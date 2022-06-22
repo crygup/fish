@@ -7,6 +7,11 @@ CREATE TABLE IF NOT EXISTS message_logs (
     created_at TIMESTAMP WITH TIME ZONE
 );
 
+CREATE TABLE IF NOT EXISTS message_attachment_logs (
+    message_id BIGINT,
+    attachment BYTEA
+);
+
 CREATE TABLE IF NOT EXISTS avatar_logs (
     user_id BIGINT,
     avatar BYTEA,
