@@ -61,8 +61,15 @@ class Bot(commands.Bot):
         print(f"Logged in as {str(self.user)}")
 
     async def close(self):
+        for extension in self.extensions:
+            try:
+                await self.unload_extension(extension)
+            except Exception:
+                pass
+
         await self.session.close()
         await self.pool.close()
+
         await super().close()
 
 
