@@ -28,7 +28,8 @@ class Owner(commands.Cog, name="owner"):
     def __init__(self, bot: Bot):
         self.bot = bot
 
-    @commands.command(name="sql")
+    @commands.command(name="sql",hidden=True)
+    @commands.is_owner()
     async def sql(self, ctx: commands.Context, *, query: UntilFlag[SqlCommandFlags]):
         """|coro|
         Executes an SQL query
