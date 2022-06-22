@@ -20,11 +20,11 @@ class UserEvents(commands.Cog, name="user_events"):
         self._avatars: List[Tuple[int, bytes, str, datetime.datetime]] = []
         self.bulk_insert.start()
 
-    def cog_unload(self):
+    async def cog_unload(self):
+        await self._bulk_insert()
         self.bulk_insert.cancel()
 
-    @tasks.loop(minutes=5.0)
-    async def bulk_insert(self):
+    async def _bulk_insert(self):
         if self._usernames:
             sql = """
             INSERT INTO username_logs(user_id, username, created_at)
@@ -48,6 +48,10 @@ class UserEvents(commands.Cog, name="user_events"):
             """
             await self.bot.pool.executemany(sql, self._avatars)
             self._avatars.clear()
+
+    @tasks.loop(minutes=5.0)
+    async def bulk_insert(self):
+        await self._bulk_insert()
 
     @commands.Cog.listener("on_user_update")
     async def on_username_update(self, before: discord.User, after: discord.User):

@@ -15,11 +15,11 @@ class MessageEvents(commands.Cog, name="message_event"):
         self._messages_attachments: List[Tuple[int, bytes]] = []
         self.bulk_insert.start()
 
-    def cog_unload(self):
+    async def cog_unload(self):
+        await self._bulk_insert()
         self.bulk_insert.cancel()
 
-    @tasks.loop(minutes=5.0)
-    async def bulk_insert(self):
+    async def _bulk_insert(self):
         if self._messages:
             sql = """
             INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at)
@@ -35,6 +35,10 @@ class MessageEvents(commands.Cog, name="message_event"):
             """
             await self.bot.pool.executemany(sql, self._messages_attachments)
             self._messages_attachments.clear()
+
+    @tasks.loop(minutes=5.0)
+    async def bulk_insert(self):
+        await self._bulk_insert()
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):

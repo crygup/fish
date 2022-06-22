@@ -17,17 +17,21 @@ class MemberEvents(commands.Cog, name="member_events"):
         self._nicks: List[Tuple[int, int, str, datetime.datetime]] = []
         self.bulk_insert.start()
 
-    def cog_unload(self):
+    async def cog_unload(self):
+        await self._bulk_insert()
         self.bulk_insert.cancel()
 
-    @tasks.loop(minutes=5.0)
-    async def bulk_insert(self):
+    async def _bulk_insert(self):
         if self._nicks:
             sql = """
             INSERT INTO nickname_logs(user_id, guild_id, nickname, created_at)
             VALUES ($1, $2, $3, $4)
             """
             await self.bot.pool.executemany(sql, self._nicks)
+
+    @tasks.loop(minutes=5.0)
+    async def bulk_insert(self):
+        await self._bulk_insert()
 
     @commands.Cog.listener("on_member_update")
     async def on_guild_avatar_update(
