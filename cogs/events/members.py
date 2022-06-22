@@ -1,8 +1,10 @@
+import datetime
 import imghdr
+from typing import List, Tuple
 
 import discord
 from bot import Bot
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 
 async def setup(bot: Bot):
@@ -12,6 +14,20 @@ async def setup(bot: Bot):
 class MemberEvents(commands.Cog, name="member_events"):
     def __init__(self, bot: Bot):
         self.bot = bot
+        self._nicks: List[Tuple[int, int, str, datetime.datetime]] = []
+        self.bulk_insert.start()
+
+    def cog_unload(self):
+        self.bulk_insert.cancel()
+
+    @tasks.loop(minutes=5.0)
+    async def bulk_insert(self):
+        if self._nicks:
+            sql = """
+            INSERT INTO nickname_logs(user_id, guild_id, nickname, created_at)
+            VALUES ($1, $2, $3, $4)
+            """
+            await self.bot.pool.executemany(sql, self._nicks)
 
     @commands.Cog.listener("on_member_update")
     async def on_guild_avatar_update(
@@ -29,3 +45,11 @@ class MemberEvents(commands.Cog, name="member_events"):
             await self.bot.pool.execute(
                 sql, after.id, avatar, imghdr.what(None, avatar), discord.utils.utcnow()
             )
+
+    @commands.Cog.listener("on_member_update")
+    async def on_nickname_update(self, before: discord.Member, after: discord.Member):
+        if before.nick != after.nick:
+            if after.nick is None:
+                return
+
+            self._nicks.append((after.id, after.guild.id, after.nick, discord.utils.utcnow()))
