@@ -1,5 +1,6 @@
+from typing import Any, List, Tuple
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from bot import Bot
 
 
@@ -10,6 +11,30 @@ async def setup(bot: Bot):
 class MessageEvents(commands.Cog, name="message_event"):
     def __init__(self, bot: Bot):
         self.bot = bot
+        self._messages: List[Tuple[Any, ...]] = []
+        self._messages_attachments: List[Tuple[int, bytes]] = []
+        self.bulk_insert.start()
+
+    def cog_unload(self):
+        self.bulk_insert.cancel()
+
+    @tasks.loop(minutes=5.0)
+    async def bulk_insert(self):
+        if self._messages:
+            sql = """
+            INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at)
+            VALUES($1, $2, $3, $4, $5, $6)
+            """
+            await self.bot.pool.executemany(sql, self._messages)
+            self._messages.clear()
+
+        if self._messages_attachments:
+            sql = """
+            INSERT INTO message_attachment_logs(message_id, attachment)
+            VALUES($1, $2)
+            """
+            await self.bot.pool.executemany(sql, self._messages_attachments)
+            self._messages_attachments.clear()
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):
@@ -19,25 +44,9 @@ class MessageEvents(commands.Cog, name="message_event"):
         if message.content == '' and message.attachments == []:
             return
 
+        self._messages.append((message.author.id, message.guild.id, message.channel.id, message.id, message.content, message.created_at))
         if message.attachments:
-            sql = """
-            INSERT INTO message_attachment_logs(message_id, attachment)
-            VALUES($1, $2)
-            """
-            sql_many = [(message.id, await attachment.read()) for attachment in message.attachments]
-            await self.bot.pool.executemany(sql, sql_many)
+            for attachment in message.attachments:
+                self._messages_attachments.append((message.id, await attachment.read()))
 
-        sql = """
-        INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at)
-        VALUES($1, $2, $3, $4, $5, $6)
-        """
 
-        await self.bot.pool.execute(
-            sql,
-            message.author.id,
-            message.guild.id,
-            message.channel.id,
-            message.id,
-            message.content,
-            message.created_at,
-        )
