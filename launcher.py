@@ -7,6 +7,7 @@ import toml
 
 from bot import Bot
 
+testing = False
 
 async def main():
     logger = logging.getLogger("discord")
@@ -33,7 +34,7 @@ async def main():
     intents.members = True
     intents.presences = True
 
-    bot = Bot(intents, config)
+    bot = Bot(intents, config, testing)
 
     async with bot:
         await bot.start(config["tokens"]["bot"])

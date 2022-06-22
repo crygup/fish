@@ -9,6 +9,7 @@ from discord.ext import commands
 initial_extensions = {
     "jishaku",
     "cogs.owner",
+    "cogs.misc",
     "cogs.events.members",
     "cogs.events.messages",
     "cogs.events.users",
@@ -23,9 +24,12 @@ class Bot(commands.Bot):
     session: aiohttp.ClientSession
     pool: asyncpg.Pool
 
-    def __init__(self, intents: discord.Intents, config: Dict):
+    async def no_dms(self, ctx: commands.Context):
+        return ctx.guild is not None
+
+    def __init__(self, intents: discord.Intents, config: Dict, testing: bool):
         super().__init__(
-            command_prefix=commands.when_mentioned_or("fish "),
+            command_prefix=commands.when_mentioned_or('f' if testing else "fish "),
             intents=intents,
             strip_after_prefix=True,
             allowed_mentions=discord.AllowedMentions(
@@ -36,10 +40,13 @@ class Bot(commands.Bot):
         self.uptime: Optional[datetime.datetime] = None
         self.embedcolor = 0xfaa0c1
         self.webhooks: Dict[str, discord.Webhook] = {}
+        self.testing = testing
+        self.add_check(self.no_dms)
 
     async def setup_hook(self):
         self.session = aiohttp.ClientSession()
-        connection = await asyncpg.create_pool(self.config["databases"]["psql"])
+        _database = self.config["databases"]["testing_psql"] if self.testing else self.config["databases"]["psql"]
+        connection = await asyncpg.create_pool(_database)
 
         if connection is None:
             raise asyncpg.ConnectionFailureError("Failed to connect to database")
@@ -61,7 +68,7 @@ class Bot(commands.Bot):
         print(f"Logged in as {str(self.user)}")
 
     async def close(self):
-        for extension in self.extensions:
+        for extension in initial_extensions:
             try:
                 await self.unload_extension(extension)
             except Exception:
