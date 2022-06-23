@@ -146,5 +146,5 @@ class Tools(commands.Cog, name="tools"):
         permissions.attach_files = True
 
         await ctx.send(
-            f'{discord.utils.oauth_url(bot.user.id, permissions=permissions, scopes="bot")}'
+            f'{discord.utils.oauth_url(bot.user.id, permissions=permissions, scopes=("bot",))}'
         )
