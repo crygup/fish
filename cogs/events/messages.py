@@ -95,8 +95,7 @@ class MessageEvents(commands.Cog, name="message_event"):
                 message.channel.id,
                 message.id,
                 message.content,
-                message.created_at,
-                True
+                message.created_at
             )
         )
 
