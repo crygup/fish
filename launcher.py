@@ -9,6 +9,7 @@ from bot import Bot
 
 testing = False
 
+
 async def main():
     logger = logging.getLogger("discord")
     logger.setLevel(logging.DEBUG)

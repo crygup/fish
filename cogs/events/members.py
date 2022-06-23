@@ -56,4 +56,6 @@ class MemberEvents(commands.Cog, name="member_events"):
             if after.nick is None:
                 return
 
-            self._nicks.append((after.id, after.guild.id, after.nick, discord.utils.utcnow()))
+            self._nicks.append(
+                (after.id, after.guild.id, after.nick, discord.utils.utcnow())
+            )

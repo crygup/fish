@@ -29,7 +29,7 @@ class Bot(commands.Bot):
 
     def __init__(self, intents: discord.Intents, config: Dict, testing: bool):
         super().__init__(
-            command_prefix=commands.when_mentioned_or('f' if testing else "fish "),
+            command_prefix=commands.when_mentioned_or("f" if testing else "fish "),
             intents=intents,
             strip_after_prefix=True,
             allowed_mentions=discord.AllowedMentions(
@@ -38,14 +38,18 @@ class Bot(commands.Bot):
         )
         self.config: Dict = config
         self.uptime: Optional[datetime.datetime] = None
-        self.embedcolor = 0xfaa0c1
+        self.embedcolor = 0xFAA0C1
         self.webhooks: Dict[str, discord.Webhook] = {}
         self.testing = testing
         self.add_check(self.no_dms)
 
     async def setup_hook(self):
         self.session = aiohttp.ClientSession()
-        _database = self.config["databases"]["testing_psql"] if self.testing else self.config["databases"]["psql"]
+        _database = (
+            self.config["databases"]["testing_psql"]
+            if self.testing
+            else self.config["databases"]["psql"]
+        )
         connection = await asyncpg.create_pool(_database)
 
         if connection is None:
@@ -53,7 +57,9 @@ class Bot(commands.Bot):
 
         self.pool = connection
 
-        self.webhooks["error_logs"] = discord.Webhook.from_url(url=self.config["webhooks"]["error_logs"], session=self.session)
+        self.webhooks["error_logs"] = discord.Webhook.from_url(
+            url=self.config["webhooks"]["error_logs"], session=self.session
+        )
 
         for extension in initial_extensions:
             try:

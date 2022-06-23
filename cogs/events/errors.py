@@ -14,10 +14,14 @@ async def setup(bot: Bot):
 class ErrorEvents(commands.Cog, name="error_events"):
     def __init__(self, bot: Bot):
         self.bot = bot
-        self.mentions = discord.AllowedMentions(users=True, roles=False, everyone=False, replied_user=False)
+        self.mentions = discord.AllowedMentions(
+            users=True, roles=False, everyone=False, replied_user=False
+        )
 
     @commands.Cog.listener("on_command_error")
-    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
+    async def on_command_error(
+        self, ctx: commands.Context, error: commands.CommandError
+    ):
         if hasattr(ctx.command, "on_error"):
             return
 
@@ -69,7 +73,9 @@ class ErrorEvents(commands.Cog, name="error_events"):
                 fmt = f"{fmt}\nGuild: {ctx.guild} (ID: {ctx.guild.id})"
 
             embed.add_field(name="Location", value=fmt, inline=False)
-            embed.add_field(name="Content", value=textwrap.shorten(ctx.message.content, 512))
+            embed.add_field(
+                name="Content", value=textwrap.shorten(ctx.message.content, 512)
+            )
 
             exc = "".join(
                 traceback.format_exception(

@@ -45,12 +45,19 @@ class MessageEvents(commands.Cog, name="message_event"):
         if message.guild is None:
             return
 
-        if message.content == '' and message.attachments == []:
+        if message.content == "" and message.attachments == []:
             return
 
-        self._messages.append((message.author.id, message.guild.id, message.channel.id, message.id, message.content, message.created_at))
+        self._messages.append(
+            (
+                message.author.id,
+                message.guild.id,
+                message.channel.id,
+                message.id,
+                message.content,
+                message.created_at,
+            )
+        )
         if message.attachments:
             for attachment in message.attachments:
                 self._messages_attachments.append((message.id, await attachment.read()))
-
-
