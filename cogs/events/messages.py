@@ -13,6 +13,8 @@ class MessageEvents(commands.Cog, name="message_event"):
         self.bot = bot
         self._messages: List[Tuple[Any, ...]] = []
         self._messages_attachments: List[Tuple[int, bytes]] = []
+        self._deleted_messages: List[Tuple[Any, ...]] = []
+        self._deleted_messages_attachments: List[Tuple[int, bytes, bool]] = []
         self.bulk_insert.start()
 
     async def cog_unload(self):
@@ -35,6 +37,22 @@ class MessageEvents(commands.Cog, name="message_event"):
             """
             await self.bot.pool.executemany(sql, self._messages_attachments)
             self._messages_attachments.clear()
+
+        if self._deleted_messages:
+            sql = """
+            INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at, snipe)
+            VALUES($1, $2, $3, $4, $5, $6, $7)
+            """
+            await self.bot.pool.executemany(sql, self._deleted_messages)
+            self._deleted_messages.clear()
+
+        if self._deleted_messages_attachments:
+            sql = """
+            INSERT INTO message_attachment_logs(message_id, attachment, snipe)
+            VALUES($1, $2, $3)
+            """
+            await self.bot.pool.executemany(sql, self._deleted_messages_attachments)
+            self._deleted_messages_attachments.clear()
 
     @tasks.loop(minutes=5.0)
     async def bulk_insert(self):
@@ -61,3 +79,27 @@ class MessageEvents(commands.Cog, name="message_event"):
         if message.attachments:
             for attachment in message.attachments:
                 self._messages_attachments.append((message.id, await attachment.read()))
+
+    @commands.Cog.listener("on_message_delete")
+    async def on_message_delete(self, message: discord.Message):
+        if message.guild is None:
+            return
+
+        if message.content == "" and message.attachments == []:
+            return
+
+        self._deleted_messages.append(
+            (
+                message.author.id,
+                message.guild.id,
+                message.channel.id,
+                message.id,
+                message.content,
+                message.created_at,
+                True
+            )
+        )
+
+        if message.attachments:
+            for attachment in message.attachments:
+                self._deleted_messages_attachments.append((message.id, await attachment.read(), True))
