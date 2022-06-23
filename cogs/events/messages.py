@@ -101,6 +101,8 @@ class MessageEvents(commands.Cog, name="message_event"):
 
         if message.attachments:
             for attachment in message.attachments:
+                if not attachment.filename.endswith(("gif", "png", "jpg", "jpeg")):
+                    continue
                 self._deleted_messages_attachments.append(
                     (message.id, await attachment.read())
                 )

@@ -9,7 +9,7 @@ from discord.ext import commands
 initial_extensions = {
     "jishaku",
     "cogs.owner",
-    "cogs.misc",
+    "cogs.tools",
     "cogs.events.members",
     "cogs.events.messages",
     "cogs.events.users",
