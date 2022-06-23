@@ -22,12 +22,18 @@ class Tools(commands.Cog, name="tools"):
         ctx: commands.Context,
         *,
         member: discord.Member = commands.Author,
-        channel: discord.TextChannel = commands.CurrentChannel,
+        channel: Optional[discord.TextChannel] = commands.CurrentChannel,
     ):
         """Sends a url to the first message from a member in a channel.
 
         If the url seems to lead nowhere the message might've been deleted."""
+
         if ctx.guild is None:
+            return
+
+        channel = channel or ctx.channel # type: ignore
+
+        if channel is None:
             return
 
         record = await self.bot.pool.fetchrow(
@@ -60,7 +66,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None or channel is None:
             return
 
-        await self.bot.get_cog('message_event')._bulk_insert() # type: ignore
+        await self.bot.get_cog("message_event")._bulk_insert()  # type: ignore
 
         if member:
             sql = """
