@@ -18,6 +18,7 @@ class UserEvents(commands.Cog, name="user_events"):
         self._usernames: List[Tuple[int, str, datetime.datetime]] = []
         self._discims: List[Tuple[int, str, datetime.datetime]] = []
         self._avatars: List[Tuple[int, bytes, str, datetime.datetime]] = []
+        self._statuses: List[Tuple[int, datetime.datetime]] = []
         self.bulk_insert.start()
 
     async def cog_unload(self):
@@ -49,6 +50,14 @@ class UserEvents(commands.Cog, name="user_events"):
             await self.bot.pool.executemany(sql, self._avatars)
             self._avatars.clear()
 
+        if self._statuses:
+            sql = """
+            INSERT INTO status_logs(user_id, time)
+            VALUES ($1, $2)
+            """
+            await self.bot.pool.executemany(sql, self._statuses)
+            self._statuses.clear()
+
     @tasks.loop(minutes=5.0)
     async def bulk_insert(self):
         await self._bulk_insert()
@@ -72,3 +81,9 @@ class UserEvents(commands.Cog, name="user_events"):
             file_type = imghdr.what(None, avatar) or "png"
 
             self._avatars.append((after.id, avatar, file_type, discord.utils.utcnow()))
+
+    @commands.Cog.listener("on_presence_update")
+    async def on_status_update(self, before: discord.Member, after: discord.Member):
+        if before.status != after.status:
+            self._statuses.append((after.id, discord.utils.utcnow()))
+
