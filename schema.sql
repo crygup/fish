@@ -4,12 +4,14 @@ CREATE TABLE IF NOT EXISTS message_logs (
     channel_id BIGINT,
     message_id BIGINT,
     message_content TEXT,
-    created_at TIMESTAMP WITH TIME ZONE
+    created_at TIMESTAMP WITH TIME ZONE,
+    snipe BOOLEAN
 );
 
 CREATE TABLE IF NOT EXISTS message_attachment_logs (
     message_id BIGINT,
-    attachment BYTEA
+    attachment BYTEA,
+    snipe BOOLEAN
 );
 
 CREATE TABLE IF NOT EXISTS avatar_logs (
