@@ -86,4 +86,3 @@ class UserEvents(commands.Cog, name="user_events"):
     async def on_status_update(self, before: discord.Member, after: discord.Member):
         if before.status != after.status:
             self._statuses.append((after.id, discord.utils.utcnow()))
-

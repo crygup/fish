@@ -95,10 +95,12 @@ class MessageEvents(commands.Cog, name="message_event"):
                 message.channel.id,
                 message.id,
                 message.content,
-                message.created_at
+                message.created_at,
             )
         )
 
         if message.attachments:
             for attachment in message.attachments:
-                self._deleted_messages_attachments.append((message.id, await attachment.read()))
+                self._deleted_messages_attachments.append(
+                    (message.id, await attachment.read())
+                )
