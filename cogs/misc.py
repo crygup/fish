@@ -19,7 +19,7 @@ class Misc(commands.Cog, name="misc"):
         if ctx.guild is None:
             return
 
-        record = await self.bot.pool.fetchrow("SELECT * FROM message_logs WHERE author_id = $1 AND guild_id = $2 AND channel_id = $3 ORDER BY created_at DESC LIMIT 1", member.id, ctx.guild.id, ctx.channel.id)
+        record = await self.bot.pool.fetchrow("SELECT * FROM message_logs WHERE author_id = $1 AND guild_id = $2 AND channel_id = $3 ORDER BY created_at ASC LIMIT 1", member.id, ctx.guild.id, ctx.channel.id)
         if record is None:
             await ctx.send(f"It seems I have no records for {str(member)} in this channel")
             return
