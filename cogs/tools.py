@@ -74,7 +74,11 @@ class Tools(commands.Cog, name="tools"):
             results = await self.bot.pool.fetch(sql, channel.id)
 
         if index - 1 >= len(results):
-            await ctx.send(f"Index out of range.")
+            await ctx.send("Index out of range.")
+            return
+
+        if results == []:
+            await ctx.send("Nothing was deleted here...")
             return
 
         user = self.bot.get_user(results[index - 1]["author_id"]) or "Unknown"
