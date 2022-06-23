@@ -102,7 +102,7 @@ class Tools(commands.Cog, name="tools"):
             else ctx.guild.me.display_avatar.url,
         )
         message_id = results[index - 1]["message_id"]
-        embed.set_footer(text=f"Index {index-1} of {len(results)-1}\nMessage deleted ")
+        embed.set_footer(text=f"Index {index} of {len(results)-1}\nMessage deleted ")
         embeds.append(embed)
 
         attachment_sql = """SELECT * FROM snipe_attachment_logs where message_id = $1"""
