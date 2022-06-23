@@ -129,7 +129,8 @@ class Tools(commands.Cog, name="tools"):
             )
             embeds.append(embed)
 
-        await ctx.send(embeds=embeds, files=files)
+        await ctx.send(embeds=embeds[:10], files=files[:10])
+        await ctx.send(embeds=embeds[-1:], files=files[-1:])
 
     @commands.command(name='invite', aliases=('join',))
     async def invite(self, ctx: commands.Context):
