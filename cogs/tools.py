@@ -36,6 +36,8 @@ class Tools(commands.Cog, name="tools"):
         if channel is None:
             return
 
+        await self.bot.get_cog("message_event")._bulk_insert()  # type: ignore
+
         record = await self.bot.pool.fetchrow(
             "SELECT * FROM message_logs WHERE author_id = $1 AND guild_id = $2 AND channel_id = $3 ORDER BY created_at ASC LIMIT 1",
             member.id,
