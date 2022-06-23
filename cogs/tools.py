@@ -20,9 +20,9 @@ class Tools(commands.Cog, name="tools"):
     async def first_message(
         self,
         ctx: commands.Context,
+        channel: Optional[discord.TextChannel] = None,
         *,
         member: discord.Member = commands.Author,
-        channel: Optional[discord.TextChannel] = None,
     ):
         """Sends a url to the first message from a member in a channel.
 
