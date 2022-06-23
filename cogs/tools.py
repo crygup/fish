@@ -22,7 +22,7 @@ class Tools(commands.Cog, name="tools"):
         ctx: commands.Context,
         *,
         member: discord.Member = commands.Author,
-        channel: Optional[discord.TextChannel] = commands.CurrentChannel,
+        channel: Optional[discord.TextChannel] = None,
     ):
         """Sends a url to the first message from a member in a channel.
 
