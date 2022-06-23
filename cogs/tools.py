@@ -130,3 +130,21 @@ class Tools(commands.Cog, name="tools"):
             embeds.append(embed)
 
         await ctx.send(embeds=embeds, files=files)
+
+    @commands.command(name='invite', aliases=('join',))
+    async def invite(self, ctx: commands.Context):
+        """Sends an invite link to the bot"""
+        bot = self.bot
+        if bot.user is None:
+            return
+
+        permissions = discord.Permissions.none()
+        permissions.read_messages = True
+        permissions.send_messages = True
+        permissions.read_message_history = True
+        permissions.embed_links = True
+        permissions.attach_files = True
+
+        await ctx.send(
+            f'{discord.utils.oauth_url(bot.user.id, permissions=permissions, scopes="bot")}'
+        )
