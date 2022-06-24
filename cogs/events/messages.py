@@ -15,11 +15,6 @@ class MessageEvents(commands.Cog, name="message_event"):
         self._messages_attachments: List[Tuple[int, bytes]] = []
         self._deleted_messages: List[Tuple[Any, ...]] = []
         self._deleted_messages_attachments: List[Tuple[int, bytes]] = []
-        self.bulk_insert.start()
-
-    async def cog_unload(self):
-        await self._bulk_insert()
-        self.bulk_insert.cancel()
 
     async def _bulk_insert(self):
         if self._messages:
@@ -54,7 +49,14 @@ class MessageEvents(commands.Cog, name="message_event"):
             await self.bot.pool.executemany(sql, self._deleted_messages_attachments)
             self._deleted_messages_attachments.clear()
 
-    @tasks.loop(minutes=5.0)
+    async def cog_unload(self):
+        await self._bulk_insert()
+        self.bulk_insert.cancel()
+
+    def cog_load(self) -> None:
+        self.bulk_insert.start()
+
+    @tasks.loop(minutes=3.0)
     async def bulk_insert(self):
         await self._bulk_insert()
 

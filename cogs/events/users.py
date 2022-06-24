@@ -19,11 +19,6 @@ class UserEvents(commands.Cog, name="user_events"):
         self._discims: List[Tuple[int, str, datetime.datetime]] = []
         self._avatars: List[Tuple[int, bytes, str, datetime.datetime]] = []
         self._statuses: List[Tuple[int, datetime.datetime]] = []
-        self.bulk_insert.start()
-
-    async def cog_unload(self):
-        await self._bulk_insert()
-        self.bulk_insert.cancel()
 
     async def _bulk_insert(self):
         if self._usernames:
@@ -58,7 +53,14 @@ class UserEvents(commands.Cog, name="user_events"):
             await self.bot.pool.executemany(sql, self._statuses)
             self._statuses.clear()
 
-    @tasks.loop(minutes=5.0)
+    async def cog_unload(self):
+        await self._bulk_insert()
+        self.bulk_insert.cancel()
+
+    def cog_load(self) -> None:
+        self.bulk_insert.start()
+
+    @tasks.loop(minutes=3.0)
     async def bulk_insert(self):
         await self._bulk_insert()
 
