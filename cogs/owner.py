@@ -9,7 +9,7 @@ from bot import Bot
 from discord.ext import commands
 from tabulate import tabulate
 from utils import UntilFlag, cleanup_code, plural
-
+from jishaku.codeblocks import codeblock_converter
 
 async def setup(bot: Bot):
     await bot.add_cog(Owner(bot))
@@ -72,3 +72,29 @@ class Owner(commands.Cog, name="owner"):
                 )
             else:
                 await ctx.send(fmt)
+
+    @commands.command(name="evaluate", aliases=["eval", "e"])
+    async def _evaluate(self, ctx: commands.Context, *, content: str):
+        content = content.replace("self.bot", "bot").replace(
+            "ref", "message.reference.resolved"
+        )
+
+        command = self.bot.get_command("jsk py")
+
+        if command is None:
+            await ctx.send("Command not found")
+            return
+
+        await command(ctx, argument=codeblock_converter(content))
+
+    @commands.command(name="pip")
+    async def _pip_shell(self, ctx: commands.Context, *, content: str):
+        content = 'venv/bin/python3.10 -m ' + content
+
+        command = self.bot.get_command("jsk sh")
+
+        if command is None:
+            await ctx.send("Command not found")
+            return
+
+        await command(ctx, argument=codeblock_converter(content))
