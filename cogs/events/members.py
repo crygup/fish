@@ -28,8 +28,8 @@ class MemberEvents(commands.Cog, name="member_events"):
         await self._bulk_insert()
         self.bulk_insert.cancel()
 
-    def cog_load(self) -> None:
-        self.bulk_insert.start()
+    async def cog_load(self) -> None:
+        await self.bulk_insert.start()
 
     @tasks.loop(minutes=3.0)
     async def bulk_insert(self):
