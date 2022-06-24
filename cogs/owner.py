@@ -26,12 +26,19 @@ class SqlCommandFlags(
     args: List[str] = commands.Flag(name="argument", aliases=["a", "arg"], annotation=List[EvaluatedArg], default=[])  # type: ignore
 
 
-class Owner(commands.Cog, name="owner"):
+class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
     def __init__(self, bot: Bot):
         self.bot = bot
 
-    @commands.command(name="sql", hidden=True)
-    @commands.is_owner()
+    async def cog_check(self, ctx: commands.Context[Bot]) -> bool:
+        check = await self.bot.is_owner(ctx.author)
+
+        if not check:
+            raise commands.NotOwner
+
+        return True
+
+    @commands.command(name="sql")
     async def sql(self, ctx: commands.Context, *, query: UntilFlag[SqlCommandFlags]):
         """|coro|
         Executes an SQL query
