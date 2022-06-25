@@ -16,9 +16,7 @@ class GuildEvents(commands.Cog, name="guild_events"):
         self._joins: List[Tuple[int, datetime.datetime]] = []
 
     async def _bulk_insert(self):
-        print('called')
         if self._joins:
-            print('there is!')
             sql = """
             INSERT INTO member_join_logs(member_id, time)
             VALUES ($1, $2)
@@ -39,7 +37,4 @@ class GuildEvents(commands.Cog, name="guild_events"):
 
     @commands.Cog.listener("on_member_join")
     async def on_member_join(self, member: discord.Member):
-        print(f'got member join {str(member)}')
-        data = (member.id, datetime.datetime.now())
-        self._joins.append(data)
-        print(data)
+        self._joins.append((member.id, datetime.datetime.now()))
