@@ -47,7 +47,7 @@ class UserEvents(commands.Cog, name="user_events"):
 
         if self._statuses:
             sql = """
-            INSERT INTO status_logs(user_id, time)
+            INSERT INTO uptime_logs(user_id, time)
             VALUES ($1, $2)
             """
             await self.bot.pool.executemany(sql, self._statuses)
