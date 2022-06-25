@@ -58,7 +58,7 @@ class UserEvents(commands.Cog, name="user_events"):
         self.bulk_insert.cancel()
 
     async def cog_load(self) -> None:
-        await self.bulk_insert.start()
+        self.bulk_insert.start()
 
     @tasks.loop(minutes=3.0)
     async def bulk_insert(self):
