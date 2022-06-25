@@ -79,7 +79,11 @@ class UserEvents(commands.Cog, name="user_events"):
     @commands.Cog.listener("on_user_update")
     async def on_avatar_update(self, before: discord.User, after: discord.User):
         if before.avatar != after.avatar:
-            avatar = await after.display_avatar.replace(size=4096).read()
+            try:
+                avatar = await after.display_avatar.replace(size=4096).read()
+            except discord.NotFound:
+                return
+
             file_type = imghdr.what(None, avatar) or "png"
 
             self._avatars.append((after.id, avatar, file_type, discord.utils.utcnow()))
