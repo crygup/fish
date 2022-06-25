@@ -2,6 +2,7 @@ import imghdr
 from io import BytesIO
 import textwrap
 from typing import List, Optional
+import asyncpg
 
 import discord
 from bot import Bot
@@ -150,3 +151,69 @@ class Tools(commands.Cog, name="tools"):
         await ctx.send(
             f'{discord.utils.oauth_url(bot.user.id, permissions=permissions, scopes=("bot",))}'
         )
+
+    @commands.group(name="joins", invoke_without_command=True)
+    async def joins(
+        self,
+        ctx: commands.Context,
+        guild: Optional[discord.Guild] = None,
+        *,
+        user: discord.User = commands.Author,
+    ):
+        """Shows how many times a user joined a server
+
+        Note: If they joined before I was added then I will not have any data for them."""
+        await self.bot.get_cog("guild_events")._bulk_insert()  # type: ignore
+
+        guild = guild or ctx.guild
+
+        if guild is None:
+            return
+
+        results: Optional[int] = await self.bot.pool.fetchval(
+            "SELECT COUNT(member_id) FROM member_join_logs WHERE member_id = $1 AND guild_id = $2",
+            user.id,
+            guild.id,
+        )
+
+        if results == 0 or results is None:
+            await ctx.send(f"I have no join records for {user!s} in {guild!s}")
+            return
+
+
+        await ctx.send(f"{user!s} has joined {guild!s} {results:,} time{'s' if results > 1 else ''}.")
+
+    @joins.command(name="index")
+    async def joins_index(self, ctx: commands.Context):
+        """Adds your join date to the database."""
+        if ctx.guild is None:
+            return
+
+        records = await self.bot.pool.fetch(
+            "SELECT * FROM member_join_logs WHERE member_id = $1 AND guild_id = $2",
+            ctx.author.id,
+            ctx.guild.id,
+        )
+
+        if records != []:
+            await ctx.send("You are already indexed in this server.")
+            return
+
+        member = ctx.guild.get_member(ctx.author.id)
+
+        if member is None:
+            return
+
+        joined = member.joined_at
+
+        if joined is None:
+            return
+
+        await self.bot.pool.execute(
+            "INSERT INTO member_join_logs (member_id, guild_id, time) VALUES ($1, $2, $3)",
+            ctx.author.id,
+            ctx.guild.id,
+            joined,
+        )
+
+        await ctx.send(f"Added you. You joined on {discord.utils.format_dt(joined, 'D')}.")
