@@ -13,13 +13,13 @@ async def setup(bot: Bot):
 class GuildEvents(commands.Cog, name="guild_events"):
     def __init__(self, bot: Bot):
         self.bot = bot
-        self._joins: List[Tuple[int, datetime.datetime]] = []
+        self._joins: List[Tuple[int, int, datetime.datetime]] = []
 
     async def _bulk_insert(self):
         if self._joins:
             sql = """
-            INSERT INTO member_join_logs(member_id, time)
-            VALUES ($1, $2)
+            INSERT INTO member_join_logs(member_id, guild_id, time)
+            VALUES ($1, $2, $2)
             """
             await self.bot.pool.executemany(sql, self._joins)
             self._joins.clear()
@@ -37,4 +37,4 @@ class GuildEvents(commands.Cog, name="guild_events"):
 
     @commands.Cog.listener("on_member_join")
     async def on_member_join(self, member: discord.Member):
-        self._joins.append((member.id, datetime.datetime.now()))
+        self._joins.append((member.id, member.guild.id, datetime.datetime.now()))
