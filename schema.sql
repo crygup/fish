@@ -77,6 +77,6 @@ CREATE TABLE IF NOT EXISTS uptime_logs (
 
 CREATE TABLE IF NOT EXISTS member_join_logs (
     member_id BIGINT,
-    guild_id,
+    guild_id BIGINT,
     time TIMESTAMP WITH TIME ZONE
 );
