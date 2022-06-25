@@ -19,7 +19,7 @@ class GuildEvents(commands.Cog, name="guild_events"):
         if self._joins:
             sql = """
             INSERT INTO member_join_logs(member_id, guild_id, time)
-            VALUES ($1, $2, $2)
+            VALUES ($1, $2, $3)
             """
             await self.bot.pool.executemany(sql, self._joins)
             self._joins.clear()
