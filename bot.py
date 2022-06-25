@@ -10,10 +10,11 @@ initial_extensions = {
     "jishaku",
     "cogs.owner",
     "cogs.tools",
+    "cogs.events.errors",
+    "cogs.events.guilds",
     "cogs.events.members",
     "cogs.events.messages",
     "cogs.events.users",
-    "cogs.events.errors",
 }
 os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
