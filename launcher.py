@@ -12,8 +12,8 @@ testing = False
 
 async def main():
     logger = logging.getLogger("discord")
-    logger.setLevel(logging.DEBUG)
-    logging.getLogger("discord.http").setLevel(logging.INFO)
+    logger.setLevel(logging.ERROR)
+    logging.getLogger("discord.http").setLevel(logging.ERROR)
 
     handler = logging.handlers.RotatingFileHandler(
         filename="discord.log",
@@ -30,10 +30,7 @@ async def main():
 
     config = toml.load("config.toml")
 
-    intents = discord.Intents.default()
-    intents.message_content = True
-    intents.members = True
-    intents.presences = True
+    intents = discord.Intents.all()
 
     bot = Bot(intents, config, testing)
 
