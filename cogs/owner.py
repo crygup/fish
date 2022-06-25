@@ -11,6 +11,7 @@ from tabulate import tabulate
 from utils import UntilFlag, cleanup_code, plural
 from jishaku.codeblocks import codeblock_converter
 
+
 async def setup(bot: Bot):
     await bot.add_cog(Owner(bot))
 
@@ -96,7 +97,7 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
 
     @commands.command(name="pip")
     async def _pip_shell(self, ctx: commands.Context, *, content: str):
-        content = 'venv/bin/python3.10 -m ' + content
+        content = "venv/bin/python3.10 -m " + content
 
         command = self.bot.get_command("jsk sh")
 

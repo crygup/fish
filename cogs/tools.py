@@ -31,7 +31,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        channel = channel or ctx.channel # type: ignore
+        channel = channel or ctx.channel  # type: ignore
 
         if channel is None:
             return
@@ -133,7 +133,7 @@ class Tools(commands.Cog, name="tools"):
         if len(embeds) >= 10:
             await ctx.send(embeds=embeds[-1:], files=files[-1:])
 
-    @commands.command(name='invite', aliases=('join',))
+    @commands.command(name="invite", aliases=("join",))
     async def invite(self, ctx: commands.Context):
         """Sends an invite link to the bot"""
         bot = self.bot
