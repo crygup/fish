@@ -6,7 +6,7 @@ from typing import Awaitable, Callable, Optional, ParamSpec, Sequence, TypeVar
 from dateutil.relativedelta import relativedelta
 import discord
 
-__all__ = ["cleanup_code", "to_thread", "plural", "Timer"]
+__all__ = ["cleanup_code", "to_thread", "plural", "Timer", "human_timedelta"]
 
 T = TypeVar("T")
 P = ParamSpec("P")

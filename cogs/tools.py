@@ -1,12 +1,14 @@
+import datetime
 import imghdr
-from io import BytesIO
 import textwrap
+from io import BytesIO
 from typing import List, Optional
-import asyncpg
 
+import asyncpg
 import discord
 from bot import Bot
 from discord.ext import commands
+from utils import human_timedelta
 
 
 async def setup(bot: Bot):
@@ -217,3 +219,27 @@ class Tools(commands.Cog, name="tools"):
         )
 
         await ctx.send(f"Added you. You joined on {discord.utils.format_dt(joined, 'D')}.")
+
+    @commands.command(name='uptime')
+    async def uptime(self, ctx: commands.Context, *, member: Optional[discord.Member]):
+        bot = self.bot
+        me = bot.user
+
+        if me is None or bot.uptime is None:
+            return
+
+        if member is None or member and member.id == me.id:
+            await ctx.send(f"Hello, I have been awake for {human_timedelta(bot.uptime)}.")
+            return
+
+        await bot.get_cog('user_events')._bulk_insert()  # type: ignore
+
+        results: Optional[datetime.datetime] = await bot.pool.fetchval('SELECT time FROM uptime_logs WHERE user_id = $1', member.id)
+
+        if results is None:
+            await ctx.send(f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} as long as I can tell.')
+            return
+
+        await ctx.send(f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} for {human_timedelta(results)}.')
+
+
