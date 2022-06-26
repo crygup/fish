@@ -82,8 +82,7 @@ class MessageEvents(commands.Cog, name="message_event"):
             for attachment in message.attachments:
                 self._messages_attachments.append((message.id, await attachment.read()))
 
-    @commands.Cog.listener("on_message_delete")
-    async def on_message_delete(self, message: discord.Message):
+    async def insert_message(self, message: discord.Message):
         if message.guild is None:
             return
 
@@ -108,3 +107,12 @@ class MessageEvents(commands.Cog, name="message_event"):
                 self._deleted_messages_attachments.append(
                     (message.id, await attachment.read())
                 )
+
+    @commands.Cog.listener("on_message_delete")
+    async def on_message_delete(self, message: discord.Message):
+        await self.insert_message(message)
+
+    @commands.Cog.listener("on_bulk_message_delete")
+    async def on_bulk_delete(self, messages: List[discord.Message]):
+        for message in messages:
+            await self.insert_message(message)
