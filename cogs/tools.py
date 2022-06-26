@@ -8,7 +8,7 @@ import asyncpg
 import discord
 from bot import Bot
 from discord.ext import commands
-from utils import human_timedelta
+from utils import human_timedelta, FieldPageSource, Pager
 
 
 async def setup(bot: Bot):
@@ -274,3 +274,89 @@ class Tools(commands.Cog, name="tools"):
         await ctx.send(
             f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} for {human_timedelta(results)}.'
         )
+
+    @commands.command(name="usernames", aliases=("names",))
+    async def usernames(
+        self, ctx: commands.Context, user: discord.User = commands.Author
+    ):
+        results = await self.bot.pool.fetch(
+            "SELECT * FROM username_logs WHERE user_id = $1", user.id
+        )
+
+        if results == []:
+            await ctx.send(f"I have no username records for {user}")
+            return
+
+        entries = [
+            (
+                r["username"],
+                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")}',
+            )
+            for r in results
+        ]
+
+        source = FieldPageSource(entries=entries)
+        source.embed.color = self.bot.embedcolor
+        source.embed.title = f"Usernames for {user}"
+        pager = Pager(source, ctx=ctx)
+        await pager.start(ctx)
+
+    @commands.command(name="discrims", aliases=("discriminators",))
+    async def discrims(
+        self, ctx: commands.Context, user: discord.User = commands.Author
+    ):
+        results = await self.bot.pool.fetch(
+            "SELECT * FROM discrim_logs WHERE user_id = $1", user.id
+        )
+
+        if results == []:
+            await ctx.send(f"I have no discriminator records for {user}")
+            return
+
+        entries = [
+            (
+                f'#{r["discrim"]}',
+                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")}',
+            )
+            for r in results
+        ]
+
+        source = FieldPageSource(entries=entries)
+        source.embed.color = self.bot.embedcolor
+        source.embed.title = f"Discriminators for {user}"
+        pager = Pager(source, ctx=ctx)
+        await pager.start(ctx)
+
+    @commands.command(name="nicknames", aliases=("nicks",))
+    async def nicknames(
+        self,
+        ctx: commands.Context,
+        *,
+        user: discord.User = commands.Author,
+    ):
+        if ctx.guild is None:
+            return
+
+        results = await self.bot.pool.fetch(
+            "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2",
+            user.id,
+            ctx.guild.id,
+        )
+
+        if results == []:
+            await ctx.send(f"I have no nickname records for {user} in {ctx.guild}")
+            return
+
+        entries = [
+            (
+                r["nickname"],
+                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")}',
+            )
+            for r in results
+        ]
+
+        source = FieldPageSource(entries=entries)
+        source.embed.title = f"Nicknames for {user} in {ctx.guild}"
+        source.embed.color = self.bot.embedcolor
+        pager = Pager(source, ctx=ctx)
+        await pager.start(ctx)
