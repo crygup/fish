@@ -280,7 +280,7 @@ class Tools(commands.Cog, name="tools"):
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
         results = await self.bot.pool.fetch(
-            "SELECT * FROM username_logs WHERE user_id = $1", user.id
+            "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC", user.id
         )
 
         if results == []:
@@ -306,7 +306,7 @@ class Tools(commands.Cog, name="tools"):
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
         results = await self.bot.pool.fetch(
-            "SELECT * FROM discrim_logs WHERE user_id = $1", user.id
+            "SELECT * FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC", user.id
         )
 
         if results == []:
@@ -338,7 +338,7 @@ class Tools(commands.Cog, name="tools"):
             return
 
         results = await self.bot.pool.fetch(
-            "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2",
+            "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC",
             user.id,
             ctx.guild.id,
         )
