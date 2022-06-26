@@ -154,6 +154,28 @@ class Tools(commands.Cog, name="tools"):
             f'{discord.utils.oauth_url(bot.user.id, permissions=permissions, scopes=("bot",))}'
         )
 
+    async def _index_member(
+        self, guild: discord.Guild, user: discord.Member | discord.User
+    ) -> bool:
+        member = guild.get_member(user.id)
+
+        if member is None:
+            return False
+
+        joined = member.joined_at
+
+        if joined is None:
+            return False
+
+        await self.bot.pool.execute(
+            "INSERT INTO member_join_logs (member_id, guild_id, time) VALUES ($1, $2, $3)",
+            user.id,
+            guild.id,
+            joined,
+        )
+
+        return True
+
     @commands.group(name="joins", invoke_without_command=True)
     async def joins(
         self,
@@ -179,13 +201,19 @@ class Tools(commands.Cog, name="tools"):
         )
 
         if results == 0 or results is None:
-            await ctx.send(f"I have no join records for {user!s} in {guild!s}")
-            return
+            results = await self._index_member(guild, user)
+            if results:
+                results = 1
 
+            else:
+                await ctx.send(f"I have no join records for {user!s} in {guild!s}")
+                return
 
-        await ctx.send(f"{user!s} has joined {guild!s} {results:,} time{'s' if results > 1 else ''}.")
+        await ctx.send(
+            f"{user!s} has joined {guild!s} {results:,} time{'s' if results > 1 else ''}."
+        )
 
-    @joins.command(name="index")
+    @joins.group(name="index", invoke_without_command=True)
     async def joins_index(self, ctx: commands.Context):
         """Adds your join date to the database."""
         if ctx.guild is None:
@@ -211,16 +239,13 @@ class Tools(commands.Cog, name="tools"):
         if joined is None:
             return
 
-        await self.bot.pool.execute(
-            "INSERT INTO member_join_logs (member_id, guild_id, time) VALUES ($1, $2, $3)",
-            ctx.author.id,
-            ctx.guild.id,
-            joined,
+        await self._index_member(ctx.guild, ctx.author)
+
+        await ctx.send(
+            f"Added you. You joined on {discord.utils.format_dt(joined, 'D')}."
         )
 
-        await ctx.send(f"Added you. You joined on {discord.utils.format_dt(joined, 'D')}.")
-
-    @commands.command(name='uptime')
+    @commands.command(name="uptime")
     async def uptime(self, ctx: commands.Context, *, member: Optional[discord.Member]):
         bot = self.bot
         me = bot.user
@@ -229,17 +254,23 @@ class Tools(commands.Cog, name="tools"):
             return
 
         if member is None or member and member.id == me.id:
-            await ctx.send(f"Hello, I have been awake for {human_timedelta(bot.uptime)}.")
+            await ctx.send(
+                f"Hello, I have been awake for {human_timedelta(bot.uptime)}."
+            )
             return
 
-        await bot.get_cog('user_events')._bulk_insert()  # type: ignore
+        await bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
-        results: Optional[datetime.datetime] = await bot.pool.fetchval('SELECT time FROM uptime_logs WHERE user_id = $1', member.id)
+        results: Optional[datetime.datetime] = await bot.pool.fetchval(
+            "SELECT time FROM uptime_logs WHERE user_id = $1", member.id
+        )
 
         if results is None:
-            await ctx.send(f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} as long as I can tell.')
+            await ctx.send(
+                f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} as long as I can tell.'
+            )
             return
 
-        await ctx.send(f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} for {human_timedelta(results)}.')
-
-
+        await ctx.send(
+            f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} for {human_timedelta(results)}.'
+        )
