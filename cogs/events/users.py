@@ -18,7 +18,6 @@ class UserEvents(commands.Cog, name="user_events"):
         self._usernames: List[Tuple[int, str, datetime.datetime]] = []
         self._discims: List[Tuple[int, str, datetime.datetime]] = []
         self._avatars: List[Tuple[int, bytes, str, datetime.datetime]] = []
-        self._statuses: List[Tuple[int, datetime.datetime]] = []
 
     async def _bulk_insert(self):
         if self._usernames:
@@ -44,14 +43,6 @@ class UserEvents(commands.Cog, name="user_events"):
             """
             await self.bot.pool.executemany(sql, self._avatars)
             self._avatars.clear()
-
-        if self._statuses:
-            sql = """
-            INSERT INTO uptime_logs(user_id, time)
-            VALUES ($1, $2)
-            """
-            await self.bot.pool.executemany(sql, self._statuses)
-            self._statuses.clear()
 
     async def cog_unload(self):
         await self._bulk_insert()
@@ -91,4 +82,18 @@ class UserEvents(commands.Cog, name="user_events"):
     @commands.Cog.listener("on_presence_update")
     async def on_status_update(self, before: discord.Member, after: discord.Member):
         if before.status != after.status:
-            self._statuses.append((after.id, discord.utils.utcnow()))
+            results = await self.bot.pool.fetchrow(
+                "SELECT user_id FROM uptime_logs WHERE user_id = $1", after.id
+            )
+
+            if results is None:
+                sql = """
+                INSERT INTO uptime_logs(user_id, time)
+                VALUES($1, $2)"""
+                await self.bot.pool.execute(sql, after.id, discord.utils.utcnow())
+            else:
+                sql = """
+                UPDATE uptime_logs
+                SET time = $2 WHERE user_id = $1
+                """
+                await self.bot.pool.execute(sql, after.id, discord.utils.utcnow())
