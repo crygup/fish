@@ -46,11 +46,16 @@ class MemberEvents(commands.Cog, name="member_events"):
 
             avatar = await after.guild_avatar.replace(size=4096).read()
             sql = """
-            INSERT INTO guild_avatar_logs(user_id, avatar, format, created_at)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO guild_avatar_logs(user_id, avatar, format, created_at, guild_id)
+            VALUES ($1, $2, $3, $4, $5)
             """
             await self.bot.pool.execute(
-                sql, after.id, avatar, imghdr.what(None, avatar), discord.utils.utcnow()
+                sql,
+                after.id,
+                avatar,
+                imghdr.what(None, avatar),
+                discord.utils.utcnow(),
+                after.guild.id,
             )
 
     @commands.Cog.listener("on_member_update")

@@ -13,6 +13,7 @@ from discord.ext import commands
 from utils import human_timedelta, FieldPageSource, Pager, to_thread, resize_to_limit
 from PIL import Image
 
+
 async def setup(bot: Bot):
     await bot.add_cog(Tools(bot))
 
@@ -287,7 +288,8 @@ class Tools(commands.Cog, name="tools"):
         await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
-            "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC", user.id
+            "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC",
+            user.id,
         )
 
         if results == []:
@@ -315,7 +317,8 @@ class Tools(commands.Cog, name="tools"):
         await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
-            "SELECT * FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC", user.id
+            "SELECT * FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC",
+            user.id,
         )
 
         if results == []:
@@ -346,7 +349,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("member_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC",
@@ -371,7 +374,6 @@ class Tools(commands.Cog, name="tools"):
         source.embed.color = self.bot.embedcolor
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
-
 
     # https://github.com/CuteFwan/Koishi/blob/master/cogs/avatar.py#L82-L102
     @to_thread
@@ -401,6 +403,26 @@ class Tools(commands.Cog, name="tools"):
             buffer = resize_to_limit(buffer, filesize_limit)
             return buffer
 
+    async def do_avatar_command(
+        self,
+        ctx: commands.Context,
+        user: discord.User | discord.Member,
+        avatars: List[asyncpg.Record],
+    ) -> discord.File:
+
+        if ctx.guild is None:
+            raise commands.GuildNotFound("Guild not found")
+
+        fp = await self._make_avatars(
+            ctx.guild.filesize_limit, [x["avatar"] for x in avatars]
+        )
+        file = discord.File(
+            fp,
+            f"{user.id}_avatar_history.png",
+        )
+
+        return file
+
     @commands.group(
         name="avatarhistory", aliases=("avyh",), invoke_without_command=True
     )
@@ -420,31 +442,40 @@ class Tools(commands.Cog, name="tools"):
         if check is None:
             raise TypeError(f"{str(user)} has no avatar history on record.")
 
-        message = await ctx.send("Fetching avatar history...")
-        to_send = ""
-
         async with ctx.typing():
-            fetching_start = time.perf_counter()
-            avatars = await self.bot.pool.fetch(
+            avatars: List[asyncpg.Record] = await self.bot.pool.fetch(
                 "SELECT avatar FROM avatar_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100",
                 user.id,
             )
-            fetching_end = time.perf_counter()
-            to_send += f"`Fetching:   {round(fetching_end - fetching_start, 3)}s`"
+            file = await self.do_avatar_command(ctx, user, avatars)
 
-            await message.edit(content=f"{to_send}\nGenerating image...")
+        await ctx.send(content=f"Viewing avatar log for {str(user)}", file=file)
 
-            generating_start = time.perf_counter()
-            file = discord.File(
-                await self._make_avatars(
-                    ctx.guild.filesize_limit, [x["avatar"] for x in avatars]
-                ),
-                f"{user.id}_avatar_history.png",
+    @avatar_history.command(name="guild")
+    async def avatar_history_guild(
+        self, ctx: commands.Context, *, member: discord.Member = commands.Author
+    ):
+        """Shows the guild avatar history of a user."""
+        if ctx.guild is None:
+            return
+
+        await self.bot.get_cog("member_events")._bulk_insert()  # type: ignore
+
+        check = await self.bot.pool.fetchrow(
+            "SELECT avatar FROM guild_avatar_logs WHERE user_id = $1 AND guild_id = $2",
+            member.id,
+            ctx.guild.id,
+        )
+
+        if check is None:
+            raise TypeError(f"{str(member)} has no avatar guild history on record.")
+
+        async with ctx.typing():
+            avatars: List[asyncpg.Record] = await self.bot.pool.fetch(
+                "SELECT avatar FROM guild_avatar_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC LIMIT 100",
+                member.id,
+                ctx.guild.id,
             )
-            generating_end = time.perf_counter()
-            to_send += f"\n`Generating: {round(generating_end - generating_start, 3)}s`"
+            file = await self.do_avatar_command(ctx, member, avatars)
 
-            await message.edit(content=f"{to_send}\nUploading image...")
-
-        await message.add_files(file)
-        await message.edit(content=f"Viewing avatar log for {str(user)}\n{to_send}")
+        await ctx.send(content=f"Viewing guild avatar log for {member}", file=file)
