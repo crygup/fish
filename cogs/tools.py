@@ -1,15 +1,17 @@
 import datetime
 import imghdr
+import math
 import textwrap
 from io import BytesIO
+import time
 from typing import List, Optional
 
 import asyncpg
 import discord
 from bot import Bot
 from discord.ext import commands
-from utils import human_timedelta, FieldPageSource, Pager
-
+from utils import human_timedelta, FieldPageSource, Pager, to_thread, resize_to_limit
+from PIL import Image
 
 async def setup(bot: Bot):
     await bot.add_cog(Tools(bot))
@@ -360,3 +362,77 @@ class Tools(commands.Cog, name="tools"):
         source.embed.color = self.bot.embedcolor
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
+
+
+    # https://github.com/CuteFwan/Koishi/blob/master/cogs/avatar.py#L82-L102
+    @to_thread
+    def _make_avatars(self, filesize_limit: int, avatars: List[bytes]) -> BytesIO:
+        xbound = math.ceil(math.sqrt(len(avatars)))
+        ybound = math.ceil(len(avatars) / xbound)
+        size = int(2520 / xbound)
+
+        with Image.new(
+            "RGBA", size=(xbound * size, ybound * size), color=(0, 0, 0, 0)
+        ) as base:
+            x, y = 0, 0
+            for avy in avatars:
+                if avy:
+                    im = Image.open(BytesIO(avy)).resize(
+                        (size, size), resample=Image.BICUBIC
+                    )
+                    base.paste(im, box=(x * size, y * size))
+                if x < xbound - 1:
+                    x += 1
+                else:
+                    x = 0
+                    y += 1
+            buffer = BytesIO()
+            base.save(buffer, "png")
+            buffer.seek(0)
+            buffer = resize_to_limit(buffer, filesize_limit)
+            return buffer
+
+    @commands.group(
+        name="avatarhistory", aliases=("avyh",), invoke_without_command=True
+    )
+    async def avatar_history(
+        self, ctx: commands.Context, *, user: discord.User = commands.Author
+    ):
+        """Shows the avatar history of a user."""
+        if ctx.guild is None:
+            return
+
+        check = await self.bot.pool.fetchrow(
+            "SELECT avatar FROM avatar_history WHERE user_id = $1", user.id
+        )
+        if check is None:
+            raise TypeError(f"{str(user)} has no avatar history on record.")
+
+        message = await ctx.send("Fetching avatar history...")
+        to_send = ""
+
+        async with ctx.typing():
+            fetching_start = time.perf_counter()
+            avatars = await self.bot.pool.fetch(
+                "SELECT avatar FROM avatar_history WHERE user_id = $1 ORDER BY date DESC LIMIT 100",
+                user.id,
+            )
+            fetching_end = time.perf_counter()
+            to_send += f"`Fetching:   {round(fetching_end - fetching_start, 3)}s`"
+
+            await message.edit(content=f"{to_send}\nGenerating image...")
+
+            generating_start = time.perf_counter()
+            file = discord.File(
+                await self._make_avatars(
+                    ctx.guild.filesize_limit, [x["avatar"] for x in avatars]
+                ),
+                f"{user.id}_avatar_history.png",
+            )
+            generating_end = time.perf_counter()
+            to_send += f"\n`Generating: {round(generating_end - generating_start, 3)}s`"
+
+            await message.edit(content=f"{to_send}\nUploading image...")
+
+        await message.add_files(file)
+        await message.edit(content=f"Viewing avatar log for {str(user)}\n{to_send}")

@@ -1,12 +1,14 @@
 import asyncio
 import datetime
 import time
+from io import BytesIO
 from typing import Awaitable, Callable, Optional, ParamSpec, Sequence, TypeVar
 
-from dateutil.relativedelta import relativedelta
 import discord
+from dateutil.relativedelta import relativedelta
+from PIL import Image, ImageSequence
 
-__all__ = ["cleanup_code", "to_thread", "plural", "Timer", "human_timedelta"]
+__all__ = ["cleanup_code", "to_thread", "plural", "Timer", "human_timedelta", "resize_to_limit"]
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -170,3 +172,41 @@ def human_timedelta(
 
 def format_relative(dt: datetime.datetime) -> str:
     return discord.utils.format_dt(dt, "R")
+
+
+# https://github.com/CuteFwan/Koishi/blob/master/cogs/utils/images.py#L4-L34
+def resize_to_limit(data: BytesIO, limit: int) -> BytesIO:
+    """
+    Downsize it for huge PIL images.
+    Half the resolution until the byte count is within the limit.
+    """
+    current_size = data.getbuffer().nbytes
+    while current_size > limit:
+        with Image.open(data) as im:
+            data = BytesIO()
+            if im.format == "PNG":
+                im = im.resize(tuple([i // 2 for i in im.size]), resample=Image.BICUBIC)
+                im.save(data, "png")
+            elif im.format == "GIF":
+                durations = []
+                new_frames = []
+                for frame in ImageSequence.Iterator(im):
+                    durations.append(frame.info["duration"])
+                    new_frames.append(
+                        frame.resize([i // 2 for i in im.size], resample=Image.BICUBIC)
+                    )
+                new_frames[0].save(
+                    data,
+                    save_all=True,
+                    append_images=new_frames[1:],
+                    format="gif",
+                    version=im.info["version"],
+                    duration=durations,
+                    loop=0,
+                    transparency=0,
+                    background=im.info["background"],
+                    palette=im.getpalette(),
+                )
+            data.seek(0)
+            current_size = data.getbuffer().nbytes
+    return data
