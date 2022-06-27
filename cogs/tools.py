@@ -403,8 +403,9 @@ class Tools(commands.Cog, name="tools"):
             return
 
         check = await self.bot.pool.fetchrow(
-            "SELECT avatar FROM avatar_history WHERE user_id = $1", user.id
+            "SELECT avatar FROM avatar_logs WHERE user_id = $1", user.id
         )
+
         if check is None:
             raise TypeError(f"{str(user)} has no avatar history on record.")
 
