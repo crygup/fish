@@ -23,6 +23,7 @@ class MemberEvents(commands.Cog, name="member_events"):
             VALUES ($1, $2, $3, $4)
             """
             await self.bot.pool.executemany(sql, self._nicks)
+            self._nicks.clear()
 
     async def cog_unload(self):
         await self._bulk_insert()
