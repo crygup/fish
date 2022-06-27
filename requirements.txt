@@ -4,3 +4,4 @@ asyncpg
 toml
 tabulate
 python-dateutil
+Pillow
