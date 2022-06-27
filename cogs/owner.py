@@ -95,8 +95,8 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
 
         await command(ctx, argument=codeblock_converter(content))
 
-    @commands.command(name="pip")
-    async def _pip_shell(self, ctx: commands.Context, *, content: str):
+    @commands.command(name="venv")
+    async def _venv_shell(self, ctx: commands.Context, *, content: str):
         content = "venv/bin/python3.10 -m " + content
 
         command = self.bot.get_command("jsk sh")
