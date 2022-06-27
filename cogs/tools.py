@@ -281,6 +281,9 @@ class Tools(commands.Cog, name="tools"):
     async def usernames(
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
+
+        await bot.get_cog("user_events")._bulk_insert()  # type: ignore
+
         results = await self.bot.pool.fetch(
             "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC", user.id
         )
@@ -307,6 +310,8 @@ class Tools(commands.Cog, name="tools"):
     async def discrims(
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
+        await bot.get_cog("user_events")._bulk_insert()  # type: ignore
+
         results = await self.bot.pool.fetch(
             "SELECT * FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC", user.id
         )
@@ -338,6 +343,8 @@ class Tools(commands.Cog, name="tools"):
     ):
         if ctx.guild is None:
             return
+
+        await bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC",
@@ -401,6 +408,8 @@ class Tools(commands.Cog, name="tools"):
         """Shows the avatar history of a user."""
         if ctx.guild is None:
             return
+
+        await bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         check = await self.bot.pool.fetchrow(
             "SELECT avatar FROM avatar_logs WHERE user_id = $1", user.id
