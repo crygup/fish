@@ -415,7 +415,7 @@ class Tools(commands.Cog, name="tools"):
         async with ctx.typing():
             fetching_start = time.perf_counter()
             avatars = await self.bot.pool.fetch(
-                "SELECT avatar FROM avatar_logs WHERE user_id = $1 ORDER BY date DESC LIMIT 100",
+                "SELECT avatar FROM avatar_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100",
                 user.id,
             )
             fetching_end = time.perf_counter()
