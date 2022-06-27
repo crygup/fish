@@ -221,6 +221,8 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
+        await self.bot.get_cog("guild_events")._bulk_insert()  # type: ignore
+
         records = await self.bot.pool.fetch(
             "SELECT * FROM member_join_logs WHERE member_id = $1 AND guild_id = $2",
             ctx.author.id,
@@ -261,7 +263,7 @@ class Tools(commands.Cog, name="tools"):
             )
             return
 
-        await bot.get_cog("user_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results: Optional[datetime.datetime] = await bot.pool.fetchval(
             "SELECT time FROM uptime_logs WHERE user_id = $1", member.id
@@ -282,7 +284,7 @@ class Tools(commands.Cog, name="tools"):
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
 
-        await bot.get_cog("user_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC", user.id
@@ -310,7 +312,7 @@ class Tools(commands.Cog, name="tools"):
     async def discrims(
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
-        await bot.get_cog("user_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC", user.id
@@ -344,7 +346,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await bot.get_cog("user_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC",
@@ -409,7 +411,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await bot.get_cog("user_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         check = await self.bot.pool.fetchrow(
             "SELECT avatar FROM avatar_logs WHERE user_id = $1", user.id
