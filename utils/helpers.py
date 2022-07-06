@@ -1,18 +1,37 @@
 import asyncio
 import datetime
+import re
 import time
 from io import BytesIO
-from typing import Awaitable, Callable, Optional, ParamSpec, Sequence, TypeVar
+from typing import Awaitable, Callable, ClassVar, Optional, ParamSpec, Sequence, TypeVar
 
 import discord
 from dateutil.relativedelta import relativedelta
 from PIL import Image, ImageSequence
 
-__all__ = ["cleanup_code", "to_thread", "plural", "Timer", "human_timedelta", "resize_to_limit"]
+__all__ = [
+    "cleanup_code",
+    "to_thread",
+    "plural",
+    "Timer",
+    "human_timedelta",
+    "resize_to_limit",
+    "Regexes"
+]
 
 T = TypeVar("T")
 P = ParamSpec("P")
 
+class Regexes:
+    TENOR_PAGE_REGEX: ClassVar[re.Pattern] = re.compile(
+        r"https?://(www\.)?tenor\.com/view/\S+"
+    )
+    TENOR_GIF_REGEX: ClassVar[re.Pattern] = re.compile(
+        r"https?://(www\.)?c\.tenor\.com/\S+/\S+\.gif"
+    )
+    CUSTOM_EMOJI_REGEX: ClassVar[re.Pattern] = re.compile(
+        r"<(a)?:([a-zA-Z0-9_]{2,32}):([0-9]{18,22})>"
+    )
 
 def cleanup_code(content: str) -> str:
     """Automatically removes code blocks from the code."""
