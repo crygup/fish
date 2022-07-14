@@ -60,6 +60,7 @@ class Tools(commands.Cog, name="tools"):
         await ctx.send(url)
 
     @commands.command(name="snipe")
+    @commands.is_owner()
     async def snipe(
         self,
         ctx: commands.Context,
@@ -485,4 +486,4 @@ class Tools(commands.Cog, name="tools"):
         """Gets the actual gif URL from a tenor link"""
 
         real_url = await TenorUrlConverter().convert(ctx, url)
-        await ctx.send(real_url)
+        await ctx.send(f"Here is the real url: {real_url}")

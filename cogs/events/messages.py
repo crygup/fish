@@ -74,7 +74,7 @@ class MessageEvents(commands.Cog, name="message_event"):
                 message.guild.id,
                 message.channel.id,
                 message.id,
-                message.content,
+                message.content or "Message did not contain any content.",
                 message.created_at,
             )
         )
