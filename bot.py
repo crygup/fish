@@ -1,5 +1,5 @@
 import datetime, os
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 import aiohttp
 import asyncpg
@@ -29,8 +29,9 @@ class Bot(commands.Bot):
         return ctx.guild is not None
 
     def __init__(self, intents: discord.Intents, config: Dict, testing: bool):
+        prefix: List = ["fish ", "f"] if not testing else ["fish. ", "f."]
         super().__init__(
-            command_prefix=commands.when_mentioned_or("f" if testing else "fish "),
+            command_prefix=commands.when_mentioned_or(*prefix),
             intents=intents,
             strip_after_prefix=True,
             allowed_mentions=discord.AllowedMentions(
