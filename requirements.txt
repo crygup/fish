@@ -5,3 +5,4 @@ toml
 tabulate
 python-dateutil
 Pillow
+pandas
