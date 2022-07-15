@@ -261,7 +261,7 @@ class Tools(commands.Cog, name="tools"):
 
         if member is None or member and member.id == me.id:
             await ctx.send(
-                f"Hello, I have been awake for {human_timedelta(bot.uptime)}."
+                f"Hello, I have been awake for {human_timedelta(bot.uptime,suffix=False)}."
             )
             return
 
@@ -278,7 +278,7 @@ class Tools(commands.Cog, name="tools"):
             return
 
         await ctx.send(
-            f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} for {human_timedelta(results)}.'
+            f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} for {human_timedelta(results,suffix=False)}.'
         )
 
     @commands.command(name="usernames", aliases=("names",))
