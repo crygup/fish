@@ -82,9 +82,9 @@ class Pokemon(commands.Cog, name="pokemon"):
 
         for p in pokemon:
             if re.search(r"[♀️|♂️]", p):
-                pokemon[pokemon.index(p)] = re.sub(r"[♀️|♂️]", "", p)
+                pokemon[pokemon.index(p)] = re.sub("[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", p)
             if re.search(r"[é]", p):
-                pokemon[pokemon.index(p)] = re.sub(r"[é]", "e", p)
+                pokemon[pokemon.index(p)] = re.sub("[\U000000e9]", "e", p)
 
         self.bot.pokemon = pokemon
 
