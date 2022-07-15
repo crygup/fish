@@ -10,7 +10,14 @@ import asyncpg
 import discord
 from bot import Bot
 from discord.ext import commands
-from utils import human_timedelta, FieldPageSource, Pager, to_thread, resize_to_limit, TenorUrlConverter
+from utils import (
+    human_timedelta,
+    FieldPageSource,
+    Pager,
+    to_thread,
+    resize_to_limit,
+    TenorUrlConverter,
+)
 from PIL import Image
 
 
@@ -481,7 +488,7 @@ class Tools(commands.Cog, name="tools"):
 
         await ctx.send(content=f"Viewing guild avatar log for {member}", file=file)
 
-    @commands.command(name='tenor')
+    @commands.command(name="tenor")
     async def tenor(self, ctx: commands.Context, url: str):
         """Gets the actual gif URL from a tenor link"""
 
