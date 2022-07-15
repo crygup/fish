@@ -27,6 +27,11 @@ class Pokemon(commands.Cog, name="pokemon"):
             if results is None:
                 continue
 
+            if re.search(r"[♀️|♂️]", p):
+                pokemon[pokemon.index(p)] = re.sub(r"[♀️|♂️]", "", p)
+            if re.search(r"[é]", p):
+                pokemon[pokemon.index(p)] = re.sub(r"[é]", "e", p)
+
             found.append(results.group())
 
         return found
@@ -58,7 +63,6 @@ class Pokemon(commands.Cog, name="pokemon"):
 
     @commands.command(name="wtp", aliases=('hint',))
     async def wtp(self, ctx: commands.Context, guess: str):
-
         to_search = guess.lower().replace("\\", "")
         found = self.get_pokemon(to_search)
 
