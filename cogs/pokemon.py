@@ -18,6 +18,11 @@ class Pokemon(commands.Cog, name="pokemon"):
     def get_pokemon(self, guess: str) -> List:
         found = []
         for p in self.bot.pokemon:
+            if re.search(r"[♀️|♂️]", p):
+                p = re.sub(r"[♀️|♂️]", "", p)
+            if re.search(r"[é]", p):
+                p = re.sub(r"[é]", "e", p)
+
             if len(p) != len(guess):
                 continue
 
@@ -27,12 +32,9 @@ class Pokemon(commands.Cog, name="pokemon"):
             if results is None:
                 continue
 
-            if re.search(r"[♀️|♂️]", p):
-                pokemon[pokemon.index(p)] = re.sub(r"[♀️|♂️]", "", p)
-            if re.search(r"[é]", p):
-                pokemon[pokemon.index(p)] = re.sub(r"[é]", "e", p)
+            answer = results.group()
 
-            found.append(results.group())
+            found.append(answer)
 
         return found
 
