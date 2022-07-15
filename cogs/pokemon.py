@@ -54,9 +54,9 @@ class Pokemon(commands.Cog, name="pokemon"):
             return
 
         joined = "\n".join(found)
-        await message.channel.send(f"Possible answers: \n{joined}")
+        await message.channel.send(joined)
 
-    @commands.command(name="wtp", aliases=("hint",))
+    @commands.command(name="wtp", aliases=('hint',))
     async def wtp(self, ctx: commands.Context, guess: str):
 
         to_search = guess.lower().replace("\\", "")
@@ -67,7 +67,7 @@ class Pokemon(commands.Cog, name="pokemon"):
             return
 
         joined = "\n".join(found)
-        await ctx.send(f"Possible answers: \n{joined}")
+        await ctx.send(joined)
 
     @commands.command(name="update_pokemon")
     @commands.is_owner()
