@@ -1,9 +1,12 @@
-import datetime, os
+import datetime
+import os
+import re
 from typing import Dict, List, Optional, Tuple
 
 import aiohttp
 import asyncpg
 import discord
+import pandas as pd
 from discord.ext import commands
 
 initial_extensions = {
@@ -15,7 +18,7 @@ initial_extensions = {
     "cogs.events.members",
     "cogs.events.messages",
     "cogs.events.users",
-    "cogs.pokemon"
+    "cogs.pokemon",
 }
 os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
@@ -44,6 +47,7 @@ class Bot(commands.Bot):
         self.embedcolor = 0xFAA0C1
         self.webhooks: Dict[str, discord.Webhook] = {}
         self.testing = testing
+        self.pokemon: List = []
         self.add_check(self.no_dms)
 
     async def setup_hook(self):
@@ -64,11 +68,17 @@ class Bot(commands.Bot):
             url=self.config["webhooks"]["error_logs"], session=self.session
         )
 
-        with open("files/pokemon.txt", 'r', encoding='utf-8') as fp:
-            pokemon = fp.read()
+        url = "https://raw.githubusercontent.com/poketwo/data/master/csv/pokemon.csv"
+        data = pd.read_csv(url)
+        pokemon = [str(p).lower() for p in data["name.en"]]
 
-        self.pokemon = [p for p in pokemon.split('\n')]
+        for p in pokemon:
+            if re.search(r"[♀️|♂️]", p):
+                pokemon[pokemon.index(p)] = re.sub(r"[♀️|♂️]", "", p)
+            if re.search(r"[é]", p):
+                pokemon[pokemon.index(p)] = re.sub(r"[é]", "e", p)
 
+        self.pokemon = pokemon
 
         for extension in initial_extensions:
             try:
