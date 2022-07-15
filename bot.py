@@ -73,10 +73,10 @@ class Bot(commands.Bot):
         pokemon = [str(p).lower() for p in data["name.en"]]
 
         for p in pokemon:
-            if re.search(r"[♀️|♂️]", p):
-                pokemon[pokemon.index(p)] = re.sub(r"[♀️|♂️]", "", p)
-            if re.search(r"[é]", p):
-                pokemon[pokemon.index(p)] = re.sub(r"[é]", "e", p)
+            if re.search(r"[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", p):
+                pokemon[pokemon.index(p)] = re.sub("[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", p)
+            if re.search(r"[\U000000e9]", p):
+                pokemon[pokemon.index(p)] = re.sub("[\U000000e9]", "e", p)
 
         self.pokemon = pokemon
 
