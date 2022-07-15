@@ -15,6 +15,7 @@ initial_extensions = {
     "cogs.events.members",
     "cogs.events.messages",
     "cogs.events.users",
+    "cogs.pokemon"
 }
 os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
@@ -62,6 +63,12 @@ class Bot(commands.Bot):
         self.webhooks["error_logs"] = discord.Webhook.from_url(
             url=self.config["webhooks"]["error_logs"], session=self.session
         )
+
+        with open("files/pokemon.txt", 'r', encoding='utf-8') as fp:
+            pokemon = fp.read()
+
+        self.pokemon = [p for p in pokemon.split('\n')]
+
 
         for extension in initial_extensions:
             try:
