@@ -17,12 +17,10 @@ class Pokemon(commands.Cog, name="pokemon"):
 
     def get_pokemon(self, guess: str) -> List:
         found = []
-        for p in self.bot.pokemon:
-            if re.search(r"[♀️|♂️]", p):
-                p = re.sub(r"[♀️|♂️]", "", p)
-            if re.search(r"[é]", p):
-                p = re.sub(r"[é]", "e", p)
+        guess = re.sub("[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", guess)
+        guess = re.sub("[\U000000e9]", "e", guess)
 
+        for p in self.bot.pokemon:
             if len(p) != len(guess):
                 continue
 
