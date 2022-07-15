@@ -20,10 +20,8 @@ class Pokemon(commands.Cog, name="pokemon"):
         guess = re.sub("[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", guess)
         guess = re.sub("[\U000000e9]", "e", guess)
 
-        for p in self.bot.pokemon:
-            if len(p) != len(guess):
-                continue
-
+        sorted_guesses = [p for p in self.bot.pokemon if len(p) == len(guess)]
+        for p in sorted_guesses:
             new_pattern = re.compile(guess.replace(r"_", r"[a-z]{1}"))
             results = new_pattern.match(p)
 
