@@ -5,6 +5,7 @@ import discord
 import pandas as pd
 from bot import Bot
 from discord.ext import commands
+from utils import SimplePages
 
 
 async def setup(bot: Bot):
@@ -79,11 +80,52 @@ class Pokemon(commands.Cog, name="pokemon"):
         pokemon = [str(p).lower() for p in data["name.en"]]
 
         for p in pokemon:
-            if re.search(r"[♀️|♂️]", p):
+            if re.search(r"[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", p):
                 pokemon[pokemon.index(p)] = re.sub("[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", p)
-            if re.search(r"[é]", p):
+            if re.search(r"[\U000000e9]", p):
                 pokemon[pokemon.index(p)] = re.sub("[\U000000e9]", "e", p)
 
         self.bot.pokemon = pokemon
 
         await ctx.send("updated")
+
+    async def poke_pages(self, ctx: commands.Context, name, title):
+        data = [p.title() for p in self.bot.pokemon if p.startswith(name)]
+        pages = SimplePages(entries=data, per_page=10, ctx=ctx)
+        pages.embed.title = title
+        await pages.start(ctx)
+
+    @commands.command(name='megas')
+    async def megas(self, ctx: commands.Context):
+        """Pokémon with a mega evolution"""
+        await self.poke_pages(ctx, 'mega ', 'Pokémon with a mega evolution')
+
+    @commands.command(name='gigantamax', alises=('gigas',))
+    async def gigantamax(self, ctx: commands.Context):
+        """Pokémon with a gigantamax evolution"""
+        await self.poke_pages(ctx, 'gigantamax ', 'Pokémon with a gigantamax evolution')
+
+    @commands.command(name='festive')
+    async def festive(self, ctx: commands.Context):
+        """Pokémon with a festive alternative"""
+        await self.poke_pages(ctx, 'festive ', 'Pokémon with a festive alternative')
+
+    @commands.command(name='shadow')
+    async def shadow(self, ctx: commands.Context):
+        """Pokémon with a shadow alternative"""
+        await self.poke_pages(ctx, 'shadow ', 'Pokémon with a shadow alternative')
+
+    @commands.command(name='hisuian')
+    async def hisuian(self, ctx: commands.Context):
+        """Pokémon with a hisuian region alternative"""
+        await self.poke_pages(ctx, 'hisuian ', 'Pokémon with a hisuian region alternative')
+
+    @commands.command(name='galarian')
+    async def galarian(self, ctx: commands.Context):
+        """Pokémon with a galarian region alternative"""
+        await self.poke_pages(ctx, 'galarian ', 'Pokémon with a galarian region alternative')
+
+    @commands.command(name='alolan')
+    async def alolan(self, ctx: commands.Context):
+        """Pokémon with a alolan region alternative"""
+        await self.poke_pages(ctx, 'alolan ', 'Pokémon with a alolan region alternative')
