@@ -100,7 +100,7 @@ class Pokemon(commands.Cog, name="pokemon"):
         """Pokémon with a mega evolution"""
         await self.poke_pages(ctx, 'mega ', 'Pokémon with a mega evolution')
 
-    @commands.command(name='gigantamax', alises=('gigas',))
+    @commands.command(name='gigantamax', aliases=('gigas',))
     async def gigantamax(self, ctx: commands.Context):
         """Pokémon with a gigantamax evolution"""
         await self.poke_pages(ctx, 'gigantamax ', 'Pokémon with a gigantamax evolution')
@@ -127,5 +127,5 @@ class Pokemon(commands.Cog, name="pokemon"):
 
     @commands.command(name='alolan')
     async def alolan(self, ctx: commands.Context):
-        """Pokémon with a alolan region alternative"""
+        """Pokémon with an alolan region alternative"""
         await self.poke_pages(ctx, 'alolan ', 'Pokémon with a alolan region alternative')
