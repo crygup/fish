@@ -2,7 +2,7 @@ import asyncio
 import textwrap
 import time
 from io import BytesIO
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Union
 
 import discord
 from bot import Bot
@@ -106,3 +106,55 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
             return
 
         await command(ctx, argument=codeblock_converter(content))
+
+    @commands.command(name="blacklist")
+    async def _blacklist(
+        self,
+        ctx: commands.Context[Bot],
+        option: Union[discord.User, discord.Guild],
+        *,
+        reason: str = "No reason provided",
+    ):
+        if isinstance(option, discord.Guild):
+            if option.owner_id == ctx.bot.owner_id:
+                await ctx.send("dumbass")
+                return
+
+            if option.id in self.bot.blacklisted_guilds:
+                await self.bot.pool.execute(
+                    "DELETE FROM guild_blacklist WHERE guild_id = $1", option.id
+                )
+                self.bot.blacklisted_guilds.remove(option.id)
+                await ctx.send(f"Removed guild `{option}` from the blacklist")
+            else:
+                await self.bot.pool.execute(
+                    "INSERT INTO guild_blacklist (guild_id, reason, time) VALUES ($1, $2, $3)",
+                    option.id,
+                    reason,
+                    discord.utils.utcnow(),
+                )
+                self.bot.blacklisted_guilds.append(option.id)
+                await ctx.send(f"Added guild `{option}` to the blacklist")
+
+        elif isinstance(option, discord.User):
+            if option.id == ctx.bot.owner_id:
+                await ctx.send("dumbass")
+                return
+
+            if option.id in self.bot.blacklisted_users:
+                await self.bot.pool.execute(
+                    "DELETE FROM user_blacklist WHERE user_id = $1", option.id
+                )
+                self.bot.blacklisted_users.remove(option.id)
+                await ctx.send(f"Removed user `{option}` from the blacklist")
+            else:
+                await self.bot.pool.execute(
+                    "INSERT INTO user_blacklist (user_id, reason, time) VALUES ($1, $2, $3)",
+                    option.id,
+                    reason,
+                    discord.utils.utcnow(),
+                )
+                self.bot.blacklisted_users.append(option.id)
+                await ctx.send(f"Added user `{option}` to the blacklist")
+        else:
+            await ctx.send("what")

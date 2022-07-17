@@ -80,3 +80,22 @@ CREATE TABLE IF NOT EXISTS member_join_logs (
     guild_id BIGINT,
     time TIMESTAMP WITH TIME ZONE
 );
+
+CREATE TABLE IF NOT EXISTS guild_join_logs (
+    guild_id BIGINT,
+    time TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS guild_blacklist (
+    guild_id BIGINT,
+    reason TEXT,
+    time TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (guild_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_blacklist (
+    user_id BIGINT,
+    reason TEXT,
+    time TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (user_id)
+);

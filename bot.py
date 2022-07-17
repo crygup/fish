@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 import os
 import re
@@ -12,6 +14,8 @@ from discord.ext import commands
 initial_extensions = {
     "jishaku",
     "cogs.owner",
+}
+bot_extensions = {
     "cogs.tools",
     "cogs.events.errors",
     "cogs.events.guilds",
@@ -29,8 +33,17 @@ class Bot(commands.Bot):
     session: aiohttp.ClientSession
     pool: asyncpg.Pool
 
-    async def no_dms(self, ctx: commands.Context):
+    async def no_dms(self, ctx: commands.Context[Bot]):
         return ctx.guild is not None
+
+    async def user_blacklist(self, ctx: commands.Context[Bot]):
+        return ctx.author.id not in self.blacklisted_users
+
+    async def guild_blacklist(self, ctx: commands.Context[Bot]):
+        if ctx.guild is None:
+            return True
+
+        return ctx.guild.id not in self.blacklisted_guilds
 
     def __init__(self, intents: discord.Intents, config: Dict, testing: bool):
         prefix: List = ["fish ", "f"] if not testing else ["fish. ", "f."]
@@ -47,8 +60,12 @@ class Bot(commands.Bot):
         self.embedcolor = 0xFAA0C1
         self.webhooks: Dict[str, discord.Webhook] = {}
         self.testing = testing
-        self.pokemon: List = []
+        self.pokemon: List[str] = []
+        self.blacklisted_guilds: List[int] = []
+        self.blacklisted_users: List[int] = []
         self.add_check(self.no_dms)
+        self.add_check(self.user_blacklist)
+        self.add_check(self.guild_blacklist)
 
     async def setup_hook(self):
         self.session = aiohttp.ClientSession()
@@ -64,8 +81,20 @@ class Bot(commands.Bot):
 
         self.pool = connection
 
+        blacklisted_guilds = await self.pool.fetch(
+            "SELECT guild_id FROM guild_blacklist"
+        )
+        self.blacklisted_guilds = [guild["guild_id"] for guild in blacklisted_guilds]
+
+        blacklisted_users = await self.pool.fetch("SELECT user_id FROM user_blacklist")
+        self.blacklisted_users = [user["user_id"] for user in blacklisted_users]
+
         self.webhooks["error_logs"] = discord.Webhook.from_url(
             url=self.config["webhooks"]["error_logs"], session=self.session
+        )
+
+        self.webhooks["join_logs"] = discord.Webhook.from_url(
+            url=self.config["webhooks"]["join_logs"], session=self.session
         )
 
         url = "https://raw.githubusercontent.com/poketwo/data/master/csv/pokemon.csv"
@@ -74,11 +103,17 @@ class Bot(commands.Bot):
 
         for p in pokemon:
             if re.search(r"[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", p):
-                pokemon[pokemon.index(p)] = re.sub("[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", p)
+                pokemon[pokemon.index(p)] = re.sub(
+                    "[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", p
+                )
             if re.search(r"[\U000000e9]", p):
                 pokemon[pokemon.index(p)] = re.sub("[\U000000e9]", "e", p)
 
         self.pokemon = pokemon
+
+        if not self.testing:
+            for extension in bot_extensions:
+                initial_extensions.add(extension)
 
         for extension in initial_extensions:
             try:
