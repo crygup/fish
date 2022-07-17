@@ -41,7 +41,9 @@ class GuildEvents(commands.Cog, name="guild_events"):
 
     async def guild_method(self, embed: discord.Embed, guild: discord.Guild):
         embed.timestamp = (
-            guild.me.joined_at if guild.me and guild.me.joined_at else discord.utils.utcnow()
+            guild.me.joined_at
+            if guild.me and guild.me.joined_at
+            else discord.utils.utcnow()
         )
         embed.add_field(
             name="Created", value=discord.utils.format_dt(guild.created_at, "d")
