@@ -12,6 +12,8 @@ import discord
 import pandas as pd
 from discord.ext import commands
 
+from utils import GuildContext
+
 initial_extensions = {
     "jishaku",
     "cogs.owner",
@@ -34,23 +36,51 @@ class Bot(commands.Bot):
     session: aiohttp.ClientSession
     pool: asyncpg.Pool
 
-    async def no_dms(self, ctx: commands.Context[Bot]):
+    async def no_dms(self, ctx: GuildContext):
         return ctx.guild is not None
 
-    async def user_blacklist(self, ctx: commands.Context[Bot]):
+    async def user_blacklist(self, ctx: GuildContext):
         return ctx.author.id not in self.blacklisted_users
 
-    async def guild_blacklist(self, ctx: commands.Context[Bot]):
+    async def guild_blacklist(self, ctx: GuildContext):
         if ctx.guild is None:
             return True
 
         return ctx.guild.id not in self.blacklisted_guilds
 
-    async def guild_owner_blacklist(self, ctx: commands.Context[Bot]):
+    async def guild_owner_blacklist(self, ctx: GuildContext):
         if ctx.guild is None:
             return True
 
         return ctx.guild.owner_id not in self.blacklisted_users
+
+    async def cooldown_check(self, ctx: GuildContext):
+        bucket = self._global_cooldown.get_bucket(ctx.message)
+
+        if bucket is None:
+            return True
+
+        retry_after = bucket.update_rate_limit()
+
+        if retry_after:
+            sql = """
+            INSERT INTO user_blacklist(user_id, reason, time)
+            """
+            await self.pool.execute(sql, ctx.author.id, "Auto-blacklist from command spam", discord.utils.utcnow())
+            self.user_blacklist.append(ctx.author.id)
+
+            if ctx.guild.owner_id == ctx.author.id:
+                sql = """
+                INSERT INTO guild_blacklist(guild_id, reason, time)
+                """
+                await self.pool.execute(sql, ctx.guild.id, "Auto-blacklist from command spam", discord.utils.utcnow())
+                self.blacklisted_guilds.append(ctx.guild.id)
+
+            await ctx.send("You have been automatically blacklisted for spamming commands, contact cr#0333 if you think this was a mistake.")
+
+            return False
+
+        return True
 
     def __init__(
         self,
@@ -79,10 +109,12 @@ class Bot(commands.Bot):
         self.blacklisted_users: List[int] = []
         self.whitelisted_users: List[int] = []
         self.poketwo_guilds: List[int] = []
+        self._global_cooldown = commands.CooldownMapping.from_cooldown(20.0, 30.0, commands.BucketType.member)
         self.add_check(self.no_dms)
         self.add_check(self.user_blacklist)
         self.add_check(self.guild_blacklist)
         self.add_check(self.guild_owner_blacklist)
+        self.add_check(self.cooldown_check)
 
     async def setup_hook(self):
         self.session = aiohttp.ClientSession()
