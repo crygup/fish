@@ -70,7 +70,7 @@ class Tools(commands.Cog, name="tools"):
         if channel is None:
             return
 
-        await self.bot.get_cog("message_event")._delete_videos()  # type: ignore
+        await self.bot.get_cog("message_event")._bulk_insert()  # type: ignore
 
         record = await self.bot.pool.fetchrow(
             "SELECT * FROM message_logs WHERE author_id = $1 AND guild_id = $2 AND channel_id = $3 ORDER BY created_at ASC LIMIT 1",
@@ -103,7 +103,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None or channel is None:
             return
 
-        await self.bot.get_cog("message_event")._delete_videos()  # type: ignore
+        await self.bot.get_cog("message_event")._bulk_insert()  # type: ignore
 
         if member:
             sql = """
@@ -219,7 +219,7 @@ class Tools(commands.Cog, name="tools"):
         """Shows how many times a user joined a server
 
         Note: If they joined before I was added then I will not have any data for them."""
-        await self.bot.get_cog("guild_events")._delete_videos()  # type: ignore
+        await self.bot.get_cog("guild_events")._bulk_insert()  # type: ignore
 
         guild = guild or ctx.guild
 
@@ -251,7 +251,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await self.bot.get_cog("guild_events")._delete_videos()  # type: ignore
+        await self.bot.get_cog("guild_events")._bulk_insert()  # type: ignore
 
         records = await self.bot.pool.fetch(
             "SELECT * FROM member_join_logs WHERE member_id = $1 AND guild_id = $2",
@@ -293,7 +293,7 @@ class Tools(commands.Cog, name="tools"):
             )
             return
 
-        await self.bot.get_cog("user_events")._delete_videos()  # type: ignore
+        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results: Optional[datetime.datetime] = await bot.pool.fetchval(
             "SELECT time FROM uptime_logs WHERE user_id = $1", member.id
@@ -314,7 +314,7 @@ class Tools(commands.Cog, name="tools"):
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
 
-        await self.bot.get_cog("user_events")._delete_videos()  # type: ignore
+        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC",
@@ -343,7 +343,7 @@ class Tools(commands.Cog, name="tools"):
     async def discrims(
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
-        await self.bot.get_cog("user_events")._delete_videos()  # type: ignore
+        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC",
@@ -378,7 +378,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await self.bot.get_cog("member_events")._delete_videos()  # type: ignore
+        await self.bot.get_cog("member_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC",
@@ -462,7 +462,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await self.bot.get_cog("user_events")._delete_videos()  # type: ignore
+        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         check = await self.bot.pool.fetchrow(
             "SELECT avatar FROM avatar_logs WHERE user_id = $1", user.id
@@ -488,7 +488,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await self.bot.get_cog("member_events")._delete_videos()  # type: ignore
+        await self.bot.get_cog("member_events")._bulk_insert()  # type: ignore
 
         check = await self.bot.pool.fetchrow(
             "SELECT avatar FROM guild_avatar_logs WHERE user_id = $1 AND guild_id = $2",
