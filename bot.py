@@ -46,6 +46,12 @@ class Bot(commands.Bot):
 
         return ctx.guild.id not in self.blacklisted_guilds
 
+    async def guild_owner_blacklist(self, ctx: commands.Context[Bot]):
+        if ctx.guild is None:
+            return True
+
+        return ctx.guild.owner_id not in self.blacklisted_users
+
     def __init__(
         self,
         intents: discord.Intents,
