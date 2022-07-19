@@ -508,7 +508,6 @@ class Tools(commands.Cog, name="tools"):
         await ctx.send(f"Here is the real url: {real_url}")
 
     @commands.command(name="download",hidden=True)
-    @commands.is_owner()
     async def download(self, ctx: GuildContext, url: str, *, flags: Optional[str]):
         """Downloads a video from certain sites.
 
