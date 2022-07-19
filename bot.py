@@ -4,7 +4,7 @@ import datetime
 import logging
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import aiohttp
 import asyncpg
@@ -12,7 +12,8 @@ import discord
 import pandas as pd
 from discord.ext import commands
 
-from utils import GuildContext
+if TYPE_CHECKING:
+    from utils import GuildContext
 
 initial_extensions = {
     "jishaku",
