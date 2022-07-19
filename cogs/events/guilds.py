@@ -14,6 +14,8 @@ class GuildEvents(commands.Cog, name="guild_events"):
     def __init__(self, bot: Bot):
         self.bot = bot
         self._joins: List[Tuple[int, int, datetime.datetime]] = []
+        self._bans: List[Tuple[int, int, int, str, datetime.datetime]] = []
+        self._kicks: List[Tuple[int, int, int, str, datetime.datetime]] = []
 
     async def _bulk_insert(self):
         if self._joins:
@@ -23,6 +25,22 @@ class GuildEvents(commands.Cog, name="guild_events"):
             """
             await self.bot.pool.executemany(sql, self._joins)
             self._joins.clear()
+
+        if self._bans:
+            sql = """
+            INSERT INTO guild_bans(guild_id, mod_id, target_id, reason, time)
+            VALUES ($1, $2, $3, $4, $5)
+            """
+            await self.bot.pool.executemany(sql, self._bans)
+            self._bans.clear()
+
+        if self._kicks:
+            sql = """
+            INSERT INTO guild_kicks(guild_id, mod_id, target_id, reason, time)
+            VALUES ($1, $2, $3, $4, $5)
+            """
+            await self.bot.pool.executemany(sql, self._kicks)
+            self._kicks.clear()
 
     async def cog_unload(self):
         await self._bulk_insert()
@@ -99,3 +117,62 @@ class GuildEvents(commands.Cog, name="guild_events"):
         )
 
         await self.guild_method(embed, guild)
+
+    @commands.Cog.listener("on_member_ban")
+    async def on_member_ban(self, guild: discord.Guild, user: discord.User):
+        if self.bot.user is None:
+            return
+
+        if guild.me.guild_permissions.view_audit_log:
+            mod_id = 0
+            reason = "No reason given"
+            async for entry in guild.audit_logs(action=discord.AuditLogAction.ban, limit=5):
+                if entry.target is None:
+                    continue
+                if entry.user is None:
+                    continue
+
+                if entry.target.id == user.id:
+                    mod_id = entry.user.id
+                    reason = entry.reason or "No reason given"
+                    break
+        else:
+            mod_id = guild.me.id
+            reason = "No reason given"
+
+        self._bans.append(
+            (
+                guild.id,
+                mod_id,
+                user.id,
+                reason,
+                discord.utils.utcnow(),
+            ))
+
+    @commands.Cog.listener("on_member_remove")
+    async def on_member_remove(self, member: discord.Member):
+        if self.bot.user is None:
+            return
+
+        if member.guild.me.guild_permissions.view_audit_log:
+            mod_id = 0
+            reason = "No reason given"
+            async for entry in member.guild.audit_logs(action=discord.AuditLogAction.kick, limit=5):
+                if entry.target is None:
+                    continue
+                if entry.user is None:
+                    continue
+
+                if entry.target.id == member.id:
+                    mod_id = entry.user.id
+                    reason = entry.reason or "No reason given"
+                    break
+
+            self._kicks.append(
+                (
+                    member.guild.id,
+                    mod_id,
+                    member.id,
+                    reason,
+                    discord.utils.utcnow(),
+                ))
