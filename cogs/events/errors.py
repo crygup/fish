@@ -1,10 +1,12 @@
 import sys
 import textwrap
 import traceback
+
 import discord
 from bot import Bot
 from discord.ext import commands
 from utils import IGNORED, SEND
+from yt_dlp import DownloadError
 
 
 async def setup(bot: Bot):
@@ -51,6 +53,9 @@ class ErrorEvents(commands.Cog, name="error_events"):
                 await ctx.message.add_reaction("\N{HOURGLASS}")
             except:
                 pass
+
+        elif isinstance(error, DownloadError):
+            await ctx.send("Invalid video url.")
 
         elif isinstance(error, SEND):
             await ctx.send(str(error), allowed_mentions=self.mentions)
