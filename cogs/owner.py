@@ -1,15 +1,13 @@
-import asyncio
-import textwrap
 import time
 from io import BytesIO
-from typing import Any, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import discord
 from bot import Bot
 from discord.ext import commands
-from tabulate import tabulate
-from utils import UntilFlag, cleanup_code, plural, GuildContext
 from jishaku.codeblocks import codeblock_converter
+from tabulate import tabulate
+from utils import GuildContext, UntilFlag, cleanup_code, plural
 
 
 async def setup(bot: Bot):

@@ -9,7 +9,7 @@ import shlex
 import textwrap
 import time
 from io import BytesIO
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import asyncpg
 import discord
@@ -28,6 +28,7 @@ from utils import (
     run,
     to_thread,
 )
+from yt_dlp import YoutubeDL
 
 
 async def setup(bot: Bot):
@@ -572,27 +573,43 @@ class Tools(commands.Cog, name="tools"):
         else:
             video = url
 
-        basic_method = f'yt-dlp {video} -P "files/videos" -o "{default_name}.%(ext)s" '
-
         if audio_only:
-            basic_method += f"-i --extract-audio --audio-format {default_format}"
+            video_format = f"-i --extract-audio --audio-format {default_format}"
         else:
             # tiktok uses h264 encoding so we have to use this
             # in the future i will add more checks to if this is reaccuring issue with other platforms
             # but for now ternary is fine
-            basic_method += (
+            video_format = (
                 "-S vcodec:h264"
                 if re.fullmatch(regexes["VMtiktok"]["regex"], video)
                 or re.fullmatch(regexes["WEBtiktok"]["regex"], video)
-                else f'--format "bestvideo+bestaudio[ext={default_format}]/best"'
+                else f"bestvideo+bestaudio[ext={default_format}]/best"
             )
+
+        def length_check(info: Dict, *, incomplete):
+            duration = info.get("duration")
+            if duration and duration > 600:
+                raise commands.BadArgument(
+                    "Video is too long to download, please keep it under 10 minutes."
+                )
+
+
+        ydl_opts = {
+            "format": video_format,
+            "outtmpl": f"files/videos/{default_name}.%(ext)s",
+            "match_filter": length_check,
+            "quiet": True,
+        }
 
         message = await ctx.send("Downloading video")
 
         self.currently_downloading.append(f"{default_name}.{default_format}")
+
         start = time.perf_counter()
-        await run(basic_method)
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.download(url)
         stop = time.perf_counter()
+
         dl_time = f"Took `{round(stop - start, 2)}` seconds to download."
 
         await message.edit(content="Downloaded, uploading...")
