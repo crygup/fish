@@ -125,14 +125,14 @@ class Pokemon(commands.Cog, name="pokemon"):
                 "DELETE FROM poketwo_whitelist WHERE guild_id = $1", ctx.guild.id
             )
             self.bot.poketwo_guilds.remove(ctx.guild.id)
-            await ctx.send("Disabled")
+            await ctx.send("Disabled auto solving for this server")
             return
 
         await self.bot.pool.execute(
             "INSERT INTO poketwo_whitelist VALUES ($1)", ctx.guild.id
         )
         self.bot.poketwo_guilds.append(ctx.guild.id)
-        await ctx.send("Enabled")
+        await ctx.send("Enabled auto solving for this server")
 
     @commands.command(name="megas")
     async def megas(self, ctx: GuildContext):
