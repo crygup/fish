@@ -82,6 +82,7 @@ class Bot(commands.Bot):
         self.add_check(self.no_dms)
         self.add_check(self.user_blacklist)
         self.add_check(self.guild_blacklist)
+        self.add_check(self.guild_owner_blacklist)
 
     async def setup_hook(self):
         self.session = aiohttp.ClientSession()
