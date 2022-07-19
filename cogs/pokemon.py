@@ -41,10 +41,16 @@ class Pokemon(commands.Cog, name="pokemon"):
         if message.guild is None:
             return
 
+        if message.author.id != 716390085896962058:
+            return
+
         if message.guild.id not in self.bot.poketwo_guilds:
             return
 
-        if message.author.id != 716390085896962058:
+        if message.guild.id in self.bot.blacklisted_guilds:
+            return
+
+        if message.guild.owner_id in self.bot.blacklisted_users:
             return
 
         if r"\_" not in message.content:
