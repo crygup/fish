@@ -85,7 +85,7 @@ regexes = {
         "whitelist": True,
     },
     "pornhub": {
-        "regex": r"(https://)?(www.)?pornhub.com/view_video.php\?viewkey=[a-z0-9]{1,20}",
+        "regex": r"(https://)?(www.)?pornhub.com/view_video.php\?viewkey=[a-zA-Z0-9]{0,20}",
         "nsfw": True,
         "whitelist": True,
     }
