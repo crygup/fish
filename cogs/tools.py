@@ -579,6 +579,7 @@ class Tools(commands.Cog, name="tools"):
             )
 
         message = await ctx.send("Downloading video")
+        await ctx.send(basic_method)
 
         self.currently_downloading.append(f"{default_name}.{default_format}")
         start = time.perf_counter()
