@@ -99,3 +99,23 @@ CREATE TABLE IF NOT EXISTS user_blacklist (
     time TIMESTAMP WITH TIME ZONE,
     PRIMARY KEY (user_id)
 );
+
+CREATE TABLE IF NOT EXISTS user_whitelist (
+    user_id BIGINT,
+    reason TEXT,
+    time TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS poketwo_whitelist (
+    guild_id BIGINT,
+    time TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (guild_id)
+);
+
+CREATE TABLE IF NOT EXISTS download_logs (
+    user_id BIGINT,
+    guild_id BIGINT,
+    video TEXT,
+    time TIMESTAMP WITH TIME ZONE
+);

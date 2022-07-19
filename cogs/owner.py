@@ -8,7 +8,7 @@ import discord
 from bot import Bot
 from discord.ext import commands
 from tabulate import tabulate
-from utils import UntilFlag, cleanup_code, plural
+from utils import UntilFlag, cleanup_code, plural, GuildContext
 from jishaku.codeblocks import codeblock_converter
 
 
@@ -40,7 +40,7 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
         return True
 
     @commands.command(name="sql")
-    async def sql(self, ctx: commands.Context, *, query: UntilFlag[SqlCommandFlags]):
+    async def sql(self, ctx: GuildContext, *, query: UntilFlag[SqlCommandFlags]):
         """|coro|
         Executes an SQL query
         Parameters
@@ -110,7 +110,7 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
     @commands.command(name="blacklist")
     async def _blacklist(
         self,
-        ctx: commands.Context[Bot],
+        ctx: GuildContext,
         option: Union[discord.User, discord.Guild],
         *,
         reason: str = "No reason provided",
@@ -158,3 +158,28 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
                 await ctx.send(f"Added user `{option}` to the blacklist")
         else:
             await ctx.send("what")
+
+    @commands.command(name="whitelist")
+    async def _whitelist(
+        self,
+        ctx: GuildContext,
+        user: discord.User,
+        *,
+        reason: str = "No reason provided",
+    ):
+        if user.id in self.bot.whitelisted_users:
+            await self.bot.pool.execute(
+                "DELETE FROM user_whitelist WHERE user_id = $1", user.id
+            )
+            self.bot.whitelisted_users.remove(user.id)
+            await ctx.send(f"Removed user `{user}` from the whitelist")
+
+        else:
+            await self.bot.pool.execute(
+                "INSERT INTO user_whitelist (user_id, reason, time) VALUES ($1, $2, $3)",
+                user.id,
+                reason,
+                discord.utils.utcnow(),
+            )
+            self.bot.whitelisted_users.append(user.id)
+            await ctx.send(f"Added user `{user}` to the whitelist")

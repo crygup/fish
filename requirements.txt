@@ -6,3 +6,4 @@ tabulate
 python-dateutil
 Pillow
 pandas
+yt-dlp

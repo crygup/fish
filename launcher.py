@@ -32,7 +32,7 @@ async def main():
 
     intents = discord.Intents.all()
 
-    bot = Bot(intents, config, testing)
+    bot = Bot(intents, config, testing, logger)
 
     async with bot:
         await bot.start(config["tokens"]["bot"])

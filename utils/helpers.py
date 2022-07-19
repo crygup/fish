@@ -1,13 +1,29 @@
+from __future__ import annotations
+
 import asyncio
 import datetime
 import re
 import time
 from io import BytesIO
-from typing import Awaitable, Callable, ClassVar, Optional, ParamSpec, Sequence, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Awaitable,
+    Callable,
+    ClassVar,
+    Optional,
+    ParamSpec,
+    Sequence,
+    TypeVar,
+    Union,
+)
 
 import discord
 from dateutil.relativedelta import relativedelta
+from discord.ext import commands
 from PIL import Image, ImageSequence
+
+if TYPE_CHECKING:
+    from bot import Bot
 
 __all__ = [
     "cleanup_code",
@@ -16,11 +32,99 @@ __all__ = [
     "Timer",
     "human_timedelta",
     "resize_to_limit",
-    "Regexes"
+    "Regexes",
+    "GuildContext",
+    "run",
+    "regexes",
+    "get_video",
 ]
 
 T = TypeVar("T")
 P = ParamSpec("P")
+
+
+regexes = {
+    "VMtiktok": {
+        "regex": r"https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9}",
+        "nsfw": False,
+        "whitelist": False,
+    },
+    "WEBtiktok": {
+        "regex": r"https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,24}\/video\/[0-9]{19}",
+        "nsfw": False,
+        "whitelist": False,
+    },
+    "instagram": {
+        "regex": r"https:\/\/(www.)?instagram.com\/(p|tv|reel)\/[a-zA-Z0-9]{11}\/",
+        "nsfw": False,
+        "whitelist": False,
+    },
+    "twitch": {
+        "regex": r"https?:\/\/clips.twitch.tv\/[a-zA-Z0-9_-]*",
+        "nsfw": False,
+        "whitelist": True,
+    },
+    "twitter": {
+        "regex": r"https?:\/\/twitter.com\/[a-zA-Z0-9_]{2,15}\/status\/[0-9]{19}",
+        "nsfw": True,
+        "whitelist": False,
+    },
+    "reddit": {
+        "regex": r"https?:\/\/(www.)reddit.com\/r\/[a-zA-Z0-9_-]{1,20}\/comments\/[a-z0-9]{6}",
+        "nsfw": True,
+        "whitelist": False,
+    },
+    "youtube_short": {
+        "regex": r"https:\/\/(www.)?youtube.com\/shorts\/[a-zA-Z0-9_-]{11}",
+        "nsfw": False,
+        "whitelist": True,
+    },
+    "youtube": {
+        "regex": r"https:\/\/(www.)?youtu(.be|be.com)\/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})",
+        "nsfw": False,
+        "whitelist": True,
+    },
+}
+
+
+async def get_video(ctx: GuildContext, url: str) -> Optional[str]:
+    for regex in regexes:
+        result = re.search(regexes[regex]["regex"], url)
+        if result:
+            if regexes[regex]["whitelist"]:
+                if ctx.author.id not in ctx.bot.whitelisted_users:
+                    raise commands.BadArgument(
+                        "You are not whitelisted to use this service, contact cr#0333."
+                    )
+
+            return result.group(0)
+
+    return None
+
+
+async def run(cmd: str) -> Optional[str]:
+
+    proc = await asyncio.create_subprocess_shell(
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+
+    stdout, stderr = await proc.communicate()
+
+    if stdout:
+        return f"[stdout]\n{stdout.decode()}"
+
+    if stderr:
+        raise TypeError(f"[stderr]\n{stderr.decode()}")
+
+
+class GuildContext(commands.Context):
+    bot: Bot
+    author: discord.Member
+    guild: discord.Guild
+    channel: Union[discord.VoiceChannel, discord.TextChannel, discord.Thread]
+    me: discord.Member
+    prefix: str
+
 
 class Regexes:
     TENOR_PAGE_REGEX: ClassVar[re.Pattern] = re.compile(
@@ -32,6 +136,7 @@ class Regexes:
     CUSTOM_EMOJI_REGEX: ClassVar[re.Pattern] = re.compile(
         r"<(a)?:([a-zA-Z0-9_]{2,32}):([0-9]{18,22})>"
     )
+
 
 def cleanup_code(content: str) -> str:
     """Automatically removes code blocks from the code."""

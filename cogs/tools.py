@@ -1,33 +1,45 @@
+import argparse
 import datetime
 import imghdr
 import math
+import os
+import re
+import secrets
+import shlex
 import textwrap
-from io import BytesIO
 import time
+from io import BytesIO
 from typing import List, Optional
 
 import asyncpg
 import discord
 from bot import Bot
-from discord.ext import commands
-from utils import (
-    human_timedelta,
-    FieldPageSource,
-    Pager,
-    to_thread,
-    resize_to_limit,
-    TenorUrlConverter,
-)
+from discord.ext import commands, tasks
 from PIL import Image
+from utils import (FieldPageSource, GuildContext, Pager, TenorUrlConverter,
+                   get_video, human_timedelta, regexes, resize_to_limit, run,
+                   to_thread)
 
 
 async def setup(bot: Bot):
     await bot.add_cog(Tools(bot))
 
 
+class Arguments(argparse.ArgumentParser):
+    def error(self, message):
+        raise RuntimeError(message)
+
+
 class Tools(commands.Cog, name="tools"):
     def __init__(self, bot: Bot):
         self.bot = bot
+        self.currently_downloading: list[str] = []
+
+    async def cog_unload(self):
+        self.delete_videos.cancel()
+
+    async def cog_load(self) -> None:
+        self.delete_videos.start()
 
     @commands.command(name="first_message", aliases=("fm", "oldest"))
     async def first_message(
@@ -49,7 +61,7 @@ class Tools(commands.Cog, name="tools"):
         if channel is None:
             return
 
-        await self.bot.get_cog("message_event")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("message_event")._delete_videos()  # type: ignore
 
         record = await self.bot.pool.fetchrow(
             "SELECT * FROM message_logs WHERE author_id = $1 AND guild_id = $2 AND channel_id = $3 ORDER BY created_at ASC LIMIT 1",
@@ -82,7 +94,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None or channel is None:
             return
 
-        await self.bot.get_cog("message_event")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("message_event")._delete_videos()  # type: ignore
 
         if member:
             sql = """
@@ -198,7 +210,7 @@ class Tools(commands.Cog, name="tools"):
         """Shows how many times a user joined a server
 
         Note: If they joined before I was added then I will not have any data for them."""
-        await self.bot.get_cog("guild_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("guild_events")._delete_videos()  # type: ignore
 
         guild = guild or ctx.guild
 
@@ -230,7 +242,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await self.bot.get_cog("guild_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("guild_events")._delete_videos()  # type: ignore
 
         records = await self.bot.pool.fetch(
             "SELECT * FROM member_join_logs WHERE member_id = $1 AND guild_id = $2",
@@ -272,7 +284,7 @@ class Tools(commands.Cog, name="tools"):
             )
             return
 
-        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("user_events")._delete_videos()  # type: ignore
 
         results: Optional[datetime.datetime] = await bot.pool.fetchval(
             "SELECT time FROM uptime_logs WHERE user_id = $1", member.id
@@ -293,7 +305,7 @@ class Tools(commands.Cog, name="tools"):
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
 
-        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("user_events")._delete_videos()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC",
@@ -322,7 +334,7 @@ class Tools(commands.Cog, name="tools"):
     async def discrims(
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
-        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("user_events")._delete_videos()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC",
@@ -357,7 +369,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await self.bot.get_cog("member_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("member_events")._delete_videos()  # type: ignore
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC",
@@ -441,7 +453,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("user_events")._delete_videos()  # type: ignore
 
         check = await self.bot.pool.fetchrow(
             "SELECT avatar FROM avatar_logs WHERE user_id = $1", user.id
@@ -467,7 +479,7 @@ class Tools(commands.Cog, name="tools"):
         if ctx.guild is None:
             return
 
-        await self.bot.get_cog("member_events")._bulk_insert()  # type: ignore
+        await self.bot.get_cog("member_events")._delete_videos()  # type: ignore
 
         check = await self.bot.pool.fetchrow(
             "SELECT avatar FROM guild_avatar_logs WHERE user_id = $1 AND guild_id = $2",
@@ -494,3 +506,134 @@ class Tools(commands.Cog, name="tools"):
 
         real_url = await TenorUrlConverter().convert(ctx, url)
         await ctx.send(f"Here is the real url: {real_url}")
+
+    @commands.command(name="download")
+    async def download(self, ctx: GuildContext, url: str, *, flags: Optional[str]):
+        """Downloads a video from certain sites.
+
+        Accepted sites are, Youtube, TikTok, Twitter, Twitch, and reddit.
+
+        Flags:
+            -format: The format of the video.
+            -name: The name of the file."""
+
+        default_name = secrets.token_urlsafe(8)
+        default_format = "mp4"
+        audio_only = False
+        check_channel = True
+        valid_video_formats = [
+            "mp4",
+            "webm",
+            "mov",
+        ]
+        valid_audio_formats = [
+            "mp3",
+            "ogg",
+            "wav",
+        ]
+
+        if flags:
+            parser = Arguments(add_help=False, allow_abbrev=False)
+            parser.add_argument("-dev", action="store_true")
+            parser.add_argument("-format", type=str)
+
+            try:
+                _flags = parser.parse_args(shlex.split(flags))
+            except Exception as e:
+                return await ctx.send(str(e))
+
+            if _flags.format:
+                if _flags.format not in valid_video_formats + valid_audio_formats:
+                    return await ctx.send("Invalid format")
+
+                if _flags.format in valid_audio_formats:
+                    audio_only = True
+
+                default_format = _flags.format
+
+            if _flags.dev:
+                check_channel = False if ctx.author.id == self.bot.owner_id else True
+
+        if check_channel:
+            video = await get_video(ctx, url)
+
+            if video is None:
+                return await ctx.send("Invalid video url.")
+
+        else:
+            video = url
+
+        basic_method = f'yt-dlp {video} -P "files/videos" -o "{default_name}.%(ext)s" '
+
+        if audio_only:
+            basic_method += f"-i --extract-audio --audio-format {default_format}"
+        else:
+            # tiktok uses h264 encoding so we have to use this
+            # in the future i will add more checks to if this is reaccuring issue with other platforms
+            # but for now ternary is fine
+            basic_method += (
+                "-S vcodec:h264"
+                if re.fullmatch(regexes["VMtiktok"]["regex"], video)
+                or re.fullmatch(regexes["WEBtiktok"]["regex"], video)
+                else f'--format "bestvideo+bestaudio[ext={default_format}]/best"'
+            )
+
+        message = await ctx.send("Downloading video")
+
+        self.currently_downloading.append(f"{default_name}.{default_format}")
+        start = time.perf_counter()
+        await run(basic_method)
+        stop = time.perf_counter()
+        dl_time = f"Took `{round(stop - start, 2)}` seconds to download."
+
+        await message.edit(content="Downloaded, uploading...")
+
+        try:
+            _file = discord.File(f"files/videos/{default_name}.{default_format}")
+            await message.edit(content=dl_time, attachments=[_file])
+            failed = False
+            sql = """
+            INSERT INTO download_logs(user_id, guild_id, video, time)
+            VALUES ($1, $2, $3, $4)
+            """
+            await self.bot.pool.execute(sql, ctx.author.id, ctx.guild.id, video, discord.utils.utcnow())
+        except (ValueError, discord.Forbidden):
+            await message.edit(content="Failed to download, try again later?")
+            failed = True
+
+        self.currently_downloading.remove(f"{default_name}.{default_format}")
+
+        channel = self.bot.get_channel(968544611352051802)
+        embed = discord.Embed(
+            title="Video downloaded",
+            timestamp=discord.utils.utcnow(),
+            color=ctx.bot.embedcolor if not failed else discord.Color.red(),
+        )
+        embed.add_field(name="Author", value=f"{ctx.author}\n{ctx.author.mention}")
+        embed.add_field(name="Video", value=video, inline=False)
+        embed.set_footer(text=f"ID: {ctx.author.id} \nDownloaded at ")
+
+        if isinstance(channel, discord.TextChannel):
+            await channel.send(embed=embed)
+
+        if not failed:
+            try:
+                os.remove(f"files/videos/{default_name}.{default_format}")
+            except (FileNotFoundError, PermissionError):
+                pass
+
+
+    @tasks.loop(minutes=10.0)
+    async def delete_videos(self):
+        valid_formats = (
+            "mp4",
+            "webm",
+            "mov",
+            "mp3",
+            "ogg",
+            "wav",
+        )
+        for file in os.listdir("files/videos"):
+            if file.endswith(valid_formats):
+                if file not in self.currently_downloading:
+                    os.remove(f"files/videos/{file}")

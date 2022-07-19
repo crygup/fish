@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 import re
 from typing import Dict, List, Optional, Tuple
@@ -45,7 +46,13 @@ class Bot(commands.Bot):
 
         return ctx.guild.id not in self.blacklisted_guilds
 
-    def __init__(self, intents: discord.Intents, config: Dict, testing: bool):
+    def __init__(
+        self,
+        intents: discord.Intents,
+        config: Dict,
+        testing: bool,
+        logger: logging.Logger,
+    ):
         prefix: List = ["fish ", "f"] if not testing else ["fish. ", "f."]
         super().__init__(
             command_prefix=commands.when_mentioned_or(*prefix),
@@ -56,6 +63,7 @@ class Bot(commands.Bot):
             ),
         )
         self.config: Dict = config
+        self.logger = logger
         self.uptime: Optional[datetime.datetime] = None
         self.embedcolor = 0xFAA0C1
         self.webhooks: Dict[str, discord.Webhook] = {}
@@ -63,6 +71,8 @@ class Bot(commands.Bot):
         self.pokemon: List[str] = []
         self.blacklisted_guilds: List[int] = []
         self.blacklisted_users: List[int] = []
+        self.whitelisted_users: List[int] = []
+        self.poketwo_guilds: List[int] = []
         self.add_check(self.no_dms)
         self.add_check(self.user_blacklist)
         self.add_check(self.guild_blacklist)
@@ -77,17 +87,29 @@ class Bot(commands.Bot):
         connection = await asyncpg.create_pool(_database)
 
         if connection is None:
-            raise asyncpg.ConnectionFailureError("Failed to connect to database")
+            self.logger.error("Failed to connect to database")
+            return
 
         self.pool = connection
+        print("Connected to database")
 
         blacklisted_guilds = await self.pool.fetch(
             "SELECT guild_id FROM guild_blacklist"
         )
         self.blacklisted_guilds = [guild["guild_id"] for guild in blacklisted_guilds]
+        print(f"Loaded {len(self.blacklisted_guilds)} blacklisted guilds")
 
         blacklisted_users = await self.pool.fetch("SELECT user_id FROM user_blacklist")
         self.blacklisted_users = [user["user_id"] for user in blacklisted_users]
+        print(f"Loaded {len(self.blacklisted_users)} blacklisted users")
+
+        whitelisted_users = await self.pool.fetch("SELECT user_id FROM user_whitelist")
+        self.whitelisted_users = [user["user_id"] for user in whitelisted_users]
+        print(f"Loaded {len(self.whitelisted_users)} whitelisted users")
+
+        poketwo_guilds = await self.pool.fetch("SELECT guild_id FROM poketwo_whitelist")
+        self.poketwo_guilds = [guild["guild_id"] for guild in poketwo_guilds]
+        print(f"Loaded {len(self.poketwo_guilds)} poketwo guilds")
 
         self.webhooks["error_logs"] = discord.Webhook.from_url(
             url=self.config["webhooks"]["error_logs"], session=self.session
@@ -96,6 +118,7 @@ class Bot(commands.Bot):
         self.webhooks["join_logs"] = discord.Webhook.from_url(
             url=self.config["webhooks"]["join_logs"], session=self.session
         )
+        print("Loaded webhooks")
 
         url = "https://raw.githubusercontent.com/poketwo/data/master/csv/pokemon.csv"
         data = pd.read_csv(url)
@@ -110,6 +133,7 @@ class Bot(commands.Bot):
                 pokemon[pokemon.index(p)] = re.sub("[\U000000e9]", "e", p)
 
         self.pokemon = pokemon
+        print("Loaded pokemon")
 
         if not self.testing:
             for extension in bot_extensions:
@@ -118,6 +142,7 @@ class Bot(commands.Bot):
         for extension in initial_extensions:
             try:
                 await self.load_extension(extension)
+                print(f"Loaded extension {extension}")
             except Exception as e:
                 print(f"Failed to load {extension}: {e}")
 
@@ -125,7 +150,7 @@ class Bot(commands.Bot):
         if self.uptime is None:
             self.uptime = discord.utils.utcnow()
 
-        print(f"Logged in as {str(self.user)}")
+        print(f"Logged in as {self.user}")
 
     async def close(self):
         for extension in initial_extensions:
