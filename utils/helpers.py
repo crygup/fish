@@ -96,6 +96,11 @@ async def get_video(ctx: GuildContext, url: str) -> Optional[str]:
                     raise commands.BadArgument(
                         "You are not whitelisted to use this service, contact cr#0333."
                     )
+            if regexes[regex]["nsfw"]:
+                if not ctx.channel.is_nsfw():
+                    raise commands.BadArgument(
+                        "The site given has been marked as NSFW, please switch to a NSFW channel."
+                    )
 
             return result.group(0)
 
