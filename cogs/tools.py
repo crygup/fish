@@ -603,7 +603,7 @@ class Tools(commands.Cog, name="tools"):
 
         self.currently_downloading.remove(f"{default_name}.{default_format}")
 
-        channel = self.bot.get_channel(968544611352051802)
+        channel = self.bot.get_channel(998816503589781534)
         embed = discord.Embed(
             title="Video downloaded",
             timestamp=discord.utils.utcnow(),
