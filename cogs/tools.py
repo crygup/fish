@@ -517,7 +517,7 @@ class Tools(commands.Cog, name="tools"):
         real_url = await TenorUrlConverter().convert(ctx, url)
         await ctx.send(f"Here is the real url: {real_url}")
 
-    @commands.command(name="download", hidden=True)
+    @commands.command(name="download", aliases=("dl",))
     async def download(self, ctx: GuildContext, url: str, *, flags: Optional[str]):
         """Downloads a video from certain sites.
 
