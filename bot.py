@@ -55,6 +55,9 @@ class Bot(commands.Bot):
         return ctx.guild.owner_id not in self.blacklisted_users
 
     async def cooldown_check(self, ctx: GuildContext):
+        if ctx.author.id == self.owner_id:
+            return True
+
         bucket = self._global_cooldown.get_bucket(ctx.message)
 
         if bucket is None:
