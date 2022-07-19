@@ -93,6 +93,28 @@ CREATE TABLE IF NOT EXISTS guild_blacklist (
     PRIMARY KEY (guild_id)
 );
 
+CREATE TABLE IF NOT EXISTS guild_bans (
+    guild_id BIGINT,
+    mod_id BIGINT,
+    target_id BIGINT,
+    reason TEXT,
+    time TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS guild_kicks (
+    guild_id BIGINT,
+    mod_id BIGINT,
+    target_id BIGINT,
+    reason TEXT,
+    time TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS poketwo_whitelist (
+    guild_id BIGINT,
+    time TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (guild_id)
+);
+
 CREATE TABLE IF NOT EXISTS user_blacklist (
     user_id BIGINT,
     reason TEXT,
@@ -105,12 +127,6 @@ CREATE TABLE IF NOT EXISTS user_whitelist (
     reason TEXT,
     time TIMESTAMP WITH TIME ZONE,
     PRIMARY KEY (user_id)
-);
-
-CREATE TABLE IF NOT EXISTS poketwo_whitelist (
-    guild_id BIGINT,
-    time TIMESTAMP WITH TIME ZONE,
-    PRIMARY KEY (guild_id)
 );
 
 CREATE TABLE IF NOT EXISTS download_logs (
