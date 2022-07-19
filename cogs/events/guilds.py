@@ -126,7 +126,9 @@ class GuildEvents(commands.Cog, name="guild_events"):
         if guild.me.guild_permissions.view_audit_log:
             mod_id = 0
             reason = "No reason given"
-            async for entry in guild.audit_logs(action=discord.AuditLogAction.ban, limit=5):
+            async for entry in guild.audit_logs(
+                action=discord.AuditLogAction.ban, limit=5
+            ):
                 if entry.target is None:
                     continue
                 if entry.user is None:
@@ -147,7 +149,8 @@ class GuildEvents(commands.Cog, name="guild_events"):
                 user.id,
                 reason,
                 discord.utils.utcnow(),
-            ))
+            )
+        )
 
     @commands.Cog.listener("on_member_remove")
     async def on_member_remove(self, member: discord.Member):
@@ -157,7 +160,9 @@ class GuildEvents(commands.Cog, name="guild_events"):
         if member.guild.me.guild_permissions.view_audit_log:
             mod_id = 0
             reason = "No reason given"
-            async for entry in member.guild.audit_logs(action=discord.AuditLogAction.kick, limit=5):
+            async for entry in member.guild.audit_logs(
+                action=discord.AuditLogAction.kick, limit=5
+            ):
                 if entry.target is None:
                     continue
                 if entry.user is None:
@@ -175,4 +180,5 @@ class GuildEvents(commands.Cog, name="guild_events"):
                     member.id,
                     reason,
                     discord.utils.utcnow(),
-                ))
+                )
+            )

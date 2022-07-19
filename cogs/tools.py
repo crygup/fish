@@ -16,9 +16,18 @@ import discord
 from bot import Bot
 from discord.ext import commands, tasks
 from PIL import Image
-from utils import (FieldPageSource, GuildContext, Pager, TenorUrlConverter,
-                   get_video, human_timedelta, regexes, resize_to_limit, run,
-                   to_thread)
+from utils import (
+    FieldPageSource,
+    GuildContext,
+    Pager,
+    TenorUrlConverter,
+    get_video,
+    human_timedelta,
+    regexes,
+    resize_to_limit,
+    run,
+    to_thread,
+)
 
 
 async def setup(bot: Bot):
@@ -507,7 +516,7 @@ class Tools(commands.Cog, name="tools"):
         real_url = await TenorUrlConverter().convert(ctx, url)
         await ctx.send(f"Here is the real url: {real_url}")
 
-    @commands.command(name="download",hidden=True)
+    @commands.command(name="download", hidden=True)
     async def download(self, ctx: GuildContext, url: str, *, flags: Optional[str]):
         """Downloads a video from certain sites.
 
@@ -596,7 +605,9 @@ class Tools(commands.Cog, name="tools"):
             INSERT INTO download_logs(user_id, guild_id, video, time)
             VALUES ($1, $2, $3, $4)
             """
-            await self.bot.pool.execute(sql, ctx.author.id, ctx.guild.id, video, discord.utils.utcnow())
+            await self.bot.pool.execute(
+                sql, ctx.author.id, ctx.guild.id, video, discord.utils.utcnow()
+            )
         except (ValueError, discord.Forbidden):
             await message.edit(content="Failed to download, try again later?")
             failed = True
@@ -621,7 +632,6 @@ class Tools(commands.Cog, name="tools"):
                 os.remove(f"files/videos/{default_name}.{default_format}")
             except (FileNotFoundError, PermissionError):
                 pass
-
 
     @tasks.loop(minutes=10.0)
     async def delete_videos(self):

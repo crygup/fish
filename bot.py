@@ -70,17 +70,29 @@ class Bot(commands.Bot):
             sql = """
             INSERT INTO user_blacklist(user_id, reason, time)
             """
-            await self.pool.execute(sql, ctx.author.id, "Auto-blacklist from command spam", discord.utils.utcnow())
+            await self.pool.execute(
+                sql,
+                ctx.author.id,
+                "Auto-blacklist from command spam",
+                discord.utils.utcnow(),
+            )
             self.user_blacklist.append(ctx.author.id)
 
             if ctx.guild.owner_id == ctx.author.id:
                 sql = """
                 INSERT INTO guild_blacklist(guild_id, reason, time)
                 """
-                await self.pool.execute(sql, ctx.guild.id, "Auto-blacklist from command spam", discord.utils.utcnow())
+                await self.pool.execute(
+                    sql,
+                    ctx.guild.id,
+                    "Auto-blacklist from command spam",
+                    discord.utils.utcnow(),
+                )
                 self.blacklisted_guilds.append(ctx.guild.id)
 
-            await ctx.send("You have been automatically blacklisted for spamming commands, contact cr#0333 if you think this was a mistake.")
+            await ctx.send(
+                "You have been automatically blacklisted for spamming commands, contact cr#0333 if you think this was a mistake."
+            )
 
             return False
 
@@ -113,7 +125,9 @@ class Bot(commands.Bot):
         self.blacklisted_users: List[int] = []
         self.whitelisted_users: List[int] = []
         self.poketwo_guilds: List[int] = []
-        self._global_cooldown = commands.CooldownMapping.from_cooldown(20.0, 30.0, commands.BucketType.member)
+        self._global_cooldown = commands.CooldownMapping.from_cooldown(
+            20.0, 30.0, commands.BucketType.member
+        )
         self.add_check(self.no_dms)
         self.add_check(self.user_blacklist)
         self.add_check(self.guild_blacklist)
