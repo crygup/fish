@@ -105,7 +105,7 @@ async def get_video(ctx: GuildContext, url: str) -> Optional[str]:
 async def run(cmd: str) -> Optional[str]:
 
     proc = await asyncio.create_subprocess_shell(
-        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        "venv/bin/python3.10 -m " + cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
 
     stdout, stderr = await proc.communicate()
