@@ -476,7 +476,7 @@ class Tools(commands.Cog, name="tools"):
 
         async with ctx.typing():
             avatars: List[asyncpg.Record] = await self.bot.pool.fetch(
-                "SELECT avatar FROM avatar_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 500",
+                "SELECT avatar FROM avatar_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100",
                 user.id,
             )
             file = await self.do_avatar_command(ctx, user, avatars)
