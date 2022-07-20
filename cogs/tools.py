@@ -8,6 +8,7 @@ import textwrap
 import time
 from io import BytesIO
 from typing import Dict, List, Optional
+import asyncpg
 
 import discord
 from bot import Bot
@@ -468,3 +469,54 @@ class Tools(commands.Cog, name="tools"):
             if file.endswith(valid_formats):
                 if file not in self.currently_downloading:
                     os.remove(f"files/videos/{file}")
+
+    @commands.group(name='auto_download', aliases=('auto_dl','adl',), invoke_without_command=True)
+    @commands.has_permissions(manage_guild=True)
+    async def auto_download(self, ctx: commands.Context, *, channel: discord.TextChannel):
+        """Toggles auto-downloading of videos"""
+
+        if ctx.guild is None:
+            return
+
+        try:
+            await self.bot.pool.execute(
+                "INSERT INTO guild_settings(guild_id, auto_download) VALUES ($1, $2)",
+                ctx.guild.id,
+                channel.id,
+            )
+            self.bot.auto_download_channels.append(channel.id)
+            await ctx.send(f"Enabled auto-downloading in {channel.mention}")
+
+        except asyncpg.UniqueViolationError:
+            await self.bot.pool.execute(
+                "UPDATE guild_settings SET auto_download = $2 WHERE guild_id = $1",
+                ctx.guild.id,
+                channel.id
+            )
+            self.bot.auto_download_channels.append(channel.id)
+            await ctx.send(f"Updated the auto-downloading channel to {channel.mention}")
+            return
+
+    @auto_download.command(name='reset', aliases=('remove',))
+    @commands.has_permissions(manage_guild=True)
+    async def auto_download_reset(self, ctx: commands.Context):
+        """Resets the auto-downloading channel"""
+        if ctx.guild is None:
+            return
+
+        channel_id: int = await self.bot.pool.fetchval(
+            "SELECT auto_download FROM guild_settings WHERE guild_id = $1",
+            ctx.guild.id,
+        )
+
+        if channel_id is None:
+            await ctx.send("No auto-downloading channel set")
+            return
+
+        await self.bot.pool.execute(
+            "DELETE FROM guild_settings WHERE guild_id = $1",
+            ctx.guild.id,
+        )
+
+        self.bot.auto_download_channels.remove(channel_id)
+        await ctx.send("Removed the auto-downloading channel")
