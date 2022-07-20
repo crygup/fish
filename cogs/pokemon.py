@@ -131,14 +131,17 @@ class Pokemon(commands.Cog, name="pokemon"):
 
         if ctx.guild.id in self.bot.poketwo_guilds:
             await self.bot.pool.execute(
-                "DELETE FROM poketwo_whitelist WHERE guild_id = $1", ctx.guild.id
+                "UPDATE guild_settings SET poketwo = NULL WHERE guild_id = $1",
+                ctx.guild.id,
             )
             self.bot.poketwo_guilds.remove(ctx.guild.id)
             await ctx.send("Disabled auto solving for this server")
             return
 
         await self.bot.pool.execute(
-            "INSERT INTO poketwo_whitelist VALUES ($1)", ctx.guild.id
+            "INSERT INTO guild_settings(guild_id, poketwo) VALUES ($1, $2)",
+            ctx.guild.id,
+            True,
         )
         self.bot.poketwo_guilds.append(ctx.guild.id)
         await ctx.send("Enabled auto solving for this server")

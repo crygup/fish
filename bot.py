@@ -123,7 +123,9 @@ class Bot(commands.Bot):
         self.whitelisted_users = [user["user_id"] for user in whitelisted_users]
         print(f"Loaded {len(self.whitelisted_users)} whitelisted users")
 
-        poketwo_guilds = await self.pool.fetch("SELECT guild_id FROM poketwo_whitelist")
+        poketwo_guilds = await self.pool.fetch(
+            "SELECT guild_id FROM guild_settings WHERE poketwo IS TRUE"
+        )
         self.poketwo_guilds = [guild["guild_id"] for guild in poketwo_guilds]
         print(f"Loaded {len(self.poketwo_guilds)} poketwo guilds")
 

@@ -68,6 +68,13 @@ CREATE TABLE IF NOT EXISTS member_join_logs (
     time TIMESTAMP WITH TIME ZONE
 );
 
+CREATE TABLE IF NOT EXISTS guild_settings (
+    guild_id BIGINT,
+    auto_download BIGINT,
+    poketwo BOOLEAN,
+    PRIMARY KEY (guild_id)
+);
+
 CREATE TABLE IF NOT EXISTS guild_join_logs (
     guild_id BIGINT,
     time TIMESTAMP WITH TIME ZONE
@@ -94,12 +101,6 @@ CREATE TABLE IF NOT EXISTS guild_kicks (
     target_id BIGINT,
     reason TEXT,
     time TIMESTAMP WITH TIME ZONE
-);
-
-CREATE TABLE IF NOT EXISTS poketwo_whitelist (
-    guild_id BIGINT,
-    time TIMESTAMP WITH TIME ZONE,
-    PRIMARY KEY (guild_id)
 );
 
 CREATE TABLE IF NOT EXISTS user_blacklist (
