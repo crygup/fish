@@ -470,9 +470,18 @@ class Tools(commands.Cog, name="tools"):
                 if file not in self.currently_downloading:
                     os.remove(f"files/videos/{file}")
 
-    @commands.group(name='auto_download', aliases=('auto_dl','adl',), invoke_without_command=True)
+    @commands.group(
+        name="auto_download",
+        aliases=(
+            "auto_dl",
+            "adl",
+        ),
+        invoke_without_command=True,
+    )
     @commands.has_permissions(manage_guild=True)
-    async def auto_download(self, ctx: commands.Context, *, channel: discord.TextChannel):
+    async def auto_download(
+        self, ctx: commands.Context, *, channel: discord.TextChannel
+    ):
         """Toggles auto-downloading of videos"""
 
         if ctx.guild is None:
@@ -491,13 +500,13 @@ class Tools(commands.Cog, name="tools"):
             await self.bot.pool.execute(
                 "UPDATE guild_settings SET auto_download = $2 WHERE guild_id = $1",
                 ctx.guild.id,
-                channel.id
+                channel.id,
             )
             self.bot.auto_download_channels.append(channel.id)
             await ctx.send(f"Updated the auto-downloading channel to {channel.mention}")
             return
 
-    @auto_download.command(name='reset', aliases=('remove',))
+    @auto_download.command(name="reset", aliases=("remove",))
     @commands.has_permissions(manage_guild=True)
     async def auto_download_reset(self, ctx: commands.Context):
         """Resets the auto-downloading channel"""

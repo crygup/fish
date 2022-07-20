@@ -124,12 +124,18 @@ class Bot(commands.Bot):
         self.whitelisted_users = [user["user_id"] for user in whitelisted_users]
         print(f"Loaded {len(self.whitelisted_users)} whitelisted users")
 
-        poketwo_guilds = await self.pool.fetch("SELECT guild_id FROM guild_settings WHERE poketwo IS TRUE")
+        poketwo_guilds = await self.pool.fetch(
+            "SELECT guild_id FROM guild_settings WHERE poketwo IS TRUE"
+        )
         self.poketwo_guilds = [guild["guild_id"] for guild in poketwo_guilds]
         print(f"Loaded {len(self.poketwo_guilds)} poketwo guilds")
 
-        auto_download_channels = await self.pool.fetch("SELECT auto_download FROM guild_settings WHERE auto_download IS NOT NULL")
-        self.auto_download_channels = [guild["auto_download"] for guild in auto_download_channels]
+        auto_download_channels = await self.pool.fetch(
+            "SELECT auto_download FROM guild_settings WHERE auto_download IS NOT NULL"
+        )
+        self.auto_download_channels = [
+            guild["auto_download"] for guild in auto_download_channels
+        ]
         print(f"Loaded {len(self.poketwo_guilds)} auto download channels")
 
         self.webhooks["error_logs"] = discord.Webhook.from_url(
