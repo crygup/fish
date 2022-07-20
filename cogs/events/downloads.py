@@ -29,14 +29,14 @@ class Downloads(commands.Cog, name="downloads"):
         if me is None:
             return
 
-        if message.author.bot:
-            await self.try_delete(message)
-            return
-
         if message.author.id == me.id:
             return
 
         if message.channel.id not in self.bot.auto_download_channels:
+            return
+
+        if message.author.bot:
+            await self.try_delete(message)
             return
 
         ctx: GuildContext = await self.bot.get_context(message) # type: ignore
