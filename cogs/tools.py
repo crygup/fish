@@ -1,7 +1,5 @@
 import argparse
-import datetime
 import imghdr
-import math
 import os
 import re
 import secrets
@@ -11,12 +9,9 @@ import time
 from io import BytesIO
 from typing import Dict, List, Optional
 
-import asyncpg
-from bs4 import CData
 import discord
 from bot import Bot
 from discord.ext import commands, tasks
-from PIL import Image
 from utils import GuildContext, TenorUrlConverter, get_video, regexes, human_join
 from yt_dlp import YoutubeDL
 
