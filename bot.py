@@ -57,49 +57,6 @@ class Bot(commands.Bot):
 
         return ctx.guild.owner_id not in self.blacklisted_users
 
-    async def cooldown_check(self, ctx: GuildContext):
-        if ctx.author.id == self.owner_id:
-            return True
-
-        bucket = self._global_cooldown.get_bucket(ctx.message)
-
-        if bucket is None:
-            return True
-
-        retry_after = bucket.update_rate_limit()
-
-        if retry_after:
-            sql = """
-            INSERT INTO user_blacklist(user_id, reason, time) VALUES ($1, $2, $3)
-            """
-            await self.pool.execute(
-                sql,
-                ctx.author.id,
-                "Auto-blacklist from command spam",
-                discord.utils.utcnow(),
-            )
-            self.user_blacklist.append(ctx.author.id)
-
-            if ctx.guild.owner_id == ctx.author.id:
-                sql = """
-                INSERT INTO guild_blacklist(guild_id, reason, time) VALUES ($1, $2, $3)
-                """
-                await self.pool.execute(
-                    sql,
-                    ctx.guild.id,
-                    "Auto-blacklist from command spam",
-                    discord.utils.utcnow(),
-                )
-                self.blacklisted_guilds.append(ctx.guild.id)
-
-            await ctx.send(
-                "You have been automatically blacklisted for spamming commands, contact cr#0333 if you think this was a mistake."
-            )
-
-            return False
-
-        return True
-
     def __init__(
         self,
         intents: discord.Intents,
@@ -135,7 +92,6 @@ class Bot(commands.Bot):
         self.add_check(self.user_blacklist)
         self.add_check(self.guild_blacklist)
         self.add_check(self.guild_owner_blacklist)
-        self.add_check(self.cooldown_check)
 
     async def setup_hook(self):
         self.session = aiohttp.ClientSession()
