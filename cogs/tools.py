@@ -159,7 +159,8 @@ class Tools(commands.Cog, name="tools"):
                 )
                 files.append(file)
                 embed = discord.Embed(
-                    color=self.bot.embedcolor, timestamp=results[index - 1]["created_at"]
+                    color=self.bot.embedcolor,
+                    timestamp=results[index - 1]["created_at"],
                 )
                 embed.set_image(
                     url=f'attachment://{message_id}_{_index}.{imghdr.what(None, result["attachment"])}'

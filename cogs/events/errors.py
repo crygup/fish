@@ -57,7 +57,11 @@ class ErrorEvents(commands.Cog, name="error_events"):
         elif isinstance(error, DownloadError):
             await ctx.send("Invalid video url.")
 
-        elif isinstance(error, discord.HTTPException) and ctx.command and ctx.command.name == "download":
+        elif (
+            isinstance(error, discord.HTTPException)
+            and ctx.command
+            and ctx.command.name == "download"
+        ):
             await ctx.send("Video too large, try a shorter video.")
 
         elif isinstance(error, SEND):

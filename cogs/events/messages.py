@@ -12,10 +12,14 @@ async def setup(bot: Bot):
 class MessageEvents(commands.Cog, name="message_event"):
     def __init__(self, bot: Bot):
         self.bot = bot
-        self._messages: List[Tuple[int, int, int, int, str, datetime.datetime, bool, bool]] = []
+        self._messages: List[
+            Tuple[int, int, int, int, str, datetime.datetime, bool, bool]
+        ] = []
         self._messages_attachments: List[Tuple[int, bytes, bool]] = []
 
-        self._deleted_messages: List[Tuple[int, int, int, int, str, datetime.datetime, bool, bool]] = []
+        self._deleted_messages: List[
+            Tuple[int, int, int, int, str, datetime.datetime, bool, bool]
+        ] = []
         self._deleted_messages_attachments: List[Tuple[int, bytes, bool]] = []
 
     async def _bulk_insert(self):
@@ -84,7 +88,9 @@ class MessageEvents(commands.Cog, name="message_event"):
         )
         if message.attachments:
             for attachment in message.attachments:
-                self._messages_attachments.append((message.id, await attachment.read(), False))
+                self._messages_attachments.append(
+                    (message.id, await attachment.read(), False)
+                )
 
     async def insert_message(self, message: discord.Message):
         if message.guild is None:
