@@ -70,7 +70,7 @@ class MyHelp(commands.HelpCommand):
 
         embed = discord.Embed(color=0xFAA0C1)
         embed.set_author(
-            name=f"{command.name.capitalize()} help",
+            name=f"{command.qualified_name.capitalize()} help",
             icon_url=bot.user.display_avatar.url,
         )
 
@@ -103,7 +103,7 @@ class MyHelp(commands.HelpCommand):
 
         embed = discord.Embed(color=0xFAA0C1)
         embed.set_author(
-            name=f"{group.name.capitalize()} help", icon_url=bot.user.display_avatar.url
+            name=f"{group.qualified_name.capitalize()} help", icon_url=bot.user.display_avatar.url
         )
 
         embed.description = f"```{group.help}```" or "No help yet..."

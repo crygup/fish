@@ -77,8 +77,9 @@ class Pokemon(commands.Cog, name="pokemon"):
 
     @commands.command(name="wtp", aliases=("hint",))
     async def wtp(self, ctx: GuildContext):
+        """Auto solve a pokétwo hint message."""
         if ctx.message.reference is None:
-            return
+            await ctx.send("Please reply to a message contain a pokétwo hint.")
 
         to_search = re.match(
             r'the pokémon is (?P<pokemon>[^"]+).', ctx.message.reference.resolved.content.lower()  # type: ignore

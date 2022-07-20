@@ -161,6 +161,7 @@ class User(commands.Cog, name="user"):
 
     @commands.command(name="uptime")
     async def uptime(self, ctx: commands.Context, *, member: Optional[discord.Member]):
+        """Shows how long a user has been online."""
         bot = self.bot
         me = bot.user
 
@@ -223,6 +224,9 @@ class User(commands.Cog, name="user"):
     async def discrims(
         self, ctx: commands.Context, user: discord.User = commands.Author
     ):
+        """Shows all discriminators a user has had.
+
+        This is the numbers after your username."""
         await self.bot.get_cog("user_events")._bulk_insert()  # type: ignore
 
         results = await self.bot.pool.fetch(
@@ -255,6 +259,7 @@ class User(commands.Cog, name="user"):
         *,
         user: discord.User = commands.Author,
     ):
+        """Shows all nicknames a user has had in a guild."""
         if ctx.guild is None:
             return
 
