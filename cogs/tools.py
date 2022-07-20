@@ -108,12 +108,12 @@ class Tools(commands.Cog, name="tools"):
 
         if member:
             sql = """
-            SELECT * FROM snipe_logs where channel_id = $1 AND author_id = $2 ORDER BY created_at DESC
+            SELECT * FROM message_logs where channel_id = $1 AND author_id = $2 AND deleted IS TRUE ORDER BY created_at DESC
             """
             results = await self.bot.pool.fetch(sql, channel.id, member.id)
         else:
             sql = """
-            SELECT * FROM snipe_logs where channel_id = $1 ORDER BY created_at DESC
+            SELECT * FROM message_logs where channel_id = $1 AND deleted IS TRUE ORDER BY created_at DESC
             """
             results = await self.bot.pool.fetch(sql, channel.id)
 
@@ -149,21 +149,22 @@ class Tools(commands.Cog, name="tools"):
         embed.set_footer(text=f"Index {index} of {len(results)}\nMessage deleted ")
         embeds.append(embed)
 
-        attachment_sql = """SELECT * FROM snipe_attachment_logs where message_id = $1"""
-        attachment_results = await self.bot.pool.fetch(attachment_sql, message_id)
-        for _index, result in enumerate(attachment_results):
-            file = discord.File(
-                BytesIO(result["attachment"]),
-                filename=f'{message_id}_{_index}.{imghdr.what(None, result["attachment"])}',
-            )
-            files.append(file)
-            embed = discord.Embed(
-                color=self.bot.embedcolor, timestamp=results[index - 1]["created_at"]
-            )
-            embed.set_image(
-                url=f'attachment://{message_id}_{_index}.{imghdr.what(None, result["attachment"])}'
-            )
-            embeds.append(embed)
+        if results[index - 1]["has_attachments"]:
+            attachment_sql = """SELECT * FROM message_attachment_logs where message_id = $1 AND deleted IS TRUE"""
+            attachment_results = await self.bot.pool.fetch(attachment_sql, message_id)
+            for _index, result in enumerate(attachment_results):
+                file = discord.File(
+                    BytesIO(result["attachment"]),
+                    filename=f'{message_id}_{_index}.{imghdr.what(None, result["attachment"])}',
+                )
+                files.append(file)
+                embed = discord.Embed(
+                    color=self.bot.embedcolor, timestamp=results[index - 1]["created_at"]
+                )
+                embed.set_image(
+                    url=f'attachment://{message_id}_{_index}.{imghdr.what(None, result["attachment"])}'
+                )
+                embeds.append(embed)
 
         await ctx.send(embeds=embeds[:10], files=files[:9])
         if len(embeds) >= 10:

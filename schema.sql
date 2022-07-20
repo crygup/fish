@@ -5,27 +5,14 @@ CREATE TABLE IF NOT EXISTS message_logs (
     message_id BIGINT,
     message_content TEXT,
     created_at TIMESTAMP WITH TIME ZONE,
-    snipe BOOLEAN
+    deleted BOOLEAN,
+    has_attachments BOOLEAN
 );
 
 CREATE TABLE IF NOT EXISTS message_attachment_logs (
     message_id BIGINT,
     attachment BYTEA,
-    snipe BOOLEAN
-);
-
-CREATE TABLE IF NOT EXISTS snipe_logs (
-    author_id BIGINT,
-    guild_id BIGINT,
-    channel_id BIGINT,
-    message_id BIGINT,
-    message_content TEXT,
-    created_at TIMESTAMP WITH TIME ZONE
-);
-
-CREATE TABLE IF NOT EXISTS snipe_attachment_logs (
-    message_id BIGINT,
-    attachment BYTEA
+    deleted BOOLEAN
 );
 
 CREATE TABLE IF NOT EXISTS avatar_logs (

@@ -1,3 +1,4 @@
+import datetime
 from typing import Any, List, Tuple
 import discord
 from discord.ext import commands, tasks
@@ -11,40 +12,41 @@ async def setup(bot: Bot):
 class MessageEvents(commands.Cog, name="message_event"):
     def __init__(self, bot: Bot):
         self.bot = bot
-        self._messages: List[Tuple[Any, ...]] = []
-        self._messages_attachments: List[Tuple[int, bytes]] = []
-        self._deleted_messages: List[Tuple[Any, ...]] = []
-        self._deleted_messages_attachments: List[Tuple[int, bytes]] = []
+        self._messages: List[Tuple[int, int, int, int, str, datetime.datetime, bool, bool]] = []
+        self._messages_attachments: List[Tuple[int, bytes, bool]] = []
+
+        self._deleted_messages: List[Tuple[int, int, int, int, str, datetime.datetime, bool, bool]] = []
+        self._deleted_messages_attachments: List[Tuple[int, bytes, bool]] = []
 
     async def _bulk_insert(self):
         if self._messages:
             sql = """
-            INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at)
-            VALUES($1, $2, $3, $4, $5, $6)
+            INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at, deleted, has_attachments)
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8)
             """
             await self.bot.pool.executemany(sql, self._messages)
             self._messages.clear()
 
         if self._messages_attachments:
             sql = """
-            INSERT INTO message_attachment_logs(message_id, attachment)
-            VALUES($1, $2)
+            INSERT INTO message_attachment_logs(message_id, attachment, deleted)
+            VALUES($1, $2, $3)
             """
             await self.bot.pool.executemany(sql, self._messages_attachments)
             self._messages_attachments.clear()
 
         if self._deleted_messages:
             sql = """
-            INSERT INTO snipe_logs(author_id, guild_id, channel_id, message_id, message_content, created_at)
-            VALUES($1, $2, $3, $4, $5, $6)
+            INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at, deleted, has_attachments)
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8)
             """
             await self.bot.pool.executemany(sql, self._deleted_messages)
             self._deleted_messages.clear()
 
         if self._deleted_messages_attachments:
             sql = """
-            INSERT INTO snipe_attachment_logs(message_id, attachment)
-            VALUES($1, $2)
+            INSERT INTO message_attachment_logs(message_id, attachment, deleted)
+            VALUES($1, $2, $3)
             """
             await self.bot.pool.executemany(sql, self._deleted_messages_attachments)
             self._deleted_messages_attachments.clear()
@@ -76,11 +78,13 @@ class MessageEvents(commands.Cog, name="message_event"):
                 message.id,
                 message.content or "Message did not contain any content.",
                 message.created_at,
+                False,
+                True if message.attachments != [] else False,
             )
         )
         if message.attachments:
             for attachment in message.attachments:
-                self._messages_attachments.append((message.id, await attachment.read()))
+                self._messages_attachments.append((message.id, await attachment.read(), False))
 
     async def insert_message(self, message: discord.Message):
         if message.guild is None:
@@ -97,6 +101,8 @@ class MessageEvents(commands.Cog, name="message_event"):
                 message.id,
                 message.content,
                 message.created_at,
+                True,
+                True if message.attachments != [] else False,
             )
         )
 
@@ -105,7 +111,7 @@ class MessageEvents(commands.Cog, name="message_event"):
                 if not attachment.filename.endswith(("gif", "png", "jpg", "jpeg")):
                     continue
                 self._deleted_messages_attachments.append(
-                    (message.id, await attachment.read())
+                    (message.id, await attachment.read(), True)
                 )
 
     @commands.Cog.listener("on_message_delete")
