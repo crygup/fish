@@ -123,6 +123,9 @@ class GuildEvents(commands.Cog, name="guild_events"):
         if self.bot.user is None:
             return
 
+        if not guild.me:
+            return
+
         if guild.me.guild_permissions.view_audit_log:
             mod_id = 0
             reason = "No reason given"

@@ -37,6 +37,7 @@ __all__ = [
     "run",
     "regexes",
     "get_video",
+    "human_join",
 ]
 
 T = TypeVar("T")
@@ -215,7 +216,7 @@ class Timer:
         return self._end - self._start
 
 
-def human_join(seq: Sequence[str], delim: str = ", ", final: str = "or") -> str:
+def human_join(seq: Sequence[str], delim=", ", final="or", spaces: bool = True) -> str:
     size = len(seq)
     if size == 0:
         return ""
@@ -226,7 +227,8 @@ def human_join(seq: Sequence[str], delim: str = ", ", final: str = "or") -> str:
     if size == 2:
         return f"{seq[0]} {final} {seq[1]}"
 
-    return delim.join(seq[:-1]) + f" {final} {seq[-1]}"
+    final = f" {final} " if spaces else final
+    return delim.join(seq[:-1]) + f"{final}{seq[-1]}"
 
 
 def human_timedelta(

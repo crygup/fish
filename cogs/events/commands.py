@@ -51,4 +51,3 @@ class CommandEvents(commands.Cog, name="command_events"):
                 discord.utils.utcnow(),
             )
         )
-

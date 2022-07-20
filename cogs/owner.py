@@ -26,6 +26,8 @@ class SqlCommandFlags(
 
 
 class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
+    """Commands for the owner"""
+
     def __init__(self, bot: Bot):
         self.bot = bot
 

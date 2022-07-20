@@ -14,6 +14,8 @@ async def setup(bot: Bot):
 
 
 class Pokemon(commands.Cog, name="pokemon"):
+    """Pokemon related commands"""
+
     def __init__(self, bot: Bot):
         self.bot = bot
 

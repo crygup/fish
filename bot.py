@@ -21,13 +21,14 @@ initial_extensions = {
 }
 bot_extensions = {
     "cogs.tools",
+    "cogs.pokemon",
+    "cogs.user",
     "cogs.events.errors",
     "cogs.events.guilds",
     "cogs.events.members",
     "cogs.events.messages",
     "cogs.events.users",
     "cogs.events.commands",
-    "cogs.pokemon",
 }
 os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
@@ -69,7 +70,7 @@ class Bot(commands.Bot):
 
         if retry_after:
             sql = """
-            INSERT INTO user_blacklist(user_id, reason, time)
+            INSERT INTO user_blacklist(user_id, reason, time) VALUES ($1, $2, $3)
             """
             await self.pool.execute(
                 sql,
@@ -81,7 +82,7 @@ class Bot(commands.Bot):
 
             if ctx.guild.owner_id == ctx.author.id:
                 sql = """
-                INSERT INTO guild_blacklist(guild_id, reason, time)
+                INSERT INTO guild_blacklist(guild_id, reason, time) VALUES ($1, $2, $3)
                 """
                 await self.pool.execute(
                     sql,
@@ -110,6 +111,7 @@ class Bot(commands.Bot):
         super().__init__(
             command_prefix=commands.when_mentioned_or(*prefix),
             intents=intents,
+            case_insensitive=False,
             strip_after_prefix=True,
             allowed_mentions=discord.AllowedMentions(
                 everyone=False, roles=False, users=True, replied_user=False
