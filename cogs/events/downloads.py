@@ -24,25 +24,19 @@ class Downloads(commands.Cog, name="downloads"):
         if message.guild is None:
             return
 
-        if message.author.id != 766953372309127168:
-            return
-
         me = self.bot.user
 
         if me is None:
-            print('me is none')
             return
 
         if message.author.bot:
-            print('bot')
+            await self.try_delete(message)
             return
 
         if message.author.id == me.id:
-            print('me')
             return
 
         if message.channel.id not in self.bot.auto_download_channels:
-            print(f'not in channel')
             return
 
         ctx: GuildContext = await self.bot.get_context(message) # type: ignore
@@ -50,22 +44,18 @@ class Downloads(commands.Cog, name="downloads"):
         video = await get_video(ctx, message.content)
 
         if video is None:
-            print('video is none')
             await self.try_delete(message)
             return
 
-        print('got video')
         bucket = self.cooldown.get_bucket(message)
 
         if bucket is None:
-            print('bucket is none')
             await self.try_delete(message)
             return
 
         retry_after = bucket.update_rate_limit()
 
         if retry_after:
-            print('cooldown after')
             await self.try_delete(message)
             await message.channel.send(f"Please wait {round(retry_after)} seconds before sending another video.", delete_after=retry_after)
             return
