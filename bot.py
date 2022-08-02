@@ -29,6 +29,7 @@ bot_extensions = {
     "cogs.events.guilds",
     "cogs.events.members",
     "cogs.events.messages",
+    "cogs.events.table",
     "cogs.events.users",
 }
 os.environ["JISHAKU_HIDE"] = "True"
