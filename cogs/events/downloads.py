@@ -11,7 +11,9 @@ async def setup(bot: Bot):
 class Downloads(commands.Cog, name="downloads"):
     def __init__(self, bot: Bot):
         self.bot = bot
-        self.cooldown = commands.CooldownMapping.from_cooldown(1, 15, commands.BucketType.user)
+        self.cooldown = commands.CooldownMapping.from_cooldown(
+            1, 15, commands.BucketType.user
+        )
 
     async def try_delete(self, message: discord.Message):
         try:
@@ -39,7 +41,7 @@ class Downloads(commands.Cog, name="downloads"):
             await self.try_delete(message)
             return
 
-        ctx: GuildContext = await self.bot.get_context(message) # type: ignore
+        ctx: GuildContext = await self.bot.get_context(message)  # type: ignore
 
         video = await get_video(ctx, message.content)
 
@@ -57,7 +59,10 @@ class Downloads(commands.Cog, name="downloads"):
 
         if retry_after:
             await self.try_delete(message)
-            await message.channel.send(f"Please wait {round(retry_after)} seconds before sending another video.", delete_after=retry_after)
+            await message.channel.send(
+                f"Please wait {round(retry_after)} seconds before sending another video.",
+                delete_after=retry_after,
+            )
             return
 
         command = self.bot.get_command("download")
