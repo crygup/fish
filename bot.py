@@ -23,6 +23,7 @@ bot_extensions = {
     "cogs.tools",
     "cogs.pokemon",
     "cogs.user",
+    "cogs.egg",
     "cogs.events.commands",
     "cogs.events.downloads",
     "cogs.events.errors",
