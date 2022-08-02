@@ -4,13 +4,16 @@ import datetime
 import logging
 import os
 import re
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import aiohttp
 import asyncpg
+import cachetools
 import discord
 import pandas as pd
 from discord.ext import commands
+
+from cogs.context import Context
 
 if TYPE_CHECKING:
     from utils import GuildContext
@@ -24,6 +27,7 @@ bot_extensions = {
     "cogs.pokemon",
     "cogs.user",
     "cogs.egg",
+    "cogs.context",
     "cogs.events.commands",
     "cogs.events.downloads",
     "cogs.events.errors",
@@ -89,13 +93,49 @@ class Bot(commands.Bot):
         self.whitelisted_users: List[int] = []
         self.poketwo_guilds: List[int] = []
         self.auto_download_channels: List[int] = []
+        self._context = Context
         self._global_cooldown = commands.CooldownMapping.from_cooldown(
             20.0, 30.0, commands.BucketType.user
+        )
+        self.messages: cachetools.TTLCache[str, discord.Message] = cachetools.TTLCache(
+            maxsize=1000, ttl=300.0
         )
         self.add_check(self.no_dms)
         self.add_check(self.user_blacklist)
         self.add_check(self.guild_blacklist)
         self.add_check(self.guild_owner_blacklist)
+
+    async def on_message_edit(
+        self, before: discord.Message, after: discord.Message
+    ) -> None:
+
+        if before.content == after.content:
+            return
+
+        await self.process_commands(after)
+
+    async def on_raw_message_delete(
+        self, payload: discord.RawMessageDeleteEvent
+    ) -> None:
+        """|coro|
+        Called every time a message is deleted.
+        Parameters
+        ----------
+        message: :class:`~discord.Message`
+            The message that was deleted.
+        """
+        _repr_regex = rf"<utils\.Context bound to message \({payload.channel_id}-{payload.message_id}-[0-9]+\)>"
+        pattern = re.compile(_repr_regex)
+        messages = {r: m for r, m in self.messages.items() if pattern.fullmatch(r)}
+        for _repr, message in messages.items():
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+            try:
+                del self.messages[_repr]
+            except KeyError:
+                pass
 
     async def setup_hook(self):
         self.session = aiohttp.ClientSession()
@@ -175,6 +215,10 @@ class Bot(commands.Bot):
                 print(f"Loaded extension {extension}")
             except Exception as e:
                 print(f"Failed to load {extension}: {e}")
+
+    async def get_context(self, message: discord.Message, *, cls=None):
+        new_cls = cls or self._context
+        return await super().get_context(message, cls=new_cls)
 
     async def on_ready(self):
         if self.uptime is None:

@@ -1,6 +1,8 @@
+import imghdr
+import textwrap
 import time
 from io import BytesIO
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import discord
 from bot import Bot
@@ -38,6 +40,89 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
             raise commands.NotOwner
 
         return True
+
+    @commands.command(name="snipe")
+    @commands.is_owner()
+    async def snipe(
+        self,
+        ctx: commands.Context,
+        index: Optional[int],
+        channel: Optional[discord.TextChannel] = commands.CurrentChannel,
+        *,
+        member: Optional[discord.Member],
+    ):
+        """Shows a deleted message"""
+        index = index or 1
+
+        if ctx.guild is None or channel is None:
+            return
+
+        await self.bot.get_cog("message_event")._bulk_insert()  # type: ignore
+
+        if member:
+            sql = """
+            SELECT * FROM message_logs where channel_id = $1 AND author_id = $2 AND deleted IS TRUE ORDER BY created_at DESC
+            """
+            results = await self.bot.pool.fetch(sql, channel.id, member.id)
+        else:
+            sql = """
+            SELECT * FROM message_logs where channel_id = $1 AND deleted IS TRUE ORDER BY created_at DESC
+            """
+            results = await self.bot.pool.fetch(sql, channel.id)
+
+        if index - 1 >= len(results):
+            await ctx.send("Index out of range.")
+            return
+
+        if results == []:
+            await ctx.send("Nothing was deleted here...")
+            return
+
+        user = self.bot.get_user(results[index - 1]["author_id"]) or "Unknown"
+
+        embeds: List[discord.Embed] = []
+        files: List[discord.File] = []
+
+        embed = discord.Embed(
+            color=self.bot.embedcolor, timestamp=results[index - 1]["created_at"]
+        )
+        embed.description = (
+            textwrap.shorten(
+                results[index - 1]["message_content"], width=300, placeholder="..."
+            )
+            or "Message did not contain any content."
+        )
+        embed.set_author(
+            name=f"{str(user)}",
+            icon_url=user.display_avatar.url
+            if isinstance(user, discord.User)
+            else ctx.guild.me.display_avatar.url,
+        )
+        message_id = results[index - 1]["message_id"]
+        embed.set_footer(text=f"Index {index} of {len(results)}\nMessage deleted ")
+        embeds.append(embed)
+
+        if results[index - 1]["has_attachments"]:
+            attachment_sql = """SELECT * FROM message_attachment_logs where message_id = $1 AND deleted IS TRUE"""
+            attachment_results = await self.bot.pool.fetch(attachment_sql, message_id)
+            for _index, result in enumerate(attachment_results):
+                file = discord.File(
+                    BytesIO(result["attachment"]),
+                    filename=f'{message_id}_{_index}.{imghdr.what(None, result["attachment"])}',
+                )
+                files.append(file)
+                embed = discord.Embed(
+                    color=self.bot.embedcolor,
+                    timestamp=results[index - 1]["created_at"],
+                )
+                embed.set_image(
+                    url=f'attachment://{message_id}_{_index}.{imghdr.what(None, result["attachment"])}'
+                )
+                embeds.append(embed)
+
+        await ctx.send(embeds=embeds[:10], files=files[:9])
+        if len(embeds) >= 10:
+            await ctx.send(embeds=embeds[-1:], files=files[-1:])
 
     @commands.command(name="sql")
     async def sql(self, ctx: GuildContext, *, query: UntilFlag[SqlCommandFlags]):
