@@ -1,6 +1,60 @@
 from discord.ext import commands
 
 
+class UnknownAccount(Exception):
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+    def __str__(self) -> str:
+        return self.message
+
+
+class ResponseError(Exception):
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+    def __str__(self) -> str:
+        return self.message
+
+
+class ServerErrorResponse(ResponseError):
+    pass
+
+
+class BadGateway(ServerErrorResponse):
+    pass
+
+
+class ClientErrorResponse(ResponseError):
+    pass
+
+
+class NotFound(ClientErrorResponse):
+    pass
+
+
+class Unauthorized(ClientErrorResponse):
+    pass
+
+
+class BadRequest(ClientErrorResponse):
+    pass
+
+
+class Forbidden(ClientErrorResponse):
+    pass
+
+
+class ImageTooLarge(commands.BadArgument):
+    pass
+
+
+class InvalidColor(commands.BadArgument):
+    pass
+
+
 IGNORED = (
     commands.CommandNotFound,
     commands.NotOwner,

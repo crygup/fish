@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import re
+import textwrap
 import time
 from io import BytesIO
 from typing import (
@@ -18,9 +19,12 @@ from typing import (
 )
 
 import discord
+from aiohttp import ClientResponse
 from dateutil.relativedelta import relativedelta
 from discord.ext import commands
 from PIL import Image, ImageSequence
+
+from .errors import *
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -38,6 +42,7 @@ __all__ = [
     "regexes",
     "get_video",
     "human_join",
+    "response_checker",
 ]
 
 T = TypeVar("T")
@@ -346,3 +351,31 @@ def resize_to_limit(data: BytesIO, limit: int) -> BytesIO:
             data.seek(0)
             current_size = data.getbuffer().nbytes
     return data
+
+
+def response_checker(response: ClientResponse) -> bool:
+    if response.status == 200:
+        return True
+    elif response.status == 502:
+        raise BadGateway("The server is down or under maintenance, try again later.")
+    elif response.status == 404:
+        raise NotFound("The requested resource could not be found.")
+    elif response.status == 400:
+        raise BadRequest("The request was invalid.")
+    elif response.status == 401:
+        raise Unauthorized("The request requires authentication.")
+    elif response.status == 403:
+        raise Forbidden("The request was forbidden.")
+    elif str(response.status).startswith("5"):
+        reason = (
+            f"\nReason: {textwrap.shorten(response.reason, 100)}"
+            if response.reason
+            else ""
+        )
+        raise ServerErrorResponse(
+            f"The server returned an error ({response.status}). {reason}"
+        )
+    else:
+        raise ResponseError(
+            f"Something went wrong, try again later? \nStatus code: `{response.status}`"
+        )
