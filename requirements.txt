@@ -1,6 +1,7 @@
 git+https://github.com/Rapptz/discord.py
 git+https://github.com/Rapptz/discord-ext-menus
 git+https://github.com/Gorialis/jishaku
+git+https://github.com/tweepy/tweepy.git#egg=tweepy[async]
 asyncpg
 toml
 tabulate
@@ -8,3 +9,11 @@ python-dateutil
 Pillow
 pandas
 yt-dlp
+psutil
+aioredis
+cachetools
+pilmoji
+steam
+ossapi
+Pillow
+Wand
