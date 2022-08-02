@@ -26,3 +26,4 @@ class Egg(commands.Cog, name="egg"):
         invite = await channel.create_invite(max_uses=users)
 
         await ctx.author.send(f"Here is the invite: {invite.url}")
+        await ctx.message.add_reaction("\U0001f44d")
