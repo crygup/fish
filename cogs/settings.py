@@ -4,7 +4,14 @@ import asyncpg
 import discord
 from bot import Bot, Context
 from discord.ext import commands
-from utils import SteamIDConverter, UnknownAccount, SimplePages, FieldPageSource, Pager, add_prefix
+from utils import (
+    SteamIDConverter,
+    UnknownAccount,
+    SimplePages,
+    FieldPageSource,
+    Pager,
+    add_prefix,
+)
 
 
 async def setup(bot: Bot):
@@ -44,8 +51,7 @@ class Settings(commands.Cog, name="settings"):
 
         await ctx.send(f"Your {option} account has been linked.")
 
-
-    @commands.group(name='prefix', invoke_without_command=True)
+    @commands.group(name="prefix", invoke_without_command=True)
     async def prefix(self, ctx: Context):
         """Set the prefix for the bot"""
         sql = """SELECT * FROM guild_prefixes WHERE guild_id = $1 ORDER BY time DESC"""
@@ -57,7 +63,8 @@ class Settings(commands.Cog, name="settings"):
 
         entries = [
             (
-                record["prefix"], f'{discord.utils.format_dt(record["time"], "R")}  |  {discord.utils.format_dt(record["time"], "d")} | {(await self.bot.getch_user(record["author_id"])).mention}',
+                record["prefix"],
+                f'{discord.utils.format_dt(record["time"], "R")}  |  {discord.utils.format_dt(record["time"], "d")} | {(await self.bot.getch_user(record["author_id"])).mention}',
             )
             for record in results
         ]
@@ -66,8 +73,8 @@ class Settings(commands.Cog, name="settings"):
         p.embed.title = f"Prefixes in {ctx.guild}"
         menu = Pager(p, ctx=ctx)
         await menu.start(ctx)
-    
-    @prefix.command(name='add', aliases=('set', 'setprefix', '+'))
+
+    @prefix.command(name="add", aliases=("set", "setprefix", "+"))
     @commands.has_permissions(manage_guild=True)
     async def prefix_add(self, ctx: Context, *, prefix: str):
         """Add a prefix to the server"""
@@ -75,18 +82,23 @@ class Settings(commands.Cog, name="settings"):
             await ctx.send("Prefixes can only be 10 characters long.")
             return
 
+        try:
+            check = self.bot.prefixes[ctx.guild.id]
+            if prefix in check:
+                await ctx.send("This prefix is already set.")
+                return
 
-        if prefix in self.bot.prefixes[ctx.guild.id]:
-            await ctx.send("This prefix is already set.")
-            return
+        except KeyError:
+            pass
 
         sql = """INSERT INTO guild_prefixes (guild_id, prefix, author_id, time) VALUES ($1, $2, $3, $4)"""
-        await ctx.bot.pool.execute(sql, ctx.guild.id, prefix, ctx.author.id, discord.utils.utcnow())
+        await ctx.bot.pool.execute(
+            sql, ctx.guild.id, prefix, ctx.author.id, discord.utils.utcnow()
+        )
         add_prefix(self.bot, ctx.guild.id, prefix)
         await ctx.send(f"Added prefix `{prefix}` to the server.")
-        
-        
-    @prefix.command(name='remove', aliases=('delete', 'del', 'rm', '-'))
+
+    @prefix.command(name="remove", aliases=("delete", "del", "rm", "-"))
     @commands.has_permissions(manage_guild=True)
     async def prefix_remove(self, ctx: Context, *, prefix: str):
         """Remove a prefix from the server"""
@@ -99,7 +111,6 @@ class Settings(commands.Cog, name="settings"):
         except (KeyError, ValueError):
             await ctx.send("This prefix does not exist.")
             return
-
 
     @commands.command(name="accounts")
     async def accounts(self, ctx: Context, *, user: discord.User = commands.Author):
