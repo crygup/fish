@@ -1,15 +1,16 @@
 import argparse
+from io import BytesIO
 import os
 import re
 import secrets
 import shlex
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import discord
-from bot import Bot
+from bot import Bot, Context
 from discord.ext import commands, tasks
-from utils import GuildContext, TenorUrlConverter, get_video, regexes, human_join
+from utils import GuildContext, TenorUrlConverter, get_video, regexes, human_join, EmojiConverter
 from yt_dlp import YoutubeDL
 
 
@@ -65,6 +66,8 @@ class Tools(commands.Cog, name="tools"):
             await ctx.send("No emojis found.")
             return
 
+        message = await ctx.send("Stealing emojis...")
+
         completed_emojis = []
         for result in results:
             emoji = await commands.PartialEmojiConverter().convert(ctx, result)
@@ -80,9 +83,9 @@ class Tools(commands.Cog, name="tools"):
             except discord.HTTPException:
                 pass
 
-        await ctx.send(
-            f'Successfully cloned {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(results)})*.'
-        )
+            await message.edit(content=
+                f'Successfully stole {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(results)})*.'
+            )
 
     @commands.command(name="tenor")
     async def tenor(self, ctx: commands.Context, url: str):
@@ -211,3 +214,99 @@ class Tools(commands.Cog, name="tools"):
             if file.endswith(valid_formats):
                 if file not in self.currently_downloading:
                     os.remove(f"files/videos/{file}")
+
+
+    @commands.group(name="emoji", invoke_without_command=True)
+    async def emoji(
+        self,
+        ctx: Context,
+        emoji: Optional[Union[discord.Emoji, discord.PartialEmoji, str]],
+    ):
+        """Gets information about an emoji."""
+
+        if ctx.message.reference is None and emoji is None:
+            raise commands.BadArgument("No emoji provided.")
+
+        if isinstance(emoji, str):
+            _emoji = await ctx.get_twemoji(str(emoji))
+
+            if _emoji is None:
+                raise commands.BadArgument("No emoji found.")
+
+            await ctx.send(file=discord.File(BytesIO(_emoji), filename=f"emoji.png"))
+            return
+
+        if emoji:
+            emoji = emoji
+
+        else:
+            if not ctx.message.reference:
+                raise commands.BadArgument("No emoji provided.")
+
+            reference = ctx.message.reference.resolved
+
+            if (
+                isinstance(reference, discord.DeletedReferencedMessage)
+                or reference is None
+            ):
+                raise commands.BadArgument("No emoji found.")
+
+            emoji = (await EmojiConverter().from_message(ctx, reference.content))[0]
+
+        if emoji is None:
+            raise TypeError("No emoji found.")
+
+        embed = discord.Embed(timestamp=emoji.created_at, title=emoji.name)
+
+        if isinstance(emoji, discord.Emoji) and emoji.guild:
+            if not emoji.available:
+                embed.title = f"~~{emoji.name}~~"
+
+            embed.add_field(
+                name="Guild",
+                value=f"{ctx.bot.e_replies}{str(emoji.guild)}\n"
+                f"{ctx.bot.e_reply}{emoji.guild.id}",
+            )
+
+            femoji = await emoji.guild.fetch_emoji(emoji.id)
+            if femoji.user:
+                embed.add_field(
+                    name="Created by",
+                    value=f"{ctx.bot.e_replies}{str(femoji.user)}\n"
+                    f"{ctx.bot.e_reply}{femoji.user.id}",
+                )
+
+        embed.add_field(
+            name="Raw text", value=f"`<:{emoji.name}\u200b:{emoji.id}>`", inline=False
+        )
+
+        embed.set_footer(text=f"ID: {emoji.id} \nCreated at")
+        embed.set_image(url=f'attachment://emoji.{"gif" if emoji.animated else "png"}')
+        file = await emoji.to_file(
+            filename=f'emoji.{"gif" if emoji.animated else "png"}'
+        )
+        await ctx.send(embed=embed, file=file)
+
+    @emoji.command(name="rename")
+    @commands.has_guild_permissions(manage_emojis=True)
+    @commands.bot_has_guild_permissions(manage_emojis=True)
+    async def emoji_rename(self, ctx: Context, emoji: discord.Emoji, *, name: str):
+        pattern = re.compile(r"[a-zA-Z0-9_ ]")
+        if not pattern.match(name):
+            raise commands.BadArgument("Name can only contain letters, numbers, and underscores.")
+        
+        await emoji.edit(name=name)
+        await ctx.send(f"Renamed {emoji} to **`{name}`**.")
+    
+    @emoji.command(name="delete")
+    @commands.has_guild_permissions(manage_emojis=True)
+    @commands.bot_has_guild_permissions(manage_emojis=True)
+    async def emoji_delete(self, ctx: Context, emoji: discord.Emoji):
+        value = await ctx.prompt(f"Are you sure you want to delete {emoji}?")
+        if not value:
+            await ctx.send("Well, I didn't want to delete it anyway.")
+            return
+        
+        await emoji.delete()
+        await ctx.send(f"Deleted `{emoji.name}`.")
+
