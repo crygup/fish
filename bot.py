@@ -53,7 +53,6 @@ class Bot(commands.Bot):
     session: aiohttp.ClientSession
     pool: asyncpg.Pool
     redis: aioredis.Redis
-    genshin: genshin.Client  # type: ignore
 
     async def no_dms(self, ctx: GuildContext):
         return ctx.guild is not None
@@ -176,14 +175,6 @@ class Bot(commands.Bot):
             self.config["keys"]["osu_id"], self.config["keys"]["osu_secret"]
         )
         print("Connected to osu! account")
-
-        self.genshin = genshin.Client(
-            {
-                "ltuid": self.config["keys"]["genshin_ltuid"],
-                "ltoken": self.config["keys"]["genshin_ltoken"],
-            }
-        )
-        print("Connected to genshin account")
 
         await setup_cache(self.pool, self.redis)
         print("Setup cache")

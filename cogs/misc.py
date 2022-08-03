@@ -18,6 +18,7 @@ from utils import (
 )
 
 from cogs.context import Context
+from utils import FrontHelpPageSource, Pager
 
 
 async def setup(bot: Bot):
@@ -33,32 +34,10 @@ class MyHelp(commands.HelpCommand):
         if bot.user is None:
             return
 
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{bot.user.name} help", icon_url=bot.user.display_avatar.url
-        )
-        for cog, cmds in mapping.items():
-            if filtered_commands := await self.filter_commands(cmds):
-                if len(cmds) == 0:
-                    continue
-
-                if cog is None:
-                    continue
-
-                embed.add_field(
-                    name=cog.qualified_name.capitalize(),
-                    value=human_join(
-                        [
-                            f"**`{command.qualified_name}`**"
-                            for command in cog.get_commands()
-                        ],
-                        final="and",
-                    )
-                    or "No commands found here.",
-                    inline=False,
-                )
-
-        await ctx.send(embed=embed)
+        p = FrontHelpPageSource([cog for _, cog in bot.cogs.items() if len(await self.filter_commands(cog.get_commands())) != 0], per_page=4, help_command=self)
+        p.embed.set_author(name=f"{bot.user.name} help", icon_url=bot.user.display_avatar.url)
+        menu = Pager(p, ctx=ctx)
+        await menu.start(ctx)
 
     async def send_command_help(self, command: commands.Command):
         bot = self.context.bot

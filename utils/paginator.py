@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import discord
 from discord.ext import commands, menus
 from discord.ext.commands import Paginator as CommandPaginator
+
+from utils import human_join
 
 blurple = discord.ButtonStyle.blurple
 red = discord.ButtonStyle.red
@@ -176,6 +178,44 @@ class FieldPageSource(menus.ListPageSource):
 
         return self.embed
 
+class FrontHelpPageSource(menus.ListPageSource):
+    def __init__(self, entries: List[commands.Cog], *, per_page=12, help_command: commands.HelpCommand):
+        super().__init__(entries, per_page=per_page)
+        self.help_command = help_command
+        self.embed = discord.Embed(colour=0x2F3136)
+
+    async def format_page(self, menu, entries: List[commands.Cog]):
+        self.embed.clear_fields()
+
+        for cog in entries:
+            cmds = await self.help_command.filter_commands(cog.get_commands())
+            if len(cmds) == 0:
+                continue
+
+            if cog is None:
+                continue
+
+            self.embed.add_field(
+                name=cog.qualified_name.capitalize(),
+                value=human_join(
+                    [
+                        f"**`{command.qualified_name}`**"
+                        for command in cmds
+                    ],
+                    final="and",
+                )
+                or "No commands found here.",
+                inline=False,
+            )
+
+        maximum = self.get_max_pages()
+        if maximum > 1:
+            text = (
+                f"Page {menu.current_page + 1}/{maximum} ({len(self.entries)} entries)"
+            )
+            self.embed.set_footer(text=text)
+
+        return self.embed
 
 class ImagePageSource(menus.ListPageSource):
     def __init__(self, entries, *, per_page=1):
