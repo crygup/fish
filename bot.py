@@ -12,12 +12,11 @@ import aioredis
 import asyncpg
 import cachetools
 import discord
-import genshin
 from discord.ext import commands
 from ossapi import OssapiV2
 
 from cogs.context import Context
-from utils import setup_cache, setup_pokemon, setup_prefixes, setup_webhooks
+from utils import setup_cache, setup_pokemon, setup_prefixes, setup_webhooks, setup_accounts
 
 if TYPE_CHECKING:
     from utils import GuildContext
@@ -187,6 +186,9 @@ class Bot(commands.Bot):
 
         await setup_prefixes(self, self.pool)
         print("Setup prefixes")
+
+        await setup_accounts(self.pool, self.redis)
+        print("Setup accounts")
 
         if not self.testing:
             initial_extensions.extend([cog for cog in cogs])

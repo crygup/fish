@@ -1,4 +1,5 @@
 import datetime
+import difflib
 import re
 from typing import Dict, List, Optional, Union
 
@@ -360,3 +361,51 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         info: Dict = await SteamClient(ctx.bot, "ISteamUser/GetPlayerSummaries", "v0002", user_id, ids=True)  # type: ignore
         info = info["response"]["players"][0]
         await ctx.send(f'{info["personaname"]}\'s 64bit steam ID is: `{user_id}`')
+
+    @commands.command(name="character")
+    async def character(self, ctx: Context, *, character: str):
+        """Gets the information about a character."""
+
+        pattern = re.compile(r'"(?P<name>[a-zA-Z-]{1,})"')
+        async with self.bot.session.get("https://api.genshin.dev/characters") as r:
+            results = await r.text()
+
+        characters = pattern.findall(results)
+
+        if not character.lower() in [c for c in characters]:
+
+            message = "Character not found.\n\n"
+            maybe = difflib.get_close_matches(character.lower(), characters)
+            if maybe:
+                message += f"Did you mean `{human_join(maybe)}`?"
+
+            await ctx.send(message)
+            return
+
+        async with self.bot.session.get(
+            f"https://api.genshin.dev/characters/{character}"
+        ) as r:
+            results = await r.json()
+
+        embed = discord.Embed(
+            color=ctx.bot.embedcolor, description=results["description"]
+        )
+        icon_fp = await ctx.to_image(
+            f"https://api.genshin.dev/characters/{character}/icon"
+        )
+        icon_file = discord.File(icon_fp, filename=f"{character}.png")
+
+        embed.set_author(
+            name=f"{results['name']}  •  {results['rarity']} \U00002b50",
+            icon_url=f"attachment://{character}.png",
+        )
+        embed.set_thumbnail(url=f"attachment://{character}.png")
+
+        embed.add_field(name="Weapon", value=results["weapon"])
+        embed.add_field(name="Vision", value=results["vision"])
+        embed.add_field(name="Nation", value=results["nation"])
+        embed.add_field(name="Affiliation", value=results["affiliation"])
+        embed.add_field(name="Constellation", value=results["constellation"])
+        embed.add_field(name="Birthday", value=results["birthday"])
+
+        await ctx.send(embed=embed, file=icon_file)

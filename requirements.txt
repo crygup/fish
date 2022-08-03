@@ -17,4 +17,3 @@ steam
 ossapi
 Pillow
 Wand
-genshin
