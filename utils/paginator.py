@@ -178,8 +178,15 @@ class FieldPageSource(menus.ListPageSource):
 
         return self.embed
 
+
 class FrontHelpPageSource(menus.ListPageSource):
-    def __init__(self, entries: List[commands.Cog], *, per_page=12, help_command: commands.HelpCommand):
+    def __init__(
+        self,
+        entries: List[commands.Cog],
+        *,
+        per_page=12,
+        help_command: commands.HelpCommand,
+    ):
         super().__init__(entries, per_page=per_page)
         self.help_command = help_command
         self.embed = discord.Embed(colour=0x2F3136)
@@ -198,10 +205,7 @@ class FrontHelpPageSource(menus.ListPageSource):
             self.embed.add_field(
                 name=cog.qualified_name.capitalize(),
                 value=human_join(
-                    [
-                        f"**`{command.qualified_name}`**"
-                        for command in cmds
-                    ],
+                    [f"**`{command.qualified_name}`**" for command in cmds],
                     final="and",
                 )
                 or "No commands found here.",
@@ -216,6 +220,7 @@ class FrontHelpPageSource(menus.ListPageSource):
             self.embed.set_footer(text=text)
 
         return self.embed
+
 
 class ImagePageSource(menus.ListPageSource):
     def __init__(self, entries, *, per_page=1):

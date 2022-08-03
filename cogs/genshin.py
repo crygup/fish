@@ -16,6 +16,7 @@ async def setup(bot: Bot):
 
 class Genshin(commands.Cog, name="genshin"):
     """Genshin related commands."""
+
     def __init__(self, bot: Bot):
         self.bot = bot
 

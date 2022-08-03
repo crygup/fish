@@ -34,8 +34,18 @@ class MyHelp(commands.HelpCommand):
         if bot.user is None:
             return
 
-        p = FrontHelpPageSource([cog for _, cog in bot.cogs.items() if len(await self.filter_commands(cog.get_commands())) != 0], per_page=4, help_command=self)
-        p.embed.set_author(name=f"{bot.user.name} help", icon_url=bot.user.display_avatar.url)
+        p = FrontHelpPageSource(
+            [
+                cog
+                for _, cog in bot.cogs.items()
+                if len(await self.filter_commands(cog.get_commands())) != 0
+            ],
+            per_page=4,
+            help_command=self,
+        )
+        p.embed.set_author(
+            name=f"{bot.user.name} help", icon_url=bot.user.display_avatar.url
+        )
         menu = Pager(p, ctx=ctx)
         await menu.start(ctx)
 
