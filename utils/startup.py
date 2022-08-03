@@ -73,6 +73,7 @@ async def setup_accounts(pool: asyncpg.Pool, redis: aioredis.Redis):
                 f"accounts:{record['user_id']}", "roblox", record["roblox"]
             )
 
+
 async def setup_prefixes(bot: Bot, pool: asyncpg.Pool):
     prefixes = await pool.fetch("SELECT * FROM guild_prefixes")
     for record in prefixes:

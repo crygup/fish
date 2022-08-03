@@ -43,11 +43,13 @@ lastfm_period = {
     "12month": "yearly",
 }
 
+
 def add_prefix(bot: Bot, guild_id: int, prefix: str):
     try:
         bot.prefixes[guild_id].append(prefix)
     except KeyError:
         bot.prefixes[guild_id] = [prefix]
+
 
 async def get_lastfm(bot: Bot, user_id: int) -> str:
     """Get the last.fm username for the given user ID."""
