@@ -35,6 +35,55 @@ class Tools(commands.Cog, name="tools"):
     async def cog_load(self) -> None:
         self.delete_videos.start()
 
+    @commands.command(name="steal", aliases=("clone",))
+    @commands.has_guild_permissions(manage_emojis=True)
+    @commands.bot_has_permissions(manage_emojis=True)
+    async def steal(self, ctx: GuildContext, *, emojis: Optional[str]):
+        ref = ctx.message.reference
+        content = ctx.message.content
+
+        if emojis is None:
+            if ref is None:
+                await ctx.send(
+                    "You need to provide some emojis to steal, either reply to a message or give them as an argument."
+                )
+                return
+
+            resolved = ref.resolved
+            if isinstance(resolved, discord.DeletedReferencedMessage):
+                return
+
+            if resolved is None:
+                return
+
+            content = resolved.content
+
+        pattern = re.compile(r"<a?:[a-zA-Z0-9\_]{1,}:[0-9]{1,}>")
+        results = pattern.findall(content)
+
+        if len(results) == 0:
+            await ctx.send("No emojis found.")
+            return
+
+        completed_emojis = []
+        for results in results:
+            emoji = await commands.PartialEmojiConverter().convert(ctx, results)
+
+            if emoji is None:
+                continue
+
+            try:
+                await ctx.guild.create_custom_emoji(
+                    name=emoji.name, image=await emoji.read()
+                )
+                completed_emojis.append(str(emoji))
+            except discord.HTTPException:
+                pass
+
+        await ctx.send(
+            f'Successfully cloned {human_join(completed_emojis, final="and")} *({len(completed_emojis):,}/{len(results):,})*.'
+        )
+
     @commands.command(name="tenor")
     async def tenor(self, ctx: commands.Context, url: str):
         """Gets the actual gif URL from a tenor link"""

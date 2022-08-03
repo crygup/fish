@@ -44,6 +44,9 @@ lastfm_period = {
     "12month": "yearly",
 }
 
+emoji_regex = r"<(?P<animated>a)?:(?P<name>[a-zA-Z0-9\_]{1,}):(?P<id>[0-9]{1,})>"
+
+
 async def mobile(self) -> None:
     """Sends the IDENTIFY packet."""
     payload = {
@@ -81,6 +84,7 @@ async def mobile(self) -> None:
         "before_identify", self.shard_id, initial=self._initial_identify
     )
     await self.send_as_json(payload)
+
 
 def add_prefix(bot: Bot, guild_id: int, prefix: str):
     try:
