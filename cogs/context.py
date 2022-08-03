@@ -100,6 +100,9 @@ class Context(commands.Context):
             return f"{emoji}: {label}"
         return emoji
 
+    def yes_no(self, value: bool) -> str:
+        return "Yes" if value else "No"
+
     async def get_twemoji(self, emoji: str, *, svg: bool = True) -> Optional[bytes]:
         try:
             folder = ("72x72", "svg")[svg]
@@ -190,6 +193,7 @@ class Context(commands.Context):
         self,
         content: Optional[str] = None,
         reference: Optional[Union[discord.Message, discord.MessageReference]] = None,
+        check_ref: Optional[bool] = False,
         **kwargs: Any,
     ) -> discord.Message:
 
@@ -206,6 +210,11 @@ class Context(commands.Context):
 
         if kwargs.get("embed") and kwargs.get("embeds"):
             raise TypeError("Cannot mix embed and embeds keyword arguments.")
+
+        if check_ref:
+            async for message in self.channel.history(limit=1):
+                if message.id != self.message.id:
+                    reference = self.message if not reference else reference
 
         embeds = kwargs.pop("embeds", []) or (
             [kwargs.pop("embed")] if kwargs.get("embed", None) else []

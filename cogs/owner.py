@@ -1,6 +1,9 @@
+import difflib
 import imghdr
+import itertools
 import textwrap
 import time
+import traceback
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -8,8 +11,11 @@ import discord
 from bot import Bot
 from discord.ext import commands
 from jishaku.codeblocks import codeblock_converter
+from jishaku.paginators import WrappedPaginator
 from tabulate import tabulate
-from utils import GuildContext, UntilFlag, cleanup_code, plural
+from utils import ExtensionConverter, GuildContext, UntilFlag, cleanup_code, plural
+
+from cogs.context import Context
 
 
 async def setup(bot: Bot):
@@ -40,6 +46,148 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
             raise commands.NotOwner
 
         return True
+
+    @commands.command(name="reload")
+    async def reload(self, ctx: Context, *extensions: ExtensionConverter):
+        """Reloads a cog"""
+
+        paginator = WrappedPaginator(prefix="", suffix="")
+
+        if not extensions:
+            raise commands.BadArgument("No extensions provided")
+
+        for extension in itertools.chain(*extensions):  # type: ignore
+
+            if extension not in self.bot.extensions:
+                results = difflib.get_close_matches(
+                    extension, self.bot.extensions.keys()
+                )
+                extension = results[0] if results else extension
+
+            method, icon = (
+                (
+                    self.bot.reload_extension,
+                    "<:cr_reload:956384262096031744>",
+                )
+                if extension in self.bot.extensions
+                else (self.bot.load_extension, "<:cr_load:956384261945040896>")
+            )
+
+            try:
+                await discord.utils.maybe_coroutine(method, extension)
+            except Exception as exc:  # pylint: disable=broad-except
+                traceback_data = "".join(
+                    traceback.format_exception(type(exc), exc, exc.__traceback__, 1)
+                )
+
+                paginator.add_line(
+                    f"{icon}<:cr_warning:956384262016344064> `{extension}`\n```py\n{traceback_data}\n```",
+                    empty=True,
+                )
+            else:
+                paginator.add_line(f"{icon} `{extension}`", empty=True)
+
+        content = []
+        for page in paginator.pages:
+            content.append(page)
+
+        content = "\n".join([str(x).replace("\n\n", "\n") for x in content])
+        embed = discord.Embed(
+            title="Reload" if ctx.invoked_with == "reload" else "Load",
+            description=content,
+        )
+        await ctx.send(embed=embed)
+
+    @commands.command(name="load")
+    async def load(self, ctx: Context, *extensions: ExtensionConverter):
+        """Reloads a cog"""
+
+        paginator = WrappedPaginator(prefix="", suffix="")
+
+        if not extensions:
+            raise commands.BadArgument("No extensions provided")
+
+        for extension in itertools.chain(*extensions):  # type: ignore
+            method, icon = (
+                (
+                    self.bot.reload_extension,
+                    "<:cr_reload:956384262096031744>",
+                )
+                if extension in self.bot.extensions
+                else (self.bot.load_extension, "<:cr_load:956384261945040896>")
+            )
+
+            try:
+                await discord.utils.maybe_coroutine(method, extension)
+            except Exception as exc:  # pylint: disable=broad-except
+                traceback_data = "".join(
+                    traceback.format_exception(type(exc), exc, exc.__traceback__, 1)
+                )
+
+                paginator.add_line(
+                    f"{icon}<:cr_warning:956384262016344064> `{extension}`\n```py\n{traceback_data}\n```",
+                    empty=True,
+                )
+            else:
+                paginator.add_line(f"{icon} `{extension}`", empty=True)
+
+        content = []
+        for page in paginator.pages:
+            content.append(page)
+
+        content = "\n".join([str(x).replace("\n\n", "\n") for x in content])
+        embed = discord.Embed(
+            title="Load",
+            description=content,
+        )
+        await ctx.send(embed=embed)
+
+    @commands.command(name="unload")
+    async def unload(self, ctx: Context, *extensions: ExtensionConverter):
+        """Reloads a cog"""
+
+        paginator = WrappedPaginator(prefix="", suffix="")
+
+        # 'jsk reload' on its own just reloads jishaku
+        if ctx.invoked_with == "reload" and not extensions:
+            extensions = [["jishaku"]]  # type: ignore
+
+        for extension in itertools.chain(*extensions):  # type: ignore
+            if extension not in self.bot.extensions:
+                results = difflib.get_close_matches(
+                    extension, self.bot.extensions.keys()
+                )
+                extension = results[0] if results else extension
+
+            method, icon = (
+                self.bot.unload_extension,
+                "<:cr_unload:957281084100456480>",
+            )
+
+            try:
+                await discord.utils.maybe_coroutine(method, extension)
+            except Exception as exc:
+                traceback_data = "".join(
+                    traceback.format_exception(type(exc), exc, exc.__traceback__, 1)
+                )
+
+                paginator.add_line(
+                    f"{icon}<:cr_warning:956384262016344064> `{extension}`\n```py\n{traceback_data}\n```",
+                    empty=True,
+                )
+            else:
+                paginator.add_line(f"{icon} `{extension}`", empty=True)
+
+        content = []
+        for page in paginator.pages:
+            content.append(page)
+
+        content = "\n".join([str(x).replace("\n\n", "\n") for x in content])
+        embed = discord.Embed(
+            title="Reload" if ctx.invoked_with == "reload" else "Load",
+            description=content,
+        )
+        await ctx.send(embed=embed)
 
     @commands.command(name="snipe")
     @commands.is_owner()
@@ -205,11 +353,11 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
                 await ctx.send("dumbass")
                 return
 
-            if option.id in self.bot.blacklisted_guilds:
+            if option.id in await self.bot.redis.smembers("blacklisted_guilds"):
                 await self.bot.pool.execute(
                     "DELETE FROM guild_blacklist WHERE guild_id = $1", option.id
                 )
-                self.bot.blacklisted_guilds.remove(option.id)
+                await self.bot.redis.srem("blacklisted_guilds", option.id)
                 await ctx.send(f"Removed guild `{option}` from the blacklist")
             else:
                 await self.bot.pool.execute(
@@ -218,7 +366,7 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
                     reason,
                     discord.utils.utcnow(),
                 )
-                self.bot.blacklisted_guilds.append(option.id)
+                await self.bot.redis.sadd("blacklisted_guilds", option.id)
                 await ctx.send(f"Added guild `{option}` to the blacklist")
 
         elif isinstance(option, discord.User):
@@ -226,11 +374,11 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
                 await ctx.send("dumbass")
                 return
 
-            if option.id in self.bot.blacklisted_users:
+            if str(option.id) in await self.bot.redis.smembers("blacklisted_users"):
                 await self.bot.pool.execute(
                     "DELETE FROM user_blacklist WHERE user_id = $1", option.id
                 )
-                self.bot.blacklisted_users.remove(option.id)
+                await self.bot.redis.srem("blacklisted_users", option.id)
                 await ctx.send(f"Removed user `{option}` from the blacklist")
             else:
                 await self.bot.pool.execute(
@@ -239,32 +387,7 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
                     reason,
                     discord.utils.utcnow(),
                 )
-                self.bot.blacklisted_users.append(option.id)
+                await self.bot.redis.sadd("blacklisted_users", option.id)
                 await ctx.send(f"Added user `{option}` to the blacklist")
         else:
             await ctx.send("what")
-
-    @commands.command(name="whitelist")
-    async def _whitelist(
-        self,
-        ctx: GuildContext,
-        user: discord.User,
-        *,
-        reason: str = "No reason provided",
-    ):
-        if user.id in self.bot.whitelisted_users:
-            await self.bot.pool.execute(
-                "DELETE FROM user_whitelist WHERE user_id = $1", user.id
-            )
-            self.bot.whitelisted_users.remove(user.id)
-            await ctx.send(f"Removed user `{user}` from the whitelist")
-
-        else:
-            await self.bot.pool.execute(
-                "INSERT INTO user_whitelist (user_id, reason, time) VALUES ($1, $2, $3)",
-                user.id,
-                reason,
-                discord.utils.utcnow(),
-            )
-            self.bot.whitelisted_users.append(user.id)
-            await ctx.send(f"Added user `{user}` to the whitelist")

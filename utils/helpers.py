@@ -11,6 +11,7 @@ from typing import (
     Awaitable,
     Callable,
     ClassVar,
+    List,
     Optional,
     ParamSpec,
     Sequence,
@@ -20,6 +21,7 @@ from typing import (
 
 import discord
 from aiohttp import ClientResponse
+from cogs.context import Context
 from dateutil.relativedelta import relativedelta
 from discord.ext import commands
 from PIL import Image, ImageSequence
@@ -29,24 +31,93 @@ from .errors import *
 if TYPE_CHECKING:
     from bot import Bot
 
-__all__ = [
-    "cleanup_code",
-    "to_thread",
-    "plural",
-    "Timer",
-    "human_timedelta",
-    "resize_to_limit",
-    "Regexes",
-    "GuildContext",
-    "run",
-    "regexes",
-    "get_video",
-    "human_join",
-    "response_checker",
-]
-
 T = TypeVar("T")
 P = ParamSpec("P")
+
+lastfm_period = {
+    "overall": "overall",
+    "7day": "weekly",
+    "1month": "monthly",
+    "3month": "quarterly",
+    "6month": "half-yearly",
+    "12month": "yearly",
+}
+
+def add_prefix(bot: Bot, guild_id: int, prefix: str):
+    try:
+        bot.prefixes[guild_id].append(prefix)
+    except KeyError:
+        bot.prefixes[guild_id] = [prefix]
+
+async def get_lastfm(bot: Bot, user_id: int) -> str:
+    """Get the last.fm username for the given user ID."""
+    name = await bot.redis.hget(f"accounts:{user_id}", "lastfm")
+    if not name:
+        raise UnknownAccount("No last.fm account set.")
+    return name
+
+
+async def get_roblox(bot: Bot, user_id: int) -> str:
+    """Get the roblox username for the given user ID."""
+    name = await bot.redis.hget(f"accounts:{user_id}", "roblox")
+    if not name:
+        raise UnknownAccount("No roblox account set.")
+    return name
+
+
+async def get_osu(bot: Bot, user_id: int) -> str:
+    """Get the osu! username for the given user ID."""
+    name = await bot.redis.hget(f"accounts:{user_id}", "osu")
+    if name is None:
+        raise UnknownAccount("No osu! account set.")
+    return name
+
+
+USER_FLAGS = {
+    "staff": "<:staff:949147468124262420> Discord Staff",
+    "partner": "<:partner:949147457839829043> Discord Partner",
+    "hypesquad": "<:hypesquad:949147451942649916> HypeSquad",
+    "bug_hunter": "<:bughunterlv1:949147440219553873> Bug Hunter",
+    "bug_hunter_level_2": "<:bughunterlv2:949147441935024178> Bug Hunter 2",
+    "hypesquad_bravery": "<:bravery:949147435333218305> HypeSquad Bravery",
+    "hypesquad_brilliance": "<:brillance:949147436880912405> HypeSquad Brilliance",
+    "hypesquad_balance": "<:balance:949147429733793832> HypeSquad Balance",
+    "early_supporter": "<:earlysupporter:949147447756726342> Early Supporter",
+    "verified_bot_developer": "<:bot_dev:949147434204946472> Bot Developer",
+    "verified_bot": "<:bot:949147432598515723> Verified Bot",
+    "discord_certified_moderator": "<:certified_moderator:949147443264622643> Moderator",
+    "system": "<:system:949147469357387817> System",
+}
+
+
+async def get_user_badges(
+    member: Union[discord.Member, discord.User],
+    ctx: Context,
+    fetched_user: Optional[discord.User] = None,
+) -> List:
+    flags = dict(member.public_flags)
+
+    user_flags = []
+    if await ctx.bot.is_owner(member):
+        user_flags.append(f"<:cr_owner:972016928371654676> Bot Owner")
+
+    if isinstance(member, discord.Member) and member.guild.owner == member:
+        user_flags.append(f"<:owner:949147456376033340> Server Owner")
+
+    if isinstance(member, discord.Member) and member.premium_since:
+        user_flags.append(f"<:booster:949147430786596896> Server Booster")
+
+    if member.display_avatar.is_animated() or fetched_user and fetched_user.banner:
+        user_flags.append(f"<:nitro:949147454991896616> Nitro")
+
+    for flag, text in USER_FLAGS.items():
+        try:
+            if flags[flag]:
+                user_flags.append(text)
+        except KeyError:
+            continue
+
+    return user_flags
 
 
 regexes = {
@@ -102,11 +173,6 @@ async def get_video(ctx: GuildContext, url: str) -> Optional[str]:
     for regex in regexes:
         result = re.search(regexes[regex]["regex"], url)
         if result:
-            if regexes[regex]["whitelist"]:
-                if ctx.author.id not in ctx.bot.whitelisted_users:
-                    raise commands.BadArgument(
-                        "You are not whitelisted to use this service, contact cr#0333."
-                    )
             if regexes[regex]["nsfw"]:
                 if not ctx.channel.is_nsfw():
                     raise commands.BadArgument(
@@ -133,7 +199,7 @@ async def run(cmd: str) -> Optional[str]:
         raise TypeError(f"[stderr]\n{stderr.decode()}")
 
 
-class GuildContext(commands.Context):
+class GuildContext(Context):
     bot: Bot
     author: discord.Member
     guild: discord.Guild

@@ -29,11 +29,11 @@ class User(commands.Cog, name="user"):
         self.bot = bot
         self.aliases = ["member", "members", "users"]
 
-    @commands.command(name="first_message", aliases=("fm", "oldest"))
+    @commands.command(name="first_message", aliases=("fmsg", "oldest"))
     async def first_message(
         self,
         ctx: commands.Context,
-        channel: Optional[discord.TextChannel] = None,
+        channel: Optional[discord.TextChannel],
         *,
         member: discord.Member = commands.Author,
     ):

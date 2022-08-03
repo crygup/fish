@@ -5,7 +5,7 @@ import toml
 
 async def main():
     config = toml.load("config.toml")
-    conn = await asyncpg.create_pool(config["databases"]["psql"])
+    conn = await asyncpg.create_pool(config["databases"]["testing_psql"])
     if conn is None:
         raise asyncpg.ConnectionFailureError("Could not connect to database")
 

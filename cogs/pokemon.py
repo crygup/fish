@@ -1,12 +1,12 @@
 import re
 from typing import List
+import asyncpg
 
 import discord
 import pandas as pd
 from bot import Bot
 from discord.ext import commands
-from utils import SimplePages
-from utils import GuildContext
+from utils import SimplePages, GuildContext, setup_pokemon
 
 
 async def setup(bot: Bot):
@@ -46,13 +46,15 @@ class Pokemon(commands.Cog, name="pokemon"):
         if message.author.id != 716390085896962058:
             return
 
-        if message.guild.id not in self.bot.poketwo_guilds:
+        if str(message.guild.id) not in await self.bot.redis.smembers("poketwo_guilds"):
             return
 
-        if message.guild.id in self.bot.blacklisted_guilds:
+        if str(message.guild.owner_id) in await self.bot.redis.smembers(
+            "blacklisted_users"
+        ):
             return
 
-        if message.guild.owner_id in self.bot.blacklisted_users:
+        if str(message.guild.id) in await self.bot.redis.smembers("blacklisted_guilds"):
             return
 
         if r"\_" not in message.content:
@@ -102,19 +104,7 @@ class Pokemon(commands.Cog, name="pokemon"):
     @commands.command(name="update_pokemon")
     @commands.is_owner()
     async def update_pokemon(self, ctx: GuildContext):
-        url = "https://raw.githubusercontent.com/poketwo/data/master/csv/pokemon.csv"
-        data = pd.read_csv(url)
-        pokemon = [str(p).lower() for p in data["name.en"]]
-
-        for p in pokemon:
-            if re.search(r"[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", p):
-                pokemon[pokemon.index(p)] = re.sub(
-                    "[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", p
-                )
-            if re.search(r"[\U000000e9]", p):
-                pokemon[pokemon.index(p)] = re.sub("[\U000000e9]", "e", p)
-
-        self.bot.pokemon = pokemon
+        await setup_pokemon(self.bot)
 
         await ctx.send("updated olk")
 
@@ -129,22 +119,22 @@ class Pokemon(commands.Cog, name="pokemon"):
     async def auto_solve(self, ctx: GuildContext):
         """Toggles automatic solving of pokétwo's pokémon hints"""
 
-        if ctx.guild.id in self.bot.poketwo_guilds:
-            await self.bot.pool.execute(
-                "UPDATE guild_settings SET poketwo = NULL WHERE guild_id = $1",
-                ctx.guild.id,
-            )
-            self.bot.poketwo_guilds.remove(ctx.guild.id)
-            await ctx.send("Disabled auto solving for this server")
-            return
+        try:
+            sql = "INSERT INTO guild_settings(guild_id, poketwo) VALUES($1, $2)"
+            await self.bot.pool.execute(sql, ctx.guild.id, True)
+        except asyncpg.UniqueViolationError:
+            if str(ctx.guild.id) in await self.bot.redis.smembers("poketwo_guilds"):
+                sql = "UPDATE guild_settings SET poketwo = NULL WHERE guild_id = $1"
+                await self.bot.pool.execute(sql, ctx.guild.id)
+                await self.bot.redis.srem("poketwo_guilds", ctx.guild.id)
+                await ctx.send("Disabled auto solving for this server.")
+                return
 
-        await self.bot.pool.execute(
-            "INSERT INTO guild_settings(guild_id, poketwo) VALUES ($1, $2)",
-            ctx.guild.id,
-            True,
-        )
-        self.bot.poketwo_guilds.append(ctx.guild.id)
-        await ctx.send("Enabled auto solving for this server")
+            sql = "UPDATE guild_settings SET poketwo = $1 WHERE guild_id = $2"
+            await self.bot.pool.execute(sql, True, ctx.guild.id)
+
+        await self.bot.redis.sadd("poketwo_guilds", ctx.guild.id)
+        await ctx.send("Enabled auto solving for this server.")
 
     @commands.command(name="megas")
     async def megas(self, ctx: GuildContext):

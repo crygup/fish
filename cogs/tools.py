@@ -1,14 +1,10 @@
 import argparse
-import imghdr
 import os
 import re
 import secrets
 import shlex
-import textwrap
 import time
-from io import BytesIO
 from typing import Dict, List, Optional
-import asyncpg
 
 import discord
 from bot import Bot
@@ -26,215 +22,18 @@ class Arguments(argparse.ArgumentParser):
         raise RuntimeError(message)
 
 
-class MyHelp(commands.HelpCommand):
-    context: GuildContext
-
-    async def send_bot_help(self, mapping: Dict[commands.Cog, List[commands.Command]]):
-        bot = self.context.bot
-        ctx = self.context
-        if bot.user is None:
-            return
-
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{bot.user.name} help", icon_url=bot.user.display_avatar.url
-        )
-        for cog, commands in mapping.items():
-            if filtered_commands := await self.filter_commands(commands):
-                if len(commands) == 0:
-                    continue
-
-                if cog is None:
-                    continue
-
-                embed.add_field(
-                    name=cog.qualified_name.capitalize(),
-                    value=human_join(
-                        [
-                            f"**`{command.qualified_name}`**"
-                            for command in cog.get_commands()
-                        ],
-                        final="and",
-                    )
-                    or "No commands found here.",
-                    inline=False,
-                )
-
-        await ctx.send(embed=embed)
-
-    async def send_command_help(self, command: commands.Command):
-        bot = self.context.bot
-        ctx = self.context
-
-        if bot.user is None:
-            return
-
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{command.qualified_name.capitalize()} help",
-            icon_url=bot.user.display_avatar.url,
-        )
-
-        embed.description = f"```{command.help}```" or "No help yet..."
-
-        if command.aliases:
-            embed.add_field(
-                name="Aliases",
-                value=human_join(
-                    [f"**`{alias}`**" for alias in command.aliases], final="and"
-                ),
-                inline=False,
-            )
-
-        if command.cooldown:
-            cd = command.cooldown
-            embed.add_field(
-                name="Cooldown",
-                value=f"{cd.rate:,} command every {round(cd.per)} seconds",
-            )
-
-        await ctx.send(embed=embed)
-
-    async def send_group_help(self, group: commands.Group):
-        bot = self.context.bot
-        ctx = self.context
-
-        if bot.user is None:
-            return
-
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{group.qualified_name.capitalize()} help",
-            icon_url=bot.user.display_avatar.url,
-        )
-
-        embed.description = f"```{group.help}```" or "No help yet..."
-
-        if group.commands:
-            embed.add_field(
-                name="Commands",
-                value=human_join(
-                    [f"**`{command.name}`**" for command in group.commands], final="and"
-                ),
-                inline=False,
-            )
-
-        if group.aliases:
-            embed.add_field(
-                name="Aliases",
-                value=human_join(
-                    [f"**`{alias}`**" for alias in group.aliases], final="and"
-                ),
-                inline=False,
-            )
-
-        if group.cooldown:
-            cd = group.cooldown
-            embed.add_field(
-                name="Cooldown",
-                value=f"{cd.rate:,} command every {round(cd.per)} seconds",
-            )
-
-        await ctx.send(embed=embed)
-
-    async def send_cog_help(self, cog: commands.Cog):
-        ctx = self.context
-        bot = ctx.bot
-
-        if bot.user is None:
-            return
-
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{cog.qualified_name.capitalize()} help",
-            icon_url=bot.user.display_avatar.url,
-        )
-
-        embed.description = f"```{cog.description}```" or "No help yet..."
-
-        commands = await self.filter_commands(cog.get_commands())
-
-        if commands:
-            embed.add_field(
-                name="Commands",
-                value=human_join(
-                    [f"**`{command.name}`**" for command in cog.get_commands()],
-                    final="and",
-                ),
-                inline=False,
-            )
-
-        if hasattr(cog, "aliases"):
-            embed.add_field(name="Aliases", value=human_join([f"**`{alias}`**" for alias in cog.aliases], final="and"), inline=False)  # type: ignore
-
-        await ctx.send(embed=embed)
-
-    async def send_error_message(self, error: commands.CommandError):
-        ctx = self.context
-        bot = ctx.bot
-
-        if bot.user is None:
-            return
-
-        pattern = re.compile(r'No command called "(?P<name>[a-zA-Z0-9]{1,25})" found.')
-        results = pattern.match(str(error))
-
-        if results:
-            error_command_name = results.group("name").lower()
-
-            for name, cog in bot.cogs.items():
-                if error_command_name == cog.qualified_name:
-                    await self.send_cog_help(cog)
-                    return
-
-                if hasattr(cog, "aliases"):
-                    if error_command_name in cog.aliases:  # type: ignore
-                        _cog = bot.get_cog(cog.qualified_name)
-
-                        if _cog is None:
-                            continue
-
-                        await self.send_cog_help(_cog)
-                        return
-
-        else:
-            await ctx.send(str(error))
-
-
 class Tools(commands.Cog, name="tools"):
     """Useful tools"""
 
     def __init__(self, bot: Bot):
         self.bot = bot
-        self._og_help = commands.DefaultHelpCommand()
-        self.bot.help_command = MyHelp()
         self.currently_downloading: list[str] = []
 
     async def cog_unload(self):
-        self.bot.help_command = self._og_help
         self.delete_videos.cancel()
 
     async def cog_load(self) -> None:
-        self.bot.help_command = MyHelp()
         self.delete_videos.start()
-
-    @commands.command(name="invite", aliases=("join",))
-    async def invite(self, ctx: commands.Context):
-        """Sends an invite link to the bot"""
-        bot = self.bot
-        if bot.user is None:
-            return
-
-        permissions = discord.Permissions.none()
-        permissions.read_messages = True
-        permissions.send_messages = True
-        permissions.read_message_history = True
-        permissions.embed_links = True
-        permissions.attach_files = True
-
-        await ctx.send(
-            f'{discord.utils.oauth_url(bot.user.id, permissions=permissions, scopes=("bot",))}'
-        )
 
     @commands.command(name="tenor")
     async def tenor(self, ctx: commands.Context, url: str):
@@ -339,38 +138,15 @@ class Tools(commands.Cog, name="tools"):
         try:
             _file = discord.File(f"files/videos/{default_name}.{default_format}")
             await message.edit(content=dl_time, attachments=[_file])
-            failed = False
-            sql = """
-            INSERT INTO download_logs(user_id, guild_id, video, time)
-            VALUES ($1, $2, $3, $4)
-            """
-            await self.bot.pool.execute(
-                sql, ctx.author.id, ctx.guild.id, video, discord.utils.utcnow()
-            )
-        except (ValueError, discord.Forbidden):
-            await message.edit(content="Failed to download, try again later?")
-            failed = True
-
-        self.currently_downloading.remove(f"{default_name}.{default_format}")
-
-        channel = self.bot.get_channel(998816503589781534)
-        embed = discord.Embed(
-            title="Video downloaded",
-            timestamp=discord.utils.utcnow(),
-            color=ctx.bot.embedcolor if not failed else discord.Color.red(),
-        )
-        embed.add_field(name="Author", value=f"{ctx.author}\n{ctx.author.mention}")
-        embed.add_field(name="Video", value=video, inline=False)
-        embed.set_footer(text=f"ID: {ctx.author.id} \nDownloaded at ")
-
-        if isinstance(channel, discord.TextChannel):
-            await channel.send(embed=embed)
-
-        if not failed:
             try:
                 os.remove(f"files/videos/{default_name}.{default_format}")
             except (FileNotFoundError, PermissionError):
                 pass
+
+        except (ValueError, discord.Forbidden):
+            await message.edit(content="Failed to download, try again later?")
+
+        self.currently_downloading.remove(f"{default_name}.{default_format}")
 
     @tasks.loop(minutes=10.0)
     async def delete_videos(self):
@@ -386,63 +162,3 @@ class Tools(commands.Cog, name="tools"):
             if file.endswith(valid_formats):
                 if file not in self.currently_downloading:
                     os.remove(f"files/videos/{file}")
-
-    @commands.group(
-        name="auto_download",
-        aliases=(
-            "auto_dl",
-            "adl",
-        ),
-        invoke_without_command=True,
-    )
-    @commands.has_permissions(manage_guild=True)
-    async def auto_download(
-        self, ctx: commands.Context, *, channel: discord.TextChannel
-    ):
-        """Toggles auto-downloading of videos"""
-
-        if ctx.guild is None:
-            return
-
-        try:
-            await self.bot.pool.execute(
-                "INSERT INTO guild_settings(guild_id, auto_download) VALUES ($1, $2)",
-                ctx.guild.id,
-                channel.id,
-            )
-            self.bot.auto_download_channels.append(channel.id)
-            await ctx.send(f"Enabled auto-downloading in {channel.mention}")
-
-        except asyncpg.UniqueViolationError:
-            await self.bot.pool.execute(
-                "UPDATE guild_settings SET auto_download = $2 WHERE guild_id = $1",
-                ctx.guild.id,
-                channel.id,
-            )
-            self.bot.auto_download_channels.append(channel.id)
-            await ctx.send(f"Updated the auto-downloading channel to {channel.mention}")
-            return
-
-    @auto_download.command(name="reset", aliases=("remove",))
-    @commands.has_permissions(manage_guild=True)
-    async def auto_download_reset(self, ctx: commands.Context):
-        """Resets the auto-downloading channel"""
-        if ctx.guild is None:
-            return
-
-        channel_id: int = await self.bot.pool.fetchval(
-            "SELECT auto_download FROM guild_settings WHERE guild_id = $1",
-            ctx.guild.id,
-        )
-
-        if channel_id is None:
-            await ctx.send("No auto-downloading channel set")
-            return
-
-        await self.bot.pool.execute(
-            "DELETE FROM guild_settings WHERE guild_id = $1",
-            ctx.guild.id,
-        )
-
-        self.bot.auto_download_channels.remove(channel_id)
-        await ctx.send("Removed the auto-downloading channel")

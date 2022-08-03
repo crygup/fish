@@ -4,65 +4,83 @@ import datetime
 import logging
 import os
 import re
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List
 
 import aiohttp
+import aioredis
 import asyncpg
 import cachetools
 import discord
-import pandas as pd
 from discord.ext import commands
+from ossapi import OssapiV2
 
 from cogs.context import Context
+from utils import setup_cache, setup_webhooks, setup_pokemon, setup_prefixes
 
 if TYPE_CHECKING:
     from utils import GuildContext
 
-initial_extensions = {
-    "jishaku",
-    "cogs.owner",
-}
+initial_extensions = {"jishaku", "cogs.owner", "cogs.context", "cogs.events.errors"}
 bot_extensions = {
     "cogs.tools",
     "cogs.pokemon",
     "cogs.user",
-    "cogs.egg",
-    "cogs.context",
+    "cogs.discord_",
+    "cogs.settings",
+    "cogs.osu",
     "cogs.events.commands",
-    "cogs.events.downloads",
-    "cogs.events.errors",
     "cogs.events.guilds",
     "cogs.events.members",
     "cogs.events.messages",
     "cogs.events.table",
     "cogs.events.users",
+    "cogs.servers.egg",
+    "cogs.servers.jawntards",
 }
 os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
 os.environ["JISHAKU_NO_DM_TRACEBACK"] = "True"
 
 
+async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
+    default = ["fish "] if not bot.testing else ["fish. "]
+    if message.guild is None:
+        return commands.when_mentioned_or(*default)(bot, message)
+
+    try:
+        prefixes = bot.prefixes[message.guild.id]
+    except KeyError:
+        prefixes = []
+        
+    packed = default + prefixes
+
+    return commands.when_mentioned_or(*packed)(bot, message)
+
 class Bot(commands.Bot):
     session: aiohttp.ClientSession
     pool: asyncpg.Pool
+    redis: aioredis.Redis
 
     async def no_dms(self, ctx: GuildContext):
         return ctx.guild is not None
 
     async def user_blacklist(self, ctx: GuildContext):
-        return ctx.author.id not in self.blacklisted_users
+        blacklisted_users = await self.redis.smembers("blacklisted_users")
+        return str(ctx.author.id) not in blacklisted_users
 
     async def guild_blacklist(self, ctx: GuildContext):
         if ctx.guild is None:
             return True
 
-        return ctx.guild.id not in self.blacklisted_guilds
+        blacklisted_guilds = await self.redis.smembers("blacklisted_guilds")
+        return str(ctx.guild.id) not in blacklisted_guilds
 
     async def guild_owner_blacklist(self, ctx: GuildContext):
         if ctx.guild is None:
             return True
 
-        return ctx.guild.owner_id not in self.blacklisted_users
+        blacklisted_owners = await self.redis.smembers("blacklisted_users")
+        return str(ctx.guild.owner_id) not in blacklisted_owners
 
     def __init__(
         self,
@@ -73,7 +91,7 @@ class Bot(commands.Bot):
     ):
         prefix: List = ["fish ", "f"] if not testing else ["fish. ", "f."]
         super().__init__(
-            command_prefix=commands.when_mentioned_or(*prefix),
+            command_prefix=get_prefix,
             intents=intents,
             case_insensitive=False,
             strip_after_prefix=True,
@@ -83,16 +101,14 @@ class Bot(commands.Bot):
         )
         self.config: Dict = config
         self.logger = logger
-        self.uptime: Optional[datetime.datetime] = None
+        self.uptime: datetime.datetime
         self.embedcolor = 0xFAA0C1
         self.webhooks: Dict[str, discord.Webhook] = {}
         self.testing = testing
         self.pokemon: List[str] = []
-        self.blacklisted_guilds: List[int] = []
-        self.blacklisted_users: List[int] = []
-        self.whitelisted_users: List[int] = []
-        self.poketwo_guilds: List[int] = []
-        self.auto_download_channels: List[int] = []
+        self.prefixes: Dict[int, List[str]] = {}
+        self.e_reply = "<:reply:972280355136606209>"
+        self.e_replies = "<:replies:972280398874824724>"
         self._context = Context
         self._global_cooldown = commands.CooldownMapping.from_cooldown(
             20.0, 30.0, commands.BucketType.user
@@ -151,59 +167,32 @@ class Bot(commands.Bot):
             return
 
         self.pool = connection
-        print("Connected to database")
+        print("Connected to postre database")
 
-        blacklisted_guilds = await self.pool.fetch(
-            "SELECT guild_id FROM guild_blacklist"
+        self.redis = await aioredis.from_url(
+            self.config["databases"]["testing_redis_dns"]
+            if self.testing
+            else self.config["databases"]["redis_dns"],
+            encoding="utf-8",
+            decode_responses=True,
         )
-        self.blacklisted_guilds = [guild["guild_id"] for guild in blacklisted_guilds]
-        print(f"Loaded {len(self.blacklisted_guilds)} blacklisted guilds")
+        print("Connect to Redis database")
 
-        blacklisted_users = await self.pool.fetch("SELECT user_id FROM user_blacklist")
-        self.blacklisted_users = [user["user_id"] for user in blacklisted_users]
-        print(f"Loaded {len(self.blacklisted_users)} blacklisted users")
-
-        whitelisted_users = await self.pool.fetch("SELECT user_id FROM user_whitelist")
-        self.whitelisted_users = [user["user_id"] for user in whitelisted_users]
-        print(f"Loaded {len(self.whitelisted_users)} whitelisted users")
-
-        poketwo_guilds = await self.pool.fetch(
-            "SELECT guild_id FROM guild_settings WHERE poketwo IS TRUE"
-        )
-        self.poketwo_guilds = [guild["guild_id"] for guild in poketwo_guilds]
-        print(f"Loaded {len(self.poketwo_guilds)} poketwo guilds")
-
-        auto_download_channels = await self.pool.fetch(
-            "SELECT auto_download FROM guild_settings WHERE auto_download IS NOT NULL"
-        )
-        self.auto_download_channels = [
-            guild["auto_download"] for guild in auto_download_channels
-        ]
-        print(f"Loaded {len(self.poketwo_guilds)} auto download channels")
-
-        self.webhooks["error_logs"] = discord.Webhook.from_url(
-            url=self.config["webhooks"]["error_logs"], session=self.session
+        self.osu = OssapiV2(
+            self.config["keys"]["osu_id"], self.config["keys"]["osu_secret"]
         )
 
-        self.webhooks["join_logs"] = discord.Webhook.from_url(
-            url=self.config["webhooks"]["join_logs"], session=self.session
-        )
-        print("Loaded webhooks")
+        await setup_cache(self.pool, self.redis)
+        print("Setup cache")
 
-        url = "https://raw.githubusercontent.com/poketwo/data/master/csv/pokemon.csv"
-        data = pd.read_csv(url)
-        pokemon = [str(p).lower() for p in data["name.en"]]
+        await setup_webhooks(self)
+        print("Setup webhooks")
 
-        for p in pokemon:
-            if re.search(r"[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", p):
-                pokemon[pokemon.index(p)] = re.sub(
-                    "[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", p
-                )
-            if re.search(r"[\U000000e9]", p):
-                pokemon[pokemon.index(p)] = re.sub("[\U000000e9]", "e", p)
-
-        self.pokemon = pokemon
+        await setup_pokemon(self)
         print("Loaded pokemon")
+
+        await setup_prefixes(self, self.pool)
+        print("Setup prefixes")
 
         if not self.testing:
             for extension in bot_extensions:
@@ -221,7 +210,7 @@ class Bot(commands.Bot):
         return await super().get_context(message, cls=new_cls)
 
     async def on_ready(self):
-        if self.uptime is None:
+        if not hasattr(self, "uptime"):
             self.uptime = discord.utils.utcnow()
 
         print(f"Logged in as {self.user}")
@@ -235,8 +224,17 @@ class Bot(commands.Bot):
 
         await self.session.close()
         await self.pool.close()
+        await self.redis.close()
 
         await super().close()
+    
+    async def getch_user(self, user_id: int) -> discord.User:
+        user = self.get_user(user_id)
+        
+        if user is None:
+            user = await self.fetch_user(user_id)
+        
+        return user
 
 
 if __name__ == "__main__":

@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     PRIMARY KEY (guild_id)
 );
 
+CREATE TABLE IF NOT EXISTS guild_prefixes (
+    guild_id BIGINT,
+    prefix TEXT,
+    author_id BIGINT,
+    time TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (guild_id, prefix)
+);
+
 CREATE TABLE IF NOT EXISTS guild_join_logs (
     guild_id BIGINT,
     time TIMESTAMP WITH TIME ZONE
@@ -110,16 +118,18 @@ CREATE TABLE IF NOT EXISTS user_blacklist (
     PRIMARY KEY (user_id)
 );
 
-CREATE TABLE IF NOT EXISTS user_whitelist (
-    user_id BIGINT,
-    reason TEXT,
-    time TIMESTAMP WITH TIME ZONE,
-    PRIMARY KEY (user_id)
-);
-
 CREATE TABLE IF NOT EXISTS download_logs (
     user_id BIGINT,
     guild_id BIGINT,
     video TEXT,
     time TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS accounts (
+    user_id BIGINT,
+    osu TEXT,
+    lastfm TEXT,
+    steam TEXT,
+    roblox TEXT,
+    PRIMARY KEY (user_id)
 );
