@@ -78,7 +78,8 @@ class GuildEvents(commands.Cog, name="guild_events"):
         if self.bot.user is None:
             return
 
-        if guild.id in self.bot.blacklisted_guilds:
+        banned_guilds = await self.bot.redis.smembers("blacklisted_guilds")
+        if str(guild.id) in banned_guilds:
             await guild.leave()
             return
 
