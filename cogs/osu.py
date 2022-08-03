@@ -20,7 +20,7 @@ class Osu(commands.Cog, name="osu"):
     def __init__(self, bot: Bot):
         self.bot = bot
 
-    @commands.command(name="osu", invoke_without_command=True)
+    @commands.group(name="osu", invoke_without_command=True)
     async def osu_command(
         self,
         ctx: Context,
@@ -65,6 +65,17 @@ class Osu(commands.Cog, name="osu"):
             e.add_field(name="Play Count", value=f"{stats.play_count:,}")
 
         await ctx.send(embed=e, check_ref=True)
+
+    @osu_command.command(name="set")
+    async def osu_set(self, ctx: Context, username: str):
+        """Alias for set osu command"""
+
+        command = self.bot.get_command("set osu")
+
+        if command is None:
+            return
+
+        await command(ctx, username=username)
 
     @commands.command(name="beatmap", aliases=["bm"])
     async def osu_beatmap(self, ctx: Context, beatmap_id: BeatmapConverter):

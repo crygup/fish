@@ -25,7 +25,7 @@ class LastFm(commands.Cog, name="lastfm"):
     def __init__(self, bot: Bot):
         self.bot = bot
 
-    @commands.command(name="lastfm", aliases=("fm",))
+    @commands.group(name="lastfm", aliases=("fm",))
     async def last_fm(self, ctx: Context, username: LastfmConverter = commands.Author):
         """Displays your last scrobble from last.fm"""
         name = (
@@ -64,6 +64,17 @@ class LastFm(commands.Cog, name="lastfm"):
         )
         embed.set_footer(text=f"{user} has {scrobbles} scrobbles")
         await ctx.send(embed=embed, check_ref=True)
+
+    @last_fm.command(name="set")
+    async def lastfm_set(self, ctx: Context, username: str):
+        """Alias for set lastfm command"""
+
+        command = self.bot.get_command("set lastfm")
+
+        if command is None:
+            return
+
+        await command(ctx, username=username)
 
     @commands.command(name="cover", aliases=("co",))
     async def cover(self, ctx: Context, *, query: Optional[str]):

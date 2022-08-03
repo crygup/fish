@@ -17,7 +17,7 @@ class Roblox(commands.Cog, name="roblox"):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
 
-    @commands.command(name="roblox", aliases=("rbx",))
+    @commands.group(name="roblox", aliases=("rbx",), invoke_without_command=True)
     async def roblox(
         self,
         ctx: Context,
@@ -81,6 +81,17 @@ class Roblox(commands.Cog, name="roblox"):
             )
 
         await ctx.send(embed=embed, files=[headshot])
+
+    @roblox.command(name="set")
+    async def roblox_set(self, ctx: Context, username: str):
+        """Alias for set roblox command"""
+
+        command = self.bot.get_command("set roblox")
+
+        if command is None:
+            return
+
+        await command(ctx, username=username)
 
     @commands.command(name="friends")
     async def friends(

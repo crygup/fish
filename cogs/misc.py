@@ -37,9 +37,9 @@ class MyHelp(commands.HelpCommand):
         embed.set_author(
             name=f"{bot.user.name} help", icon_url=bot.user.display_avatar.url
         )
-        for cog, commands in mapping.items():
-            if filtered_commands := await self.filter_commands(commands):
-                if len(commands) == 0:
+        for cog, cmds in mapping.items():
+            if filtered_commands := await self.filter_commands(cmds):
+                if len(cmds) == 0:
                     continue
 
                 if cog is None:
