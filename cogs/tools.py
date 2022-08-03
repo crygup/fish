@@ -10,7 +10,14 @@ from typing import Dict, List, Optional, Union
 import discord
 from bot import Bot, Context
 from discord.ext import commands, tasks
-from utils import GuildContext, TenorUrlConverter, get_video, regexes, human_join, EmojiConverter
+from utils import (
+    GuildContext,
+    TenorUrlConverter,
+    get_video,
+    regexes,
+    human_join,
+    EmojiConverter,
+)
 from yt_dlp import YoutubeDL
 
 
@@ -83,8 +90,8 @@ class Tools(commands.Cog, name="tools"):
             except discord.HTTPException:
                 pass
 
-            await message.edit(content=
-                f'Successfully stole {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(results)})*.'
+            await message.edit(
+                content=f'Successfully stole {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(results)})*.'
             )
 
     @commands.command(name="tenor")
@@ -215,7 +222,6 @@ class Tools(commands.Cog, name="tools"):
                 if file not in self.currently_downloading:
                     os.remove(f"files/videos/{file}")
 
-
     @commands.group(name="emoji", invoke_without_command=True)
     async def emoji(
         self,
@@ -293,20 +299,27 @@ class Tools(commands.Cog, name="tools"):
     async def emoji_rename(self, ctx: Context, emoji: discord.Emoji, *, name: str):
         pattern = re.compile(r"[a-zA-Z0-9_ ]")
         if not pattern.match(name):
-            raise commands.BadArgument("Name can only contain letters, numbers, and underscores.")
-        
+            raise commands.BadArgument(
+                "Name can only contain letters, numbers, and underscores."
+            )
+
         await emoji.edit(name=name)
         await ctx.send(f"Renamed {emoji} to **`{name}`**.")
-    
+
     @emoji.command(name="delete")
     @commands.has_guild_permissions(manage_emojis=True)
     @commands.bot_has_guild_permissions(manage_emojis=True)
-    async def emoji_delete(self, ctx: Context, emoji: discord.Emoji):
-        value = await ctx.prompt(f"Are you sure you want to delete {emoji}?")
+    async def emoji_delete(self, ctx: Context, *emojis: discord.Emoji):
+        value = await ctx.prompt(f"Are you sure you want to delete {len(emojis):,}?")
         if not value:
             await ctx.send("Well, I didn't want to delete it anyway.")
             return
-        
-        await emoji.delete()
-        await ctx.send(f"Deleted `{emoji.name}`.")
 
+        message = await ctx.send(f"Deleting {len(emojis):,} emojis...")
+        deleted_emojis = []
+
+        for emoji in emojis:
+            await emoji.delete()
+            await message.edit(
+                content=f"Successfully deleted {human_join(deleted_emojis, final='and')} *({len(deleted_emojis)}/{len(emojis)})*."
+            )
