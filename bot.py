@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import pathlib
 import re
 from typing import TYPE_CHECKING, Dict, List
 
@@ -15,31 +16,18 @@ from discord.ext import commands
 from ossapi import OssapiV2
 
 from cogs.context import Context
-from utils import setup_cache, setup_webhooks, setup_pokemon, setup_prefixes
+from utils import setup_cache, setup_pokemon, setup_prefixes, setup_webhooks
 
 if TYPE_CHECKING:
     from utils import GuildContext
 
-initial_extensions = {"jishaku", "cogs.owner", "cogs.context", "cogs.events.errors"}
-bot_extensions = {
-    "cogs.tools",
-    "cogs.pokemon",
-    "cogs.user",
-    "cogs.discord_",
-    "cogs.settings",
-    "cogs.osu",
-    "cogs.misc",
-    "cogs.lastfm",
-    "cogs.roblox",
-    "cogs.events.commands",
-    "cogs.events.guilds",
-    "cogs.events.members",
-    "cogs.events.messages",
-    "cogs.events.table",
-    "cogs.events.users",
-    "cogs.servers.egg",
-    "cogs.servers.jawntards",
-}
+initial_extensions = ["jishaku", "cogs.owner", "cogs.context", "cogs.events.errors"]
+cogs_path = pathlib.Path("./cogs")
+cogs = [
+    x.as_posix().replace("/", ".")[:-3]
+    for x in cogs_path.glob("**/*.py")
+    if x.parent.name != "examples"
+]
 os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
 os.environ["JISHAKU_NO_DM_TRACEBACK"] = "True"
@@ -54,10 +42,11 @@ async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
         prefixes = bot.prefixes[message.guild.id]
     except KeyError:
         prefixes = []
-        
+
     packed = default + prefixes
 
     return commands.when_mentioned_or(*packed)(bot, message)
+
 
 class Bot(commands.Bot):
     session: aiohttp.ClientSession
@@ -198,10 +187,9 @@ class Bot(commands.Bot):
         print("Setup prefixes")
 
         if not self.testing:
-            for extension in bot_extensions:
-                initial_extensions.add(extension)
+            initial_extensions.extend([cog for cog in cogs])
 
-        for extension in initial_extensions:
+        for extension in set(initial_extensions):
             try:
                 await self.load_extension(extension)
                 print(f"Loaded extension {extension}")
@@ -230,13 +218,13 @@ class Bot(commands.Bot):
         await self.redis.close()
 
         await super().close()
-    
+
     async def getch_user(self, user_id: int) -> discord.User:
         user = self.get_user(user_id)
-        
+
         if user is None:
             user = await self.fetch_user(user_id)
-        
+
         return user
 
 
