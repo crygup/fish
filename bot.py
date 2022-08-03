@@ -29,6 +29,8 @@ bot_extensions = {
     "cogs.settings",
     "cogs.osu",
     "cogs.misc",
+    "cogs.lastfm",
+    "cogs.roblox",
     "cogs.events.commands",
     "cogs.events.guilds",
     "cogs.events.members",
