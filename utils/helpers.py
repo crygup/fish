@@ -109,6 +109,14 @@ async def get_roblox(bot: Bot, user_id: int) -> str:
     return name
 
 
+async def get_genshin(bot: Bot, user_id: int) -> str:
+    """Get the genshin UID for the given user ID."""
+    name = await bot.redis.hget(f"accounts:{user_id}", "genshin")
+    if not name:
+        raise UnknownAccount("No genshin account set.")
+    return name
+
+
 async def get_osu(bot: Bot, user_id: int) -> str:
     """Get the osu! username for the given user ID."""
     name = await bot.redis.hget(f"accounts:{user_id}", "osu")

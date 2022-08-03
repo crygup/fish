@@ -133,6 +133,7 @@ class Settings(commands.Cog, name="settings"):
         embed.add_field(name="osu!", value=accounts["osu"] or "Not set")
         embed.add_field(name="Steam", value=accounts["steam"] or "Not set")
         embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
+        embed.add_field(name="genshin", value=accounts["genshin"] or "Not set")
 
         await ctx.send(embed=embed, check_ref=True)
 
@@ -169,6 +170,14 @@ class Settings(commands.Cog, name="settings"):
 
         await self.link_method(ctx, ctx.author.id, "roblox", username)
 
+    @set.command(name="genshin")
+    async def set_genshin(self, ctx: Context, *, username: str):
+        """Sets your genshin account"""
+        if not re.match(r"[0-9]{4,15}", username):
+            raise UnknownAccount("Invalid UID.")
+
+        await self.link_method(ctx, ctx.author.id, "genshin", username)
+
     @commands.group(name="unlink", invoke_without_command=True)
     async def unlink(self, ctx: Context):
         """Unlinks your account"""
@@ -190,30 +199,6 @@ class Settings(commands.Cog, name="settings"):
     async def unlink_roblox(self, ctx: Context):
         await self.unlink_method(ctx, ctx.author.id, "roblox")
 
-    @commands.group(name="settings", invoke_without_command=True)
-    async def settings(self, ctx: Context):
-        """Shows your settings for the bot"""
-
-        user = ctx.author
-
-        settings = await ctx.bot.pool.fetchrow(
-            "SELECT * FROM logging_settings WHERE user_id = $1", user.id
-        )
-
-        if not settings:
-            await ctx.send(f"{str(user)} has no settings set.")
-            return
-
-        embed = discord.Embed()
-        embed.set_author(
-            name=f"{user.display_name} - User settings",
-            icon_url=user.display_avatar.url,
-        )
-
-        leveling = "Enabled" if settings["leveling"] else "Disabled"
-        messages = "Enabled" if settings["messages"] else "Disabled"
-
-        embed.add_field(name="Leveling logging", value=leveling)
-        embed.add_field(name="Message logging", value=messages)
-
-        await ctx.send(embed=embed, check_ref=True)
+    @unlink.command(name="genshin")
+    async def unlink_genshin(self, ctx: Context):
+        await self.unlink_method(ctx, ctx.author.id, "genshin")

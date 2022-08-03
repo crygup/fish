@@ -131,5 +131,6 @@ CREATE TABLE IF NOT EXISTS accounts (
     lastfm TEXT,
     steam TEXT,
     roblox TEXT,
+    genshin TEXT,
     PRIMARY KEY (user_id)
 );

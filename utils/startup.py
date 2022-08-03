@@ -72,6 +72,10 @@ async def setup_accounts(pool: asyncpg.Pool, redis: aioredis.Redis):
             await redis.hset(
                 f"accounts:{record['user_id']}", "roblox", record["roblox"]
             )
+        if record["genshin"]:
+            await redis.hset(
+                f"accounts:{record['user_id']}", "genshin", record["genshin"]
+            )
 
 
 async def setup_prefixes(bot: Bot, pool: asyncpg.Pool):

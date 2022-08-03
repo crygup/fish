@@ -10,13 +10,8 @@ from io import BytesIO
 from typing import (
     TYPE_CHECKING,
     Dict,
-    List,
-    Literal,
     Optional,
-    Protocol,
     Union,
-    cast,
-    runtime_checkable,
 )
 
 import discord
