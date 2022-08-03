@@ -28,6 +28,7 @@ bot_extensions = {
     "cogs.discord_",
     "cogs.settings",
     "cogs.osu",
+    "cogs.misc",
     "cogs.events.commands",
     "cogs.events.guilds",
     "cogs.events.members",
