@@ -15,29 +15,9 @@ async def setup(bot: Bot):
 
 
 class Genshin(commands.Cog, name="genshin"):
+    """Genshin related commands."""
     def __init__(self, bot: Bot):
         self.bot = bot
-
-    @commands.command(name="characters", hiddne=True)
-    @commands.is_owner()
-    async def account_test(
-        self, ctx: commands.Context, account: Union[int, discord.User] = commands.Author
-    ):
-        """Gets the characters a user has."""
-
-        if isinstance(account, (discord.User, discord.Member)):
-            results = await get_genshin(ctx.bot, account.id)
-            uid = int(results)
-        else:
-            uid = account
-
-        try:
-            data = await self.bot.genshin.get_partial_genshin_user(uid)
-        except genshin.errors.DataNotPublic:
-            await ctx.send("This user's data is not public.")
-            return
-
-        await ctx.send(f"{data.info}")
 
     @commands.command(name="character")
     async def character(self, ctx: Context, *, character: str):

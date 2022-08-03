@@ -133,7 +133,7 @@ class Settings(commands.Cog, name="settings"):
         embed.add_field(name="osu!", value=accounts["osu"] or "Not set")
         embed.add_field(name="Steam", value=accounts["steam"] or "Not set")
         embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
-        embed.add_field(name="genshin", value=accounts["genshin"] or "Not set")
+        embed.add_field(name="Genshin UID", value=accounts["genshin"] or "Not set")
 
         await ctx.send(embed=embed, check_ref=True)
 
