@@ -69,4 +69,5 @@ SEND = (
     commands.TooManyArguments,
     commands.UserInputError,
     UnknownAccount,
+    commands.MissingPermissions
 )
