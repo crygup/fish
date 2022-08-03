@@ -4,8 +4,12 @@ import logging.handlers
 
 import discord
 import toml
+from discord import gateway
 
 from bot import Bot
+from utils import mobile
+
+gateway.DiscordWebSocket.identify = mobile
 
 testing = False
 
