@@ -66,22 +66,22 @@ class Tools(commands.Cog, name="tools"):
             return
 
         completed_emojis = []
-        for results in results:
-            emoji = await commands.PartialEmojiConverter().convert(ctx, results)
+        for result in results:
+            emoji = await commands.PartialEmojiConverter().convert(ctx, result)
 
             if emoji is None:
                 continue
 
             try:
-                await ctx.guild.create_custom_emoji(
+                e = await ctx.guild.create_custom_emoji(
                     name=emoji.name, image=await emoji.read()
                 )
-                completed_emojis.append(str(emoji))
+                completed_emojis.append(str(e))
             except discord.HTTPException:
                 pass
 
         await ctx.send(
-            f'Successfully cloned {human_join(completed_emojis, final="and")} *({len(completed_emojis):,}/{len(results):,})*.'
+            f'Successfully cloned {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(results)})*.'
         )
 
     @commands.command(name="tenor")
