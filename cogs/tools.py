@@ -310,15 +310,16 @@ class Tools(commands.Cog, name="tools"):
     @commands.has_guild_permissions(manage_emojis=True)
     @commands.bot_has_guild_permissions(manage_emojis=True)
     async def emoji_delete(self, ctx: Context, *emojis: discord.Emoji):
-        value = await ctx.prompt(f"Are you sure you want to delete {len(emojis):,}?")
+        value = await ctx.prompt(f"Are you sure you want to delete {len(emojis):,} emojis?")
         if not value:
-            await ctx.send("Well, I didn't want to delete it anyway.")
+            await ctx.send(f"Well, I didn't want to delete {'them' if len(emojis) > 1 else 'it'} anyway.")
             return
 
         message = await ctx.send(f"Deleting {len(emojis):,} emojis...")
         deleted_emojis = []
 
         for emoji in emojis:
+            deleted_emojis.append(f'`{emoji}`')
             await emoji.delete()
             await message.edit(
                 content=f"Successfully deleted {human_join(deleted_emojis, final='and')} *({len(deleted_emojis)}/{len(emojis)})*."
