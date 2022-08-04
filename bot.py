@@ -5,7 +5,7 @@ import logging
 import os
 import pathlib
 import re
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING, Dict, List, Set
 
 import aiohttp
 import aioredis
@@ -58,6 +58,7 @@ class Bot(commands.Bot):
     session: aiohttp.ClientSession
     pool: asyncpg.Pool
     redis: aioredis.Redis
+    exts: Set[str]
 
     async def no_dms(self, ctx: Context):
         return ctx.guild is not None
@@ -196,10 +197,9 @@ class Bot(commands.Bot):
         await setup_accounts(self.pool, self.redis)
         print("Setup accounts")
 
-        if not self.testing:
-            initial_extensions.extend([cog for cog in cogs])
+        self.exts = set(initial_extensions + cogs)
 
-        for extension in set(initial_extensions):
+        for extension in self.exts if not self.testing else initial_extensions:
             try:
                 await self.load_extension(extension)
                 print(f"Loaded extension {extension}")

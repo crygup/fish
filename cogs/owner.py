@@ -47,9 +47,9 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
 
         return True
 
-    @commands.command(name="reload")
-    async def reload(self, ctx: Context, *extensions: ExtensionConverter):
-        """Reloads a cog"""
+    @commands.command(name="load", aliases=("reload",))
+    async def load(self, ctx: Context, *extensions: ExtensionConverter):
+        """Loads or reloads a cog"""
 
         paginator = WrappedPaginator(prefix="", suffix="")
 
@@ -58,11 +58,8 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
 
         for extension in itertools.chain(*extensions):  # type: ignore
 
-            if extension not in self.bot.extensions:
-                results = difflib.get_close_matches(
-                    extension, self.bot.extensions.keys()
-                )
-                extension = results[0] if results else extension
+            results = difflib.get_close_matches(extension, self.bot.exts, cutoff=0.5)
+            extension = results[0] if results else extension
 
             method, icon = (
                 (
@@ -94,50 +91,6 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
         content = "\n".join([str(x).replace("\n\n", "\n") for x in content])
         embed = discord.Embed(
             title="Reload" if ctx.invoked_with == "reload" else "Load",
-            description=content,
-        )
-        await ctx.send(embed=embed)
-
-    @commands.command(name="load")
-    async def load(self, ctx: Context, *extensions: ExtensionConverter):
-        """Reloads a cog"""
-
-        paginator = WrappedPaginator(prefix="", suffix="")
-
-        if not extensions:
-            raise commands.BadArgument("No extensions provided")
-
-        for extension in itertools.chain(*extensions):  # type: ignore
-            method, icon = (
-                (
-                    self.bot.reload_extension,
-                    "<:cr_reload:956384262096031744>",
-                )
-                if extension in self.bot.extensions
-                else (self.bot.load_extension, "<:cr_load:956384261945040896>")
-            )
-
-            try:
-                await discord.utils.maybe_coroutine(method, extension)
-            except Exception as exc:  # pylint: disable=broad-except
-                traceback_data = "".join(
-                    traceback.format_exception(type(exc), exc, exc.__traceback__, 1)
-                )
-
-                paginator.add_line(
-                    f"{icon}<:cr_warning:956384262016344064> `{extension}`\n```py\n{traceback_data}\n```",
-                    empty=True,
-                )
-            else:
-                paginator.add_line(f"{icon} `{extension}`", empty=True)
-
-        content = []
-        for page in paginator.pages:
-            content.append(page)
-
-        content = "\n".join([str(x).replace("\n\n", "\n") for x in content])
-        embed = discord.Embed(
-            title="Load",
             description=content,
         )
         await ctx.send(embed=embed)
