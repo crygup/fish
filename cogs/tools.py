@@ -14,7 +14,7 @@ from utils import (
     GuildContext,
     TenorUrlConverter,
     get_video,
-    regexes,
+    video_regexes,
     human_join,
     EmojiConverter,
 )
@@ -162,8 +162,8 @@ class Tools(commands.Cog, name="tools"):
             # but for now ternary is fine
             video_format = (
                 "-S vcodec:h264"
-                if re.fullmatch(regexes["VMtiktok"]["regex"], video)
-                or re.fullmatch(regexes["WEBtiktok"]["regex"], video)
+                if re.fullmatch(video_regexes["VMtiktok"]["regex"], video)
+                or re.fullmatch(video_regexes["WEBtiktok"]["regex"], video)
                 else f"bestvideo+bestaudio[ext={default_format}]/best"
             )
 

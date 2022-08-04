@@ -8,7 +8,7 @@ import discord
 from bot import Bot, Context
 from discord.ext import commands, tasks
 from typing_extensions import reveal_type
-from utils import get_video, regexes
+from utils import get_video, video_regexes
 from yt_dlp import YoutubeDL
 
 
@@ -50,8 +50,8 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
 
         video_format = (
             "-S vcodec:h264"
-            if re.fullmatch(regexes["VMtiktok"]["regex"], video)
-            or re.fullmatch(regexes["WEBtiktok"]["regex"], video)
+            if re.fullmatch(video_regexes["VMtiktok"]["regex"], video)
+            or re.fullmatch(video_regexes["WEBtiktok"]["regex"], video)
             else f"bestvideo+bestaudio[ext=mp4]/best"
         )
 

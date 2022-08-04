@@ -172,14 +172,14 @@ async def get_user_badges(
     return user_flags
 
 
-regexes = {
+video_regexes = {
     "VMtiktok": {
-        "regex": r"https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9}",
+        "regex": r"https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,}",
         "nsfw": False,
         "whitelist": False,
     },
     "WEBtiktok": {
-        "regex": r"https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,24}\/video\/[0-9]{19}",
+        "regex": r"https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,}",
         "nsfw": False,
         "whitelist": False,
     },
@@ -224,10 +224,10 @@ regexes = {
 async def get_video(
     ctx: GuildContext | Context, url: str, auto: bool = False
 ) -> Optional[str]:
-    for regex in regexes:
-        result = re.search(regexes[regex]["regex"], url)
+    for regex in video_regexes:
+        result = re.search(video_regexes[regex]["regex"], url)
         if result:
-            if regexes[regex]["nsfw"]:
+            if video_regexes[regex]["nsfw"]:
                 if not ctx.channel.is_nsfw():
                     msg = "The site given has been marked as NSFW, please switch to a NSFW channel."
                     if auto:
