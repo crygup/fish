@@ -175,48 +175,39 @@ async def get_user_badges(
 video_regexes = {
     "VMtiktok": {
         "regex": r"https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,}",
-        "nsfw": False,
-        "whitelist": False,
+        "nsfw": False
     },
     "WEBtiktok": {
         "regex": r"https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,}",
-        "nsfw": False,
-        "whitelist": False,
+        "nsfw": False
     },
     "instagram": {
         "regex": r"https:\/\/(www.)?instagram.com\/(p|tv|reel)\/[a-zA-Z0-9]{11}\/",
-        "nsfw": False,
-        "whitelist": False,
+        "nsfw": False
     },
     "twitch": {
         "regex": r"https?:\/\/clips.twitch.tv\/[a-zA-Z0-9_-]*",
-        "nsfw": False,
-        "whitelist": True,
+        "nsfw": False
     },
     "twitter": {
         "regex": r"https?:\/\/twitter.com\/[a-zA-Z0-9_]{2,15}\/status\/[0-9]{19}",
-        "nsfw": True,
-        "whitelist": False,
+        "nsfw": True
     },
     "reddit": {
         "regex": r"https?:\/\/(www.)reddit.com\/r\/[a-zA-Z0-9_-]{1,20}\/comments\/[a-z0-9]{6}",
-        "nsfw": True,
-        "whitelist": False,
+        "nsfw": True
     },
     "youtube_short": {
         "regex": r"https:\/\/(www.)?youtube.com\/shorts\/[a-zA-Z0-9_-]{11}",
-        "nsfw": False,
-        "whitelist": True,
+        "nsfw": False
     },
     "youtube": {
         "regex": r"https:\/\/(www.)?youtu(.be|be.com)\/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})",
-        "nsfw": False,
-        "whitelist": True,
+        "nsfw": False
     },
     "pornhub": {
         "regex": r"(https://)?(www.)?pornhub.com/view_video.php\?viewkey=[a-zA-Z0-9]{0,20}",
-        "nsfw": True,
-        "whitelist": True,
+        "nsfw": True
     },
 }
 
@@ -233,8 +224,8 @@ async def get_video(
                     if auto:
                         await ctx.send(msg)
                         return
-                    else:
-                        raise commands.BadArgument(msg)
+
+                    raise commands.BadArgument(msg)
 
             return result.group(0)
 

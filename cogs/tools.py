@@ -157,13 +157,10 @@ class Tools(commands.Cog, name="tools"):
         if audio_only:
             video_format = f"-i --extract-audio --audio-format {default_format}"
         else:
-            # tiktok uses h264 encoding so we have to use this
-            # in the future i will add more checks to if this is reaccuring issue with other platforms
-            # but for now ternary is fine
+            pattern = re.compile(r"(https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,})|(https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,})")
             video_format = (
                 "-S vcodec:h264"
-                if re.fullmatch(video_regexes["VMtiktok"]["regex"], video)
-                or re.fullmatch(video_regexes["WEBtiktok"]["regex"], video)
+                if pattern.search(video)
                 else f"bestvideo+bestaudio[ext={default_format}]/best"
             )
 
