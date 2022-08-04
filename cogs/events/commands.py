@@ -19,7 +19,7 @@ class CommandEvents(commands.Cog, name="command_events"):
     async def _bulk_insert(self):
         if self._commands:
             sql = """
-            INSERT INTO command_logs(user_id, guild_id, channel_id, message_id, command, time)
+            INSERT INTO command_logs(user_id, guild_id, channel_id, message_id, command, created_at)
             VALUES ($1, $2, $3, $4, $5, $6)
             """
             await self.bot.pool.executemany(sql, self._commands)
