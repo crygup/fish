@@ -253,12 +253,13 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
 
         if ctx.bot.user is None:
             raise TypeError("Bot is not logged in.")
-
+        cr = await self.bot.getch_user(766953372309127168)
         embed = discord.Embed(
-            description="An information bot made by cr#0333.",
+            description="Multi-purpose bot or something like that.",
             timestamp=ctx.bot.user.created_at,
             color=ctx.bot.embedcolor,
         )
+        embed.set_author(name=f"{cr}", icon_url=cr.display_avatar.url)
         embed.add_field(
             name="Guilds",
             value=f"{len(ctx.bot.guilds):,}",
