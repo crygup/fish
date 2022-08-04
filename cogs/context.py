@@ -114,6 +114,9 @@ class Context(commands.Context):
     command: commands.Command[Any, ..., Any]
     bot: Bot
     guild: discord.Guild  # due to our check guild will never be None
+    me: discord.Member
+    channel: Union[discord.VoiceChannel, discord.TextChannel, discord.Thread]
+    author: discord.Member
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

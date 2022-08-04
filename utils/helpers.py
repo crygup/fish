@@ -221,15 +221,20 @@ regexes = {
 }
 
 
-async def get_video(ctx: GuildContext, url: str) -> Optional[str]:
+async def get_video(
+    ctx: GuildContext | Context, url: str, auto: bool = False
+) -> Optional[str]:
     for regex in regexes:
         result = re.search(regexes[regex]["regex"], url)
         if result:
             if regexes[regex]["nsfw"]:
                 if not ctx.channel.is_nsfw():
-                    raise commands.BadArgument(
-                        "The site given has been marked as NSFW, please switch to a NSFW channel."
-                    )
+                    msg = "The site given has been marked as NSFW, please switch to a NSFW channel."
+                    if auto:
+                        await ctx.send(msg)
+                        return
+                    else:
+                        raise commands.BadArgument(msg)
 
             return result.group(0)
 

@@ -28,7 +28,7 @@ async def setup_cache(pool: asyncpg.Pool, redis: aioredis.Redis):
         if guild["poketwo"]:
             await redis.sadd("poketwo_guilds", guild["guild_id"])
         if guild["auto_download"]:
-            await redis.sadd("auto_download_channels", guild["guild_id"])
+            await redis.sadd("auto_download_channels", guild["auto_download"])
 
 
 async def setup_webhooks(bot: Bot):
