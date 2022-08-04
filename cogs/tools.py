@@ -157,7 +157,9 @@ class Tools(commands.Cog, name="tools"):
         if audio_only:
             video_format = f"-i --extract-audio --audio-format {default_format}"
         else:
-            pattern = re.compile(r"(https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,})|(https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,})")
+            pattern = re.compile(
+                r"(https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,})|(https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,})"
+            )
             video_format = (
                 "-S vcodec:h264"
                 if pattern.search(video)
@@ -437,17 +439,15 @@ class Tools(commands.Cog, name="tools"):
             return
 
         channel = self.bot.get_channel(result)
-        if not channel or not isinstance(channel, discord.TextChannel):
-            return
-
-        results = await ctx.prompt(
-            f"Are you sure you want to delete {channel.mention}?"
-        )
-        if not results:
-            await ctx.send(f"Well I didn't want to delete it anyway.")
-            return
+        if isinstance(channel, discord.TextChannel):
+            results = await ctx.prompt(
+                f"Are you sure you want to delete {channel.mention}?"
+            )
+            if not results:
+                await ctx.send(f"Well I didn't want to delete it anyway.")
+                return
 
         sql = """UPDATE guild_settings SET auto_download = NULL WHERE guild_id = $1"""
         await self.bot.pool.execute(sql, ctx.guild.id)
-        await self.bot.redis.srem("auto_download_channels", channel.id)
-        await ctx.send(f"Disabled auto-downloads for this server.")
+        await self.bot.redis.srem("auto_download_channels", result)
+        await ctx.send(f"Removed auto-downloads for this server.")
