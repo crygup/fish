@@ -25,7 +25,7 @@ from utils import (
 )
 
 if TYPE_CHECKING:
-    from utils import GuildContext
+    from utils import Context
 
 initial_extensions = ["jishaku", "cogs.owner", "cogs.context", "cogs.events.errors"]
 cogs_path = pathlib.Path("./cogs")
@@ -59,26 +59,25 @@ class Bot(commands.Bot):
     pool: asyncpg.Pool
     redis: aioredis.Redis
 
-    async def no_dms(self, ctx: GuildContext):
+    async def no_dms(self, ctx: Context):
         return ctx.guild is not None
 
-    async def user_blacklist(self, ctx: GuildContext):
+    async def user_blacklist(self, ctx: Context):
         blacklisted_users = await self.redis.smembers("blacklisted_users")
         return str(ctx.author.id) not in blacklisted_users
 
-    async def guild_blacklist(self, ctx: GuildContext):
-        if ctx.guild is None:
-            return True
-
+    async def guild_blacklist(self, ctx: Context):
         blacklisted_guilds = await self.redis.smembers("blacklisted_guilds")
         return str(ctx.guild.id) not in blacklisted_guilds
 
-    async def guild_owner_blacklist(self, ctx: GuildContext):
-        if ctx.guild is None:
-            return True
-
+    async def guild_owner_blacklist(self, ctx: Context):
         blacklisted_owners = await self.redis.smembers("blacklisted_users")
         return str(ctx.guild.owner_id) not in blacklisted_owners
+
+    async def no_auto_commands(self, ctx: Context):
+        return str(ctx.channel.id) not in await self.redis.smembers(
+            "auto_download_channels"
+        )
 
     def __init__(
         self,
@@ -118,6 +117,7 @@ class Bot(commands.Bot):
         self.add_check(self.user_blacklist)
         self.add_check(self.guild_blacklist)
         self.add_check(self.guild_owner_blacklist)
+        self.add_check(self.no_auto_commands)
 
     async def on_message_edit(
         self, before: discord.Message, after: discord.Message
