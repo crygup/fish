@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import math
 import random
+import re
 import shlex
 import time
 from io import BytesIO
 from typing import (
     TYPE_CHECKING,
     Dict,
+    List,
+    Literal,
     Optional,
     Union,
 )
@@ -31,6 +35,7 @@ from utils import (
 )
 
 from cogs.context import Context
+from utils.helpers import AuthorView
 
 blurple = discord.ButtonStyle.blurple
 red = discord.ButtonStyle.red
@@ -935,6 +940,272 @@ class Discord_(commands.Cog, name="discord"):
             f"```Viewing raw data for {str(channel)}``````json\n{to_send}\n```"
         )
 
+    @commands.command(name="avatar", aliases=("pfp", "avy"))
+    async def avatar(
+        self, ctx: Context, user: Union[discord.Member, discord.User] = commands.Author
+    ):
+        """Gets the avatar of a user"""
+        embed = discord.Embed(
+            color=self.bot.embedcolor
+            if user.color == discord.Color.default()
+            else user.color
+        )
+        embed.set_author(name=str(user), icon_url=user.display_avatar.url)
+
+        embed.set_image(url=user.display_avatar.url)
+        sql = """SELECT created_at FROM avatar_logs WHERE user_id = $1 ORDER BY created_at DESC"""
+        latest_avatar = await self.bot.pool.fetchval(sql, user.id)
+
+        if latest_avatar:
+            embed.timestamp = latest_avatar
+            embed.set_footer(text="Avatar changed")
+
+        await ctx.send(
+            embed=embed,
+            view=AvatarView(ctx, user, embed, user.display_avatar),
+            check_ref=True,
+        )
+
+
+class AvatarView(AuthorView):
+    def __init__(
+        self,
+        ctx: Context,
+        user: discord.Member | discord.User,
+        embed: discord.Embed,
+        asset: discord.Asset,
+    ):
+        super().__init__(ctx)
+        self.user = user
+        self.ctx = ctx
+        self.embed = embed
+        self.asset = asset
+        self.files: List[discord.File] = []
+
+        self.server.disabled = (
+            not isinstance(user, discord.Member)
+            or isinstance(user, discord.Member)
+            and user.guild_avatar is None
+        )
+        self.avatar.disabled = user.avatar is None
+
+    async def edit_message(self, interaction: discord.Interaction):
+        self.embed.set_image(url=self.asset.url)
+        await interaction.response.edit_message(embed=self.embed)
+
+    @discord.ui.button(label="Avatar", row=0, style=discord.ButtonStyle.blurple)
+    async def avatar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.user.avatar is None:
+            return
+
+        self.asset = self.user.avatar
+
+        await self.edit_message(interaction)
+
+    @discord.ui.button(label="Default", row=0, style=discord.ButtonStyle.blurple)
+    async def default(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        self.asset = self.user.default_avatar
+
+        await self.edit_message(interaction)
+
+    @discord.ui.button(label="Server", row=0, style=discord.ButtonStyle.blurple)
+    async def server(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not isinstance(self.user, discord.Member) or self.user.guild_avatar is None:
+            return
+
+        self.asset = self.user.guild_avatar
+
+        await self.edit_message(interaction)
+
+    async def check_asset(self, interaction: discord.Interaction) -> bool:
+        if self.asset.url.startswith("https://cdn.discordapp.com/embed"):
+            await interaction.response.send_message(
+                "This is a default discord avatar and cannot be changed.",
+                ephemeral=True,
+            )
+            return False
+
+        return True
+
+    @discord.ui.button(label="Quality", row=2, style=discord.ButtonStyle.green)
+    async def quality(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        results = await self.check_asset(interaction)
+        if interaction.message is None or not results:
+            return
+
+        await interaction.message.edit(
+            view=QualityView(self.ctx, self.user, self.embed, self.asset)
+        )
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Format", row=2, style=discord.ButtonStyle.green)
+    async def _format(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        results = await self.check_asset(interaction)
+        if interaction.message is None or not results:
+            return
+
+        await interaction.message.edit(
+            view=FormatView(self.ctx, self.user, self.embed, self.asset)
+        )
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Save", row=2, style=discord.ButtonStyle.green)
+    async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.message is None:
+            return
+
+        file_type = re.search(r".(jpg|png|webp|jpeg|gif)", self.asset.url)
+
+        if file_type is None:
+            return
+
+        avatar_file = await self.asset.to_file(filename=f"avatar.{file_type.group()}")
+        self.embed.set_image(url=f"attachment://avatar.{file_type.group()}")
+        await interaction.message.edit(
+            view=None, embed=self.embed, attachments=[avatar_file]
+        )
+        await interaction.response.defer()
+
+
+class QualityView(AuthorView):
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.Member, discord.User],
+        embed: discord.Embed,
+        asset: discord.Asset,
+    ):
+        super().__init__(ctx)
+        self.user = user
+        self.ctx = ctx
+        self.embed = embed
+        self.asset = asset
+        self.add_item(QualityDropdown(ctx, user, embed, asset))
+
+    @discord.ui.button(label="Go back", row=1, style=discord.ButtonStyle.red)
+    async def go_back(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if interaction.message is None:
+            return
+
+        await interaction.message.edit(
+            view=AvatarView(self.ctx, self.user, self.embed, self.asset)
+        )
+        await interaction.response.defer()
+
+
+class QualityDropdown(discord.ui.Select):
+    view: QualityView
+
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.Member, discord.User],
+        embed: discord.Embed,
+        asset: discord.Asset,
+    ):
+        self.ctx = ctx
+        self.user = user
+        self.embed = embed
+
+        valid_sizes = ["16", "32", "64", "128", "256", "512", "1024", "2048", "4096"]
+        options = [
+            discord.SelectOption(label=f"{size}px", value=size) for size in valid_sizes
+        ]
+
+        super().__init__(
+            min_values=1, max_values=1, options=options, placeholder="Select a size"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        value = int(self.values[0])
+
+        self.view.asset = self.view.asset.with_size(value)
+        if interaction.message is None:
+            return
+
+        self.embed.set_image(url=self.view.asset.url)
+
+        await interaction.message.edit(embed=self.embed)
+        await interaction.response.defer()
+
+
+class FormatView(AuthorView):
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.Member, discord.User],
+        embed: discord.Embed,
+        asset: discord.Asset,
+    ):
+        super().__init__(ctx)
+        self.user = user
+        self.ctx = ctx
+        self.embed = embed
+        self.asset = asset
+        self.add_item(FormatDropdown(ctx, user, embed, asset))
+
+    @discord.ui.button(label="Go back", row=1, style=discord.ButtonStyle.red)
+    async def go_back(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if interaction.message is None:
+            return
+
+        await interaction.message.edit(
+            view=AvatarView(self.ctx, self.user, self.embed, self.asset)
+        )
+        await interaction.response.defer()
+
+
+class FormatDropdown(discord.ui.Select):
+    view: FormatView
+
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.Member, discord.User],
+        embed: discord.Embed,
+        asset: discord.Asset,
+    ):
+        self.ctx = ctx
+        self.user = user
+        self.embed = embed
+        self.asset = asset
+
+        valid_formats = ["webp", "jpeg", "jpg", "png"]
+
+        if asset.is_animated():
+            valid_formats.append("gif")
+
+        options = [
+            discord.SelectOption(label=_format, value=_format)
+            for _format in valid_formats
+        ]
+
+        super().__init__(
+            min_values=1, max_values=1, options=options, placeholder="Select a format"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        value = self.values[0]
+
+        self.view.asset = self.view.asset.with_format(value)  # type: ignore
+        if interaction.message is None:
+            return
+
+        self.embed.set_image(url=self.view.asset.url)
+
+        await interaction.message.edit(embed=self.embed)
+        await interaction.response.defer()
+
 
 class UserInfoDropdown(discord.ui.Select):
     def __init__(
@@ -1042,19 +1313,10 @@ class UserInfoDropdown(discord.ui.Select):
         await interaction.response.edit_message(embed=embed)
 
 
-class UserInfoView(discord.ui.View):
+class UserInfoView(AuthorView):
     def __init__(
         self, ctx: Context, member: discord.Member, original_embed: discord.Embed
     ):
-        super().__init__()
+        super().__init__(ctx)
         self.ctx = ctx
         self.add_item(UserInfoDropdown(ctx, member, original_embed))
-
-    async def interaction_check(self, interaction: discord.Interaction):
-        if interaction.user and interaction.user == self.ctx.author:
-            return True
-        await interaction.response.send_message(
-            f'You can\'t use this, sorry. \nIf you\'d like to use this then run the command `{self.ctx.command}{self.ctx.invoked_subcommand or ""}`',
-            ephemeral=True,
-        )
-        return False
