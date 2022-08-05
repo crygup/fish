@@ -70,6 +70,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
             "format": video_format,
             "outtmpl": f"files/videos/{name}.%(ext)s",
             "quiet": True,
+            "max_filesize": message.guild.filesize_limit,
         }
 
         msg = await ctx.send("Downloading video")
