@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import math
 import re
 import sys
 import textwrap
@@ -45,6 +46,33 @@ lastfm_period = {
 }
 
 emoji_regex = r"<(?P<animated>a)?:(?P<name>[a-zA-Z0-9\_]{1,}):(?P<id>[0-9]{1,})>"
+
+
+class AuthorView(discord.ui.View):
+    def __init__(self, ctx: Context, *, timeout: Optional[float] = None):
+        super().__init__(timeout=timeout)
+
+        self.message: Optional[discord.Message] = None
+        self.ctx = ctx
+
+    def disable_all(self) -> None:
+        for button in self.children:
+            if isinstance(button, discord.ui.Button):
+                button.disabled = True
+
+    async def on_timeout(self) -> None:
+        self.disable_all()
+        if self.message:
+            await self.message.edit(view=self)
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user and interaction.user == self.ctx.author:
+            return True
+        await interaction.response.send_message(
+            f'You can\'t use this, sorry. \nIf you\'d like to use this then run the command `{self.ctx.command}{self.ctx.invoked_subcommand or ""}`',
+            ephemeral=True,
+        )
+        return False
 
 
 async def mobile(self) -> None:
@@ -227,6 +255,20 @@ async def get_video(
             return result.group(0)
 
     return None
+
+
+def natural_size(size_in_bytes: int) -> str:
+    """
+    Converts a number of bytes to an appropriately-scaled unit
+    E.g.:
+        1024 -> 1.00 KiB
+        12345678 -> 11.77 MiB
+    """
+    units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB")
+
+    power = int(math.log(max(abs(size_in_bytes), 1), 1024))
+
+    return f"{size_in_bytes / (1024 ** power):.2f} {units[power]}"
 
 
 async def run(cmd: str) -> Optional[str]:

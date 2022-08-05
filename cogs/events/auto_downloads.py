@@ -8,7 +8,7 @@ import discord
 from bot import Bot, Context
 from discord.ext import commands, tasks
 from typing_extensions import reveal_type
-from utils import get_video, video_regexes
+from utils import get_video, video_regexes, to_thread, natural_size
 from yt_dlp import YoutubeDL
 
 
@@ -23,6 +23,10 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
         self.cd_mapping = commands.CooldownMapping.from_cooldown(
             10, 10, commands.BucketType.member
         )
+
+    async def download_video(self, video: str, options: Dict):
+        with YoutubeDL(options) as ydl:
+            ydl.download(video)
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):
@@ -43,29 +47,28 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
             return
 
         name = secrets.token_urlsafe(8)
-        video = await get_video(ctx, ctx.message.content, True)
+
+        try:
+            video = await get_video(ctx, ctx.message.content, True)
+        except commands.BadArgument as e:
+            await ctx.send(str(e))
+            return
 
         if video is None:
             return
 
+        pattern = re.compile(
+            r"(https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,})|(https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,})"
+        )
         video_format = (
-            "-S vcodec:h264"
-            if re.fullmatch(video_regexes["VMtiktok"]["regex"], video)
-            or re.fullmatch(video_regexes["WEBtiktok"]["regex"], video)
+            "vcodec:h264"
+            if pattern.search(video)
             else f"bestvideo+bestaudio[ext=mp4]/best"
         )
-
-        def length_check(info: Dict, *, incomplete):
-            duration = info.get("duration")
-            if duration and duration > 600:
-                raise commands.BadArgument(
-                    "Video is too long, please keep it under 10 minutes."
-                )
 
         ydl_opts = {
             "format": video_format,
             "outtmpl": f"files/videos/{name}.%(ext)s",
-            "match_filter": length_check,
             "quiet": True,
         }
 
@@ -74,12 +77,9 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
 
         start = time.perf_counter()
         try:
-            with YoutubeDL(ydl_opts) as ydl:
-                ydl.download(video)
+            await self.download_video(video, ydl_opts)
         except commands.BadArgument as e:
-            await msg.edit(content=str(e))
-            return
-
+            return await msg.edit(content=str(e))
         stop = time.perf_counter()
 
         dl_time = f"Took `{round(stop - start, 2)}` seconds to download."
@@ -94,6 +94,11 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
 
         except (ValueError, discord.Forbidden):
             await msg.edit(content="Failed to download, try again later?")
+
+        except FileNotFoundError:
+            await msg.edit(
+                content=f"Video file size is too big, try a shorter video. This server's file size limit is **`{natural_size(ctx.guild.filesize_limit)}`**."
+            )
 
         self.current_downloads.remove(f"{name}.mp4")
 

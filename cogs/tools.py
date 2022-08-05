@@ -1,22 +1,23 @@
 import argparse
-from io import BytesIO
 import os
 import re
 import secrets
 import shlex
 import time
+from io import BytesIO
 from typing import Dict, List, Optional, Union
-
 import discord
 from bot import Bot, Context
 from discord.ext import commands, tasks
 from utils import (
+    EmojiConverter,
     GuildContext,
     TenorUrlConverter,
     get_video,
-    video_regexes,
     human_join,
-    EmojiConverter,
+    to_thread,
+    video_regexes,
+    natural_size,
 )
 from yt_dlp import YoutubeDL
 
@@ -101,6 +102,11 @@ class Tools(commands.Cog, name="tools"):
         real_url = await TenorUrlConverter().convert(ctx, url)
         await ctx.send(f"Here is the real url: {real_url}")
 
+    @to_thread
+    def download_video(self, video: str, options: Dict):
+        with YoutubeDL(options) as ydl:
+            ydl.download(video)
+
     @commands.command(name="download", aliases=("dl",))
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def download(self, ctx: GuildContext, url: str, *, flags: Optional[str]):
@@ -110,74 +116,27 @@ class Tools(commands.Cog, name="tools"):
 
         default_name = secrets.token_urlsafe(8)
         default_format = "mp4"
-        audio_only = False
-        check_channel = True
-        valid_video_formats = [
-            "mp4",
-            "webm",
-            "mov",
-        ]
-        valid_audio_formats = [
-            "mp3",
-            "ogg",
-            "wav",
-        ]
 
-        if flags:
-            parser = Arguments(add_help=False, allow_abbrev=False)
-            parser.add_argument("-dev", action="store_true")
-            parser.add_argument("-format", type=str)
+        video = await get_video(ctx, url)
 
-            try:
-                _flags = parser.parse_args(shlex.split(flags))
-            except Exception as e:
-                return await ctx.send(str(e))
+        if video is None:
+            return await ctx.send("Invalid video url.")
 
-            if _flags.format:
-                if _flags.format not in valid_video_formats + valid_audio_formats:
-                    return await ctx.send("Invalid format")
+        pattern = re.compile(
+            r"(https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,})|(https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,})"
+        )
 
-                if _flags.format in valid_audio_formats:
-                    audio_only = True
-
-                default_format = _flags.format
-
-            if _flags.dev:
-                check_channel = False if ctx.author.id == self.bot.owner_id else True
-
-        if check_channel:
-            video = await get_video(ctx, url)
-
-            if video is None:
-                return await ctx.send("Invalid video url.")
-
-        else:
-            video = url
-
-        if audio_only:
-            video_format = f"-i --extract-audio --audio-format {default_format}"
-        else:
-            pattern = re.compile(
-                r"(https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,})|(https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,})"
-            )
-            video_format = (
-                "-S vcodec:h264"
-                if pattern.search(video)
-                else f"bestvideo+bestaudio[ext={default_format}]/best"
-            )
-
-        def length_check(info: Dict, *, incomplete):
-            duration = info.get("duration")
-            if duration and duration > 600:
-                raise commands.BadArgument(
-                    "Video is too long to download, please keep it under 10 minutes."
-                )
+        video_format = (
+            "vcodec:h264"
+            if pattern.search(video)
+            else f"bestvideo+bestaudio[ext={default_format}]/best"
+        )
 
         ydl_opts = {
             "format": video_format,
             "outtmpl": f"files/videos/{default_name}.%(ext)s",
-            "match_filter": length_check,
             "quiet": True,
+            "max_filesize": ctx.guild.filesize_limit,
         }
 
         message = await ctx.send("Downloading video")
@@ -185,8 +144,7 @@ class Tools(commands.Cog, name="tools"):
         self.currently_downloading.append(f"{default_name}.{default_format}")
 
         start = time.perf_counter()
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download(video)
+        await self.download_video(video, ydl_opts)
         stop = time.perf_counter()
 
         dl_time = f"Took `{round(stop - start, 2)}` seconds to download."
@@ -203,6 +161,11 @@ class Tools(commands.Cog, name="tools"):
 
         except (ValueError, discord.Forbidden):
             await message.edit(content="Failed to download, try again later?")
+
+        except FileNotFoundError:
+            await message.edit(
+                content=f"Video file size is too big, try a shorter video. This server's file size limit is **`{natural_size(ctx.guild.filesize_limit)}`**."
+            )
 
         self.currently_downloading.remove(f"{default_name}.{default_format}")
 
