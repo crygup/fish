@@ -87,18 +87,19 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
         try:
             _file = discord.File(f"files/videos/{name}.mp4")
             await msg.edit(content=dl_time, attachments=[_file])
-            try:
-                os.remove(f"files/videos/{name}.mp4")
-            except (FileNotFoundError, PermissionError):
-                pass
 
         except (ValueError, discord.Forbidden):
             await msg.edit(content="Failed to download, try again later?")
 
-        except FileNotFoundError:
+        except (FileNotFoundError, discord.HTTPException):
             await msg.edit(
                 content=f"Video file size is too big, try a shorter video. This server's file size limit is **`{natural_size(ctx.guild.filesize_limit)}`**."
             )
+
+        try:
+            os.remove(f"files/videos/{name}.mp4")
+        except (FileNotFoundError, PermissionError):
+            pass
 
         self.current_downloads.remove(f"{name}.mp4")
 

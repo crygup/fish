@@ -154,18 +154,19 @@ class Tools(commands.Cog, name="tools"):
         try:
             _file = discord.File(f"files/videos/{default_name}.{default_format}")
             await message.edit(content=dl_time, attachments=[_file])
-            try:
-                os.remove(f"files/videos/{default_name}.{default_format}")
-            except (FileNotFoundError, PermissionError):
-                pass
 
         except (ValueError, discord.Forbidden):
             await message.edit(content="Failed to download, try again later?")
 
-        except FileNotFoundError:
+        except (FileNotFoundError, discord.HTTPException):
             await message.edit(
                 content=f"Video file size is too big, try a shorter video. This server's file size limit is **`{natural_size(ctx.guild.filesize_limit)}`**."
             )
+
+        try:
+            os.remove(f"files/videos/{default_name}.{default_format}")
+        except (FileNotFoundError, PermissionError):
+            pass
 
         self.currently_downloading.remove(f"{default_name}.{default_format}")
 
