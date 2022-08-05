@@ -29,7 +29,8 @@ class MessageEvents(commands.Cog, name="message_event"):
             VALUES($1, $2, $3, $4, $5, $6, $7, $8)
             """
             await self.bot.pool.executemany(sql, self._messages)
-            self._messages.clear()
+            del self._messages
+            self._messages = []
 
         if self._messages_attachments:
             sql = """
@@ -37,7 +38,8 @@ class MessageEvents(commands.Cog, name="message_event"):
             VALUES($1, $2, $3)
             """
             await self.bot.pool.executemany(sql, self._messages_attachments)
-            self._messages_attachments.clear()
+            del self._messages_attachments
+            self._messages_attachments = []
 
         if self._deleted_messages:
             sql = """
@@ -45,7 +47,8 @@ class MessageEvents(commands.Cog, name="message_event"):
             VALUES($1, $2, $3, $4, $5, $6, $7, $8)
             """
             await self.bot.pool.executemany(sql, self._deleted_messages)
-            self._deleted_messages.clear()
+            del self._deleted_messages
+            self._deleted_messages = []
 
         if self._deleted_messages_attachments:
             sql = """
@@ -53,7 +56,8 @@ class MessageEvents(commands.Cog, name="message_event"):
             VALUES($1, $2, $3)
             """
             await self.bot.pool.executemany(sql, self._deleted_messages_attachments)
-            self._deleted_messages_attachments.clear()
+            del self._deleted_messages_attachments
+            self._deleted_messages_attachments = []
 
     async def cog_unload(self):
         await self._bulk_insert()

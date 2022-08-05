@@ -24,7 +24,8 @@ class GuildEvents(commands.Cog, name="guild_events"):
             VALUES ($1, $2, $3)
             """
             await self.bot.pool.executemany(sql, self._joins)
-            self._joins.clear()
+            del self._joins
+            self._joins = []
 
         if self._bans:
             sql = """
@@ -32,7 +33,8 @@ class GuildEvents(commands.Cog, name="guild_events"):
             VALUES ($1, $2, $3, $4, $5)
             """
             await self.bot.pool.executemany(sql, self._bans)
-            self._bans.clear()
+            del self._bans
+            self._bans = []
 
         if self._kicks:
             sql = """
@@ -40,7 +42,8 @@ class GuildEvents(commands.Cog, name="guild_events"):
             VALUES ($1, $2, $3, $4, $5)
             """
             await self.bot.pool.executemany(sql, self._kicks)
-            self._kicks.clear()
+            del self._kicks
+            self._kicks = []
 
     async def cog_unload(self):
         await self._bulk_insert()

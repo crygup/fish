@@ -26,7 +26,8 @@ class UserEvents(commands.Cog, name="user_events"):
             VALUES ($1, $2, $3)
             """
             await self.bot.pool.executemany(sql, self._usernames)
-            self._usernames.clear()
+            del self._usernames
+            self._usernames = []
 
         if self._discims:
             sql = """
@@ -34,7 +35,8 @@ class UserEvents(commands.Cog, name="user_events"):
             VALUES ($1, $2, $3)
             """
             await self.bot.pool.executemany(sql, self._discims)
-            self._discims.clear()
+            del self._discims
+            self._discims = []
 
         if self._avatars:
             sql = """
@@ -42,7 +44,8 @@ class UserEvents(commands.Cog, name="user_events"):
             VALUES ($1, $2, $3, $4)
             """
             await self.bot.pool.executemany(sql, self._avatars)
-            self._avatars.clear()
+            del self._avatars
+            self._avatars = []
 
     async def cog_unload(self):
         await self._bulk_insert()
