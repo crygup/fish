@@ -940,7 +940,7 @@ class Discord_(commands.Cog, name="discord"):
             f"```Viewing raw data for {str(channel)}``````json\n{to_send}\n```"
         )
 
-    @commands.command(name="avatar", aliases=("pfp", "avy"))
+    @commands.command(name="avatar", aliases=("pfp", "avy", "av"))
     async def avatar(
         self, ctx: Context, user: Union[discord.Member, discord.User] = commands.Author
     ):
