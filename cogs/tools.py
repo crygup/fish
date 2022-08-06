@@ -126,18 +126,15 @@ class Tools(commands.Cog, name="tools"):
             r"(https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,})|(https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,})"
         )
 
-        video_format = (
-            "vcodec:h264"
-            if pattern.search(video)
-            else f"bestvideo+bestaudio[ext={default_format}]/best"
-        )
-
         ydl_opts = {
-            "format": video_format,
+            "format": f"bestvideo+bestaudio[ext={default_format}]/best",
             "outtmpl": f"files/videos/{default_name}.%(ext)s",
             "quiet": True,
             "max_filesize": ctx.guild.filesize_limit,
         }
+
+        if pattern.search(video):
+            ydl_opts["format_sort"] = ['vcodec:h264']
 
         message = await ctx.send("Downloading video")
 

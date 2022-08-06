@@ -60,18 +60,20 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
         pattern = re.compile(
             r"(https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,})|(https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,})"
         )
-        video_format = (
-            "vcodec:h264"
-            if pattern.search(video)
-            else f"bestvideo+bestaudio[ext=mp4]/best"
+
+        pattern = re.compile(
+            r"(https?:\/\/vm.tiktok.com\/[a-zA-Z0-9_-]{9,})|(https?:\/\/(www.)?tiktok.com\/@?[a-zA-Z0-9_]{4,}\/video\/[0-9]{1,})"
         )
 
         ydl_opts = {
-            "format": video_format,
+            "format": f"bestvideo+bestaudio[ext=mp4]/best",
             "outtmpl": f"files/videos/{name}.%(ext)s",
             "quiet": True,
-            "max_filesize": message.guild.filesize_limit,
+            "max_filesize": ctx.guild.filesize_limit,
         }
+
+        if pattern.search(video):
+            ydl_opts["format_sort"] = ['vcodec:h264']
 
         msg = await ctx.send("Downloading video")
         self.current_downloads.append(f"{name}.mp4")
