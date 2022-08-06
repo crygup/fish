@@ -12,63 +12,7 @@ async def setup(bot: Bot):
 class MessageEvents(commands.Cog, name="message_event"):
     def __init__(self, bot: Bot):
         self.bot = bot
-        self._messages: List[
-            Tuple[int, int, int, int, str, datetime.datetime, bool, bool]
-        ] = []
-        self._messages_attachments: List[Tuple[int, bytes, bool]] = []
-
-        self._deleted_messages: List[
-            Tuple[int, int, int, int, str, datetime.datetime, bool, bool]
-        ] = []
         self._deleted_messages_attachments: List[Tuple[int, bytes, bool]] = []
-
-    async def _bulk_insert(self):
-        if self._messages:
-            sql = """
-            INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at, deleted, has_attachments)
-            VALUES($1, $2, $3, $4, $5, $6, $7, $8)
-            """
-            await self.bot.pool.executemany(sql, self._messages)
-            del self._messages
-            self._messages = []
-
-        if self._messages_attachments:
-            sql = """
-            INSERT INTO message_attachment_logs(message_id, attachment, deleted)
-            VALUES($1, $2, $3)
-            """
-            await self.bot.pool.executemany(sql, self._messages_attachments)
-            del self._messages_attachments
-            self._messages_attachments = []
-
-        if self._deleted_messages:
-            sql = """
-            INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at, deleted, has_attachments)
-            VALUES($1, $2, $3, $4, $5, $6, $7, $8)
-            """
-            await self.bot.pool.executemany(sql, self._deleted_messages)
-            del self._deleted_messages
-            self._deleted_messages = []
-
-        if self._deleted_messages_attachments:
-            sql = """
-            INSERT INTO message_attachment_logs(message_id, attachment, deleted)
-            VALUES($1, $2, $3)
-            """
-            await self.bot.pool.executemany(sql, self._deleted_messages_attachments)
-            del self._deleted_messages_attachments
-            self._deleted_messages_attachments = []
-
-    async def cog_unload(self):
-        await self._bulk_insert()
-        self.bulk_insert.cancel()
-
-    async def cog_load(self) -> None:
-        self.bulk_insert.start()
-
-    @tasks.loop(minutes=3.0)
-    async def bulk_insert(self):
-        await self._bulk_insert()
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):
@@ -78,23 +22,34 @@ class MessageEvents(commands.Cog, name="message_event"):
         if message.content == "" and message.attachments == []:
             return
 
-        self._messages.append(
-            (
-                message.author.id,
-                message.guild.id,
-                message.channel.id,
-                message.id,
-                message.content or "Message did not contain any content.",
-                message.created_at,
-                False,
-                True if message.attachments != [] else False,
-            )
+        sql = """
+        INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at, deleted, has_attachments)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8)
+        """
+        await self.bot.pool.execute(
+            sql,
+            message.author.id,
+            message.guild.id,
+            message.channel.id,
+            message.id,
+            message.content
+            if message.content != ""
+            else "Message did not contain any content.",
+            message.created_at,
+            False,
+            True if message.attachments != [] else False,
         )
         if message.attachments:
-            for attachment in message.attachments:
-                self._messages_attachments.append(
-                    (message.id, await attachment.read(), False)
-                )
+            messages_attachments = [
+                (message.id, await attachment.read(), False)
+                for attachment in message.attachments
+                if attachment.filename.endswith(("gif", "png", "jpg", "jpeg"))
+            ]
+            sql = """
+            INSERT INTO message_attachment_logs(message_id, attachment, deleted)
+            VALUES($1, $2, $3)
+            """
+            await self.bot.pool.executemany(sql, messages_attachments)
 
     async def insert_message(self, message: discord.Message):
         if message.guild is None:
@@ -103,26 +58,35 @@ class MessageEvents(commands.Cog, name="message_event"):
         if message.content == "" and message.attachments == []:
             return
 
-        self._deleted_messages.append(
-            (
-                message.author.id,
-                message.guild.id,
-                message.channel.id,
-                message.id,
-                message.content,
-                message.created_at,
-                True,
-                True if message.attachments != [] else False,
-            )
-        )
+        sql = """
+        INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at, deleted, has_attachments)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8)
+        """
 
+        await self.bot.pool.execute(
+            sql,
+            message.author.id,
+            message.guild.id,
+            message.channel.id,
+            message.id,
+            message.content
+            if message.content != ""
+            else "Message did not contain any content.",
+            message.created_at,
+            True,
+            True if message.attachments != [] else False,
+        )
         if message.attachments:
-            for attachment in message.attachments:
-                if not attachment.filename.endswith(("gif", "png", "jpg", "jpeg")):
-                    continue
-                self._deleted_messages_attachments.append(
-                    (message.id, await attachment.read(), True)
-                )
+            messages_attachments = [
+                (message.id, await attachment.read(), True)
+                for attachment in message.attachments
+                if attachment.filename.endswith(("gif", "png", "jpg", "jpeg"))
+            ]
+            sql = """
+            INSERT INTO message_attachment_logs(message_id, attachment, deleted)
+            VALUES($1, $2, $3)
+            """
+            await self.bot.pool.executemany(sql, messages_attachments)
 
     @commands.Cog.listener("on_message_delete")
     async def on_message_delete(self, message: discord.Message):

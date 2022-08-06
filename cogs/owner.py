@@ -158,8 +158,6 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
         if ctx.guild is None or channel is None:
             return
 
-        await self.bot.get_cog("message_event")._bulk_insert()  # type: ignore
-
         if member:
             sql = """
             SELECT * FROM message_logs where channel_id = $1 AND author_id = $2 AND deleted IS TRUE ORDER BY created_at DESC

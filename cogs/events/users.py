@@ -15,59 +15,27 @@ async def setup(bot: Bot):
 class UserEvents(commands.Cog, name="user_events"):
     def __init__(self, bot: Bot):
         self.bot = bot
-        self._usernames: List[Tuple[int, str, datetime.datetime]] = []
-        self._discims: List[Tuple[int, str, datetime.datetime]] = []
-        self._avatars: List[Tuple[int, bytes, str, datetime.datetime]] = []
-
-    async def _bulk_insert(self):
-        if self._usernames:
-            sql = """
-            INSERT INTO username_logs(user_id, username, created_at)
-            VALUES ($1, $2, $3)
-            """
-            await self.bot.pool.executemany(sql, self._usernames)
-            del self._usernames
-            self._usernames = []
-
-        if self._discims:
-            sql = """
-            INSERT INTO discrim_logs(user_id, discrim, created_at)
-            VALUES ($1, $2, $3)
-            """
-            await self.bot.pool.executemany(sql, self._discims)
-            del self._discims
-            self._discims = []
-
-        if self._avatars:
-            sql = """
-            INSERT INTO avatar_logs(user_id, avatar, format, created_at)
-            VALUES ($1, $2, $3, $4)
-            """
-            await self.bot.pool.executemany(sql, self._avatars)
-            del self._avatars
-            self._avatars = []
-
-    async def cog_unload(self):
-        await self._bulk_insert()
-        self.bulk_insert.cancel()
-
-    async def cog_load(self) -> None:
-        self.bulk_insert.start()
-
-    @tasks.loop(minutes=3.0)
-    async def bulk_insert(self):
-        await self._bulk_insert()
 
     @commands.Cog.listener("on_user_update")
     async def on_username_update(self, before: discord.User, after: discord.User):
         if before.name != after.name:
-            self._usernames.append((after.id, after.name, discord.utils.utcnow()))
+            sql = """
+            INSERT INTO username_logs(user_id, username, created_at)
+            VALUES ($1, $2, $3)
+            """
+            await self.bot.pool.execute(
+                sql, after.id, after.name, datetime.datetime.utcnow()
+            )
 
     @commands.Cog.listener("on_user_update")
     async def on_discrim_update(self, before: discord.User, after: discord.User):
         if before.discriminator != after.discriminator:
-            self._discims.append(
-                (after.id, after.discriminator, discord.utils.utcnow())
+            sql = """
+            INSERT INTO discrim_logs(user_id, discrim, created_at)
+            VALUES ($1, $2, $3)
+            """
+            await self.bot.pool.execute(
+                sql, after.id, after.discriminator, datetime.datetime.utcnow()
             )
 
     @commands.Cog.listener("on_user_update")
@@ -78,9 +46,17 @@ class UserEvents(commands.Cog, name="user_events"):
             except discord.NotFound:
                 return
 
-            file_type = imghdr.what(None, avatar) or "png"
-
-            self._avatars.append((after.id, avatar, file_type, discord.utils.utcnow()))
+            sql = """
+            INSERT INTO avatar_logs(user_id, avatar, format, created_at)
+            VALUES ($1, $2, $3, $4)
+            """
+            await self.bot.pool.execute(
+                sql,
+                after.id,
+                avatar,
+                imghdr.what(None, avatar) or "png",
+                datetime.datetime.utcnow(),
+            )
 
     @commands.Cog.listener("on_presence_update")
     async def on_status_update(self, before: discord.Member, after: discord.Member):
@@ -94,9 +70,10 @@ class UserEvents(commands.Cog, name="user_events"):
                 INSERT INTO uptime_logs(user_id, time)
                 VALUES($1, $2)"""
                 await self.bot.pool.execute(sql, after.id, discord.utils.utcnow())
-            else:
-                sql = """
-                UPDATE uptime_logs
-                SET time = $2 WHERE user_id = $1
-                """
-                await self.bot.pool.execute(sql, after.id, discord.utils.utcnow())
+                return
+
+            sql = """
+            UPDATE uptime_logs
+            SET time = $2 WHERE user_id = $1
+            """
+            await self.bot.pool.execute(sql, after.id, discord.utils.utcnow())

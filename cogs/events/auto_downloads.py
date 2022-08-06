@@ -73,7 +73,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
         }
 
         if pattern.search(video):
-            ydl_opts["format_sort"] = ['vcodec:h264']
+            ydl_opts["format_sort"] = ["vcodec:h264"]
 
         msg = await ctx.send("Downloading video")
         self.current_downloads.append(f"{name}.mp4")

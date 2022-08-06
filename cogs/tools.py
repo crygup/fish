@@ -134,7 +134,7 @@ class Tools(commands.Cog, name="tools"):
         }
 
         if pattern.search(video):
-            ydl_opts["format_sort"] = ['vcodec:h264']
+            ydl_opts["format_sort"] = ["vcodec:h264"]
 
         message = await ctx.send("Downloading video")
 

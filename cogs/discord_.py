@@ -936,9 +936,7 @@ class Discord_(commands.Cog, name="discord"):
             await ctx.send("File too large", file=file)
             return
 
-        await ctx.send(
-            f"```Viewing raw data for {str(channel)}``````json\n{to_send}\n```"
-        )
+        await ctx.send(f"```Viewing raw data for {channel}``````json\n{to_send}\n```")
 
     @commands.command(name="avatar", aliases=("pfp", "avy", "av"))
     async def avatar(
