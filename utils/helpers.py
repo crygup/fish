@@ -210,7 +210,7 @@ video_regexes = {
         "nsfw": False,
     },
     "instagram": {
-        "regex": r"https:\/\/(www.)?instagram.com\/(p|tv|reel)\/[a-zA-Z0-9]{11}\/",
+        "regex": r"https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,}",
         "nsfw": False,
     },
     "twitch": {"regex": r"https?:\/\/clips.twitch.tv\/[a-zA-Z0-9_-]*", "nsfw": False},
