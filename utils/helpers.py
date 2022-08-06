@@ -219,7 +219,7 @@ video_regexes = {
     },
     "twitter": {
         "regex": re.compile(
-            r"https?://twitter.com/[a-zA-Z0-9_]{2,15}/status/[0-9]{19}"
+            r"https?://twitter.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19}"
         ),
         "nsfw": True,
     },
@@ -246,7 +246,7 @@ compiled_videos = re.compile(
     (?P<tiktok>(https://(www|vt|vm|m).tiktok.com/(@)?[a-zA-Z0-9_-]{3,}(/video/[0-9]{1,})?))?
     (?P<instagram>(https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,}))?
     (?P<twitch>(https?://clips.twitch.tv/[a-zA-Z0-9_-]*))?
-    (?P<twitter>(https?://twitter.com/[a-zA-Z0-9_]{2,15}/status/[0-9]{19}))?
+    (?P<twitter>(https?://twitter.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19}))?
     (?P<reddit>(https?://(www.)?reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6}))?
     (?P<youtube>(https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})))?
     (?P<youtube_shorts>(https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}))?
