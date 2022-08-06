@@ -75,7 +75,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
         if pattern.search(video):
             ydl_opts["format_sort"] = ["vcodec:h264"]
 
-        msg = await ctx.send("Downloading video")
+        msg = await ctx.reply("Downloading video")
         self.current_downloads.append(f"{name}.mp4")
 
         start = time.perf_counter()
@@ -85,7 +85,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
             return await msg.edit(content=str(e))
         stop = time.perf_counter()
 
-        dl_time = f"Took `{round(stop - start, 2)}` seconds to download."
+        dl_time = f"Took `{round(stop - start, 2)}` seconds to download, {message.author.mention}"
 
         try:
             _file = discord.File(f"files/videos/{name}.mp4")

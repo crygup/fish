@@ -136,7 +136,7 @@ class Tools(commands.Cog, name="tools"):
         if pattern.search(video):
             ydl_opts["format_sort"] = ["vcodec:h264"]
 
-        message = await ctx.send("Downloading video")
+        message = await ctx.reply("Downloading video")
 
         self.currently_downloading.append(f"{default_name}.{default_format}")
 
@@ -144,7 +144,9 @@ class Tools(commands.Cog, name="tools"):
         await self.download_video(video, ydl_opts)
         stop = time.perf_counter()
 
-        dl_time = f"Took `{round(stop - start, 2)}` seconds to download."
+        dl_time = (
+            f"Took `{round(stop - start, 2)}` seconds to download, {ctx.author.mention}"
+        )
 
         await message.edit(content="Downloaded, uploading...")
 

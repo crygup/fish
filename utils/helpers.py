@@ -202,55 +202,78 @@ async def get_user_badges(
 
 video_regexes = {
     "tiktok": {
-        "regex": r"https://(www|vt|vm|m).tiktok.com/(@)?[a-zA-Z0-9_-]{3,}(/video/[0-9]{1,})?",
+        "regex": re.compile(
+            r"https://(www|vt|vm|m).tiktok.com/(@)?[a-zA-Z0-9_-]{3,}(/video/[0-9]{1,})?"
+        ),
         "nsfw": False,
     },
     "instagram": {
-        "regex": r"https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,}",
+        "regex": re.compile(
+            r"https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,}"
+        ),
         "nsfw": False,
     },
-    "twitch": {"regex": r"https?:\/\/clips.twitch.tv\/[a-zA-Z0-9_-]*", "nsfw": False},
+    "twitch": {
+        "regex": re.compile(r"https?://clips.twitch.tv/[a-zA-Z0-9_-]"),
+        "nsfw": False,
+    },
     "twitter": {
-        "regex": r"https?:\/\/twitter.com\/[a-zA-Z0-9_]{2,15}\/status\/[0-9]{19}",
+        "regex": re.compile(
+            r"https?://twitter.com/[a-zA-Z0-9_]{2,15}/status/[0-9]{19}"
+        ),
         "nsfw": True,
     },
     "reddit": {
-        "regex": r"https?:\/\/(www.)reddit.com\/r\/[a-zA-Z0-9_-]{1,20}\/comments\/[a-z0-9]{6}",
+        "regex": re.compile(
+            r"https?://(www.)reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6}"
+        ),
         "nsfw": True,
     },
     "youtube_short": {
-        "regex": r"https:\/\/(www.)?youtube.com\/shorts\/[a-zA-Z0-9_-]{11}",
+        "regex": re.compile(r"https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}"),
         "nsfw": False,
     },
     "youtube": {
-        "regex": r"https:\/\/(www.)?youtu(.be|be.com)\/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})",
+        "regex": re.compile(
+            r"https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})"
+        ),
         "nsfw": False,
     },
-    "pornhub": {
-        "regex": r"(https://)?(www.)?pornhub.com/view_video.php\?viewkey=[a-zA-Z0-9]{0,20}",
-        "nsfw": True,
-    },
 }
+
+compiled_videos = re.compile(
+    r"""
+    (?P<tiktok>(https://(www|vt|vm|m).tiktok.com/(@)?[a-zA-Z0-9_-]{3,}(/video/[0-9]{1,})?))?
+    (?P<instagram>(https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,}))?
+    (?P<twitch>(https?://clips.twitch.tv/[a-zA-Z0-9_-]*))?
+    (?P<twitter>(https?://twitter.com/[a-zA-Z0-9_]{2,15}/status/[0-9]{19}))?
+    (?P<reddit>(https?://(www.)?reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6}))?
+    (?P<youtube>(https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})))?
+    (?P<youtube_shorts>(https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}))?
+    """,
+    re.VERBOSE,
+)
 
 
 async def get_video(
     ctx: GuildContext | Context, url: str, auto: bool = False
 ) -> Optional[str]:
-    for regex in video_regexes:
-        result = re.search(video_regexes[regex]["regex"], url)
-        if result:
-            if video_regexes[regex]["nsfw"]:
-                if not ctx.channel.is_nsfw():
-                    msg = "The site given has been marked as NSFW, please switch to a NSFW channel."
-                    if auto:
-                        await ctx.send(msg)
-                        return
 
-                    raise commands.BadArgument(msg)
+    if not compiled_videos.search(url):
+        return None
 
-            return result.group(0)
+    for _, data in video_regexes.items():
+        results = data["regex"].search(url)
+        if results:
+            if data["nsfw"] and not ctx.channel.is_nsfw():
+                msg = "The site given has been marked as NSFW, please switch to a NSFW channel."
+                if auto:
+                    await ctx.send(msg)
+                    return
 
-    return None
+                raise commands.BadArgument(msg)
+
+            return results.group()
 
 
 def natural_size(size_in_bytes: int) -> str:
