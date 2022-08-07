@@ -469,12 +469,19 @@ class Tools(commands.Cog, name="tools"):
         ctx: Context,
         name: Annotated[str, TagName],
         *,
-        content: Annotated[str, commands.clean_content],
+        content: Optional[Annotated[str, commands.clean_content]],
     ):
         sql = """
         INSERT INTO tags (guild_id, author_id, name, content, created_at) 
         VALUES ($1, $2, $3, $4, $5)
         """
+
+        if content is None:
+            if ctx.message.attachments:
+                content = ctx.message.attachments[0].url
+            else:
+                await ctx.send("content is a required argument that is missing.")
+                return
 
         try:
             await self.bot.pool.execute(
