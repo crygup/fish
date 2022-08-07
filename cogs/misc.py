@@ -251,30 +251,8 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         """Tells you information about the bot itself."""
 
         if ctx.bot.user is None:
-            raise TypeError("Bot is not logged in.")
-        cr = await self.bot.getch_user(766953372309127168)
-        embed = discord.Embed(
-            description="cool discord bot",
-            timestamp=ctx.bot.user.created_at,
-            color=ctx.bot.embedcolor,
-        )
-        embed.set_author(name=f"{cr}", icon_url=cr.display_avatar.url)
-        embed.add_field(
-            name="Guilds",
-            value=f"{len(ctx.bot.guilds):,}",
-        )
-        embed.add_field(
-            name="Uptime",
-            value=human_timedelta(
-                ctx.bot.uptime, accuracy=None, brief=True, suffix=False
-            ),
-        )
-        memory_usage = self.process.memory_full_info().uss / 1024**2
-        cpu_usage = self.process.cpu_percent() / psutil.cpu_count()
-        embed.add_field(
-            name="Process", value=f"{memory_usage:.2f} MiB\n{cpu_usage:.2f}% CPU"
-        )
-        embed.add_field(name="Users", value=f"{len(ctx.bot.users):,}")
+            return
+
         sql = """SELECT * FROM command_logs"""
         results = await self.bot.pool.fetch(sql)
 
@@ -285,12 +263,40 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         total_today = len(
             [result for result in results if result["created_at"] >= start]
         )
-        embed.add_field(
+        memory_usage = self.process.memory_full_info().uss / 1024**2
+        cpu_usage = self.process.cpu_percent() / psutil.cpu_count()
+        cr = await self.bot.getch_user(766953372309127168)
+
+        e = discord.Embed(
+            description="cool discord bot",
+            timestamp=ctx.bot.user.created_at,
+            color=ctx.bot.embedcolor,
+        )
+
+        e.set_footer(text="Created at")
+        e.set_author(name=f"{cr}", icon_url=cr.display_avatar.url)
+
+        e.add_field(
             name="Commands ran", value=f"{total:,} total\n{total_today:,} today"
         )
-        embed.add_field(name="Invite", value=f"[Click here]({self.invite_url})")
-        embed.set_footer(text="Created at")
-        await ctx.send(embed=embed)
+        e.add_field(
+            name="Process", value=f"{memory_usage:.2f} MiB\n{cpu_usage:.2f}% CPU"
+        )
+        e.add_field(name="Invite", value=f"[Click here]({self.invite_url})")
+        e.add_field(
+            name="Guilds",
+            value=f"{len(ctx.bot.guilds):,}",
+        )
+
+        e.add_field(name="Users", value=f"{len(ctx.bot.users):,}")
+        e.add_field(
+            name="Uptime",
+            value=human_timedelta(
+                ctx.bot.uptime, accuracy=None, brief=True, suffix=False
+            ),
+        )
+
+        await ctx.send(embed=e)
 
     @commands.command(name="hello", hidden=True)
     async def hello(self, ctx: Context):
