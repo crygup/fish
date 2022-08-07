@@ -218,9 +218,7 @@ video_regexes = {
         "nsfw": False,
     },
     "twitter": {
-        "regex": re.compile(
-            r"https?://twitter.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19}"
-        ),
+        "regex": re.compile(r"https?://twitter.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19}"),
         "nsfw": True,
     },
     "reddit": {

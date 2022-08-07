@@ -4,6 +4,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 import discord
+from cogs.context import Context
 from discord.ext import commands, menus
 from discord.ext.commands import Paginator as CommandPaginator
 
@@ -63,7 +64,7 @@ class Pager(discord.ui.View):
             if page_number == 0 and (page_number + 1) >= max_pages:
                 self.go_to_number_page.disabled = True
 
-    async def start(self, ctx, e=False):
+    async def start(self, ctx: Context, e=False):
         await self.source._prepare_once()
         page = await self.source.get_page(0)
         kwargs = await self._get_kwargs_from_page(page)

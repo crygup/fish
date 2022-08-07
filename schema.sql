@@ -134,3 +134,14 @@ CREATE TABLE IF NOT EXISTS accounts (
     genshin TEXT,
     PRIMARY KEY (user_id)
 );
+
+
+CREATE TABLE IF NOT EXISTS tags (
+    guild_id BIGINT,
+    author_id BIGINT,
+    name TEXT,
+    content TEXT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    uses BIGINT DEFAULT 0,
+    PRIMARY KEY (guild_id, name)
+);

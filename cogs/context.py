@@ -17,6 +17,7 @@ from typing import (
     TypeVar,
     Union,
 )
+from typing_extensions import reveal_type
 
 import discord
 from aiohttp import ClientSession
@@ -148,6 +149,16 @@ class Context(commands.Context):
 
     def yes_no(self, value: bool) -> str:
         return "Yes" if value else "No"
+
+    @property
+    def replied_reference(self) -> Optional[discord.Message]:
+        reference = self.message.reference
+        if reference is None or isinstance(
+            reference.resolved, discord.DeletedReferencedMessage
+        ):
+            return None
+
+        return reference.resolved
 
     async def prompt(
         self,
@@ -333,10 +344,14 @@ class Context(commands.Context):
                 return m
             except discord.HTTPException:
                 self._previous_message = None
-                self._previous_message = m = await super().send(content, **kwargs)
+                self._previous_message = m = await super().send(
+                    content, reference=reference, **kwargs
+                )
                 return m
 
-        self._previous_message = m = await super().send(content, **kwargs)
+        self._previous_message = m = await super().send(
+            content, reference=reference, **kwargs
+        )
         self._message_count += 1
         return m
 
