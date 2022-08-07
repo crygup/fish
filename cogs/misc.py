@@ -212,19 +212,6 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         self.bot.help_command = MyHelp()
         self.process = psutil.Process()
 
-    async def cog_unload(self):
-        self.bot.help_command = self._og_help
-
-    async def cog_load(self) -> None:
-        self.bot.help_command = MyHelp()
-
-    @commands.command(name="invite", aliases=("join",))
-    async def invite(self, ctx: commands.Context):
-        """Sends an invite link to the bot"""
-        bot = self.bot
-        if bot.user is None:
-            return
-
         perms = discord.Permissions.none()
         perms.read_messages = True
         perms.send_messages = True
@@ -243,8 +230,20 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         perms.manage_nicknames = True
         perms.manage_emojis_and_stickers = True
 
+        self.invite_url = discord.utils.oauth_url(bot.user.id, permissions=perms, scopes=("bot",))  # type: ignore
+
+    async def cog_unload(self):
+        self.bot.help_command = self._og_help
+
+    async def cog_load(self) -> None:
+        self.bot.help_command = MyHelp()
+
+    @commands.command(name="invite", aliases=("join",))
+    async def invite(self, ctx: commands.Context):
+        """Sends an invite link to the bot"""
+
         await ctx.send(
-            f'{discord.utils.oauth_url(bot.user.id, permissions=perms, scopes=("bot",))}'
+            self.invite_url,
         )
 
     @commands.command(name="about")
@@ -255,7 +254,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
             raise TypeError("Bot is not logged in.")
         cr = await self.bot.getch_user(766953372309127168)
         embed = discord.Embed(
-            description="Multi-purpose bot or something like that.",
+            description="cool discord bot",
             timestamp=ctx.bot.user.created_at,
             color=ctx.bot.embedcolor,
         )
@@ -275,6 +274,21 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         embed.add_field(
             name="Process", value=f"{memory_usage:.2f} MiB\n{cpu_usage:.2f}% CPU"
         )
+        embed.add_field(name="Users", value=f"{len(ctx.bot.users):,}")
+        sql = """SELECT * FROM command_logs"""
+        results = await self.bot.pool.fetch(sql)
+
+        total = len(results)
+        start = discord.utils.utcnow().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        total_today = len(
+            [result for result in results if result["created_at"] >= start]
+        )
+        embed.add_field(
+            name="Commands ran", value=f"{total:,} total\n{total_today:,} today"
+        )
+        embed.add_field(name="Invite", value=f"[Click here]({self.invite_url})")
         embed.set_footer(text="Created at")
         await ctx.send(embed=embed)
 
