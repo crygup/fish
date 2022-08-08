@@ -963,7 +963,9 @@ class Discord_(commands.Cog, name="discord"):
 
         await ctx.send(
             embed=embed,
-            view=UserInfoView(ctx, user, embed),
+            view=UserInfoView(ctx, user, embed)
+            if isinstance(user, discord.Member) or user.bot
+            else None,
         )
 
 
