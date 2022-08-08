@@ -963,9 +963,7 @@ class Discord_(commands.Cog, name="discord"):
 
         await ctx.send(
             embed=embed,
-            view=UserInfoView(ctx, user, embed)
-            if isinstance(user, discord.Member) or user.bot
-            else None,
+            view=UserInfoView(ctx, user, embed),
         )
 
 
@@ -1186,10 +1184,19 @@ class UserInfoView(AuthorView):
     ):
         super().__init__(ctx)
         self.ctx = ctx
-        self.add_item(UserInfoDropdown(ctx, user, original_embed))
+        self.user = user
+        if isinstance(user, discord.Member) or user.bot:
+            self.add_item(UserInfoDropdown(ctx, user, original_embed))
+
+        if not isinstance(user, discord.Member):
+            self.nicknames.disabled = True
+
+        self.avyh_check: bool = False
+        self.usernames_check: bool = False
+        self.nicknames_check: bool = False
 
     async def on_error(
-        self, interaction: discord.Interaction, error: Exception, item
+        self, interaction: discord.Interaction, error: Exception, __
     ) -> None:
         if isinstance(error, commands.BadArgument):
             await interaction.response.send_message(content=str(error), ephemeral=True)
@@ -1199,6 +1206,52 @@ class UserInfoView(AuthorView):
             )
 
         self.ctx.bot.logger.error(error)
+
+    @discord.ui.button(label="Avatar History", row=2, style=discord.ButtonStyle.blurple)
+    async def avyh(self, interaction: discord.Interaction, __):
+        command = self.ctx.bot.get_command("avyh")
+        if command is None:
+            return
+
+        if self.avyh_check:
+            await interaction.response.defer()
+            return
+
+        self.avyh_check = True
+        await interaction.response.defer()
+        await command(self.ctx, user=self.user)
+
+    @discord.ui.button(
+        label="Username History", row=2, style=discord.ButtonStyle.blurple
+    )
+    async def usernames(self, interaction: discord.Interaction, __):
+        command = self.ctx.bot.get_command("usernames")
+        if command is None:
+            return
+
+        if self.usernames_check:
+            await interaction.response.defer()
+            return
+
+        self.usernames_check = True
+        await interaction.response.defer()
+        await command(self.ctx, user=self.user)
+
+    @discord.ui.button(
+        label="Nickname History", row=2, style=discord.ButtonStyle.blurple
+    )
+    async def nicknames(self, interaction: discord.Interaction, __):
+        command = self.ctx.bot.get_command("nicknames")
+        if command is None:
+            return
+
+        if self.nicknames_check:
+            await interaction.response.defer()
+            return
+
+        self.nicknames_check = True
+        await interaction.response.defer()
+        await command(self.ctx, user=self.user)
 
 
 class AvatarView(AuthorView):

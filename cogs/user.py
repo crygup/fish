@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import asyncpg
 import discord
-from bot import Bot
+from bot import Bot, Context
 from discord.ext import commands
 from PIL import Image
 from utils import (
@@ -32,7 +32,7 @@ class User(commands.Cog, name="user"):
     @commands.command(name="first_message", aliases=("fmsg", "oldest"))
     async def first_message(
         self,
-        ctx: commands.Context,
+        ctx: Context,
         channel: Optional[discord.TextChannel],
         *,
         member: discord.Member = commands.Author,
@@ -89,7 +89,7 @@ class User(commands.Cog, name="user"):
     @commands.group(name="joins", invoke_without_command=True)
     async def joins(
         self,
-        ctx: commands.Context,
+        ctx: Context,
         guild: Optional[discord.Guild] = None,
         *,
         user: discord.User = commands.Author,
@@ -123,7 +123,7 @@ class User(commands.Cog, name="user"):
         )
 
     @joins.group(name="index", invoke_without_command=True)
-    async def joins_index(self, ctx: commands.Context):
+    async def joins_index(self, ctx: Context):
         """Adds your join date to the database."""
         if ctx.guild is None:
             return
@@ -155,7 +155,7 @@ class User(commands.Cog, name="user"):
         )
 
     @commands.command(name="uptime")
-    async def uptime(self, ctx: commands.Context, *, member: Optional[discord.Member]):
+    async def uptime(self, ctx: Context, *, member: Optional[discord.Member]):
         """Shows how long a user has been online."""
         bot = self.bot
         me = bot.user
@@ -184,9 +184,7 @@ class User(commands.Cog, name="user"):
         )
 
     @commands.command(name="usernames", aliases=("names",))
-    async def usernames(
-        self, ctx: commands.Context, user: discord.User = commands.Author
-    ):
+    async def usernames(self, ctx: Context, user: discord.User = commands.Author):
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC",
@@ -212,9 +210,7 @@ class User(commands.Cog, name="user"):
         await pager.start(ctx)
 
     @commands.command(name="discrims", aliases=("discriminators",))
-    async def discrims(
-        self, ctx: commands.Context, user: discord.User = commands.Author
-    ):
+    async def discrims(self, ctx: Context, user: discord.User = commands.Author):
         """Shows all discriminators a user has had.
 
         This is the numbers after your username."""
@@ -245,7 +241,7 @@ class User(commands.Cog, name="user"):
     @commands.command(name="nicknames", aliases=("nicks",))
     async def nicknames(
         self,
-        ctx: commands.Context,
+        ctx: Context,
         *,
         user: discord.User = commands.Author,
     ):
@@ -307,7 +303,7 @@ class User(commands.Cog, name="user"):
 
     async def do_avatar_command(
         self,
-        ctx: commands.Context,
+        ctx: Context,
         user: discord.User | discord.Member,
         avatars: List[asyncpg.Record],
     ) -> discord.File:
@@ -329,7 +325,7 @@ class User(commands.Cog, name="user"):
         name="avatarhistory", aliases=("avyh",), invoke_without_command=True
     )
     async def avatar_history(
-        self, ctx: commands.Context, *, user: discord.User = commands.Author
+        self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows the avatar history of a user."""
         if ctx.guild is None:
@@ -353,7 +349,7 @@ class User(commands.Cog, name="user"):
 
     @avatar_history.command(name="guild")
     async def avatar_history_guild(
-        self, ctx: commands.Context, *, member: discord.Member = commands.Author
+        self, ctx: Context, *, member: discord.Member = commands.Author
     ):
         """Shows the guild avatar history of a user."""
         if ctx.guild is None:
