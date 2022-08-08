@@ -979,14 +979,15 @@ class UserInfoDropdown(discord.ui.Select):
         self.original_embed = original_embed
 
         # Set the options that will be presented inside the dropdown
-        options = []
-        member_options = [
+        options = [
             discord.SelectOption(
                 label="Index",
                 description=f"Goes back to home page",
                 emoji="\U0001f3e0",
                 value="index",
             ),
+        ]
+        member_options = [
             discord.SelectOption(
                 label="Roles",
                 description=f"{user.name}'s roles",
