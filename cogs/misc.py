@@ -5,21 +5,20 @@ from typing import Dict, List, Optional, Union
 
 import discord
 import psutil
-from bot import Bot
 from bot import Bot, Context
 from discord.ext import commands
 from utils import (
+    FrontHelpPageSource,
     GuildContext,
+    Pager,
     SteamClient,
     SteamConverter,
-    SteamIDConverter,
     Unauthorized,
     human_join,
     human_timedelta,
 )
 
 from cogs.context import Context
-from utils import FrontHelpPageSource, Pager
 
 
 async def setup(bot: Bot):

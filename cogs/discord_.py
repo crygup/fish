@@ -774,73 +774,6 @@ class Discord_(commands.Cog, name="discord"):
 
         await ctx.send(embed=embed)
 
-    @commands.command(
-        name="userinfo",
-        aliases=(
-            "ui",
-            "whois",
-        ),
-    )
-    async def userinfo(
-        self,
-        ctx: Context,
-        *,
-        user: Union[discord.Member, discord.User] = commands.Author,
-    ):
-        """Get information about a user."""
-        if user is None:
-            raise commands.UserNotFound(user)
-        fuser = await ctx.bot.fetch_user(user.id)
-        badges = await get_user_badges(member=user, fetched_user=fuser, ctx=ctx)
-
-        embed = discord.Embed(timestamp=user.created_at, description=user.mention)
-        filler = "\u2800" * 47
-        embed.set_footer(text=f"{filler}\nID: {user.id} \nCreated at")
-
-        embed.add_field(
-            name="Badges", value="\n".join(badges) if badges else "\U0000274c No Badges"
-        )
-
-        images = []
-        images.append(f"[Default Avatar]({user.default_avatar.url})")
-        if user.avatar:
-            images.append(f"[Avatar]({user.avatar.url})")
-
-        if fuser.banner:
-            images.append(f"[Banner]({fuser.banner.url})")
-
-        name = str(user)
-        if isinstance(user, discord.Member):
-            if user.guild_avatar:
-                images.append(f"[Guild Avatar]({user.guild_avatar.url})")
-
-            if user.nick:
-                name += f"  • {user.nick}"
-            if user.joined_at and ctx.guild:
-                order = (
-                    sorted(
-                        ctx.guild.members,
-                        key=lambda member: member.joined_at or discord.utils.utcnow(),
-                    ).index(user)
-                    + 1
-                )
-                embed.add_field(
-                    name=f"Joined",
-                    value=f"Position #{order:,}\n"
-                    f'{discord.utils.format_dt(user.joined_at, "R")}\n'
-                    f'{self.bot.e_reply}{discord.utils.format_dt(user.joined_at, "D")}\n',
-                )
-
-        embed.add_field(name="Images", value="\n".join(images))
-
-        embed.set_author(name=name, icon_url=user.display_avatar.url)
-        await ctx.send(
-            embed=embed,
-            view=UserInfoView(ctx, user, embed)
-            if isinstance(user, discord.Member)
-            else None,
-        )
-
     @commands.group(name="raw")
     @commands.cooldown(1, 30, commands.BucketType.user)
     async def raw(self, ctx: Context):
@@ -963,6 +896,307 @@ class Discord_(commands.Cog, name="discord"):
             view=AvatarView(ctx, user, embed, user.display_avatar),
             check_ref=True,
         )
+
+    @commands.command(
+        name="userinfo",
+        aliases=(
+            "ui",
+            "whois",
+        ),
+    )
+    async def userinfo(
+        self,
+        ctx: Context,
+        *,
+        user: Union[discord.Member, discord.User] = commands.Author,
+    ):
+        """Get information about a user."""
+        if user is None:
+            raise commands.UserNotFound(user)
+        fuser = await ctx.bot.fetch_user(user.id)
+        badges = await get_user_badges(member=user, fetched_user=fuser, ctx=ctx)
+
+        embed = discord.Embed(timestamp=user.created_at)
+        embed.description = user.mention
+
+        filler = "\u2800" * 47
+        embed.set_footer(text=f"{filler}\nID: {user.id} \nCreated at")
+
+        embed.add_field(
+            name="Badges", value="\n".join(badges) if badges else "\U0000274c No Badges"
+        )
+
+        images = []
+        images.append(f"[Default Avatar]({user.default_avatar.url})")
+        if user.avatar:
+            images.append(f"[Avatar]({user.avatar.url})")
+
+        if fuser.banner:
+            images.append(f"[Banner]({fuser.banner.url})")
+
+        name = str(user)
+        if isinstance(user, discord.Member):
+            if user.guild_avatar:
+                images.append(f"[Guild Avatar]({user.guild_avatar.url})")
+
+            if user.nick:
+                name += f"  •  {user.nick}"
+
+            if user.joined_at and ctx.guild:
+                order = (
+                    sorted(
+                        ctx.guild.members,
+                        key=lambda member: member.joined_at or discord.utils.utcnow(),
+                    ).index(user)
+                    + 1
+                )
+                embed.add_field(
+                    name=f"Joined",
+                    value=f"Position #{order:,}\n"
+                    f'{discord.utils.format_dt(user.joined_at, "R")}\n'
+                    f'{self.bot.e_reply}{discord.utils.format_dt(user.joined_at, "D")}\n',
+                )
+
+        embed.add_field(name="Images", value="\n".join(images))
+
+        embed.set_author(name=name, icon_url=user.display_avatar.url)
+
+        await ctx.send(
+            embed=embed,
+            view=UserInfoView(ctx, user, embed),
+        )
+
+
+class UserInfoDropdown(discord.ui.Select):
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.Member, discord.User],
+        original_embed: discord.Embed,
+    ):
+        self.user = user
+        self.ctx: Context = ctx
+        self.original_embed = original_embed
+
+        # Set the options that will be presented inside the dropdown
+        options = []
+        member_options = [
+            discord.SelectOption(
+                label="Index",
+                description=f"Goes back to home page",
+                emoji="\U0001f3e0",
+                value="index",
+            ),
+            discord.SelectOption(
+                label="Roles",
+                description=f"{user.name}'s roles",
+                emoji="\U0001f9fb",
+                value="roles",
+            ),
+            discord.SelectOption(
+                label="Devices",
+                description=f"{user.name}'s current devices",
+                emoji="\U0001f5a5",
+                value="devices",
+            ),
+            discord.SelectOption(
+                label="Permissions",
+                description=f"{user.name}'s permissions",
+                emoji="<:certified_moderator:949147443264622643>",
+                value="perms",
+            ),
+        ]
+        bot_options = [
+            discord.SelectOption(
+                label="Bot Specific",
+                description=f"{user.name}'s bot information",
+                emoji="\U0001f916",
+                value="botinfo",
+            ),
+        ]
+
+        if user.bot:
+            options.extend(bot_options)
+
+        if isinstance(user, discord.Member):
+            options.extend(member_options)
+
+        super().__init__(min_values=1, max_values=1, options=options)
+
+    async def role_callback(
+        self, member: discord.Member, ctx: Context
+    ) -> discord.Embed:
+        roles = sorted(member.roles, key=lambda role: role.position, reverse=True)
+        roles = [
+            role.mention if role.id != ctx.guild.id else "`@everyone`" for role in roles
+        ]
+        embed = discord.Embed(
+            color=ctx.bot.embedcolor,
+            description="\n".join(roles),
+        )
+        embed.set_author(
+            name=f"{member.name}'s roles", icon_url=member.display_avatar.url
+        )
+        embed.set_footer(text="\u2800" * 47)
+        return embed
+
+    async def device_callback(
+        self, member: discord.Member, ctx: Context
+    ) -> discord.Embed:
+        device_types = {
+            "dnd": "Do Not Disturb",
+            "idle": "Idle",
+            "offline": "Offline",
+            "online": "Online",
+        }
+
+        devices = [
+            f"**Desktop**: {device_types[member.desktop_status.value]}",
+            f"**Mobile**: {device_types[member.mobile_status.value]}",
+            f"**Web**: {device_types[member.web_status.value]}",
+        ]
+
+        embed = discord.Embed(
+            color=ctx.bot.embedcolor,
+            description="\n".join(devices),
+        )
+        embed.set_author(
+            name=f"{member.name}'s devices", icon_url=member.display_avatar.url
+        )
+        embed.set_footer(text="\u2800" * 47)
+        return embed
+
+    async def perms_callback(
+        self, member: discord.Member, ctx: Context
+    ) -> discord.Embed:
+        permissions = member.guild_permissions
+
+        allowed = []
+        for name, value in permissions:
+            name = name.replace("_", " ").replace("guild", "server").title()
+            if value:
+                allowed.append(name)
+
+        embed = discord.Embed(
+            color=ctx.bot.embedcolor,
+            description="\n".join(allowed),
+        )
+        embed.set_author(
+            name=f"{member.name}'s permissions", icon_url=member.display_avatar.url
+        )
+
+        embed.set_footer(text="\u2800" * 47)
+        return embed
+
+    async def botinfo_callback(
+        self, user: Union[discord.Member, discord.User], ctx: Context
+    ) -> discord.Embed:
+        url = f"https://discord.com/api/v10/oauth2/applications/{user.id}/rpc"
+        async with self.ctx.bot.session.get(url) as r:
+            if r.status != 200:
+                raise commands.BadArgument(f"Unable to fetch info on {user}")
+
+            results = await r.json()
+
+        embed = discord.Embed(color=ctx.bot.embedcolor)
+        embed.set_author(
+            name=f"{user.name}'s bot information", icon_url=user.display_avatar.url
+        )
+        embed.set_footer(text="\u2800" * 47)
+
+        embed.description = results["description"]
+
+        embed.add_field(
+            name="Bot Info",
+            value=f"Public: {ctx.yes_no(results['bot_public'])}\n"
+            f"Require Code Grant: {ctx.yes_no(results['bot_require_code_grant'])}\n",
+        )
+        if results.get("tags"):
+            embed.add_field(
+                name="Tags",
+                value="\n".join(
+                    f"`{tag}`"
+                    for tag in sorted(
+                        results["tags"], key=lambda x: len(x), reverse=True
+                    )
+                ),
+            )
+
+        admin_perms = discord.Permissions.none()
+        admin_perms.administrator = True
+        invite_perms = [
+            ("Advanced", discord.Permissions.advanced()),
+            ("None", discord.Permissions.none()),
+            ("All", discord.Permissions.all()),
+            ("General", discord.Permissions.general()),
+            ("Administrator", admin_perms),
+        ]
+
+        embed.add_field(
+            name="Invites",
+            value=f"\n".join(
+                f"[`{name}`]({discord.utils.oauth_url(user.id, permissions=perms)})"
+                for name, perms in sorted(
+                    invite_perms, key=lambda x: len(x[0]), reverse=True
+                )
+            ),
+        )
+
+        return embed
+
+    async def callback(self, interaction: discord.Interaction):
+        ctx = self.ctx
+        member = self.user
+
+        if ctx.guild is None:
+            raise commands.GuildNotFound("Unknown guild")
+
+        if self.values[0] == "roles":
+            if not isinstance(member, discord.Member):
+                return
+            embed = await self.role_callback(member, ctx)
+
+        elif self.values[0] == "devices":
+            if not isinstance(member, discord.Member):
+                return
+            embed = await self.device_callback(member, ctx)
+
+        elif self.values[0] == "perms":
+            if not isinstance(member, discord.Member):
+                return
+            embed = await self.perms_callback(member, ctx)
+
+        elif self.values[0] == "botinfo":
+            embed = await self.botinfo_callback(member, ctx)
+
+        else:
+            embed = self.original_embed
+
+        await interaction.response.edit_message(embed=embed)
+
+
+class UserInfoView(AuthorView):
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.Member, discord.User],
+        original_embed: discord.Embed,
+    ):
+        super().__init__(ctx)
+        self.ctx = ctx
+        self.add_item(UserInfoDropdown(ctx, user, original_embed))
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception, item
+    ) -> None:
+        if isinstance(error, commands.BadArgument):
+            await interaction.response.send_message(content=str(error), ephemeral=True)
+        else:
+            await interaction.response.send_message(
+                "Oops! Something went wrong.", ephemeral=True
+            )
+
+        self.ctx.bot.logger.error(error)
 
 
 class AvatarView(AuthorView):
@@ -1203,118 +1437,3 @@ class FormatDropdown(discord.ui.Select):
 
         await interaction.message.edit(embed=self.embed)
         await interaction.response.defer()
-
-
-class UserInfoDropdown(discord.ui.Select):
-    def __init__(
-        self, ctx: Context, member: discord.Member, original_embed: discord.Embed
-    ):
-        self.member = member
-        self.ctx = ctx
-        self.original_embed = original_embed
-
-        # Set the options that will be presented inside the dropdown
-        options = [
-            discord.SelectOption(
-                label="Index",
-                description=f"Goes back to home page",
-                emoji="\U0001f3e0",
-                value="index",
-            ),
-            discord.SelectOption(
-                label="Roles",
-                description=f"{member.name}'s roles",
-                emoji="\U0001f9fb",
-                value="roles",
-            ),
-            discord.SelectOption(
-                label="Devices",
-                description=f"{member.name}'s current devices",
-                emoji="\U0001f5a5",
-                value="devices",
-            ),
-            discord.SelectOption(
-                label="Permissions",
-                description=f"{member.name}'s permissions",
-                emoji="<:certified_moderator:949147443264622643>",
-                value="perms",
-            ),
-        ]
-
-        super().__init__(min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        ctx = self.ctx
-        member = self.member
-        if ctx.guild is None:
-            raise commands.GuildNotFound("Unknown guild")
-        if self.values[0] == "roles":
-            roles = sorted(member.roles, key=lambda role: role.position, reverse=True)
-            roles = [
-                role.mention if role.id != ctx.guild.id else "`@everyone`"
-                for role in roles
-            ]
-            embed = discord.Embed(
-                color=ctx.bot.embedcolor,
-                description="\n".join(roles),
-            )
-            embed.set_author(
-                name=f"{member.name}'s roles", icon_url=member.display_avatar.url
-            )
-            embed.set_footer(text="\u2800" * 47)
-
-        elif self.values[0] == "devices":
-            device_types = {
-                "dnd": "Do Not Disturb",
-                "idle": "Idle",
-                "offline": "Offline",
-                "online": "Online",
-            }
-
-            devices = [
-                f"**Desktop**: {device_types[member.desktop_status.value]}",
-                f"**Mobile**: {device_types[member.mobile_status.value]}",
-                f"**Web**: {device_types[member.web_status.value]}",
-            ]
-
-            embed = discord.Embed(
-                color=ctx.bot.embedcolor,
-                description="\n".join(devices),
-            )
-            embed.set_author(
-                name=f"{member.name}'s devices", icon_url=member.display_avatar.url
-            )
-            embed.set_footer(text="\u2800" * 47)
-
-        elif self.values[0] == "perms":
-            permissions = member.guild_permissions
-
-            allowed = []
-            for name, value in permissions:
-                name = name.replace("_", " ").replace("guild", "server").title()
-                if value:
-                    allowed.append(name)
-
-            embed = discord.Embed(
-                color=ctx.bot.embedcolor,
-                description="\n".join(allowed),
-            )
-            embed.set_author(
-                name=f"{member.name}'s permissions", icon_url=member.display_avatar.url
-            )
-
-            embed.set_footer(text="\u2800" * 47)
-
-        else:
-            embed = self.original_embed
-
-        await interaction.response.edit_message(embed=embed)
-
-
-class UserInfoView(AuthorView):
-    def __init__(
-        self, ctx: Context, member: discord.Member, original_embed: discord.Embed
-    ):
-        super().__init__(ctx)
-        self.ctx = ctx
-        self.add_item(UserInfoDropdown(ctx, member, original_embed))

@@ -139,7 +139,7 @@ class Context(commands.Context):
     def tick(self, opt: Optional[bool], label: Optional[str] = None) -> str:
         lookup = {
             True: "<:cr_check:956022530521563136>",
-            False: "<:cr_warning:956384262016344064>",
+            False: "<:cr_x:956869589822750762>",
             None: "\U00002b1c",
         }
         emoji = lookup.get(opt, "<:cr_warning:956384262016344064>")
