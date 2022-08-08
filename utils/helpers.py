@@ -237,6 +237,10 @@ video_regexes = {
         ),
         "nsfw": False,
     },
+    "youtube_clip": {
+        "regex": re.compile(r"https://youtube.com/clip/[A-Za-z0-9_-]{1,}"),
+        "nsfw": False,
+    },
 }
 
 compiled_videos = re.compile(
@@ -248,6 +252,7 @@ compiled_videos = re.compile(
     (?P<reddit>(https?://(www.)?reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6}))?
     (?P<youtube>(https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})))?
     (?P<youtube_shorts>(https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}))?
+    (?P<youtube_clip>(https://youtube.com/clip/[A-Za-z0-9_-]{1,}))?
     """,
     re.VERBOSE,
 )
