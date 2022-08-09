@@ -147,18 +147,55 @@ class Tools(commands.Cog, name="tools"):
 
         default_name = secrets.token_urlsafe(8)
         default_format = "mp4"
+        skip_check = False
+        audio = False
 
-        video = await get_video(ctx, url)
+        parser = Arguments(add_help=False, allow_abbrev=False)
+        parser.add_argument("-format", type=str, default=default_format)
+        parser.add_argument("-dev", action="store_true")
 
-        if video is None:
-            return await ctx.send("Invalid video url.")
+        if flags is not None:
+            try:
+                args = parser.parse_args(shlex.split(flags))
+            except RuntimeError as e:
+                await ctx.send(str(e))
+                return
+
+            if args.dev:
+                check = await self.bot.is_owner(ctx.author)
+
+                if not check:
+                    raise commands.NotOwner
+
+                skip_check = True
+
+            if args.format is not None:
+                if not re.match(r"(mp4|webm|mp3)", args.format):
+                    await ctx.send("Invalid format.")
+                    return
+
+                if re.match(r"(mp3)", args.format):
+                    audio = True
+                    default_format = args.format
+                else:
+                    default_format = args.format
+
+        if not skip_check:
+            video = await get_video(ctx, url)
+
+            if video is None:
+                return await ctx.send("Invalid video url.")
+        else:
+            video = url
 
         pattern = re.compile(
             r"https://(www|vt|vm|m).tiktok.com/(@)?[a-zA-Z0-9_-]{3,}(/video/[0-9]{1,})?"
         )
 
         ydl_opts = {
-            "format": f"bestvideo+bestaudio[ext={default_format}]/best",
+            "format": f"bestvideo+bestaudio[ext={default_format}]/best"
+            if not audio
+            else f"bestaudio/best",
             "outtmpl": f"files/videos/{default_name}.%(ext)s",
             "quiet": True,
             "max_filesize": ctx.guild.filesize_limit,
@@ -166,6 +203,15 @@ class Tools(commands.Cog, name="tools"):
 
         if pattern.search(video):
             ydl_opts["format_sort"] = ["vcodec:h264"]
+
+        if audio:
+            ydl_opts["postprocessors"] = [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }
+            ]
 
         message = await ctx.reply("Downloading video")
 
