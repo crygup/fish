@@ -227,6 +227,10 @@ video_regexes = {
         ),
         "nsfw": True,
     },
+    "youtube_clip": {
+        "regex": re.compile(r"https://(www.)?youtube.com/clip/[A-Za-z0-9_-]{1,}"),
+        "nsfw": False,
+    },
     "youtube_short": {
         "regex": re.compile(r"https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}"),
         "nsfw": False,
@@ -235,10 +239,6 @@ video_regexes = {
         "regex": re.compile(
             r"https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})"
         ),
-        "nsfw": False,
-    },
-    "youtube_clip": {
-        "regex": re.compile(r"https://youtube.com/clip/[A-Za-z0-9_-]{1,}"),
         "nsfw": False,
     },
 }
@@ -250,9 +250,9 @@ compiled_videos = re.compile(
     (?P<twitch>(https?://clips.twitch.tv/[a-zA-Z0-9_-]*))?
     (?P<twitter>(https?://twitter.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19}))?
     (?P<reddit>(https?://(www.)?reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6}))?
+    (?P<youtube_clip>(https://youtube.com/clip/[A-Za-z0-9_-]{1,}))?
     (?P<youtube>(https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})))?
     (?P<youtube_shorts>(https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}))?
-    (?P<youtube_clip>(https://youtube.com/clip/[A-Za-z0-9_-]{1,}))?
     """,
     re.VERBOSE,
 )
