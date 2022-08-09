@@ -129,7 +129,7 @@ class Tools(commands.Cog, name="tools"):
 
         formatted = guessed_words[:10]
         embed = discord.Embed(color=self.bot.embedcolor)
-        embed.title = f"Possible words found {len(formatted)}/{len(guessed_words):,}"
+        embed.title = f"Possible words found ({len(formatted)}/{len(guessed_words):,})"
         embed.description = human_join(
             [f"**`{word}`**" for word in formatted], final="and"
         )
