@@ -82,3 +82,15 @@ async def setup_prefixes(bot: Bot, pool: asyncpg.Pool):
     prefixes = await pool.fetch("SELECT * FROM guild_prefixes")
     for record in prefixes:
         add_prefix(bot, record["guild_id"], record["prefix"])
+
+
+def setup_words(bot: Bot):
+    with open("files/words/5_letter_jeyy.txt", "r") as f:
+        bot.jeyy_words = f.read().splitlines()
+        f.close()
+
+    with open("files/words/5_letters.txt", "r") as f:
+        bot.words = f.read().splitlines()
+        f.close()
+
+    return

@@ -135,7 +135,6 @@ CREATE TABLE IF NOT EXISTS accounts (
     PRIMARY KEY (user_id)
 );
 
-
 CREATE TABLE IF NOT EXISTS tags (
     guild_id BIGINT,
     author_id BIGINT,

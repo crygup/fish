@@ -22,6 +22,7 @@ from utils import (
     setup_prefixes,
     setup_webhooks,
     setup_accounts,
+    setup_words,
 )
 
 if TYPE_CHECKING:
@@ -59,6 +60,9 @@ class Bot(commands.Bot):
     pool: asyncpg.Pool
     redis: aioredis.Redis
     exts: Set[str]
+
+    jeyy_words: List[str]
+    words: List[str]
 
     async def no_dms(self, ctx: Context):
         return ctx.guild is not None
@@ -196,6 +200,9 @@ class Bot(commands.Bot):
 
         await setup_accounts(self.pool, self.redis)
         print("Setup accounts")
+
+        setup_words(self)
+        print("Setup words")
 
         self.exts = set(initial_extensions + cogs)
 
