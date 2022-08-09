@@ -353,10 +353,7 @@ class User(commands.Cog, name="user"):
         embed.set_author(
             name=f"{user}'s avatar history", icon_url=user.display_avatar.url
         )
-        embed.description = f"""
-        `Fetching  :` {round(fetch_end - fetch_start, 2)}s
-        `Generating:` {round(gen_end - gen_start, 2)}s
-        """
+        embed.description = f"`Fetching  :` {round(fetch_end - fetch_start, 2)}s\n`Generating:` {round(gen_end - gen_start, 2)}s"
         embed.set_image(url=f"attachment://{user.id}_avatar_history.png")
 
         await ctx.send(embed=embed, file=file)
@@ -388,10 +385,7 @@ class User(commands.Cog, name="user"):
             name=f"{member}'s avatar history in {ctx.guild}",
             icon_url=member.display_avatar.url,
         )
-        embed.description = f"""
-        `Fetching  :` {round(fetch_end - fetch_start, 2)}s
-        `Generating:` {round(gen_end - gen_start, 2)}s
-        """
+        embed.description = f"`Fetching  :` {round(fetch_end - fetch_start, 2)}s\n`Generating:` {round(gen_end - gen_start, 2)}s"
         embed.set_image(url=f"attachment://{member.id}_avatar_history.png")
 
         await ctx.send(content=f"Viewing guild avatar log for {member}", file=file)
