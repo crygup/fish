@@ -25,7 +25,7 @@ class LastFm(commands.Cog, name="lastfm"):
     def __init__(self, bot: Bot):
         self.bot = bot
 
-    @commands.group(name="lastfm", aliases=("fm",))
+    @commands.group(name="lastfm", aliases=("fm",), invoke_without_command=True)
     async def last_fm(self, ctx: Context, username: LastfmConverter = commands.Author):
         """Displays your last scrobble from last.fm"""
         name = (
