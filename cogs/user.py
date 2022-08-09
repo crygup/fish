@@ -1,6 +1,7 @@
 import datetime
 import math
 from io import BytesIO
+import time
 from typing import List, Optional
 
 import asyncpg
@@ -15,6 +16,7 @@ from utils import (
     human_timedelta,
     resize_to_limit,
     to_thread,
+    Timer,
 )
 
 
@@ -331,45 +333,65 @@ class User(commands.Cog, name="user"):
         if ctx.guild is None:
             return
 
-        check = await self.bot.pool.fetchrow(
-            "SELECT avatar FROM avatar_logs WHERE user_id = $1", user.id
-        )
-
-        if check is None:
-            raise TypeError(f"{str(user)} has no avatar history on record.")
-
         async with ctx.typing():
+            fetch_start = time.perf_counter()
             avatars: List[asyncpg.Record] = await self.bot.pool.fetch(
-                "SELECT avatar FROM avatar_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100",
+                "SELECT * FROM avatar_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100",
                 user.id,
             )
-            file = await self.do_avatar_command(ctx, user, avatars)
+            fetch_end = time.perf_counter()
 
-        await ctx.send(content=f"Viewing avatar log for {str(user)}", file=file)
+            if avatars == []:
+                raise TypeError(f"{str(user)} has no avatar history on record.")
+
+            gen_start = time.perf_counter()
+            file = await self.do_avatar_command(ctx, user, avatars)
+            gen_end = time.perf_counter()
+
+        embed = discord.Embed(timestamp=avatars[-1]["created_at"])
+        embed.set_footer(text="First avatar saved")
+        embed.set_author(
+            name=f"{user}'s avatar history", icon_url=user.display_avatar.url
+        )
+        embed.description = f"""
+        `Fetching  :` {round(fetch_end - fetch_start, 2)}s
+        `Generating:` {round(gen_end - gen_start, 2)}s
+        """
+        embed.set_image(url=f"attachment://{user.id}_avatar_history.png")
+
+        await ctx.send(embed=embed, file=file)
 
     @avatar_history.command(name="guild")
     async def avatar_history_guild(
         self, ctx: Context, *, member: discord.Member = commands.Author
     ):
         """Shows the guild avatar history of a user."""
-        if ctx.guild is None:
-            return
-
-        check = await self.bot.pool.fetchrow(
-            "SELECT avatar FROM guild_avatar_logs WHERE user_id = $1 AND guild_id = $2",
-            member.id,
-            ctx.guild.id,
-        )
-
-        if check is None:
-            raise TypeError(f"{str(member)} has no avatar guild history on record.")
-
         async with ctx.typing():
+            fetch_start = time.perf_counter()
             avatars: List[asyncpg.Record] = await self.bot.pool.fetch(
                 "SELECT avatar FROM guild_avatar_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC LIMIT 100",
                 member.id,
                 ctx.guild.id,
             )
+            fetch_end = time.perf_counter()
+
+            if avatars == []:
+                raise TypeError(f"{str(member)} has no avatar history on record.")
+
+            gen_start = time.perf_counter()
             file = await self.do_avatar_command(ctx, member, avatars)
+            gen_end = time.perf_counter()
+
+        embed = discord.Embed(timestamp=avatars[-1]["created_at"])
+        embed.set_footer(text="First avatar saved")
+        embed.set_author(
+            name=f"{member}'s avatar history in {ctx.guild}",
+            icon_url=member.display_avatar.url,
+        )
+        embed.description = f"""
+        `Fetching  :` {round(fetch_end - fetch_start, 2)}s
+        `Generating:` {round(gen_end - gen_start, 2)}s
+        """
+        embed.set_image(url=f"attachment://{member.id}_avatar_history.png")
 
         await ctx.send(content=f"Viewing guild avatar log for {member}", file=file)
