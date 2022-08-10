@@ -69,6 +69,17 @@ class RobloxAccountConverter(commands.Converter):
         )
 
 
+class RobloxAssetConverter(commands.Converter):
+    async def convert(self, ctx: Context, argument: str) -> int:
+        pattern = re.compile(r"(https://www.roblox.com/catalog/)?(?P<id>[0-9]{5,})")
+        results = pattern.search(argument)
+
+        if results is None:
+            raise commands.BadArgument(f"`{argument}` is not a valid asset ID")
+
+        return int(results.group("id"))
+
+
 class ImageConverter(commands.Converter):
     """
     Converts to a BytesIO image

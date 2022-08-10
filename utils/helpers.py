@@ -21,6 +21,7 @@ from typing import (
     Union,
 )
 
+import bs4
 import discord
 from aiohttp import ClientResponse
 from cogs.context import Context
@@ -46,6 +47,40 @@ lastfm_period = {
 }
 
 emoji_regex = r"<(?P<animated>a)?:(?P<name>[a-zA-Z0-9\_]{1,}):(?P<id>[0-9]{1,})>"
+
+
+def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    return wrapper
+
+
+@to_thread
+def RobloxScrapper(text):
+    soup = bs4.BeautifulSoup(text, "html.parser")
+    content = soup.find_all("url")
+    content = (
+        str(content)
+        .replace("[<url>http://www.roblox.com/asset/?id=", "")
+        .replace("</url>]", "")
+    )
+    return content
+
+
+async def template(bot: Bot, assetID: int, ctx: Context):
+    async with bot.session.get(
+        f"https://assetdelivery.roblox.com/v1/asset?id={assetID}"
+    ) as r:
+        if r.status == 200:
+            text = await r.text()
+            content = await RobloxScrapper(text)
+            img = await ctx.to_image(
+                url=f"https://assetdelivery.roblox.com/v1/asset?id={content}"
+            )
+            return img
+        else:
+            raise TypeError(f"Sorry, I couldn't find that asset.`")
 
 
 class AuthorView(discord.ui.View):
@@ -349,13 +384,6 @@ class plural:
         if abs(v) != 1:
             return f"{v} {plural}"
         return f"{v} {singular}"
-
-
-def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
-    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-        return await asyncio.to_thread(func, *args, **kwargs)
-
-    return wrapper
 
 
 class Timer:

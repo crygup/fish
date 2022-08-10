@@ -1,9 +1,17 @@
 import textwrap
+
 import discord
 from bot import Bot, Context
 from dateutil import parser
 from discord.ext import commands
-from utils import FieldPageSource, Pager, RobloxAccountConverter, to_thread
+from utils import (
+    FieldPageSource,
+    Pager,
+    RobloxAccountConverter,
+    template,
+    to_thread,
+    RobloxAssetConverter,
+)
 from utils.roblox import *  # smd
 
 
@@ -128,3 +136,21 @@ class Roblox(commands.Cog, name="roblox"):
         p.embed.title = f"{name}'s friends"
         menu = Pager(p, ctx=ctx)
         await menu.start(ctx)
+
+    @commands.command(name="asset", aliases=("template",))
+    async def asset(
+        self,
+        ctx: Context,
+        assetID: int = commands.parameter(
+            converter=RobloxAssetConverter, displayed_default="[roblox asset url/id]"
+        ),
+    ):
+        """Gets the template from a given asset url or id"""
+        asset = await template(bot=self.bot, ctx=ctx, assetID=assetID)
+        embed = discord.Embed()
+        embed.set_image(url=f"attachment://asset.png")
+        await ctx.send(
+            ctx.author.mention,
+            embed=embed,
+            file=discord.File(fp=asset, filename=f"asset.png"),
+        )

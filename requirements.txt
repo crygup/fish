@@ -17,3 +17,4 @@ steam
 ossapi
 Pillow
 Wand
+beautifulsoup4
