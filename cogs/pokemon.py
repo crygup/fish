@@ -6,7 +6,7 @@ import discord
 import pandas as pd
 from bot import Bot
 from discord.ext import commands
-from utils import SimplePages, GuildContext, setup_pokemon
+from utils import SimplePages, Context, setup_pokemon
 
 
 async def setup(bot: Bot):
@@ -77,11 +77,12 @@ class Pokemon(commands.Cog, name="pokemon"):
         joined = "\n".join(found)
         await message.channel.send(joined)
 
-    @commands.command(name="wtp", aliases=("hint",))
-    async def wtp(self, ctx: GuildContext):
+    @commands.command(name="hint")
+    async def hint(self, ctx: Context):
         """Auto solve a pokétwo hint message."""
         if ctx.message.reference is None:
             await ctx.send("Please reply to a message contain a pokétwo hint.")
+            return
 
         to_search = re.match(
             r'the pokémon is (?P<pokemon>[^"]+).', ctx.message.reference.resolved.content.lower()  # type: ignore
@@ -103,12 +104,12 @@ class Pokemon(commands.Cog, name="pokemon"):
 
     @commands.command(name="update_pokemon")
     @commands.is_owner()
-    async def update_pokemon(self, ctx: GuildContext):
+    async def update_pokemon(self, ctx: Context):
         await setup_pokemon(self.bot)
 
         await ctx.send("updated olk")
 
-    async def poke_pages(self, ctx: GuildContext, name, title):
+    async def poke_pages(self, ctx: Context, name, title):
         data = [p.title() for p in self.bot.pokemon if p.startswith(name)]
         pages = SimplePages(entries=data, per_page=10, ctx=ctx)
         pages.embed.title = title
@@ -116,7 +117,7 @@ class Pokemon(commands.Cog, name="pokemon"):
 
     @commands.command(name="auto_solve", aliases=("as",))
     @commands.has_permissions(manage_guild=True)
-    async def auto_solve(self, ctx: GuildContext):
+    async def auto_solve(self, ctx: Context):
         """Toggles automatic solving of pokétwo's pokémon hints"""
 
         try:
@@ -137,41 +138,41 @@ class Pokemon(commands.Cog, name="pokemon"):
         await ctx.send("Enabled auto solving for this server.")
 
     @commands.command(name="megas")
-    async def megas(self, ctx: GuildContext):
+    async def megas(self, ctx: Context):
         """Pokémon with a mega evolution"""
         await self.poke_pages(ctx, "mega ", "Pokémon with a mega evolution")
 
     @commands.command(name="gigantamax", aliases=("gigas",))
-    async def gigantamax(self, ctx: GuildContext):
+    async def gigantamax(self, ctx: Context):
         """Pokémon with a gigantamax evolution"""
         await self.poke_pages(ctx, "gigantamax ", "Pokémon with a gigantamax evolution")
 
     @commands.command(name="festive")
-    async def festive(self, ctx: GuildContext):
+    async def festive(self, ctx: Context):
         """Pokémon with a festive alternative"""
         await self.poke_pages(ctx, "festive ", "Pokémon with a festive alternative")
 
     @commands.command(name="shadow")
-    async def shadow(self, ctx: GuildContext):
+    async def shadow(self, ctx: Context):
         """Pokémon with a shadow alternative"""
         await self.poke_pages(ctx, "shadow ", "Pokémon with a shadow alternative")
 
     @commands.command(name="hisuian")
-    async def hisuian(self, ctx: GuildContext):
+    async def hisuian(self, ctx: Context):
         """Pokémon with a hisuian region alternative"""
         await self.poke_pages(
             ctx, "hisuian ", "Pokémon with a hisuian region alternative"
         )
 
     @commands.command(name="galarian")
-    async def galarian(self, ctx: GuildContext):
+    async def galarian(self, ctx: Context):
         """Pokémon with a galarian region alternative"""
         await self.poke_pages(
             ctx, "galarian ", "Pokémon with a galarian region alternative"
         )
 
     @commands.command(name="alolan")
-    async def alolan(self, ctx: GuildContext):
+    async def alolan(self, ctx: Context):
         """Pokémon with an alolan region alternative"""
         await self.poke_pages(
             ctx, "alolan ", "Pokémon with a alolan region alternative"
