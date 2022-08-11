@@ -281,10 +281,9 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
                 await ctx.send(fmt)
 
     @commands.command(name="evaluate", aliases=["eval", "e"])
-    async def _evaluate(self, ctx: commands.Context, *, content: str):
-        content = content.replace("self.bot", "bot").replace(
-            "ref", "message.reference.resolved"
-        )
+    async def evaluate_command(self, ctx: commands.Context, *, content: str):
+        content = re.sub(r"ref", "message.reference.resolved", content)
+        content = re.sub(r"self.bot", "bot", content)
 
         command = self.bot.get_command("jsk py")
 
