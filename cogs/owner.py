@@ -33,7 +33,7 @@ async def setup(bot: Bot):
 
 
 class EvaluatedArg(commands.Converter):
-    async def convert(self, ctx: commands.Context, argument: str) -> str:
+    async def convert(self, ctx: Context, argument: str) -> str:
         return eval(cleanup_code(argument), {"bot": ctx.bot, "ctx": ctx})
 
 
@@ -54,7 +54,7 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
     def __init__(self, bot: Bot):
         self.bot = bot
 
-    async def cog_check(self, ctx: commands.Context[Bot]) -> bool:
+    async def cog_check(self, ctx: Context) -> bool:
         check = await self.bot.is_owner(ctx.author)
 
         if not check:
@@ -161,7 +161,7 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
     @commands.is_owner()
     async def snipe(
         self,
-        ctx: commands.Context,
+        ctx: Context,
         index: Optional[int],
         channel: Optional[discord.TextChannel] = commands.CurrentChannel,
         *,
@@ -281,7 +281,7 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
                 await ctx.send(fmt)
 
     @commands.command(name="evaluate", aliases=["eval", "e"])
-    async def evaluate_command(self, ctx: commands.Context, *, content: str):
+    async def evaluate_command(self, ctx: Context, *, content: str):
         content = re.sub(r"ref", "message.reference.resolved", content)
         content = re.sub(r"self.bot", "bot", content)
 
@@ -294,7 +294,7 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
         await command(ctx, argument=codeblock_converter(content))
 
     @commands.command(name="venv")
-    async def _venv_shell(self, ctx: commands.Context, *, content: str):
+    async def _venv_shell(self, ctx: Context, *, content: str):
         content = "venv/bin/python3.10 -m " + content
 
         command = self.bot.get_command("jsk sh")
@@ -304,6 +304,16 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
             return
 
         await command(ctx, argument=codeblock_converter(content))
+
+    @commands.command(name="update")
+    async def update(self, ctx: Context):
+        command = self.bot.get_command("jsk git pull")
+
+        if command is None:
+            await ctx.send("Command not found")
+            return
+
+        await command(ctx)
 
     @commands.command(name="blacklist")
     async def _blacklist(
