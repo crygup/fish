@@ -1,4 +1,6 @@
 import datetime
+import re
+import textwrap
 from typing import List, Tuple
 
 import discord
@@ -135,6 +137,34 @@ class GuildEvents(commands.Cog, name="guild_events"):
         )
 
         await self.guild_method(embed, guild)
+
+        pattern = re.compile(r"(general|chat)")
+        channel = discord.utils.find(
+            lambda c: pattern.search(c.name)
+            and c.permissions_for(guild.me).send_messages,
+            guild.text_channels,
+        )
+
+        try:
+            channel = (
+                channel
+                or [
+                    c
+                    for c in guild.text_channels
+                    if c.permissions_for(guild.me).send_messages
+                ][0]
+            )
+        except IndexError:
+            return
+
+        message = """
+        Hello, thanks for adding me. (feel free to delete this message if it bothers you!)
+
+        To enable Pokétwo auto-solving run the command `fish auto_solve`
+
+        See more commands with `fish help`
+        """
+        await channel.send(textwrap.dedent(message))
 
     @commands.Cog.listener("on_guild_remove")
     async def on_guild_remove(self, guild: discord.Guild):
