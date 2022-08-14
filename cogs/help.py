@@ -49,12 +49,15 @@ def make_command_embed(command: commands.Command | commands.Group) -> discord.Em
         )
 
     if isinstance(command, commands.Group) and command.commands:
+        formatted_subcmds = "\n".join(
+            [
+                f"fish {subcmd.full_parent_name} {subcmd.name} {subcmd.signature}"
+                for subcmd in command.commands
+            ]
+        )
         embed.add_field(
             name="Subcommands",
-            value=human_join(
-                [f"**`{subcommand}`**" for subcommand in command.commands],
-                final="and",
-            ),
+            value=f"```{formatted_subcmds}```",
             inline=False,
         )
 
@@ -353,38 +356,7 @@ class MyHelp(commands.HelpCommand):
         if bot.user is None:
             return
 
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{group.qualified_name.capitalize()} help",
-            icon_url=bot.user.display_avatar.url,
-        )
-
-        embed.description = f"```{group.help}```" if group.help else "No help yet..."
-
-        if group.commands:
-            embed.add_field(
-                name="Commands",
-                value=human_join(
-                    [f"**`{command.name}`**" for command in group.commands], final="and"
-                ),
-                inline=False,
-            )
-
-        if group.aliases:
-            embed.add_field(
-                name="Aliases",
-                value=human_join(
-                    [f"**`{alias}`**" for alias in group.aliases], final="and"
-                ),
-                inline=False,
-            )
-
-        if group.cooldown:
-            cd = group.cooldown
-            embed.add_field(
-                name="Cooldown",
-                value=f"{cd.rate:,} command every {round(cd.per)} seconds",
-            )
+        embed = make_command_embed(group)
 
         await ctx.send(embed=embed, view=CommandView(ctx, group.cog))
 
