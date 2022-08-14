@@ -307,13 +307,13 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
 
     @commands.command(name="update")
     async def update(self, ctx: Context):
-        command = self.bot.get_command("jsk git pull")
+        command = self.bot.get_command("jsk git")
 
         if command is None:
             await ctx.send("Command not found")
             return
 
-        await command(ctx)
+        await command(ctx, argument="pull")
 
     @commands.command(name="blacklist")
     async def _blacklist(
