@@ -36,7 +36,9 @@ class CommandDropdown(discord.ui.Select):
                 discord.SelectOption(
                     label=cmd.name.title(),
                     value=cmd.name.lower().replace(" ", "_"),
-                    description=f'{cmd.description.capitalize()}{"." if not cog.description.endswith(".") else ""}'
+                    description=f'{cmd.help.splitlines()[0].capitalize()}{"." if not cmd.help.splitlines()[0].endswith(".") else ""}'
+                    if cmd.help
+                    else None
                     if cmd.description != ""
                     else None,
                     emoji="\U0001f536"
