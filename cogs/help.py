@@ -112,11 +112,12 @@ class CommandDropdown(discord.ui.Select):
             return
 
         embed = await self.make_embed(embed, cmd)
+        self.placeholder = cmd.name.title()
 
         if interaction.message is None:
             return
 
-        await interaction.message.edit(embed=embed)
+        await interaction.message.edit(embed=embed, view=self.view)
         await interaction.response.defer()
 
 
@@ -204,6 +205,7 @@ class HelpDropdown(discord.ui.Select):
             embed = self.defaut_embed
             self.view.remove_item(self.view.children[-1])
             self.view_added = False
+            self.placeholder = "Select a category"
         else:
             if self.view_added:
                 self.view.remove_item(self.view.children[-1])
@@ -219,6 +221,7 @@ class HelpDropdown(discord.ui.Select):
             embed = await self.make_embed(embed, cog)
             self.view.add_item(CommandDropdown(ctx, cog))
             self.view_added = True
+            self.placeholder = cog.qualified_name.title()
 
         if interaction.message is None:
             return
