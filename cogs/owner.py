@@ -313,7 +313,7 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
             await ctx.send("Command not found")
             return
 
-        await command(ctx, argument="pull")
+        await command(ctx, argument=codeblock_converter("pull"))
 
     @commands.command(name="blacklist")
     async def _blacklist(
