@@ -353,38 +353,36 @@ class Discord_(commands.Cog, name="discord"):
         menu = Pager(p, ctx=ctx)
         await menu.start(ctx)
 
-    @commands.command(name="search")
+    @commands.command(
+        name="search",
+        extras={"examples": ["cr search -name liz -discrim 0333 -length 3 -nick"]},
+    )
     async def search(self, ctx: Context, *, args: Optional[str] = None):
         """Search for a member with certain flags.
 
         Flags:
-        `-starts`: Name starts with x
-        `-ends`: Name ends with x
-        `-contains`: Names contains x
-        `-length`: Length of name
-        `-name`: Name matches x
-        `-discrim`: Discriminator matches x
-        `-role`: Has role
+        -starts: Name starts with x
+        -ends: Name ends with x
+        -contains: Names contains x
+        -length: Length of name
+        -name: Name matches x
+        -discrim: Discriminator matches x
+        -role: Has role
 
         Flags (no arguments):
-        `-nick`: Nicknames only
-        `-no_avatar`: No avatar
-        `-spotify`: Listening to spotify
-        `-online`: Online status
-        `-dnd`: Do not disturb status
-        `-idle`: Idle status
-        `-offline`: Offline status
-        `-streaming`: Streaming status
-        `-mobile`: Mobile status
-        `-desktop`: Desktop status
-        `-web`: Web status
-        `-bots`: Bots
-        `-voice`: Current in a voice channel
-
-        Example:
-        ```
-        cr search -name liz -discrim 0333 -length 3 -nick
-        ```
+        -nick: Nicknames only
+        -no_avatar: No avatar
+        -spotify: Listening to spotify
+        -online: Online status
+        -dnd: Do not disturb status
+        -idle: Idle status
+        -offline: Offline status
+        -streaming: Streaming status
+        -mobile: Mobile status
+        -desktop: Desktop status
+        -web: Web status
+        -bots: Bots
+        -voice: Current in a voice channel
         """
 
         if args is None:
