@@ -26,6 +26,99 @@ class CogView(AuthorView):
         self.add_item(HelpDropdown(ctx, cogs, main_help=False))
 
 
+def make_command_embed(command: commands.Command | commands.Group) -> discord.Embed:
+    embed = discord.Embed(color=0xFAA0C1)
+    embed.set_author(
+        name=f"{command.name.capitalize()} help",
+        icon_url=command.cog.bot.user.display_avatar.url,
+    )
+
+    embed.add_field(
+        name="Description",
+        value=command.help if command.help else "No help yet...",
+        inline=False,
+    )
+
+    if command.aliases:
+        embed.add_field(
+            name="Aliases",
+            value=human_join(
+                [f"**`{alias}`**" for alias in command.aliases], final="and"
+            ),
+            inline=False,
+        )
+
+    if isinstance(command, commands.Group) and command.commands:
+        embed.add_field(
+            name="Subcommands",
+            value=human_join(
+                [f"**`{subcommand}`**" for subcommand in command.commands],
+                final="and",
+            ),
+            inline=False,
+        )
+
+    if command.cooldown:
+        cd = command.cooldown
+        embed.add_field(
+            name="Cooldown",
+            value=f"{cd.rate:,} command every {round(cd.per)} seconds",
+            inline=False,
+        )
+
+    try:
+        examples = command.extras["examples"]
+        embed.add_field(
+            name="Examples",
+            value="\n".join(examples),
+            inline=False,
+        )
+    except KeyError:
+        pass
+
+    return embed
+
+
+def make_cog_embed(bot: Bot, cog: commands.Cog) -> discord.Embed:
+    if bot.user is None:
+        raise RuntimeError("Bot is not logged in")
+
+    embed = discord.Embed(color=0xFAA0C1)
+    embed.set_author(
+        name=f"{cog.qualified_name.capitalize()} help",
+        icon_url=bot.user.display_avatar.url,
+    )
+
+    embed.add_field(
+        name="Description",
+        value=cog.description if cog.description else "No description yet...",
+        inline=False,
+    )
+
+    cmds = cog.get_commands()
+
+    if cmds == []:
+        return embed
+
+    embed.add_field(
+        name="Commands",
+        value=human_join(
+            [f"**`{command.name}`**" for command in cmds],
+            final="and",
+        ),
+        inline=False,
+    )
+
+    if hasattr(cog, "aliases"):
+        embed.add_field(
+            name="Aliases",
+            value=human_join([f"**`{alias}`**" for alias in cog.aliases], final="and"),  # type: ignore
+            inline=False,
+        )
+
+    return embed
+
+
 class CommandDropdown(discord.ui.Select):
     def __init__(self, ctx: Context, cog: commands.Cog):
         self.ctx = ctx
@@ -51,55 +144,10 @@ class CommandDropdown(discord.ui.Select):
 
         super().__init__(placeholder="Select a command", options=options)
 
-    async def make_embed(
-        self, embed: discord.Embed, command: commands.Command | commands.Group
-    ) -> discord.Embed:
-        ctx = self.ctx
-        bot = ctx.bot
-
-        if bot.user is None:
-            raise RuntimeError("Bot user is None")
-
-        embed.set_author(
-            name=f"{command.qualified_name.capitalize()} help",
-            icon_url=bot.user.display_avatar.url,
-        )
-
-        embed.description = (
-            f"```{command.help}```" if command.help else "No help yet..."
-        )
-
-        if command.aliases:
-            embed.add_field(
-                name="Aliases",
-                value=human_join(
-                    [f"**`{alias}`**" for alias in command.aliases], final="and"
-                ),
-                inline=False,
-            )
-
-        if isinstance(command, commands.Group) and command.commands:
-            embed.add_field(
-                name="Subcommands",
-                value=human_join(
-                    [f"**`{subcmd}`**" for subcmd in command.commands], final="and"
-                ),
-                inline=False,
-            )
-
-        if command.cooldown:
-            cd = command.cooldown
-            embed.add_field(
-                name="Cooldown",
-                value=f"{cd.rate:,} command every {round(cd.per)} seconds",
-            )
-
-        return embed
-
     async def callback(self, interaction: discord.Interaction):
         ctx = self.ctx
         bot = ctx.bot
-        embed = discord.Embed(color=bot.embedcolor)
+
         if bot.user is None:
             return
 
@@ -111,7 +159,7 @@ class CommandDropdown(discord.ui.Select):
             )
             return
 
-        embed = await self.make_embed(embed, cmd)
+        embed = make_command_embed(cmd)
         self.placeholder = cmd.name.title()
 
         if interaction.message is None:
@@ -164,40 +212,9 @@ class HelpDropdown(discord.ui.Select):
 
         super().__init__(placeholder="Select a category", options=options)
 
-    async def make_embed(
-        self, embed: discord.Embed, cog: commands.Cog
-    ) -> discord.Embed:
-        ctx = self.ctx
-        bot = ctx.bot
-
-        if bot.user is None:
-            raise RuntimeError("Bot user is None")
-
-        embed.set_author(
-            name=f"{cog.qualified_name.title()} Help",
-            icon_url=bot.user.display_avatar.url,
-        )
-        embed.description = cog.description
-        embed.color = bot.embedcolor
-
-        cmds = cog.get_commands()
-
-        if len(cmds) == 0:
-            embed.description += "\n\nNo commands found."
-            return embed
-
-        embed.add_field(
-            name="Commands",
-            value=human_join([f"`{c.name}`" for c in cmds], final="and"),
-            inline=False,
-        )
-
-        return embed
-
     async def callback(self, interaction: discord.Interaction):
         ctx = self.ctx
         bot = ctx.bot
-        embed = discord.Embed(color=bot.embedcolor)
         if bot.user is None:
             return
 
@@ -218,7 +235,7 @@ class HelpDropdown(discord.ui.Select):
                 )
                 return
 
-            embed = await self.make_embed(embed, cog)
+            embed = make_cog_embed(bot, cog)
             self.view.add_item(CommandDropdown(ctx, cog))
             self.view_added = True
             self.placeholder = cog.qualified_name.title()
@@ -297,8 +314,10 @@ class MyHelp(commands.HelpCommand):
             icon_url=bot.user.display_avatar.url,
         )
 
-        embed.description = (
-            f"```{command.help}```" if command.help else "No help yet..."
+        embed.add_field(
+            name="Description",
+            value=command.help if command.help else "No help yet...",
+            inline=False,
         )
 
         if command.aliases:
@@ -307,7 +326,6 @@ class MyHelp(commands.HelpCommand):
                 value=human_join(
                     [f"**`{alias}`**" for alias in command.aliases], final="and"
                 ),
-                inline=False,
             )
 
         if command.cooldown:
@@ -316,6 +334,15 @@ class MyHelp(commands.HelpCommand):
                 name="Cooldown",
                 value=f"{cd.rate:,} command every {round(cd.per)} seconds",
             )
+
+        try:
+            examples = command.extras["examples"]
+            embed.add_field(
+                name="Examples",
+                value="\n".join(examples),
+            )
+        except KeyError:
+            pass
 
         await ctx.send(embed=embed, view=CommandView(ctx, command.cog))
 
@@ -368,28 +395,7 @@ class MyHelp(commands.HelpCommand):
         if bot.user is None:
             return
 
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{cog.qualified_name.capitalize()} help",
-            icon_url=bot.user.display_avatar.url,
-        )
-
-        embed.description = f"```{cog.description}```" or "No help yet..."
-
-        commands = await self.filter_commands(cog.get_commands())
-
-        if commands:
-            embed.add_field(
-                name="Commands",
-                value=human_join(
-                    [f"**`{command.name}`**" for command in cog.get_commands()],
-                    final="and",
-                ),
-                inline=False,
-            )
-
-        if hasattr(cog, "aliases"):
-            embed.add_field(name="Aliases", value=human_join([f"**`{alias}`**" for alias in cog.aliases], final="and"), inline=False)  # type: ignore
+        embed = make_cog_embed(bot, cog)
 
         filtered_cogs = [
             cog
