@@ -75,6 +75,10 @@ class Tools(commands.Cog, name="tools"):
     async def cog_load(self) -> None:
         self.delete_videos.start()
 
+    @property
+    def display_emoji(self) -> discord.PartialEmoji:
+        return discord.PartialEmoji(name="\U0001f528")
+
     @commands.command(name="wordle", aliases=("word",))
     async def wordle(self, ctx: Context, *, flags: str):
         """This uses flags to solve a wordle problem.
@@ -555,6 +559,7 @@ class Tools(commands.Cog, name="tools"):
 
     @commands.group(name="tag", invoke_without_command=True)
     async def tag(self, ctx: Context, *, name: Annotated[str, TagName(lower=True)]):
+        """Allows you to tag text for later retrieval."""
         sql = """
         SELECT content FROM tags WHERE guild_id = $1 AND LOWER(name)=$2
         """

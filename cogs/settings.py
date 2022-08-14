@@ -24,6 +24,10 @@ class Settings(commands.Cog, name="settings"):
     def __init__(self, bot: Bot):
         self.bot = bot
 
+    @property
+    def display_emoji(self) -> discord.PartialEmoji:
+        return discord.PartialEmoji(name="\U00002699\U0000fe0f")
+
     async def unlink_method(self, ctx: Context, user_id: int, option: str):
         await ctx.bot.pool.execute(
             f"UPDATE accounts SET {option} = NULL WHERE user_id = $1", user_id

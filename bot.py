@@ -28,7 +28,13 @@ from utils import (
 if TYPE_CHECKING:
     from utils import Context
 
-initial_extensions = ["jishaku", "cogs.owner", "cogs.context", "cogs.events.errors"]
+initial_extensions = [
+    "jishaku",
+    "cogs.owner",
+    "cogs.context",
+    "cogs.events.errors",
+    "cogs.help",
+]
 cogs_path = pathlib.Path("./cogs")
 cogs = [
     x.as_posix().replace("/", ".")[:-3]

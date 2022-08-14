@@ -25,171 +25,6 @@ async def setup(bot: Bot):
     await bot.add_cog(Miscellaneous(bot))
 
 
-class MyHelp(commands.HelpCommand):
-    context: GuildContext
-
-    async def send_bot_help(self, mapping: Dict[commands.Cog, List[commands.Command]]):
-        bot = self.context.bot
-        ctx = self.context
-        if bot.user is None:
-            return
-
-        p = FrontHelpPageSource(
-            [
-                cog
-                for _, cog in bot.cogs.items()
-                if len(await self.filter_commands(cog.get_commands())) != 0
-            ],
-            per_page=4,
-            help_command=self,
-        )
-        p.embed.set_author(
-            name=f"{bot.user.name} help", icon_url=bot.user.display_avatar.url
-        )
-        menu = Pager(p, ctx=ctx)
-        await menu.start(ctx)
-
-    async def send_command_help(self, command: commands.Command):
-        bot = self.context.bot
-        ctx = self.context
-
-        if bot.user is None:
-            return
-
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{command.qualified_name.capitalize()} help",
-            icon_url=bot.user.display_avatar.url,
-        )
-
-        embed.description = (
-            f"```{command.help}```" if command.help else "No help yet..."
-        )
-
-        if command.aliases:
-            embed.add_field(
-                name="Aliases",
-                value=human_join(
-                    [f"**`{alias}`**" for alias in command.aliases], final="and"
-                ),
-                inline=False,
-            )
-
-        if command.cooldown:
-            cd = command.cooldown
-            embed.add_field(
-                name="Cooldown",
-                value=f"{cd.rate:,} command every {round(cd.per)} seconds",
-            )
-
-        await ctx.send(embed=embed)
-
-    async def send_group_help(self, group: commands.Group):
-        bot = self.context.bot
-        ctx = self.context
-
-        if bot.user is None:
-            return
-
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{group.qualified_name.capitalize()} help",
-            icon_url=bot.user.display_avatar.url,
-        )
-
-        embed.description = f"```{group.help}```" if group.help else "No help yet..."
-
-        if group.commands:
-            embed.add_field(
-                name="Commands",
-                value=human_join(
-                    [f"**`{command.name}`**" for command in group.commands], final="and"
-                ),
-                inline=False,
-            )
-
-        if group.aliases:
-            embed.add_field(
-                name="Aliases",
-                value=human_join(
-                    [f"**`{alias}`**" for alias in group.aliases], final="and"
-                ),
-                inline=False,
-            )
-
-        if group.cooldown:
-            cd = group.cooldown
-            embed.add_field(
-                name="Cooldown",
-                value=f"{cd.rate:,} command every {round(cd.per)} seconds",
-            )
-
-        await ctx.send(embed=embed)
-
-    async def send_cog_help(self, cog: commands.Cog):
-        ctx = self.context
-        bot = ctx.bot
-
-        if bot.user is None:
-            return
-
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{cog.qualified_name.capitalize()} help",
-            icon_url=bot.user.display_avatar.url,
-        )
-
-        embed.description = f"```{cog.description}```" or "No help yet..."
-
-        commands = await self.filter_commands(cog.get_commands())
-
-        if commands:
-            embed.add_field(
-                name="Commands",
-                value=human_join(
-                    [f"**`{command.name}`**" for command in cog.get_commands()],
-                    final="and",
-                ),
-                inline=False,
-            )
-
-        if hasattr(cog, "aliases"):
-            embed.add_field(name="Aliases", value=human_join([f"**`{alias}`**" for alias in cog.aliases], final="and"), inline=False)  # type: ignore
-
-        await ctx.send(embed=embed)
-
-    async def send_error_message(self, error: commands.CommandError):
-        ctx = self.context
-        bot = ctx.bot
-
-        if bot.user is None:
-            return
-
-        pattern = re.compile(r'No command called "(?P<name>[a-zA-Z0-9]{1,25})" found.')
-        results = pattern.match(str(error))
-
-        if results:
-            error_command_name = results.group("name").lower()
-
-            for name, cog in bot.cogs.items():
-                if error_command_name == cog.qualified_name.lower():
-                    await self.send_cog_help(cog)
-                    return
-
-                if hasattr(cog, "aliases"):
-                    if error_command_name in cog.aliases:  # type: ignore
-                        _cog = bot.get_cog(cog.qualified_name)
-
-                        if _cog is None:
-                            continue
-
-                        await self.send_cog_help(_cog)
-                        return
-
-        else:
-            await ctx.send(str(error))
-
-
 status_state = {
     0: "Offline",
     1: "Online",
@@ -207,8 +42,6 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
     def __init__(self, bot: Bot):
         self.bot = bot
         self.aliases = ["misc"]
-        self._og_help = commands.DefaultHelpCommand()
-        self.bot.help_command = MyHelp()
         self.process = psutil.Process()
 
         perms = discord.Permissions.none()
@@ -231,11 +64,9 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
 
         self.invite_url = discord.utils.oauth_url(bot.user.id, permissions=perms, scopes=("bot",))  # type: ignore
 
-    async def cog_unload(self):
-        self.bot.help_command = self._og_help
-
-    async def cog_load(self) -> None:
-        self.bot.help_command = MyHelp()
+    @property
+    def display_emoji(self) -> discord.PartialEmoji:
+        return discord.PartialEmoji(name="\U0001f4a0")
 
     @commands.command(name="invite", aliases=("join",))
     async def invite(self, ctx: commands.Context):

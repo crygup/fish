@@ -25,6 +25,10 @@ class Roblox(commands.Cog, name="roblox"):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
 
+    @property
+    def display_emoji(self) -> discord.PartialEmoji:
+        return discord.PartialEmoji(name="roblox", id=1006847143400706078)
+
     @commands.group(name="roblox", aliases=("rbx",), invoke_without_command=True)
     async def roblox(
         self,

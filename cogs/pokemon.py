@@ -19,6 +19,10 @@ class Pokemon(commands.Cog, name="pokemon"):
     def __init__(self, bot: Bot):
         self.bot = bot
 
+    @property
+    def display_emoji(self) -> discord.PartialEmoji:
+        return discord.PartialEmoji(name="pokeball", id=1006847357381521428)
+
     def get_pokemon(self, guess: str) -> List:
         found = []
         guess = re.sub("[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", guess)

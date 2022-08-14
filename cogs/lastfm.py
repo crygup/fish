@@ -25,6 +25,10 @@ class LastFm(commands.Cog, name="lastfm"):
     def __init__(self, bot: Bot):
         self.bot = bot
 
+    @property
+    def display_emoji(self) -> discord.PartialEmoji:
+        return discord.PartialEmoji(name="lastfm", id=1006848047923351612)
+
     @commands.group(name="lastfm", aliases=("fm",), invoke_without_command=True)
     async def last_fm(self, ctx: Context, username: LastfmConverter = commands.Author):
         """Displays your last scrobble from last.fm"""

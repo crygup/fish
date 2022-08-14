@@ -20,6 +20,10 @@ class Osu(commands.Cog, name="osu"):
     def __init__(self, bot: Bot):
         self.bot = bot
 
+    @property
+    def display_emoji(self) -> discord.PartialEmoji:
+        return discord.PartialEmoji(name="osu", id=1006847555616919642)
+
     @commands.group(name="osu", invoke_without_command=True)
     async def osu_command(
         self,

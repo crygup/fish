@@ -59,6 +59,10 @@ class Discord_(commands.Cog, name="discord"):
     def __init__(self, bot: Bot):
         self.bot = bot
 
+    @property
+    def display_emoji(self) -> discord.PartialEmoji:
+        return discord.PartialEmoji(name="discord", id=1006848754944593921)
+
     def get_emoji(self, channel: GuildChannel) -> str:
         if isinstance(channel, discord.TextChannel):
             if channel.is_nsfw():

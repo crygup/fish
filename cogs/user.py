@@ -31,6 +31,10 @@ class User(commands.Cog, name="user"):
         self.bot = bot
         self.aliases = ["member", "members", "users"]
 
+    @property
+    def display_emoji(self) -> discord.PartialEmoji:
+        return discord.PartialEmoji(name="user", id=971924020389892106)
+
     @commands.command(name="first_message", aliases=("fmsg", "oldest"))
     async def first_message(
         self,
