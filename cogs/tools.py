@@ -755,8 +755,11 @@ class Tools(commands.Cog, name="tools"):
     async def tags_command(
         self, ctx: Context, member: discord.Member = commands.Author
     ):
+        """Shows a members tags.
+
+        Alias for tag list"""
         sql = """
-        SELECT * FROM tags WHERE guild_id = $1 AND author_id = $2
+        SELECT * FROM tags WHERE guild_id = $1 AND author_id = $2 ORDER BY created_at DESC
         """
 
         results = await self.bot.pool.fetch(sql, ctx.guild.id, member.id)
