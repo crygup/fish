@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import textwrap
-from typing import Dict, List, TypeAlias
+from typing import Dict, List, Optional, TypeAlias
 
 import discord
 from bot import Bot, Context
@@ -14,22 +14,24 @@ async def setup(bot: Bot):
     await bot.add_cog(HelpCog(bot))
 
 
-class CommandDropdown(discord.ui.Select):
-    view: HelpView
+class CommandView(AuthorView):
+    def __init__(self, ctx: Context, cog: commands.Cog):
+        super().__init__(ctx)
+        self.add_item(CommandDropdown(ctx, cog))
 
-    def __init__(self, ctx: Context, cog: commands.Cog, embed: discord.Embed):
+
+class CogView(AuthorView):
+    def __init__(self, ctx: Context, cogs: List[commands.Cog]):
+        super().__init__(ctx)
+        self.add_item(HelpDropdown(ctx, cogs, main_help=False))
+
+
+class CommandDropdown(discord.ui.Select):
+    def __init__(self, ctx: Context, cog: commands.Cog):
         self.ctx = ctx
         self.cog = cog
-        self.defaut_embed = embed
 
-        options = [
-            discord.SelectOption(
-                label="Index",
-                value="index",
-                description="Goes back to the home page.",
-                emoji="\U0001f3e0",
-            )
-        ]
+        options = []
 
         for cmd in cog.get_commands():
             options.append(
@@ -58,7 +60,6 @@ class CommandDropdown(discord.ui.Select):
         if bot.user is None:
             raise RuntimeError("Bot user is None")
 
-        embed = discord.Embed(color=0xFAA0C1)
         embed.set_author(
             name=f"{command.qualified_name.capitalize()} help",
             icon_url=bot.user.display_avatar.url,
@@ -96,25 +97,21 @@ class CommandDropdown(discord.ui.Select):
         return embed
 
     async def callback(self, interaction: discord.Interaction):
-        embed = discord.Embed()
         ctx = self.ctx
         bot = ctx.bot
+        embed = discord.Embed(color=bot.embedcolor)
         if bot.user is None:
             return
 
-        if self.values[0] == "index":
-            embed = self.defaut_embed
+        cmd = bot.get_command(self.values[0])
 
-        else:
-            cmd = bot.get_command(self.values[0])
+        if cmd is None:
+            await interaction.response.send_message(
+                "Unable to find that command?", ephemeral=True
+            )
+            return
 
-            if cmd is None:
-                await interaction.response.send_message(
-                    "Unable to find that command?", ephemeral=True
-                )
-                return
-
-            embed = await self.make_embed(embed, cmd)
+        embed = await self.make_embed(embed, cmd)
 
         if interaction.message is None:
             return
@@ -126,21 +123,29 @@ class CommandDropdown(discord.ui.Select):
 class HelpDropdown(discord.ui.Select):
     view: HelpView
 
-    def __init__(self, ctx: Context, cogs: List[commands.Cog], embed: discord.Embed):
+    def __init__(
+        self,
+        ctx: Context,
+        cogs: List[commands.Cog],
+        embed: Optional[discord.Embed] = None,
+        main_help: bool = True,
+    ):
         self.ctx = ctx
         self.cogs = cogs
         self.defaut_embed = embed
         self.view_added = False
+        self.main_help = main_help
 
-        options = [
-            discord.SelectOption(
-                label="Index",
-                value="index",
-                description="Goes back to the home page.",
-                emoji="\U0001f3e0",
+        options = []
+        if main_help:
+            options.append(
+                discord.SelectOption(
+                    label="Index",
+                    value="index",
+                    description="Goes back to the home page.",
+                    emoji="\U0001f3e0",
+                )
             )
-        ]
-
         for cog in cogs:
             if cog.qualified_name == "":
                 continue
@@ -189,9 +194,9 @@ class HelpDropdown(discord.ui.Select):
         return embed
 
     async def callback(self, interaction: discord.Interaction):
-        embed = discord.Embed()
         ctx = self.ctx
         bot = ctx.bot
+        embed = discord.Embed(color=bot.embedcolor)
         if bot.user is None:
             return
 
@@ -212,7 +217,7 @@ class HelpDropdown(discord.ui.Select):
                 return
 
             embed = await self.make_embed(embed, cog)
-            self.view.add_item(CommandDropdown(ctx, cog, embed))
+            self.view.add_item(CommandDropdown(ctx, cog))
             self.view_added = True
 
         if interaction.message is None:
@@ -270,7 +275,7 @@ class MyHelp(commands.HelpCommand):
 
         filtered_cogs = [
             cog
-            for name, cog in bot.cogs.items()
+            for _, cog in bot.cogs.items()
             if len(await self.filter_commands(cog.get_commands())) > 0
         ]
 
@@ -309,7 +314,7 @@ class MyHelp(commands.HelpCommand):
                 value=f"{cd.rate:,} command every {round(cd.per)} seconds",
             )
 
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed, view=CommandView(ctx, command.cog))
 
     async def send_group_help(self, group: commands.Group):
         bot = self.context.bot
@@ -351,7 +356,7 @@ class MyHelp(commands.HelpCommand):
                 value=f"{cd.rate:,} command every {round(cd.per)} seconds",
             )
 
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed, view=CommandView(ctx, group.cog))
 
     async def send_cog_help(self, cog: commands.Cog):
         ctx = self.context
@@ -383,7 +388,13 @@ class MyHelp(commands.HelpCommand):
         if hasattr(cog, "aliases"):
             embed.add_field(name="Aliases", value=human_join([f"**`{alias}`**" for alias in cog.aliases], final="and"), inline=False)  # type: ignore
 
-        await ctx.send(embed=embed)
+        filtered_cogs = [
+            cog
+            for _, cog in bot.cogs.items()
+            if len(await self.filter_commands(cog.get_commands())) > 0
+        ]
+
+        await ctx.send(embed=embed, view=CogView(ctx, filtered_cogs))
 
     async def send_error_message(self, error: commands.CommandError):
         ctx = self.context
