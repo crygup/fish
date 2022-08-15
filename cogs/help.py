@@ -223,7 +223,10 @@ class HelpDropdown(discord.ui.Select):
 
         if self.values[0] == "index":
             embed = self.defaut_embed
-            self.view.remove_item(self.view.children[-1])
+
+            if len(self.view.children) >= 2:
+                self.view.remove_item(self.view.children[-1])
+
             self.view_added = False
             self.placeholder = "Select a category"
         else:
