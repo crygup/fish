@@ -120,6 +120,7 @@ class Bot(commands.Bot):
         self.e_reply = "<:reply:972280355136606209>"
         self.e_replies = "<:replies:972280398874824724>"
         self._context = Context
+        self.select_filler = "\u2800" * 47
         self._global_cooldown = commands.CooldownMapping.from_cooldown(
             20.0, 30.0, commands.BucketType.user
         )
