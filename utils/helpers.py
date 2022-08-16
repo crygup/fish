@@ -19,6 +19,7 @@ from typing import (
     Sequence,
     TypeVar,
     Union,
+    TypeAlias,
 )
 
 import bs4
@@ -45,6 +46,15 @@ lastfm_period = {
     "6month": "half-yearly",
     "12month": "yearly",
 }
+
+Argument: TypeAlias = Optional[
+    discord.Member
+    | discord.User
+    | discord.PartialEmoji
+    | discord.Role
+    | discord.Message
+    | str
+]
 
 emoji_regex = r"<(?P<animated>a)?:(?P<name>[a-zA-Z0-9\_]{1,}):(?P<id>[0-9]{1,})>"
 
