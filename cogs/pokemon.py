@@ -14,7 +14,10 @@ async def setup(bot: Bot):
 
 
 class Pokemon(commands.Cog, name="pokemon"):
-    """Pokemon related commands"""
+    """Pokemon related commands
+
+
+    Enable auto-solving with `fish auto_solve``"""
 
     def __init__(self, bot: Bot):
         self.bot = bot
@@ -106,7 +109,7 @@ class Pokemon(commands.Cog, name="pokemon"):
         joined = "\n".join(found)
         await ctx.send(joined)
 
-    @commands.command(name="update_pokemon", extras={"UPerms": "Bot Owner"})
+    @commands.command(name="update_pokemon", extras={"UPerms": ["Bot Owner"]})
     @commands.is_owner()
     async def update_pokemon(self, ctx: Context):
         await setup_pokemon(self.bot)
@@ -120,7 +123,7 @@ class Pokemon(commands.Cog, name="pokemon"):
         await pages.start(ctx)
 
     @commands.command(
-        name="auto_solve", aliases=("as",), extras={"UPerms": "Manage Server"}
+        name="auto_solve", aliases=("as",), extras={"UPerms": ["Manage Server"]}
     )
     @commands.has_permissions(manage_guild=True)
     async def auto_solve(self, ctx: Context):
