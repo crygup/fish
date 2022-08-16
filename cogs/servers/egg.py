@@ -19,7 +19,8 @@ class Egg(commands.Cog, name="egg"):
         self,
         ctx: GuildContext,
         uses: Optional[int] = 1,
-        *, member: discord.Member = commands.Author,
+        *,
+        member: discord.Member = commands.Author,
     ):
         uses = uses or 1
 

@@ -2,7 +2,7 @@ import datetime
 import math
 from io import BytesIO
 import time
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import asyncpg
 import discord
@@ -35,13 +35,23 @@ class User(commands.Cog, name="user"):
     def display_emoji(self) -> discord.PartialEmoji:
         return discord.PartialEmoji(name="user", id=971924020389892106)
 
+    async def failed_to_find(
+        self, ctx: Context, guild_id: int, channel_id: int, message_id: int
+    ) -> None:
+        url = f"https://discordapp.com/channels/{guild_id}/{channel_id}/{message_id}"
+        await ctx.send(
+            f"I was unable to find and verify the message, here is a link, it might not work though. \b{url}"
+        )
+
     @commands.command(name="first_message", aliases=("fmsg", "oldest"))
     async def first_message(
         self,
         ctx: Context,
-        channel: Optional[discord.TextChannel],
+        channel: Optional[
+            Union[discord.TextChannel, discord.Thread, discord.VoiceChannel]
+        ],
         *,
-        member: discord.Member = commands.Author,
+        user: Optional[discord.User],
     ):
         """Sends a url to the first message from a member in a channel.
 
@@ -50,25 +60,38 @@ class User(commands.Cog, name="user"):
         if ctx.guild is None:
             return
 
-        channel = channel or ctx.channel  # type: ignore
+        channel = channel or ctx.channel
 
-        if channel is None:
+        if user:
+            sql = f"""SELECT * FROM message_logs WHERE author_id = $1 AND guild_id = $2 AND channel_id = $3 ORDER BY created_at ASC LIMIT 1"""
+            args = [user.id, ctx.guild.id, channel.id]
+        else:
+            sql = f"""SELECT * FROM message_logs WHERE guild_id = $1 AND channel_id = $2 ORDER BY created_at ASC LIMIT 1"""
+            args = [ctx.guild.id, channel.id]
+
+        record = await self.bot.pool.fetchrow(sql, *args)
+        if record is None:
+            await ctx.send(f"It seems I have no records in this channel")
             return
 
-        record = await self.bot.pool.fetchrow(
-            "SELECT * FROM message_logs WHERE author_id = $1 AND guild_id = $2 AND channel_id = $3 ORDER BY created_at ASC LIMIT 1",
-            member.id,
-            ctx.guild.id,
-            channel.id,
-        )
-        if record is None:
-            await ctx.send(
-                f"It seems I have no records for {str(member)} in this channel"
+        _channel = self.bot.get_channel(channel.id)
+        if _channel is None or not isinstance(
+            _channel, (discord.TextChannel, discord.Thread, discord.VoiceChannel)
+        ):
+            await self.failed_to_find(
+                ctx, ctx.guild.id, channel.id, record["message_id"]
             )
             return
 
-        url = f'https://discordapp.com/channels/{record["guild_id"]}/{record["channel_id"]}/{record["message_id"]}'
-        await ctx.send(url)
+        try:
+            _message = await _channel.fetch_message(record["message_id"])
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            await self.failed_to_find(
+                ctx, ctx.guild.id, channel.id, record["message_id"]
+            )
+            return
+
+        await ctx.send(_message.jump_url)
 
     async def _index_member(
         self, guild: discord.Guild, user: discord.Member | discord.User
