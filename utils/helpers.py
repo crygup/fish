@@ -104,6 +104,8 @@ class AuthorView(discord.ui.View):
         for button in self.children:
             if isinstance(button, discord.ui.Button):
                 button.disabled = True
+            if isinstance(button, discord.ui.Select):
+                button.disabled = True
 
     async def on_timeout(self) -> None:
         self.disable_all()
