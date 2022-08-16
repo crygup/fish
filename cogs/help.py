@@ -41,11 +41,12 @@ def make_command_embed(command: commands.Command | commands.Group) -> discord.Em
         inline=False,
     )
 
-    embed.add_field(
-        name="Usage",
-        value=f"`{command.name} {command.signature}`",
-        inline=False,
-    )
+    if command.signature:
+        embed.add_field(
+            name="Usage",
+            value=f"`{command.name} {command.signature}`",
+            inline=False,
+        )
 
     if command.aliases:
         embed.add_field(
