@@ -88,13 +88,6 @@ CREATE TABLE IF NOT EXISTS guild_join_logs (
     time TIMESTAMP WITH TIME ZONE
 );
 
-CREATE TABLE IF NOT EXISTS guild_blacklist (
-    guild_id BIGINT,
-    reason TEXT,
-    time TIMESTAMP WITH TIME ZONE,
-    PRIMARY KEY (guild_id)
-);
-
 CREATE TABLE IF NOT EXISTS guild_bans (
     guild_id BIGINT,
     mod_id BIGINT,
@@ -108,20 +101,6 @@ CREATE TABLE IF NOT EXISTS guild_kicks (
     mod_id BIGINT,
     target_id BIGINT,
     reason TEXT,
-    time TIMESTAMP WITH TIME ZONE
-);
-
-CREATE TABLE IF NOT EXISTS user_blacklist (
-    user_id BIGINT,
-    reason TEXT,
-    time TIMESTAMP WITH TIME ZONE,
-    PRIMARY KEY (user_id)
-);
-
-CREATE TABLE IF NOT EXISTS download_logs (
-    user_id BIGINT,
-    guild_id BIGINT,
-    video TEXT,
     time TIMESTAMP WITH TIME ZONE
 );
 
@@ -143,4 +122,20 @@ CREATE TABLE IF NOT EXISTS tags (
     created_at TIMESTAMP WITH TIME ZONE,
     uses BIGINT DEFAULT 0,
     PRIMARY KEY (guild_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS table_boosters (
+    user_id BIGINT,
+    role_id BIGINT,
+    author_id BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (user_id)
+);
+
+
+CREATE TABLE IF NOT EXISTS block_list (
+    snowflake BIGINT,
+    reason TEXT,
+    time TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (snowflake)
 );

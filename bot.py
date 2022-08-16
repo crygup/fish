@@ -73,17 +73,19 @@ class Bot(commands.Bot):
     async def no_dms(self, ctx: Context):
         return ctx.guild is not None
 
-    async def user_blacklist(self, ctx: Context):
-        blacklisted_users = await self.redis.smembers("blacklisted_users")
-        return str(ctx.author.id) not in blacklisted_users
+    async def block_list(self, ctx: Context):
+        blocked = await self.redis.smembers("block_list")
 
-    async def guild_blacklist(self, ctx: Context):
-        blacklisted_guilds = await self.redis.smembers("blacklisted_guilds")
-        return str(ctx.guild.id) not in blacklisted_guilds
+        if str(ctx.author.id) in blocked:
+            return False
 
-    async def guild_owner_blacklist(self, ctx: Context):
-        blacklisted_owners = await self.redis.smembers("blacklisted_users")
-        return str(ctx.guild.owner_id) not in blacklisted_owners
+        if str(ctx.guild.id) in blocked:
+            return False
+
+        if str(ctx.guild.owner_id) in blocked:
+            return False
+
+        return True
 
     async def no_auto_commands(self, ctx: Context):
         return str(ctx.channel.id) not in await self.redis.smembers(
@@ -125,9 +127,7 @@ class Bot(commands.Bot):
             maxsize=1000, ttl=300.0
         )
         self.add_check(self.no_dms)
-        self.add_check(self.user_blacklist)
-        self.add_check(self.guild_blacklist)
-        self.add_check(self.guild_owner_blacklist)
+        self.add_check(self.block_list)
         self.add_check(self.no_auto_commands)
 
     async def on_message_edit(
@@ -192,7 +192,7 @@ class Bot(commands.Bot):
         )
         print("Connected to osu! account")
 
-        await setup_cache(self.pool, self.redis)
+        await setup_cache(self)
         print("Setup cache")
 
         await setup_webhooks(self)
@@ -201,10 +201,10 @@ class Bot(commands.Bot):
         await setup_pokemon(self)
         print("Loaded pokemon")
 
-        await setup_prefixes(self, self.pool)
+        await setup_prefixes(self)
         print("Setup prefixes")
 
-        await setup_accounts(self.pool, self.redis)
+        await setup_accounts(self)
         print("Setup accounts")
 
         setup_words(self)

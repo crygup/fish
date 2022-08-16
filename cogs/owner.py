@@ -1,4 +1,5 @@
 import argparse
+from ast import alias
 import difflib
 import imghdr
 import itertools
@@ -10,6 +11,7 @@ import traceback
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import asyncpg
 import discord
 from bot import Bot
 from discord.ext import commands
@@ -315,54 +317,25 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
 
         await command(ctx, argument=codeblock_converter("pull"))
 
-    @commands.command(name="blacklist")
-    async def _blacklist(
+    @commands.command(name="block", aliases=("blacklist",))
+    async def block(
         self,
         ctx: GuildContext,
-        option: Union[discord.User, discord.Guild],
+        snowflake: discord.Object,
         *,
         reason: str = "No reason provided",
     ):
-        if isinstance(option, discord.Guild):
-            if option.owner_id == ctx.bot.owner_id:
-                await ctx.send("dumbass")
-                return
-
-            if option.id in await self.bot.redis.smembers("blacklisted_guilds"):
-                await self.bot.pool.execute(
-                    "DELETE FROM guild_blacklist WHERE guild_id = $1", option.id
-                )
-                await self.bot.redis.srem("blacklisted_guilds", option.id)
-                await ctx.send(f"Removed guild `{option}` from the blacklist")
-            else:
-                await self.bot.pool.execute(
-                    "INSERT INTO guild_blacklist (guild_id, reason, time) VALUES ($1, $2, $3)",
-                    option.id,
-                    reason,
-                    discord.utils.utcnow(),
-                )
-                await self.bot.redis.sadd("blacklisted_guilds", option.id)
-                await ctx.send(f"Added guild `{option}` to the blacklist")
-
-        elif isinstance(option, discord.User):
-            if option.id == ctx.bot.owner_id:
-                await ctx.send("dumbass")
-                return
-
-            if str(option.id) in await self.bot.redis.smembers("blacklisted_users"):
-                await self.bot.pool.execute(
-                    "DELETE FROM user_blacklist WHERE user_id = $1", option.id
-                )
-                await self.bot.redis.srem("blacklisted_users", option.id)
-                await ctx.send(f"Removed user `{option}` from the blacklist")
-            else:
-                await self.bot.pool.execute(
-                    "INSERT INTO user_blacklist (user_id, reason, time) VALUES ($1, $2, $3)",
-                    option.id,
-                    reason,
-                    discord.utils.utcnow(),
-                )
-                await self.bot.redis.sadd("blacklisted_users", option.id)
-                await ctx.send(f"Added user `{option}` to the blacklist")
-        else:
-            await ctx.send("what")
+        try:
+            sql = """INSERT INTO block_list(snowflake, reason, time) VALUES ($1, $2, $3)"""
+            await self.bot.pool.execute(
+                sql, snowflake.id, reason, discord.utils.utcnow()
+            )
+            await self.bot.redis.sadd("block_list", snowflake.id)
+            msg = f"{snowflake.id} has been blocked"
+        except asyncpg.UniqueViolationError:
+            sql = """DELETE FROM block_list WHERE snowflake = $1"""
+            await self.bot.pool.execute(sql, snowflake.id)
+            await self.bot.redis.srem("block_list", snowflake.id)
+            msg = f"{snowflake.id} has been unblocked"
+        
+        await ctx.send(msg)

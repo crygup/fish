@@ -14,21 +14,17 @@ else:
     from discord.ext.commands import Bot
 
 
-async def setup_cache(pool: asyncpg.Pool, redis: aioredis.Redis):
-    blacklisted_guilds = await pool.fetch("SELECT guild_id FROM guild_blacklist")
-    for guild in blacklisted_guilds:
-        await redis.sadd("blacklisted_guilds", guild["guild_id"])
-
-    blacklisted_users = await pool.fetch("SELECT user_id FROM user_blacklist")
-    for user in blacklisted_users:
-        await redis.sadd("blacklisted_users", user["user_id"])
-
-    guild_settings = await pool.fetch("SELECT * FROM guild_settings")
+async def setup_cache(bot: Bot):
+    guild_settings = await bot.pool.fetch("SELECT * FROM guild_settings")
     for guild in guild_settings:
         if guild["poketwo"]:
-            await redis.sadd("poketwo_guilds", guild["guild_id"])
+            await bot.redis.sadd("poketwo_guilds", guild["guild_id"])
         if guild["auto_download"]:
-            await redis.sadd("auto_download_channels", guild["auto_download"])
+            await bot.redis.sadd("auto_download_channels", guild["auto_download"])
+
+    blacklisted = await bot.pool.fetch("SELECT snowflake FROM block_list")
+    for snowflake in blacklisted:
+        await bot.redis.sadd("block_list", snowflake["snowflake"])
 
 
 async def setup_webhooks(bot: Bot):
@@ -57,29 +53,31 @@ async def setup_pokemon(bot: Bot):
     bot.pokemon = pokemon
 
 
-async def setup_accounts(pool: asyncpg.Pool, redis: aioredis.Redis):
-    accounts = await pool.fetch("SELECT * FROM accounts")
+async def setup_accounts(bot: Bot):
+    accounts = await bot.pool.fetch("SELECT * FROM accounts")
     for record in accounts:
         if record["osu"]:
-            await redis.hset(f"accounts:{record['user_id']}", "osu", record["osu"])
+            await bot.redis.hset(f"accounts:{record['user_id']}", "osu", record["osu"])
         if record["lastfm"]:
-            await redis.hset(
+            await bot.redis.hset(
                 f"accounts:{record['user_id']}", "lastfm", record["lastfm"]
             )
         if record["steam"]:
-            await redis.hset(f"accounts:{record['user_id']}", "steam", record["steam"])
+            await bot.redis.hset(
+                f"accounts:{record['user_id']}", "steam", record["steam"]
+            )
         if record["roblox"]:
-            await redis.hset(
+            await bot.redis.hset(
                 f"accounts:{record['user_id']}", "roblox", record["roblox"]
             )
         if record["genshin"]:
-            await redis.hset(
+            await bot.redis.hset(
                 f"accounts:{record['user_id']}", "genshin", record["genshin"]
             )
 
 
-async def setup_prefixes(bot: Bot, pool: asyncpg.Pool):
-    prefixes = await pool.fetch("SELECT * FROM guild_prefixes")
+async def setup_prefixes(bot: Bot):
+    prefixes = await bot.pool.fetch("SELECT * FROM guild_prefixes")
     for record in prefixes:
         add_prefix(bot, record["guild_id"], record["prefix"])
 
