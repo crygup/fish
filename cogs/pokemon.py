@@ -106,7 +106,7 @@ class Pokemon(commands.Cog, name="pokemon"):
         joined = "\n".join(found)
         await ctx.send(joined)
 
-    @commands.command(name="update_pokemon")
+    @commands.command(name="update_pokemon", extras={"UPerms": "Bot Owner"})
     @commands.is_owner()
     async def update_pokemon(self, ctx: Context):
         await setup_pokemon(self.bot)
@@ -119,7 +119,9 @@ class Pokemon(commands.Cog, name="pokemon"):
         pages.embed.title = title
         await pages.start(ctx)
 
-    @commands.command(name="auto_solve", aliases=("as",))
+    @commands.command(
+        name="auto_solve", aliases=("as",), extras={"UPerms": "Manage Server"}
+    )
     @commands.has_permissions(manage_guild=True)
     async def auto_solve(self, ctx: Context):
         """Toggles automatic solving of pokétwo's pokémon hints"""

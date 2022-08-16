@@ -50,7 +50,14 @@ class Arguments(argparse.ArgumentParser):
         raise RuntimeError(message)
 
 
-class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
+class Owner(
+    commands.Cog,
+    name="owner",
+    command_attrs=dict(
+        hidden=True,
+        extras={"UPerms": ["Bot Owner"]},
+    ),
+):
     """Commands for the owner"""
 
     def __init__(self, bot: Bot):
@@ -337,5 +344,5 @@ class Owner(commands.Cog, name="owner", command_attrs=dict(hidden=True)):
             await self.bot.pool.execute(sql, snowflake.id)
             await self.bot.redis.srem("block_list", snowflake.id)
             msg = f"{snowflake.id} has been unblocked"
-        
+
         await ctx.send(msg)

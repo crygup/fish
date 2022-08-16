@@ -37,6 +37,9 @@ class Arguments(argparse.ArgumentParser):
         raise RuntimeError(message)
 
 
+emoji_extras = {"BPerms": ["Manage Emojis"], "UPerms": ["Manage Emojis"]}
+
+
 class TagName(commands.clean_content):
     def __init__(self, *, lower: bool = False):
         self.lower: bool = lower
@@ -140,9 +143,9 @@ class Tools(commands.Cog, name="tools"):
 
         await ctx.send(embed=embed)
 
-    @commands.command(name="steal", aliases=("clone",))
+    @commands.command(name="steal", aliases=("clone",), extras=emoji_extras)
     @commands.has_guild_permissions(manage_emojis=True)
-    @commands.bot_has_permissions(manage_emojis=True)
+    @commands.bot_has_guild_permissions(manage_emojis=True)
     async def steal(self, ctx: GuildContext, *, emojis: Optional[str]):
         ref = ctx.message.reference
         content = ctx.message.content
@@ -171,6 +174,9 @@ class Tools(commands.Cog, name="tools"):
             return
 
         message = await ctx.send("Stealing emojis...")
+
+        if message is None:
+            return
 
         completed_emojis = []
         for result in results:
@@ -397,7 +403,7 @@ class Tools(commands.Cog, name="tools"):
         )
         await ctx.send(embed=embed, file=file)
 
-    @emoji.command(name="rename")
+    @emoji.command(name="rename", extras=emoji_extras)
     @commands.has_guild_permissions(manage_emojis=True)
     @commands.bot_has_guild_permissions(manage_emojis=True)
     async def emoji_rename(self, ctx: Context, emoji: discord.Emoji, *, name: str):
@@ -410,7 +416,7 @@ class Tools(commands.Cog, name="tools"):
         await emoji.edit(name=name)
         await ctx.send(f"Renamed {emoji} to **`{name}`**.")
 
-    @emoji.command(name="delete")
+    @emoji.command(name="delete", extras=emoji_extras)
     @commands.has_guild_permissions(manage_emojis=True)
     @commands.bot_has_guild_permissions(manage_emojis=True)
     async def emoji_delete(self, ctx: Context, *emojis: discord.Emoji):
@@ -426,6 +432,10 @@ class Tools(commands.Cog, name="tools"):
         message = await ctx.send(
             f"Deleting {len(emojis):,} emoji{'s' if len(emojis) > 1 else ''}..."
         )
+
+        if message is None:
+            return
+
         deleted_emojis = []
 
         for emoji in emojis:
@@ -461,7 +471,9 @@ class Tools(commands.Cog, name="tools"):
         await ctx.send(f"Auto-download is set to {channel.mention}.")
 
     @auto_download.command(
-        name="set", aliases=("create", "create_channel", "create_dl_channel")
+        name="set",
+        aliases=("create", "create_channel", "create_dl_channel"),
+        extras={"UPerms": ["Manage Emojis"]},
     )
     @commands.has_guild_permissions(manage_guild=True)
     async def auto_download_set(
@@ -528,7 +540,9 @@ class Tools(commands.Cog, name="tools"):
         await self.bot.redis.sadd("auto_download_channels", channel.id)
         await ctx.send(f"Auto-download is now set to {channel.mention}.")
 
-    @auto_download.command(name="remove", aliases=("delete",))
+    @auto_download.command(
+        name="remove", aliases=("delete",), extras={"UPerms": ["Manage Emojis"]}
+    )
     @commands.has_guild_permissions(manage_guild=True)
     async def auto_download_remove(self, ctx: Context):
         sql = """SELECT auto_download FROM guild_settings WHERE guild_id = $1"""

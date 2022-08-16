@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import textwrap
 from typing import Dict, List, Optional, TypeAlias
+from typing_extensions import reveal_type
 
 import discord
 from bot import Bot, Context
@@ -27,6 +28,7 @@ class CogView(AuthorView):
 
 
 def make_command_embed(command: commands.Command | commands.Group) -> discord.Embed:
+
     embed = discord.Embed(color=0xFAA0C1)
     embed.set_author(
         name=f"{command.name.capitalize()} help",
@@ -39,25 +41,18 @@ def make_command_embed(command: commands.Command | commands.Group) -> discord.Em
         inline=False,
     )
 
+    embed.add_field(
+        name="Usage",
+        value=f"`{command.name} {command.signature}`",
+        inline=False,
+    )
+
     if command.aliases:
         embed.add_field(
             name="Aliases",
             value=human_join(
                 [f"**`{alias}`**" for alias in command.aliases], final="and"
             ),
-            inline=False,
-        )
-
-    if isinstance(command, commands.Group) and command.commands:
-        formatted_subcmds = "\n".join(
-            [
-                f"fish {subcmd.full_parent_name} {subcmd.name} {subcmd.signature}"
-                for subcmd in command.commands
-            ]
-        )
-        embed.add_field(
-            name="Subcommands",
-            value=f"```{formatted_subcmds}```",
             inline=False,
         )
 
@@ -79,6 +74,59 @@ def make_command_embed(command: commands.Command | commands.Group) -> discord.Em
     except KeyError:
         pass
 
+    try:
+        nsfw = command.extras["nsfw"]
+    except KeyError:
+        nsfw = False
+
+    metadata = {
+        "Category": str(command.cog.qualified_name).title(),
+        "NSFW": nsfw,
+    }
+
+    embed.add_field(
+        name="Metadata",
+        value="\n".join([f"{key}: {value}" for key, value in metadata.items()]),
+        inline=False,
+    )
+
+    if isinstance(command, commands.Group) and command.commands:
+        formatted_subcmds = "\n".join(
+            [
+                f"fish {subcmd.full_parent_name} {subcmd.name} {subcmd.signature}"
+                for subcmd in command.commands
+            ]
+        )
+        embed.add_field(
+            name="Subcommands",
+            value=f"```{formatted_subcmds}```",
+            inline=False,
+        )
+
+    try:
+        bot_perms = command.extras["BPerms"]
+    except KeyError:
+        bot_perms = []
+
+    try:
+        user_perms = command.extras["UPerms"]
+    except KeyError:
+        user_perms = []
+
+    perms_text = ""
+
+    if user_perms:
+        perms_text += f"User: {human_join([f'**`{perm}`**' for perm in user_perms], final='and')}\n"
+
+    if bot_perms:
+        perms_text += (
+            f"Bot: {human_join([f'**`{perm}`**' for perm in bot_perms], final='and')}"
+        )
+
+    if perms_text:
+        embed.add_field(name="Permissions required", value=perms_text)
+
+    embed.set_footer(text="\u2800" * 47)
     return embed
 
 
@@ -119,6 +167,7 @@ def make_cog_embed(bot: Bot, cog: commands.Cog) -> discord.Embed:
             inline=False,
         )
 
+    embed.set_footer(text="\u2800" * 47)
     return embed
 
 
@@ -314,41 +363,7 @@ class MyHelp(commands.HelpCommand):
         if bot.user is None:
             return
 
-        embed = discord.Embed(color=0xFAA0C1)
-        embed.set_author(
-            name=f"{command.qualified_name.capitalize()} help",
-            icon_url=bot.user.display_avatar.url,
-        )
-
-        embed.add_field(
-            name="Description",
-            value=command.help if command.help else "No help yet...",
-            inline=False,
-        )
-
-        if command.aliases:
-            embed.add_field(
-                name="Aliases",
-                value=human_join(
-                    [f"**`{alias}`**" for alias in command.aliases], final="and"
-                ),
-            )
-
-        if command.cooldown:
-            cd = command.cooldown
-            embed.add_field(
-                name="Cooldown",
-                value=f"{cd.rate:,} command every {round(cd.per)} seconds",
-            )
-
-        try:
-            examples = command.extras["examples"]
-            embed.add_field(
-                name="Examples",
-                value="\n".join(examples),
-            )
-        except KeyError:
-            pass
+        embed = make_command_embed(command)
 
         await ctx.send(embed=embed, view=CommandView(ctx, command.cog))
 
