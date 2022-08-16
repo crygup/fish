@@ -294,18 +294,18 @@ class Context(commands.Context):
         reference: Optional[Union[discord.Message, discord.MessageReference]] = None,
         check_ref: Optional[bool] = False,
         **kwargs: Any,
-    ) -> discord.Message:
+    ) -> discord.Message | None:
 
         reference = reference or self.message.reference or None
 
         if self.guild is None:
-            return  # type: ignore
+            return
 
         if not self.channel.permissions_for(self.guild.me).send_messages:
             try:
                 return await self.author.send(f"I do not have permissions to send messages in {self.channel.mention}.")  # type: ignore
             except discord.Forbidden:
-                pass
+                return
 
         if kwargs.get("embed") and kwargs.get("embeds"):
             raise TypeError("Cannot mix embed and embeds keyword arguments.")
