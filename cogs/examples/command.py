@@ -1,5 +1,5 @@
 import discord
-from bot import Bot
+from bot import Bot, Context
 from discord.ext import commands
 
 
@@ -12,5 +12,5 @@ class Example(commands.Cog, name="example"):
         self.bot = bot
 
     @commands.command()
-    async def example(self, ctx: commands.Context):
+    async def example(self, ctx: Context):
         await ctx.send("This is an example command.")
