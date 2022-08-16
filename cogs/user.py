@@ -96,7 +96,7 @@ class User(commands.Cog, name="user"):
     async def joins(
         self,
         ctx: Context,
-        guild: Optional[discord.Guild] = None,
+        guild: Optional[discord.Guild] = commands.CurrentGuild,
         *,
         user: discord.User = commands.Author,
     ):
