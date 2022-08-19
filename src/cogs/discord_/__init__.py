@@ -8,6 +8,8 @@ from .other import OtherCommands
 
 
 class Discord(SearchCommand, InfoCommands, UserCommands, OtherCommands, name="discord"):
+    """Commands for discord itself"""
+
     @property
     def display_emoji(self) -> discord.PartialEmoji:
         return discord.PartialEmoji(name="discord", id=1006848754944593921)
