@@ -11,7 +11,7 @@ from utils import mobile
 
 gateway.DiscordWebSocket.identify = mobile
 
-testing = True
+testing = False
 
 
 async def main():
