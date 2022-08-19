@@ -67,7 +67,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
 
         ydl_opts = {
             "format": f"bestvideo+bestaudio[ext=mp4]/best",
-            "outtmpl": f"files/videos/{name}.%(ext)s",
+            "outtmpl": f"src/files/videos/{name}.%(ext)s",
             "quiet": True,
             "max_filesize": ctx.guild.filesize_limit,
         }
@@ -88,7 +88,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
         dl_time = f"Took `{round(stop - start, 2)}` seconds to download, {message.author.mention}"
 
         try:
-            _file = discord.File(f"files/videos/{name}.mp4")
+            _file = discord.File(f"src/files/videos/{name}.mp4")
             await msg.edit(content=dl_time, attachments=[_file])
 
         except (ValueError, discord.Forbidden):
