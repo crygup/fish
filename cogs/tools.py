@@ -82,7 +82,8 @@ class Tools(commands.Cog, name="tools"):
     def display_emoji(self) -> discord.PartialEmoji:
         return discord.PartialEmoji(name="\U0001f528")
 
-    @commands.command(name="wordle", aliases=("word",))
+    @commands.command(name="wordle", aliases=("word",), hidden=True)
+    @commands.is_owner()
     async def wordle(self, ctx: Context, *, flags: str):
         """This uses flags to solve a wordle problem.
 
