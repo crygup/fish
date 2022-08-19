@@ -423,7 +423,7 @@ class MyHelp(commands.HelpCommand):
 
                         await self.send_cog_help(_cog)
                         return
-                        
+
         await ctx.send(str(error))
 
 

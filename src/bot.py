@@ -6,6 +6,7 @@ import os
 import pathlib
 import re
 from typing import TYPE_CHECKING, Dict, List, Set
+from unittest import result
 
 import aiohttp
 import aioredis
@@ -22,7 +23,6 @@ from utils import (
     setup_prefixes,
     setup_webhooks,
     setup_accounts,
-    setup_words,
 )
 
 if TYPE_CHECKING:
@@ -35,12 +35,23 @@ initial_extensions = [
     "cogs.events.errors",
     "cogs.help",
 ]
-cogs_path = pathlib.Path("./cogs")
+cogs_path = pathlib.Path("./src/cogs")
+
+
+def fix_cog(results) -> str:
+    results = re.sub(r"[/]", ".", results)
+    results = re.sub(r"(src(/|.)|[.]py$)", "", results)
+
+    return results
+
+
 cogs = [
-    x.as_posix().replace("/", ".")[:-3]
+    fix_cog(x.as_posix())
     for x in cogs_path.glob("**/*.py")
-    if x.parent.name != "examples"
+    if x.parent.name not in ["examples", "discord_"]
 ]
+cogs.extend(["cogs.discord_"])
+
 os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
 os.environ["JISHAKU_NO_DM_TRACEBACK"] = "True"
@@ -66,9 +77,6 @@ class Bot(commands.Bot):
     pool: asyncpg.Pool
     redis: aioredis.Redis
     exts: Set[str]
-
-    jeyy_words: List[str]
-    words: List[str]
 
     async def no_dms(self, ctx: Context):
         return ctx.guild is not None
@@ -99,7 +107,6 @@ class Bot(commands.Bot):
         testing: bool,
         logger: logging.Logger,
     ):
-        prefix: List = ["fish ", "f"] if not testing else ["fish. ", "f."]
         super().__init__(
             command_prefix=get_prefix,
             intents=intents,
@@ -208,12 +215,9 @@ class Bot(commands.Bot):
         await setup_accounts(self)
         print("Setup accounts")
 
-        setup_words(self)
-        print("Setup words")
-
         self.exts = set(initial_extensions + cogs)
 
-        for extension in self.exts if not self.testing else initial_extensions:
+        for extension in self.exts:
             try:
                 await self.load_extension(extension)
                 print(f"Loaded extension {extension}")

@@ -82,67 +82,67 @@ class Tools(commands.Cog, name="tools"):
     def display_emoji(self) -> discord.PartialEmoji:
         return discord.PartialEmoji(name="\U0001f528")
 
-    @commands.command(name="wordle", aliases=("word",), hidden=True)
-    @commands.is_owner()
-    async def wordle(self, ctx: Context, *, flags: str):
-        """This uses flags to solve a wordle problem.
-
-        Use underscores to spcify blanks.
-        Example: h_r___
-
-        Flags:
-            -jeyy    - Uses jeyybot wordle list (this is default true for the jeyybot wordle command)
-            -correct - letters that are correct
-            -invalid - letters that are not used
-        """
-        words = self.bot.words
-
-        parser = Arguments(add_help=False, allow_abbrev=False)
-        parser.add_argument("-j", "-jeyy", action="store_true", default=True)
-        parser.add_argument("-c", "-correct", type=str)
-        parser.add_argument("-i", "-invalid", type=str)
-
-        args = parser.parse_args(shlex.split(flags))
-
-        if args.j:
-            words = self.bot.jeyy_words
-
-        word = ["_", "_", "_", "_", "_"]
-        letters_to_skip = [letter for letter in args.i] if args.i else []
-
-        letters_to_use = "abcdefghijklmnopqrstuvwxyz"
-
-        if letters_to_skip:
-            letters_to_use = re.sub(f"[{''.join(letters_to_skip)}]", "", letters_to_use)
-
-        if args.c:
-            if len(args.c) != 5:
-                await ctx.send("The word must be 5 letters long.")
-                return
-
-            word = [letter for letter in args.c]
-            for i, letter in enumerate(word):
-                if letter == "_":
-                    word[i] = f"[{letters_to_use}]{{1}}"
-                else:
-                    word[i] = f"[{letter}]{{1}}"
-
-        pattern = re.compile("".join(word))
-
-        guessed_words = [word for word in words if pattern.match(word)]
-
-        if guessed_words == []:
-            await ctx.send("No words found.")
-            return
-
-        formatted = guessed_words[:10]
-        embed = discord.Embed(color=self.bot.embedcolor)
-        embed.title = f"Possible words found ({len(formatted)}/{len(guessed_words):,})"
-        embed.description = human_join(
-            [f"**`{word}`**" for word in formatted], final="and"
-        )
-
-        await ctx.send(embed=embed)
+    # @commands.command(name="wordle", aliases=("word",), hidden=True)
+    # @commands.is_owner()
+    # async def wordle(self, ctx: Context, *, flags: str):
+    #    """This uses flags to solve a wordle problem.
+    #
+    #    Use underscores to spcify blanks.
+    #    Example: h_r___
+    #
+    #    Flags:
+    #        -jeyy    - Uses jeyybot wordle list (this is default true for the jeyybot wordle command)
+    #        -correct - letters that are correct
+    #        -invalid - letters that are not used
+    #    """
+    #    words = self.bot.words
+    #
+    #    parser = Arguments(add_help=False, allow_abbrev=False)
+    #    parser.add_argument("-j", "-jeyy", action="store_true", default=True)
+    #    parser.add_argument("-c", "-correct", type=str)
+    #    parser.add_argument("-i", "-invalid", type=str)
+    #
+    #    args = parser.parse_args(shlex.split(flags))
+    #
+    #    if args.j:
+    #        words = self.bot.jeyy_words
+    #
+    #    word = ["_", "_", "_", "_", "_"]
+    #    letters_to_skip = [letter for letter in args.i] if args.i else []
+    #
+    #    letters_to_use = "abcdefghijklmnopqrstuvwxyz"
+    #
+    #    if letters_to_skip:
+    #        letters_to_use = re.sub(f"[{''.join(letters_to_skip)}]", "", letters_to_use)
+    #
+    #    if args.c:
+    #        if len(args.c) != 5:
+    #            await ctx.send("The word must be 5 letters long.")
+    #            return
+    #
+    #        word = [letter for letter in args.c]
+    #        for i, letter in enumerate(word):
+    #            if letter == "_":
+    #                word[i] = f"[{letters_to_use}]{{1}}"
+    #            else:
+    #                word[i] = f"[{letter}]{{1}}"
+    #
+    #    pattern = re.compile("".join(word))
+    #
+    #    guessed_words = [word for word in words if pattern.match(word)]
+    #
+    #    if guessed_words == []:
+    #        await ctx.send("No words found.")
+    #        return
+    #
+    #    formatted = guessed_words[:10]
+    #    embed = discord.Embed(color=self.bot.embedcolor)
+    #    embed.title = f"Possible words found ({len(formatted)}/{len(guessed_words):,})"
+    #    embed.description = human_join(
+    #        [f"**`{word}`**" for word in formatted], final="and"
+    #    )
+    #
+    #    await ctx.send(embed=embed)
 
     @commands.command(name="steal", aliases=("clone",), extras=emoji_extras)
     @commands.has_guild_permissions(manage_emojis=True)
@@ -159,10 +159,10 @@ class Tools(commands.Cog, name="tools"):
                 return
 
             resolved = ref.resolved
-            if isinstance(resolved, discord.DeletedReferencedMessage):
-                return
-
-            if resolved is None:
+            if (
+                isinstance(resolved, discord.DeletedReferencedMessage)
+                or resolved is None
+            ):
                 return
 
             content = resolved.content
@@ -332,119 +332,6 @@ class Tools(commands.Cog, name="tools"):
             if file.endswith(valid_formats):
                 if file not in self.currently_downloading:
                     os.remove(f"files/videos/{file}")
-
-    @commands.group(name="emoji", invoke_without_command=True)
-    async def emoji(
-        self,
-        ctx: Context,
-        emoji: Optional[Union[discord.Emoji, discord.PartialEmoji, str]],
-    ):
-        """Gets information about an emoji."""
-
-        if ctx.message.reference is None and emoji is None:
-            raise commands.BadArgument("No emoji provided.")
-
-        if isinstance(emoji, str):
-            _emoji = await ctx.get_twemoji(str(emoji))
-
-            if _emoji is None:
-                raise commands.BadArgument("No emoji found.")
-
-            await ctx.send(file=discord.File(BytesIO(_emoji), filename=f"emoji.png"))
-            return
-
-        if emoji:
-            emoji = emoji
-
-        else:
-            if not ctx.message.reference:
-                raise commands.BadArgument("No emoji provided.")
-
-            reference = ctx.message.reference.resolved
-
-            if (
-                isinstance(reference, discord.DeletedReferencedMessage)
-                or reference is None
-            ):
-                raise commands.BadArgument("No emoji found.")
-
-            emoji = (await EmojiConverter().from_message(ctx, reference.content))[0]
-
-        if emoji is None:
-            raise TypeError("No emoji found.")
-
-        embed = discord.Embed(timestamp=emoji.created_at, title=emoji.name)
-
-        if isinstance(emoji, discord.Emoji) and emoji.guild:
-            if not emoji.available:
-                embed.title = f"~~{emoji.name}~~"
-
-            embed.add_field(
-                name="Guild",
-                value=f"{ctx.bot.e_replies}{str(emoji.guild)}\n"
-                f"{ctx.bot.e_reply}{emoji.guild.id}",
-            )
-
-            femoji = await emoji.guild.fetch_emoji(emoji.id)
-            if femoji.user:
-                embed.add_field(
-                    name="Created by",
-                    value=f"{ctx.bot.e_replies}{str(femoji.user)}\n"
-                    f"{ctx.bot.e_reply}{femoji.user.id}",
-                )
-
-        embed.add_field(
-            name="Raw text", value=f"`<:{emoji.name}\u200b:{emoji.id}>`", inline=False
-        )
-
-        embed.set_footer(text=f"ID: {emoji.id} \nCreated at")
-        embed.set_image(url=f'attachment://emoji.{"gif" if emoji.animated else "png"}')
-        file = await emoji.to_file(
-            filename=f'emoji.{"gif" if emoji.animated else "png"}'
-        )
-        await ctx.send(embed=embed, file=file)
-
-    @emoji.command(name="rename", extras=emoji_extras)
-    @commands.has_guild_permissions(manage_emojis=True)
-    @commands.bot_has_guild_permissions(manage_emojis=True)
-    async def emoji_rename(self, ctx: Context, emoji: discord.Emoji, *, name: str):
-        pattern = re.compile(r"[a-zA-Z0-9_ ]")
-        if not pattern.match(name):
-            raise commands.BadArgument(
-                "Name can only contain letters, numbers, and underscores."
-            )
-
-        await emoji.edit(name=name)
-        await ctx.send(f"Renamed {emoji} to **`{name}`**.")
-
-    @emoji.command(name="delete", extras=emoji_extras)
-    @commands.has_guild_permissions(manage_emojis=True)
-    @commands.bot_has_guild_permissions(manage_emojis=True)
-    async def emoji_delete(self, ctx: Context, *emojis: discord.Emoji):
-        value = await ctx.prompt(
-            f"Are you sure you want to delete {len(emojis):,} emoji{'s' if len(emojis) > 1 else ''}?"
-        )
-        if not value:
-            await ctx.send(
-                f"Well I didn't want to delete {'them' if len(emojis) > 1 else 'it'} anyway."
-            )
-            return
-
-        message = await ctx.send(
-            f"Deleting {len(emojis):,} emoji{'s' if len(emojis) > 1 else ''}..."
-        )
-
-        if message is None:
-            return
-
-        deleted_emojis = []
-
-        for emoji in emojis:
-            deleted_emojis.append(f"`{emoji}`")
-            await emoji.delete()
-            await message.edit(
-                content=f"Successfully deleted {human_join(deleted_emojis, final='and')} *({len(deleted_emojis)}/{len(emojis)})*."
-            )
 
     @commands.group(
         name="auto_download", aliases=("auto_dl", "adl"), invoke_without_command=True

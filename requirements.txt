@@ -18,3 +18,4 @@ ossapi
 Pillow
 Wand
 beautifulsoup4
+pre-commit
