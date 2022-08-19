@@ -113,7 +113,7 @@ class GuildEvents(commands.Cog, name="guild_events"):
         if self.bot.user is None:
             return
 
-        banned_guilds = await self.bot.redis.smembers("blacklisted_guilds")
+        banned_guilds = await self.bot.redis.smembers("block_list")
         if str(guild.id) in banned_guilds:
             await guild.leave()
             return
@@ -171,7 +171,7 @@ class GuildEvents(commands.Cog, name="guild_events"):
         if self.bot.user is None:
             return
 
-        banned_guilds = await self.bot.redis.smembers("blacklisted_guilds")
+        banned_guilds = await self.bot.redis.smembers("block_list")
         if str(guild.id) in banned_guilds:
             return
 

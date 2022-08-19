@@ -30,6 +30,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):
+        blocked = await self.bot.redis.smembers("block_list")
         if (
             message.guild is None
             or message.author.bot
@@ -38,6 +39,9 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
             or message.author.id == message.guild.me.id
             or not str(message.channel.id)
             in await self.bot.redis.smembers("auto_download_channels")
+            or str(message.author.id) in blocked
+            or str(message.guild.owner_id) in blocked
+            or str(message.guild.id) in blocked
         ):
             return
 
