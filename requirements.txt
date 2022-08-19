@@ -1,7 +1,7 @@
-git+https://github.com/Rapptz/discord.py
 git+https://github.com/Rapptz/discord-ext-menus
 git+https://github.com/Gorialis/jishaku
 git+https://github.com/tweepy/tweepy.git#egg=tweepy[async]
+discord.py==2.0.0
 asyncpg
 toml
 tabulate
