@@ -268,7 +268,7 @@ class Tools(commands.Cog, name="tools"):
             "format": f"bestvideo+bestaudio[ext={default_format}]/best"
             if not audio
             else f"bestaudio/best",
-            "outtmpl": f"files/videos/{default_name}.%(ext)s",
+            "outtmpl": f"src/files/videos/{default_name}.%(ext)s",
             "quiet": True,
             "max_filesize": ctx.guild.filesize_limit,
         }
@@ -300,7 +300,7 @@ class Tools(commands.Cog, name="tools"):
         await message.edit(content="Downloaded, uploading...")
 
         try:
-            _file = discord.File(f"files/videos/{default_name}.{default_format}")
+            _file = discord.File(f"src/files/videos/{default_name}.{default_format}")
             await message.edit(content=dl_time, attachments=[_file])
 
         except (ValueError, discord.Forbidden):

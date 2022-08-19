@@ -217,7 +217,7 @@ class Bot(commands.Bot):
 
         self.exts = set(initial_extensions + cogs)
 
-        for extension in self.exts:
+        for extension in self.exts if not self.testing else initial_extensions:
             try:
                 await self.load_extension(extension)
                 print(f"Loaded extension {extension}")
