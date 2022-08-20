@@ -85,7 +85,9 @@ class Roblox(commands.Cog, name="roblox"):
             _badges = await fetch_badges(ctx.bot.session, user)
             badges = ", ".join([data["name"] for data in _badges])
 
-            embed.set_footer(text=f"ID: {user}\nBadges: {badges}\nCreated")
+            embed.set_footer(
+                text=f"ID: {user}\nBadges: {badges if badges else 'No badges'}\nCreated"
+            )
 
             headshot = discord.File(
                 await ctx.to_image(await fetch_headshot(ctx.bot.session, user)),
