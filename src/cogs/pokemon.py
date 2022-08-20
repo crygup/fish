@@ -47,24 +47,16 @@ class Pokemon(commands.Cog, name="pokemon"):
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):
-        if message.guild is None:
-            return
-
-        if message.author.id != 716390085896962058:
-            return
-
-        if str(message.guild.id) not in await self.bot.redis.smembers("poketwo_guilds"):
-            return
-
-        if str(message.guild.owner_id) in await self.bot.redis.smembers(
-            "blacklisted_users"
+        if (
+            message.guild is None
+            or message.author.id != 716390085896962058
+            or str(message.guild.id)
+            not in await self.bot.redis.smembers("poketwo_guilds")
+            or str(message.guild.owner_id)
+            in await self.bot.redis.smembers("block_list")
+            or str(message.guild.id) in await self.bot.redis.smembers("block_list")
+            or r"\_" not in message.content
         ):
-            return
-
-        if str(message.guild.id) in await self.bot.redis.smembers("blacklisted_guilds"):
-            return
-
-        if r"\_" not in message.content:
             return
 
         to_search = re.match(
@@ -74,7 +66,7 @@ class Pokemon(commands.Cog, name="pokemon"):
         if to_search is None:
             return
 
-        to_search = to_search.groups()[0].replace("\\", "")
+        to_search = re.sub(r"\\", "", to_search.groups()[0])
         found = self.get_pokemon(to_search)
 
         if found == []:
@@ -98,7 +90,7 @@ class Pokemon(commands.Cog, name="pokemon"):
         if to_search is None:
             return
 
-        to_search = to_search.groups()[0].replace("\\", "")
+        to_search = re.sub(r"\\", "", to_search.groups()[0])
 
         found = self.get_pokemon(to_search)
 
