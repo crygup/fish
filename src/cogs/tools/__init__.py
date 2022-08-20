@@ -7,6 +7,10 @@ from .tags import TagCommands
 
 
 class Tools(TagCommands, DownloadCommands, OtherCommands, name="tools"):
+    def __init__(self, bot: Bot):
+        super().__init__(bot)
+        self.currently_downloading: list[str] = []
+
     """Useful tools"""
 
     @property
