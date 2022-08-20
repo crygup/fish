@@ -151,7 +151,7 @@ class Pager(discord.ui.View):
     async def stop_pages(self, interaction: discord.Interaction, __):
         """stops the pagination session."""
         await interaction.response.defer()
-        await interaction.delete_original_message()
+        await interaction.delete_original_response()
         await self.ctx.message.add_reaction("<:cr_check:956022530521563136>")
         self.stop()
 
