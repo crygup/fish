@@ -1,17 +1,20 @@
 import textwrap
+from turtle import title
 
+import bs4
 import discord
 from bot import Bot, Context
+from bs4 import BeautifulSoup
 from dateutil import parser
 from discord.ext import commands
 from utils import (
     FieldPageSource,
     Pager,
     RobloxAccountConverter,
-    template,
-    to_thread,
     RobloxAssetConverter,
     SimplePages,
+    template,
+    to_thread,
 )
 from utils.helpers import human_join
 from utils.roblox import *  # smd
@@ -185,6 +188,33 @@ class Roblox(commands.Cog, name="roblox"):
         menu = Pager(p, ctx=ctx)
         await menu.start(ctx)
 
+    @to_thread
+    def scrape_info(self, text: str, embed: discord.Embed) -> discord.Embed:
+        scraper = BeautifulSoup(text, "html.parser")
+        description = scraper.find(id="item-details-description")
+        price = scraper.find(class_="text-robux-lg wait-for-i18n-format-render")
+        clothing_type = scraper.find(
+            id="type-content", class_="font-body text wait-for-i18n-format-render"
+        ).text  # type: ignore
+        title_div = scraper.find(class_="border-bottom item-name-container")
+        title: str = title_div.find("h1").text  # type: ignore
+        price = f"{price.text} robux" if price else "Not for sale"
+        creator: bs4.Tag = scraper.find(class_="text-name")  # type: ignore
+
+        embed.add_field(name="Price", value=price, inline=True)
+        embed.title = title
+
+        embed.add_field(name="Type", value=clothing_type, inline=True)
+
+        embed.add_field(
+            name="Creator", value=f'[{creator.text}]({creator["href"]})', inline=True
+        )
+
+        if description:
+            embed.add_field(name="Description", value=description.text, inline=False)
+
+        return embed
+
     @commands.command(name="asset", aliases=("template",))
     async def asset(
         self,
@@ -197,8 +227,12 @@ class Roblox(commands.Cog, name="roblox"):
         asset = await template(bot=self.bot, ctx=ctx, assetID=assetID)
         embed = discord.Embed()
         embed.set_image(url=f"attachment://asset.png")
-        await ctx.send(
-            ctx.author.mention,
-            embed=embed,
-            file=discord.File(fp=asset, filename=f"asset.png"),
-        )
+        file = discord.File(fp=asset, filename=f"asset.png")
+        url = f'https://www.roblox.com/catalog/{assetID}/"'
+        embed.url = url
+
+        async with self.bot.session.get(url) as r:
+            text = await r.text()
+            embed = await self.scrape_info(text, embed)
+
+        await ctx.send(embed=embed, file=file, reference=ctx.message)
