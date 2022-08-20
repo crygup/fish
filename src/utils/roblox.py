@@ -5,6 +5,27 @@ from aiohttp import ClientSession
 from .helpers import response_checker
 
 
+async def fetch_usernames(session: ClientSession, account_id: int) -> List[str]:
+    """Get a list of badges for a user"""
+
+    cursor = ""
+
+    usernames: List = []
+
+    while True:
+        async with session.get(
+            f"https://users.roblox.com/v1/users/{account_id}/username-history?limit=100&sortOrder=Asc&cursor="
+            + cursor
+        ) as response:
+            data = await response.json()
+            usernames.extend([nameData["name"] for nameData in data["data"]])
+            cursor = data["nextPageCursor"]
+            if cursor is None:
+                break
+
+    return usernames
+
+
 async def fetch_badges(session: ClientSession, account_id: int) -> Dict:
     """Get a list of badges for a user"""
 

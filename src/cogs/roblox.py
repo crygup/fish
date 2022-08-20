@@ -11,7 +11,9 @@ from utils import (
     template,
     to_thread,
     RobloxAssetConverter,
+    SimplePages,
 )
+from utils.helpers import human_join
 from utils.roblox import *  # smd
 
 
@@ -82,6 +84,18 @@ class Roblox(commands.Cog, name="roblox"):
 
             embed.add_field(name="Status", value=onlinestatus_str)
 
+            usernames = await fetch_usernames(ctx.bot.session, user)
+            if usernames:
+                first_5 = usernames[:5]
+                humaned_joined = human_join([f"`{u}`" for u in first_5], final="and")
+                remaining = usernames[5:]
+                text = f"{humaned_joined}"
+
+                if remaining:
+                    text += f"\n*({len(remaining)} remaining)*"
+
+                embed.add_field(name="Usernames", value=text, inline=False)
+
             _badges = await fetch_badges(ctx.bot.session, user)
             badges = ", ".join([data["name"] for data in _badges])
 
@@ -95,6 +109,34 @@ class Roblox(commands.Cog, name="roblox"):
             )
 
         await ctx.send(embed=embed, files=[headshot])
+
+    @roblox.command(name="usernames", aliases=("names",))
+    async def roblox_usernames(
+        self,
+        ctx: Context,
+        *,
+        account: int = commands.parameter(
+            converter=RobloxAccountConverter,
+            default=None,
+            displayed_default="[roblox account]",
+        ),
+    ):
+        """Get all usernames for a roblox account"""
+
+        async with ctx.typing():
+            user = account or await RobloxAccountConverter().convert(
+                ctx, str(ctx.author)
+            )
+            info = await fetch_info(ctx.bot.session, user)
+
+            usernames = await fetch_usernames(ctx.bot.session, user)
+            if not usernames:
+                return await ctx.send("No usernames found")
+
+        pages = SimplePages(entries=usernames, per_page=15, ctx=ctx)
+        pages.embed.title = f"Usernames for {info['name']}"
+        pages.embed.color = self.bot.embedcolor
+        await pages.start(ctx)
 
     @roblox.command(name="set")
     async def roblox_set(self, ctx: Context, username: str):
