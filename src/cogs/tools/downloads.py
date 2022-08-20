@@ -157,7 +157,7 @@ class DownloadCommands(CogBase):
         for file in os.listdir("files/videos"):
             if file.endswith(valid_formats):
                 if file not in self.currently_downloading:
-                    os.remove(f"files/videos/{file}")
+                    os.remove(f"src/files/videos/{file}")
 
     @commands.group(
         name="auto_download", aliases=("auto_dl", "adl"), invoke_without_command=True
