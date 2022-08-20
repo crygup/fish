@@ -1,8 +1,9 @@
-from utils import AuthorView
-import discord
 from typing import List, Union
+
+import discord
 from bot import Bot, Context, re
 from discord.ext import commands
+from utils import AuthorView
 
 
 class AvatarView(AuthorView):

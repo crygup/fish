@@ -11,11 +11,11 @@ from discord.ext import commands
 from PIL import Image
 from utils import FieldPageSource, Pager, human_timedelta, resize_to_limit, to_thread
 
-from ._base import DiscordBase
+from ._base import CogBase
 from .views import AvatarView
 
 
-class UserCommands(DiscordBase):
+class UserCommands(CogBase):
     def __init__(self, bot: Bot):
         self.bot = bot
 

@@ -1,14 +1,17 @@
 import argparse
-from io import BytesIO
 import random
 import re
 import shlex
+from io import BytesIO
 from typing import Dict, Optional, TypeAlias, Union
+
 import discord
 from bot import Bot, Context
 from discord.ext import commands
-from ._base import DiscordBase
-from utils import AuthorView, get_user_badges, GuildChannel, EmojiConverter, human_join
+from utils import (AuthorView, EmojiConverter, GuildChannel, get_user_badges,
+                   human_join)
+
+from ._base import CogBase
 from .views import UserInfoView
 
 emoji_extras = {"BPerms": ["Manage Emojis"], "UPerms": ["Manage Emojis"]}
@@ -17,7 +20,7 @@ InfoArgument: TypeAlias = Optional[
 ]
 
 
-class InfoCommands(DiscordBase):
+class InfoCommands(CogBase):
     def __init__(self, bot: Bot):
         self.bot = bot
 

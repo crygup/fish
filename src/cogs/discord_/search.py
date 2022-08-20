@@ -1,11 +1,13 @@
 import argparse
 import shlex
 from typing import Optional
+
 import discord
 from bot import Bot, Context
 from discord.ext import commands
-from ._base import DiscordBase
-from utils import RoleConverter, FieldPageSource, Pager
+from utils import FieldPageSource, Pager, RoleConverter
+
+from ._base import CogBase
 
 
 class Arguments(argparse.ArgumentParser):
@@ -13,7 +15,7 @@ class Arguments(argparse.ArgumentParser):
         raise RuntimeError(message)
 
 
-class SearchCommand(DiscordBase):
+class SearchCommand(CogBase):
     def __init__(self, bot: Bot):
         self.bot = bot
 

@@ -6,10 +6,10 @@ from bot import Bot, Context
 from discord.ext import commands
 from utils import FieldPageSource, Pager, SimplePages
 
-from ._base import DiscordBase
+from ._base import CogBase
 
 
-class OtherCommands(DiscordBase):
+class OtherCommands(CogBase):
     def __init__(self, bot: Bot):
         self.bot = bot
 
