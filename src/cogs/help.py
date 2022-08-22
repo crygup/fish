@@ -21,6 +21,12 @@ class CommandView(AuthorView):
         self.add_item(CommandDropdown(ctx, cog))
 
 
+class SubCommandView(AuthorView):
+    def __init__(self, ctx: Context, group: commands.Group):
+        super().__init__(ctx)
+        self.add_item(GroupDropdown(ctx, group))
+
+
 class CogView(AuthorView):
     def __init__(self, ctx: Context, cogs: List[commands.Cog]):
         super().__init__(ctx)
@@ -222,6 +228,56 @@ class CommandDropdown(discord.ui.Select):
         await interaction.response.defer()
 
 
+class GroupDropdown(discord.ui.Select):
+    def __init__(self, ctx: Context, group: commands.Group):
+        self.ctx = ctx
+        self.group = group
+
+        options = []
+
+        for cmd in group.commands:
+            options.append(
+                discord.SelectOption(
+                    label=cmd.name.title(),
+                    value=cmd.name.lower(),
+                    description=f'{cmd.help.splitlines()[0].capitalize()}{"." if not cmd.help.splitlines()[0].endswith(".") else ""}'
+                    if cmd.help
+                    else None
+                    if cmd.description != ""
+                    else None,
+                    emoji="\U0001f536"
+                    if isinstance(cmd, commands.Group)
+                    else "\U0001f537",
+                )
+            )
+
+        super().__init__(placeholder="Select a subcommand", options=options[:25])
+
+    async def callback(self, interaction: discord.Interaction):
+        ctx = self.ctx
+        bot = ctx.bot
+
+        if bot.user is None:
+            return
+
+        cmd = bot.get_command(f"{self.group.name} {self.values[0]}")
+
+        if cmd is None:
+            await interaction.response.send_message(
+                "Unable to find that command?", ephemeral=True
+            )
+            return
+
+        embed = make_command_embed(cmd)
+        self.placeholder = cmd.name.title()
+
+        if interaction.message is None:
+            return
+
+        await interaction.message.edit(embed=embed, view=self.view)
+        await interaction.response.defer()
+
+
 class HelpDropdown(discord.ui.Select):
     view: HelpView
 
@@ -303,11 +359,6 @@ class HelpDropdown(discord.ui.Select):
         await interaction.response.defer()
 
 
-class HelpCommandDropdown(discord.ui.Select):
-    def __init__(self):
-        super().__init__(placeholder="Select a command", options=[])
-
-
 class HelpView(AuthorView):
     def __init__(self, ctx: Context, cogs: List[commands.Cog], embed: discord.Embed):
         super().__init__(ctx)
@@ -376,8 +427,8 @@ class MyHelp(commands.HelpCommand):
             return
 
         embed = make_command_embed(group)
-
-        await ctx.send(embed=embed, view=CommandView(ctx, group.cog))
+        view = CommandView(ctx, group.cog)
+        await ctx.send(embed=embed, view=view)
 
     async def send_cog_help(self, cog: commands.Cog):
         ctx = self.context
