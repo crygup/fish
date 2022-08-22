@@ -210,7 +210,7 @@ class Settings(commands.Cog, name="settings"):
         await self.unlink_method(ctx, ctx.author.id, "genshin")
 
     @commands.group(
-        name="auto_download", aliases=("auto_dl", "adl"), invoke_without_command=True
+        name="auto-download", aliases=("auto-dl", "adl"), invoke_without_command=True
     )
     async def auto_download(self, ctx: Context):
         sql = """SELECT auto_download FROM guild_settings WHERE guild_id = $1"""
