@@ -17,7 +17,7 @@ class Pokemon(commands.Cog, name="pokemon"):
     """Pokemon related commands
 
 
-    Enable auto-solving with `fish auto_solve``"""
+    Enable auto-solving with `fish auto_solve`"""
 
     def __init__(self, bot: Bot):
         self.bot = bot
