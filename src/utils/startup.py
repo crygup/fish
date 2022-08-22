@@ -22,6 +22,9 @@ async def setup_cache(bot: Bot):
         if guild["auto_download"]:
             await bot.redis.sadd("auto_download_channels", guild["auto_download"])
 
+        if guild["auto_reactions"]:
+            await bot.redis.sadd("auto_reactions", guild["auto_reactions"])
+
     blacklisted = await bot.pool.fetch("SELECT snowflake FROM block_list")
     for snowflake in blacklisted:
         await bot.redis.sadd("block_list", snowflake["snowflake"])
