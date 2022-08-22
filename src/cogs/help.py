@@ -192,8 +192,6 @@ class CommandDropdown(discord.ui.Select):
                     value=cmd.name.lower().replace(" ", "_"),
                     description=f'{cmd.help.splitlines()[0].capitalize()}{"." if not cmd.help.splitlines()[0].endswith(".") else ""}'
                     if cmd.help
-                    else None
-                    if cmd.description != ""
                     else None,
                     emoji="\U0001f536"
                     if isinstance(cmd, commands.Group)
@@ -242,8 +240,6 @@ class GroupDropdown(discord.ui.Select):
                     value=cmd.name.lower(),
                     description=f'{cmd.help.splitlines()[0].capitalize()}{"." if not cmd.help.splitlines()[0].endswith(".") else ""}'
                     if cmd.help
-                    else None
-                    if cmd.description != ""
                     else None,
                     emoji="\U0001f536"
                     if isinstance(cmd, commands.Group)
@@ -312,7 +308,7 @@ class HelpDropdown(discord.ui.Select):
                 discord.SelectOption(
                     label=cog.qualified_name.title(),
                     value=cog.qualified_name.lower().replace(" ", "_"),
-                    description=f'{cog.description.capitalize()}{"." if not cog.description.endswith(".") else ""}'
+                    description=f'{cog.description.splitlines()[0].capitalize()}{"." if not cog.description.endswith(".") else ""}'
                     if cog.description != ""
                     else None,
                     emoji=getattr(cog, "display_emoji", None),
