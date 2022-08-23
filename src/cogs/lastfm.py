@@ -5,6 +5,7 @@ from typing import Dict, Optional
 import discord
 from bot import Bot, Context
 from discord.ext import commands
+from discord.utils import remove_markdown
 from utils import (
     LastfmClient,
     LastfmConverter,
@@ -58,11 +59,11 @@ class LastFm(commands.Cog, name="lastfm"):
             else ""
         )
         embed = discord.Embed(
-            description=f"**Artist**: {artist} \n**Track**: {name} \n**Album**: {album} {scrobbled}",
+            description=f"**Artist**: {remove_markdown(artist)} \n**Track**: {remove_markdown(name)} \n**Album**: {remove_markdown(album)} {scrobbled}",
         )
         embed.set_thumbnail(url=track["image"][3]["#text"])
         embed.set_author(
-            name=f"{playing} - {user}",
+            name=f"{playing} - {remove_markdown(user)}",
             url=track["url"],
             icon_url=ctx.author.display_avatar.url,
         )
