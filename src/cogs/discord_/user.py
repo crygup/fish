@@ -357,21 +357,32 @@ class UserCommands(CogBase):
             return
 
         async with ctx.typing():
+            sql = """
+            SELECT * FROM avatar_logs WHERE user_id = $1
+            ORDER BY created_at DESC LIMIT 100
+            """
+
             fetch_start = time.perf_counter()
             avatars: List[asyncpg.Record] = await self.bot.pool.fetch(
-                "SELECT * FROM avatar_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100",
+                sql,
                 user.id,
             )
             fetch_end = time.perf_counter()
 
             if avatars == []:
-                raise TypeError(f"{str(user)} has no avatar history on record.")
+                raise TypeError(f"{user} has no avatar history on record.")
 
             gen_start = time.perf_counter()
             file = await self.do_avatar_command(ctx, user, avatars)
             gen_end = time.perf_counter()
 
-        embed = discord.Embed(timestamp=avatars[-1]["created_at"])
+        if len(avatars) == 100:
+            sql = """SELECT created_at FROM avatar_logs WHERE user_id = $1 ORDER BY created_at ASC"""
+            first_avatar: datetime.datetime = await self.bot.pool.fetchval(sql, user.id)  # type: ignore
+        else:
+            first_avatar = avatars[-1]["created_at"]
+
+        embed = discord.Embed(timestamp=first_avatar)
         embed.set_footer(text="First avatar saved")
         embed.set_author(
             name=f"{user}'s avatar history", icon_url=user.display_avatar.url
