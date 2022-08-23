@@ -4,9 +4,10 @@ from bot import Bot, Context
 from .downloads import DownloadCommands
 from .other import OtherCommands
 from .tags import TagCommands
+from .afk import AfkCommands
 
 
-class Tools(TagCommands, DownloadCommands, OtherCommands, name="tools"):
+class Tools(TagCommands, DownloadCommands, OtherCommands, AfkCommands, name="tools"):
     def __init__(self, bot: Bot):
         super().__init__(bot)
         self.currently_downloading: list[str] = []
