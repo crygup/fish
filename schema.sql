@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id BIGINT,
     auto_download BIGINT,
     poketwo BOOLEAN,
+    auto_reactions BOOLEAN,
     PRIMARY KEY (guild_id)
 );
 
@@ -138,4 +139,11 @@ CREATE TABLE IF NOT EXISTS block_list (
     reason TEXT,
     time TIMESTAMP WITH TIME ZONE,
     PRIMARY KEY (snowflake)
+);
+
+CREATE TABLE IF NOT EXISTS afk (
+    user_id BIGINT,
+    reason TEXT,
+    time TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (user_id)
 );
