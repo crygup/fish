@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -15,7 +15,7 @@ async def LastfmClient(
     endpoint: str,
     query: str,
     extras: Optional[str] = None,
-) -> Dict:
+) -> Dict[Any, Any]:
     url = f"http://ws.audioscrobbler.com/{version}/?method={method}&{endpoint}={query}&api_key={bot.config['keys']['lastfm_key']}&format=json"
     if extras:
         url += f"{extras}"

@@ -74,7 +74,7 @@ async def template(bot: Bot, assetID: int, ctx: Context):
             text = await r.text()
             results = re.search(r"\?id=(?P<id>[0-9]+)", text)
             if results:
-                img = await ctx.to_image(
+                img = await ctx.to_bytesio(
                     url=f"https://assetdelivery.roblox.com/v1/asset?id={results.group('id')}"
                 )
                 return img

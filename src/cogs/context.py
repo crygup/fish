@@ -126,6 +126,9 @@ class Context(commands.Context):
         self.pool = self.bot.pool
         self._db: Optional[Union[Pool, Connection]] = None
         self._message_count: int = 0
+        self.dagpi_rl = commands.CooldownMapping.from_cooldown(
+            60.0, 60.0, commands.BucketType.default
+        )
 
     @property
     def db(self) -> Union[Pool, Connection]:
@@ -232,17 +235,27 @@ class Context(commands.Context):
 
         raise TypeError("Failed to convert svg to bytes")
 
-    async def to_image(
-        self, url: str, byte: bool = False, skip_check: bool = False
-    ) -> BytesIO | bytes:
+    async def to_bytesio(self, url: str, skip_check: bool = False) -> BytesIO:
         from utils import response_checker
 
         async with self.bot.session.get(url) as resp:
             if not skip_check:
                 response_checker(resp)
+
             data = await resp.read()
 
-        return data if byte else BytesIO(data)
+        return BytesIO(data)
+
+    async def to_bytes(self, url: str, skip_check: bool = False) -> bytes:
+        from utils import response_checker
+
+        async with self.bot.session.get(url) as resp:
+            if not skip_check:
+                response_checker(resp)
+
+            data = await resp.read()
+
+        return data
 
     @property
     def session(self) -> ClientSession:
@@ -357,11 +370,28 @@ class Context(commands.Context):
         self._message_count += 1
         return m
 
-    async def typing(self, *, ephemeral: bool = False) -> Union[Typing, DeferTyping, None]:
-        try:
-            return super().typing(ephemeral=ephemeral)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+    async def dagpi(self, url: str) -> Dict[str, str]:
+        from utils import RateLimitExceeded, response_checker
+
+        bucket = self.dagpi_rl.get_bucket(self.message)
+        if bucket is None:
+            raise RateLimitExceeded()
+
+        retry_after = bucket.update_rate_limit()
+
+        if retry_after:
+            raise RateLimitExceeded()
+
+        headers = {"Authorization": self.bot.config["keys"]["dagpi"]}
+        async with self.bot.session.get(url, headers=headers) as r:
+            if r.status == 429:
+                raise RateLimitExceeded()
+
+            response_checker(r)
+
+            data = await r.json()
+
+        return data
 
     @property
     def _previous_message(self) -> Optional[discord.Message]:

@@ -1,5 +1,4 @@
 import argparse
-from ast import alias
 import difflib
 import imghdr
 import itertools
@@ -9,7 +8,7 @@ import textwrap
 import time
 import traceback
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import asyncpg
 import discord
@@ -50,6 +49,33 @@ class Arguments(argparse.ArgumentParser):
         raise RuntimeError(message)
 
 
+class FakeUser:
+    def __init__(
+        self,
+        user: Union[discord.Member, discord.User],
+    ) -> None:
+        self.name = user.name
+        self.id = user.id
+        self.tag = user.discriminator
+        self.full = f"{user!r}"
+
+    def __str__(self) -> str:
+        return self.full
+
+    def __repr__(self) -> str:
+        return self.full
+
+
+class FakeGuild:
+    def __init__(self, guild: discord.Guild) -> None:
+        self.name = guild.name
+        self.id = guild.id
+        self.icon = guild.icon.url if guild.icon else None
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Owner(
     commands.Cog,
     name="owner",
@@ -70,6 +96,15 @@ class Owner(
             raise commands.NotOwner
 
         return True
+
+    @commands.command(name="test")
+    async def test(self, ctx: Context, *, message: str):
+        new_message = message.format_map({"user": ctx.author, "server": ctx.guild})
+
+        await ctx.send(
+            new_message,
+            allowed_mentions=discord.AllowedMentions(everyone=False, users=True),
+        )
 
     @commands.command(name="load", aliases=("reload",))
     async def load(self, ctx: Context, *extensions: ExtensionConverter):

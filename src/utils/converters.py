@@ -121,7 +121,7 @@ class ImageConverter(commands.Converter):
             ref: discord.Message = message.reference.resolved  # type: ignore
 
             if ref.embeds and self.get_embed_image(ref.embeds[0], ignore_errors=True):
-                return await ctx.to_image(embed_url)  # type: ignore
+                return await ctx.to_bytesio(self.get_embed_image(ref.embeds[0]))  # type: ignore
 
             if ref.attachments:
                 return BytesIO(await ref.attachments[0].read())
@@ -527,3 +527,12 @@ class TenorUrlConverter(commands.Converter):
 
         except Exception:
             raise failed
+
+
+class BoolConverter(commands.Converter):
+    """Converts discord.Message to List[discord.PartialEmoji]"""
+
+    async def convert(self, ctx: Context, message: str) -> bool:
+        compiled = re.compile(r"(yes|y|true)", re.IGNORECASE)
+
+        return bool(compiled.match(message))

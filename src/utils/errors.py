@@ -55,6 +55,10 @@ class InvalidColor(commands.BadArgument):
     pass
 
 
+class RateLimitExceeded(commands.BadArgument):
+    pass
+
+
 IGNORED = (
     commands.CommandNotFound,
     commands.NotOwner,
@@ -70,4 +74,14 @@ SEND = (
     commands.UserInputError,
     UnknownAccount,
     commands.MissingPermissions,
+    ServerErrorResponse,
+    BadGateway,
+    ClientErrorResponse,
+    NotFound,
+    Unauthorized,
+    BadRequest,
+    Forbidden,
+    ImageTooLarge,
+    InvalidColor,
+    RateLimitExceeded,
 )

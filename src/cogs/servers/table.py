@@ -128,7 +128,7 @@ class Table(commands.Cog, name="table", command_attrs=dict(hidden=True)):
             await ctx.send("User already has a booster role.")
             return
 
-        icon_bytes: bytes = await ctx.to_image(icon, byte=True) if icon else None  # type: ignore
+        icon_bytes: bytes | str = await ctx.to_bytes(icon) if icon else ""
         color_value = color.value if color else 0
 
         role = await ctx.guild.create_role(

@@ -5,6 +5,9 @@ import logging
 import os
 import pathlib
 import re
+import sys
+import textwrap
+import traceback
 from typing import TYPE_CHECKING, Dict, List, Set
 from unittest import result
 
@@ -254,6 +257,35 @@ class Bot(commands.Bot):
             user = await self.fetch_user(user_id)
 
         return user
+
+    async def send_error(self, ctx: Context, error: commands.CommandError):
+        await ctx.send(f"An unhandled error occured, this error has been reported.")
+        embed = discord.Embed(title="Command Error", colour=self.embedcolor)
+        embed.add_field(name="Name", value=ctx.command.qualified_name)
+        embed.add_field(name="Author", value=f"{ctx.author} (ID: {ctx.author.id})")
+
+        fmt = f"Channel: {ctx.channel} (ID: {ctx.channel.id})"
+
+        if ctx.guild:
+            fmt = f"{fmt}\nGuild: {ctx.guild} (ID: {ctx.guild.id})"
+
+        embed.add_field(name="Location", value=fmt, inline=False)
+        embed.add_field(
+            name="Content", value=textwrap.shorten(ctx.message.content, 512)
+        )
+
+        exc = "".join(
+            traceback.format_exception(
+                type(error), error, error.__traceback__, chain=False
+            )
+        )
+        traceback.print_exception(
+            type(error), error, error.__traceback__, file=sys.stderr
+        )
+        embed.description = f"```py\n{exc}\n```"
+        embed.timestamp = discord.utils.utcnow()
+        await self.webhooks["error_logs"].send(embed=embed)
+        return
 
 
 if __name__ == "__main__":

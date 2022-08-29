@@ -161,7 +161,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
             friends = 0
 
         info = info["response"]["players"][0]
-        avatar = await ctx.to_image(info["avatarfull"])
+        avatar = await ctx.to_bytesio(info["avatarfull"])
         avatar_file = discord.File(avatar, filename="avatar.png")
 
         name = (
@@ -241,7 +241,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         embed = discord.Embed(
             color=ctx.bot.embedcolor, description=results["description"]
         )
-        icon_fp = await ctx.to_image(
+        icon_fp = await ctx.to_bytesio(
             f"https://api.genshin.dev/characters/{character}/icon"
         )
         icon_file = discord.File(icon_fp, filename=f"{character}.png")

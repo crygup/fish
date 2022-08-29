@@ -39,35 +39,38 @@ class LastFm(commands.Cog, name="lastfm"):
             else str(username)
         )
 
-        await ctx.typing()
-        info = await LastfmClient(self.bot, "2.0", "user.getrecenttracks", "user", name)
+        async with ctx.typing():
+            info = await LastfmClient(
+                self.bot, "2.0", "user.getrecenttracks", "user", name
+            )
 
-        if info["recenttracks"]["track"] == []:
-            raise TypeError("No recent tracks found for this user.")
+            if info["recenttracks"]["track"] == []:
+                raise TypeError("No recent tracks found for this user.")
 
-        track = info["recenttracks"]["track"][0]
-        user = info["recenttracks"]["@attr"]["user"]
-        scrobbles = f"{int(info['recenttracks']['@attr']['total']):,}"
-        playing = "Now playing" if not track.get("date") else "Last track for"
-        artist = track["artist"]["#text"]
-        name = track["name"]
-        album = track["album"]["#text"]
+            track = info["recenttracks"]["track"][0]
+            user = info["recenttracks"]["@attr"]["user"]
+            scrobbles = f"{int(info['recenttracks']['@attr']['total']):,}"
+            playing = "Now playing" if not track.get("date") else "Last track for"
+            artist = track["artist"]["#text"]
+            name = track["name"]
+            album = track["album"]["#text"]
 
-        scrobbled = (
-            f'\n**Scrobbled**: <t:{track["date"]["uts"]}:R>'
-            if track.get("date")
-            else ""
-        )
-        embed = discord.Embed(
-            description=f"**Artist**: {remove_markdown(artist)} \n**Track**: {remove_markdown(name)} \n**Album**: {remove_markdown(album)} {scrobbled}",
-        )
-        embed.set_thumbnail(url=track["image"][3]["#text"])
-        embed.set_author(
-            name=f"{playing} - {remove_markdown(user)}",
-            url=track["url"],
-            icon_url=ctx.author.display_avatar.url,
-        )
-        embed.set_footer(text=f"{user} has {scrobbles} scrobbles")
+            scrobbled = (
+                f'\n**Scrobbled**: <t:{track["date"]["uts"]}:R>'
+                if track.get("date")
+                else ""
+            )
+            embed = discord.Embed(
+                description=f"**Artist**: {remove_markdown(artist)} \n**Track**: {remove_markdown(name)} \n**Album**: {remove_markdown(album)} {scrobbled}",
+            )
+            embed.set_thumbnail(url=track["image"][3]["#text"])
+            embed.set_author(
+                name=f"{playing} - {remove_markdown(user)}",
+                url=track["url"],
+                icon_url=ctx.author.display_avatar.url,
+            )
+            embed.set_footer(text=f"{user} has {scrobbles} scrobbles")
+
         await ctx.send(embed=embed, check_ref=True)
 
     @last_fm.command(name="set")
@@ -97,7 +100,7 @@ class LastFm(commands.Cog, name="lastfm"):
             title = f'**{track["artist"]["#text"]}** - **[{track["album"]["#text"]}]({track["url"]})**'
             if track["image"][3]["#text"] == "":
                 raise TypeError(f"No album cover found for {title}")
-            image = await ctx.to_image(track["image"][3]["#text"])
+            image = await ctx.to_bytesio(track["image"][3]["#text"])
         else:
             info = await LastfmClient(self.bot, "2.0", "album.search", "album", query)
             if info["results"]["albummatches"]["album"] == []:
@@ -109,7 +112,7 @@ class LastFm(commands.Cog, name="lastfm"):
                     f'No album cover found for `{track["artist"]} - {track["name"]}`'
                 )
 
-            image = await ctx.to_image(track["image"][3]["#text"])
+            image = await ctx.to_bytesio(track["image"][3]["#text"])
 
         embed = discord.Embed(description=title)
         embed.set_image(url="attachment://cover.png")

@@ -1,11 +1,7 @@
-import sys
-import textwrap
-import traceback
-
 import discord
-from bot import Bot
+from bot import Bot, Context
 from discord.ext import commands
-from utils import IGNORED, SEND
+from utils import IGNORED, SEND, RateLimitExceeded
 from yt_dlp import DownloadError
 
 
@@ -21,9 +17,7 @@ class ErrorEvents(commands.Cog, name="error_events"):
         )
 
     @commands.Cog.listener("on_command_error")
-    async def on_command_error(
-        self, ctx: commands.Context, error: commands.CommandError
-    ):
+    async def on_command_error(self, ctx: Context, error: commands.CommandError):
         if hasattr(ctx.command, "on_error"):
             return
 
@@ -48,7 +42,7 @@ class ErrorEvents(commands.Cog, name="error_events"):
                 f"{ctx.command.name.capitalize()} has been disabled temporarily."
             )
 
-        elif isinstance(error, commands.CommandOnCooldown):
+        elif isinstance(error, (commands.CommandOnCooldown, RateLimitExceeded)):
             try:
                 await ctx.message.add_reaction("\N{HOURGLASS}")
             except:
@@ -74,30 +68,4 @@ class ErrorEvents(commands.Cog, name="error_events"):
             if ctx.command is None:
                 return
 
-            await ctx.send(f"An unhandled error occured, this error has been reported.")
-            embed = discord.Embed(title="Command Error", colour=self.bot.embedcolor)
-            embed.add_field(name="Name", value=ctx.command.qualified_name)
-            embed.add_field(name="Author", value=f"{ctx.author} (ID: {ctx.author.id})")
-
-            fmt = f"Channel: {ctx.channel} (ID: {ctx.channel.id})"
-
-            if ctx.guild:
-                fmt = f"{fmt}\nGuild: {ctx.guild} (ID: {ctx.guild.id})"
-
-            embed.add_field(name="Location", value=fmt, inline=False)
-            embed.add_field(
-                name="Content", value=textwrap.shorten(ctx.message.content, 512)
-            )
-
-            exc = "".join(
-                traceback.format_exception(
-                    type(error), error, error.__traceback__, chain=False
-                )
-            )
-            traceback.print_exception(
-                type(error), error, error.__traceback__, file=sys.stderr
-            )
-            embed.description = f"```py\n{exc}\n```"
-            embed.timestamp = discord.utils.utcnow()
-            await self.bot.webhooks["error_logs"].send(embed=embed)
-            return
+            await self.bot.send_error(ctx, error)

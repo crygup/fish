@@ -1,12 +1,12 @@
 import re
-from typing import List
+from typing import Dict, List
 import asyncpg
 
 import discord
 import pandas as pd
 from bot import Bot
 from discord.ext import commands
-from utils import SimplePages, Context, setup_pokemon
+from utils import SimplePages, Context, setup_pokemon, BoolConverter, AuthorView
 
 
 async def setup(bot: Bot):
@@ -178,3 +178,55 @@ class Pokemon(commands.Cog, name="pokemon"):
         await self.poke_pages(
             ctx, "alolan ", "Pokémon with a alolan region alternative"
         )
+
+    # @commands.command(name="wtp")
+    # @commands.is_owner()
+    # async def wtp(
+    #    self,
+    #    ctx: Context,
+    #    public=commands.parameter(
+    #        converter=BoolConverter, default="no", displayed_default="[bool=no]"
+    #    ),
+    # ):
+    #    data = await ctx.dagpi("https://api.dagpi.xyz/data/wtp")
+    #    embed = discord.Embed(color=self.bot.embedcolor)
+    #    embed.set_author(name="Who's that pokemon?")
+    #    image = await ctx.to_bytesio(data["question"])
+    #    file = discord.File(fp=image, filename="pokemon.png")
+    #    embed.set_image(url="attachment://pokemon.png")
+
+    #    await ctx.send(embed=embed, file=file, view=WTPView(ctx, data))
+
+
+class WTPModal(discord.ui.Modal, title="Who's That Pokémon?"):
+    def __init__(self, ctx: Context, data: Dict[str, str]):
+        self.ctx = ctx
+        self.data = data
+
+    name = discord.ui.TextInput(
+        label="Who's That Pokémon?",
+        placeholder="Enter your guess here.",
+        required=True,
+        style=discord.TextStyle.short,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.send_message(f"{self.name.value}!", ephemeral=True)
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception
+    ) -> None:
+        await interaction.response.send_message(
+            "Oops! Something went wrong.", ephemeral=True
+        )
+
+
+class WTPView(AuthorView):
+    def __init__(self, ctx: Context, data: dict[str, str]):
+        super().__init__(ctx)
+        self.ctx = ctx
+        self.data = data
+
+    @discord.ui.button(label="click me")
+    async def modal(self, interaction: discord.Interaction, __):
+        await interaction.response.send_modal(WTPModal(self.ctx, self.data))

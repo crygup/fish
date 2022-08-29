@@ -107,7 +107,7 @@ class Roblox(commands.Cog, name="roblox"):
             )
 
             headshot = discord.File(
-                await ctx.to_image(await fetch_headshot(ctx.bot.session, user)),
+                await ctx.to_bytesio(await fetch_headshot(ctx.bot.session, user)),
                 f"{user}_headshot.png",
             )
 
