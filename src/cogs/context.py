@@ -17,12 +17,14 @@ from typing import (
     TypeVar,
     Union,
 )
-from typing_extensions import reveal_type
 
 import discord
 from aiohttp import ClientSession
 from asyncpg import Connection, Pool
+from discord.context_managers import Typing
 from discord.ext import commands
+from discord.ext.commands.context import DeferTyping
+from typing_extensions import reveal_type
 from wand.image import Image as wImage
 
 T = TypeVar("T")
@@ -354,6 +356,12 @@ class Context(commands.Context):
         )
         self._message_count += 1
         return m
+
+    async def typing(self, *, ephemeral: bool = False) -> Union[Typing, DeferTyping, None]:
+        try:
+            return super().typing(ephemeral=ephemeral)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
     @property
     def _previous_message(self) -> Optional[discord.Message]:
