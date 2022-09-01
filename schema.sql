@@ -5,13 +5,6 @@ CREATE TABLE IF NOT EXISTS message_logs (
     message_id BIGINT,
     message_content TEXT,
     created_at TIMESTAMP WITH TIME ZONE,
-    deleted BOOLEAN,
-    has_attachments BOOLEAN
-);
-
-CREATE TABLE IF NOT EXISTS message_attachment_logs (
-    message_id BIGINT,
-    attachment BYTEA,
     deleted BOOLEAN
 );
 

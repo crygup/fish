@@ -238,9 +238,6 @@ class Owner(
 
         user = self.bot.get_user(results[index - 1]["author_id"]) or "Unknown"
 
-        embeds: List[discord.Embed] = []
-        files: List[discord.File] = []
-
         embed = discord.Embed(
             color=self.bot.embedcolor, timestamp=results[index - 1]["created_at"]
         )
@@ -256,31 +253,9 @@ class Owner(
             if isinstance(user, discord.User)
             else ctx.guild.me.display_avatar.url,
         )
-        message_id = results[index - 1]["message_id"]
         embed.set_footer(text=f"Index {index} of {len(results)}\nMessage deleted ")
-        embeds.append(embed)
 
-        if results[index - 1]["has_attachments"]:
-            attachment_sql = """SELECT * FROM message_attachment_logs where message_id = $1 AND deleted IS TRUE"""
-            attachment_results = await self.bot.pool.fetch(attachment_sql, message_id)
-            for _index, result in enumerate(attachment_results):
-                file = discord.File(
-                    BytesIO(result["attachment"]),
-                    filename=f'{message_id}_{_index}.{imghdr.what(None, result["attachment"])}',
-                )
-                files.append(file)
-                embed = discord.Embed(
-                    color=self.bot.embedcolor,
-                    timestamp=results[index - 1]["created_at"],
-                )
-                embed.set_image(
-                    url=f'attachment://{message_id}_{_index}.{imghdr.what(None, result["attachment"])}'
-                )
-                embeds.append(embed)
-
-        await ctx.send(embeds=embeds[:10], files=files[:9])
-        if len(embeds) >= 10:
-            await ctx.send(embeds=embeds[-1:], files=files[-1:])
+        await ctx.send(embed=embed)
 
     @commands.command(name="sql")
     async def sql(self, ctx: GuildContext, *, query: UntilFlag[SqlCommandFlags]):
