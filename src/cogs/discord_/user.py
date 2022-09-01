@@ -364,8 +364,7 @@ class UserCommands(CogBase):
         
         Due to how we were storing avatars, the storage increased really fast.
         
-        We've moved to a new way of storing avatars but with this change we wont be able to keep them all due to how long this will take, if you wish to keep your avatars please run the command `fish import_avatars`, this will start saving them.
-        This will also save your server avatars if you have any saved.
+        We have a new method for storing them which doesn't take up as much space, but this will take awhile, please be patient.
 
         Thanks."""
         await ctx.send(textwrap.dedent(msg))
@@ -475,11 +474,3 @@ class UserCommands(CogBase):
             f"INSERT INTO imported(user_id) VALUES($1)", user.id
         )
         self.currently_importing.pop(self.currently_importing.index(user.id))
-
-    @commands.command(name="import_avatars")
-    async def import_avatars(self, ctx: Context, user: discord.User = commands.Author):
-        if user.id in self.currently_importing:
-            await ctx.send("Your avatars are currently being imported.")
-            return
-
-        await self.import_method(ctx, user)
