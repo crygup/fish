@@ -66,6 +66,7 @@ IGNORED = (
 )
 SEND = (
     TypeError,
+    ValueError,
     commands.GuildNotFound,
     commands.UserNotFound,
     commands.BadArgument,

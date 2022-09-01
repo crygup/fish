@@ -179,7 +179,7 @@ class Pokemon(commands.Cog, name="pokemon"):
             ctx, "alolan ", "Pokémon with a alolan region alternative"
         )
 
-    # @commands.command(name="wtp")
+    # @commands.command(name="wtp", hidden=True)
     # @commands.is_owner()
     # async def wtp(
     #    self,
@@ -194,7 +194,6 @@ class Pokemon(commands.Cog, name="pokemon"):
     #    image = await ctx.to_bytesio(data["question"])
     #    file = discord.File(fp=image, filename="pokemon.png")
     #    embed.set_image(url="attachment://pokemon.png")
-
     #    await ctx.send(embed=embed, file=file, view=WTPView(ctx, data))
 
 

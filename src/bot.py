@@ -48,12 +48,13 @@ def fix_cog(results) -> str:
     return results
 
 
+module_extensions = ["examples", "discord_", "tools"]
 cogs = [
     fix_cog(x.as_posix())
     for x in cogs_path.glob("**/*.py")
-    if x.parent.name not in ["examples", "discord_", "tools"]
+    if x.parent.name not in module_extensions
 ]
-cogs.extend(["cogs.discord_", "cogs.tools"])
+cogs.extend([f"cogs.{x}" for x in module_extensions])
 
 os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
