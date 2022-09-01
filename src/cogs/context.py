@@ -393,6 +393,12 @@ class Context(commands.Context):
 
         return data
 
+    async def trigger_typing(self):
+        try:
+            await self.typing()
+        except:
+            pass
+
     @property
     def _previous_message(self) -> Optional[discord.Message]:
         if self.message:

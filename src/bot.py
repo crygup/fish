@@ -21,11 +21,11 @@ from ossapi import OssapiV2
 
 from cogs.context import Context
 from utils import (
+    setup_accounts,
     setup_cache,
     setup_pokemon,
     setup_prefixes,
     setup_webhooks,
-    setup_accounts,
 )
 
 if TYPE_CHECKING:
@@ -48,7 +48,7 @@ def fix_cog(results) -> str:
     return results
 
 
-module_extensions = ["examples", "discord_", "tools"]
+module_extensions = ["examples", "discord_", "tools", "image"]
 cogs = [
     fix_cog(x.as_posix())
     for x in cogs_path.glob("**/*.py")
