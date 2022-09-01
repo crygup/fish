@@ -44,7 +44,7 @@ class UserEvents(commands.Cog, name="user_events"):
                 return
 
             try:
-                avatar = await after.display_avatar.replace(size=4096).to_file()
+                avatar = await after.display_avatar.replace(size=2048).to_file()
             except discord.NotFound:
                 return
 
