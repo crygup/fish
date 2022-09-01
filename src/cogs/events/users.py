@@ -39,9 +39,6 @@ class UserEvents(commands.Cog, name="user_events"):
 
     @commands.Cog.listener("on_user_update")
     async def on_avatar_update(self, before: discord.User, after: discord.User):
-        if after.id != 766953372309127168:
-            return
-
         if before.avatar != after.avatar:
             if after.display_avatar.key.isdigit():
                 return
