@@ -1,8 +1,7 @@
 import datetime
-import imghdr
-from io import BytesIO
-from typing import List, Tuple
+import random
 
+import asyncpg
 import discord
 from bot import Bot
 from discord.ext import commands, tasks
@@ -40,23 +39,44 @@ class UserEvents(commands.Cog, name="user_events"):
 
     @commands.Cog.listener("on_user_update")
     async def on_avatar_update(self, before: discord.User, after: discord.User):
+        if after.id != 766953372309127168:
+            return
+
         if before.avatar != after.avatar:
+            if after.display_avatar.key.isdigit():
+                return
+
             try:
-                avatar = await after.display_avatar.replace(size=4096).read()
+                avatar = await after.display_avatar.replace(size=4096).to_file()
             except discord.NotFound:
                 return
 
-            sql = """
-            INSERT INTO avatar_logs(user_id, avatar, format, created_at)
-            VALUES ($1, $2, $3, $4)
-            """
-            await self.bot.pool.execute(
-                sql,
-                after.id,
-                avatar,
-                imghdr.what(None, avatar) or "png",
-                datetime.datetime.utcnow(),
+            webhook = random.choice(
+                [webhook for _, webhook in self.bot.avatar_webhooks.items()]
             )
+
+            message = await webhook.send(
+                f"{after.mention} | {after} | {after.id} | {discord.utils.format_dt(discord.utils.utcnow())}",
+                file=avatar,
+                wait=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+            sql = """
+            INSERT INTO avatars(user_id, avatar_key, created_at, avatar)
+            VALUES($1, $2, $3, $4)"""
+
+            now = discord.utils.utcnow()
+            try:
+                await self.bot.pool.execute(
+                    sql,
+                    after.id,
+                    after.display_avatar.key,
+                    now,
+                    message.attachments[0].url,
+                )
+            except asyncpg.UniqueViolationError:
+                pass
 
     @commands.Cog.listener("on_presence_update")
     async def on_status_update(self, before: discord.Member, after: discord.Member):

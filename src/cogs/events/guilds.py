@@ -62,36 +62,6 @@ class GuildEvents(commands.Cog, name="guild_events"):
             sql, guild.id, mod_id, user.id, reason, discord.utils.utcnow()
         )
 
-    @commands.Cog.listener("on_member_remove")
-    async def on_member_remove(self, member: discord.Member):
-        if self.bot.user is None:
-            return
-
-        if member.guild.me.guild_permissions.view_audit_log:
-            mod_id = 0
-            reason = "No reason given"
-            async for entry in member.guild.audit_logs(
-                action=discord.AuditLogAction.kick, limit=5
-            ):
-                if entry.target is None:
-                    continue
-                if entry.user is None:
-                    continue
-
-                if entry.target.id == member.id:
-                    mod_id = entry.user.id
-                    reason = entry.reason or "No reason given"
-                    break
-
-            sql = """
-            INSERT INTO guild_kicks(guild_id, mod_id, target_id, reason, time)
-            VALUES ($1, $2, $3, $4, $5)
-            """
-
-            await self.bot.pool.execute(
-                sql, member.guild.id, mod_id, member.id, reason, discord.utils.utcnow()
-            )
-
     async def guild_method(self, embed: discord.Embed, guild: discord.Guild):
         embed.timestamp = (
             guild.me.joined_at

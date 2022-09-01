@@ -33,8 +33,7 @@ class AutoReactions(commands.Cog, name="auto_reactions"):
             await self.add_reactions(message)
             return
 
-        valid_embed_types = ["image", "video", "gifv", "article", "link"]
         for embed in message.embeds:
-            if embed.type in valid_embed_types:
+            if not embed.type == "rich":
                 await self.add_reactions(message)
                 return

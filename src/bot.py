@@ -8,7 +8,7 @@ import re
 import sys
 import textwrap
 import traceback
-from typing import TYPE_CHECKING, Dict, List, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Set
 from unittest import result
 
 import aiohttp
@@ -120,11 +120,12 @@ class Bot(commands.Bot):
                 everyone=False, roles=False, users=True, replied_user=False
             ),
         )
-        self.config: Dict = config
+        self.config: Dict[str, Any] = config
         self.logger = logger
         self.uptime: datetime.datetime
         self.embedcolor = 0xFAA0C1
         self.webhooks: Dict[str, discord.Webhook] = {}
+        self.avatar_webhooks: Dict[str, discord.Webhook] = {}
         self.testing = testing
         self.pokemon: List[str] = []
         self.prefixes: Dict[int, List[str]] = {}

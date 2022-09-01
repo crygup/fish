@@ -8,8 +8,7 @@ from typing import Dict, Optional, TypeAlias, Union
 import discord
 from bot import Bot, Context
 from discord.ext import commands
-from utils import (AuthorView, EmojiConverter, GuildChannel, get_user_badges,
-                   human_join)
+from utils import AuthorView, EmojiConverter, GuildChannel, get_user_badges, human_join
 
 from ._base import CogBase
 from .views import UserInfoView

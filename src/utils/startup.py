@@ -35,13 +35,13 @@ async def setup_cache(bot: Bot):
 
 
 async def setup_webhooks(bot: Bot):
-    bot.webhooks["error_logs"] = discord.Webhook.from_url(
-        url=bot.config["webhooks"]["error_logs"], session=bot.session
-    )
+    for name, webhook in bot.config["webhooks"].items():
+        bot.webhooks[name] = discord.Webhook.from_url(url=webhook, session=bot.session)
 
-    bot.webhooks["join_logs"] = discord.Webhook.from_url(
-        url=bot.config["webhooks"]["join_logs"], session=bot.session
-    )
+    for name, webhook in bot.config["avatar_webhooks"].items():
+        bot.avatar_webhooks[name] = discord.Webhook.from_url(
+            url=webhook, session=bot.session
+        )
 
 
 async def setup_pokemon(bot: Bot):

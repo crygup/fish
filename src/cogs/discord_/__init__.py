@@ -10,6 +10,10 @@ from .other import OtherCommands
 class Discord(SearchCommand, InfoCommands, UserCommands, OtherCommands, name="discord"):
     """Commands for discord itself"""
 
+    def __init__(self, bot: Bot):
+        super().__init__(bot)
+        self.currently_importing: list[int] = []
+
     @property
     def display_emoji(self) -> discord.PartialEmoji:
         return discord.PartialEmoji(name="discord", id=1006848754944593921)

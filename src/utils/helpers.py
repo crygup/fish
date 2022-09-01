@@ -81,6 +81,7 @@ async def template(bot: Bot, assetID: int, ctx: Context):
 
         raise TypeError(f"Sorry, I couldn't find that asset.`")
 
+
 class AuthorView(discord.ui.View):
     def __init__(self, ctx: Context, *, timeout: Optional[float] = None):
         super().__init__(timeout=timeout)
