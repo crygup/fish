@@ -15,18 +15,21 @@ CREATE TABLE IF NOT EXISTS message_attachment_logs (
     deleted BOOLEAN
 );
 
-CREATE TABLE IF NOT EXISTS avatar_logs (
+CREATE TABLE IF NOT EXISTS avatars (
     user_id BIGINT,
-    avatar BYTEA,
-    format TEXT,
-    created_at TIMESTAMP WITH TIME ZONE
+    avatar_key TEXT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    avatar TEXT,
+    PRIMARY KEY(user_id, avatar_key)
 );
 
-CREATE TABLE IF NOT EXISTS guild_avatar_logs (
-    user_id BIGINT,
-    avatar BYTEA,
-    format TEXT,
-    created_at TIMESTAMP WITH TIME ZONE
+CREATE TABLE IF NOT EXISTS guild_avatars (
+    member_id BIGINT,
+    guild_id BIGINT,
+    avatar_key TEXT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    avatar TEXT,
+    PRIMARY KEY(member_id, avatar_key, guild_id)
 );
 
 CREATE TABLE IF NOT EXISTS username_logs (
