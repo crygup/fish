@@ -1,3 +1,4 @@
+import discord
 from discord.ext import commands
 
 
@@ -65,6 +66,7 @@ IGNORED = (
     commands.CheckFailure,
 )
 SEND = (
+    discord.HTTPException,
     TypeError,
     ValueError,
     commands.GuildNotFound,
