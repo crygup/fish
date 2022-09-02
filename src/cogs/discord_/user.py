@@ -399,7 +399,7 @@ class UserCommands(CogBase):
 
         async with ctx.typing():
             sql = """
-            SELECT * FROM guild_avatars WHERE user_id = $1 AND member_id = $2
+            SELECT * FROM guild_avatars WHERE member_id = $1 AND guild_id = $2
             ORDER BY created_at DESC LIMIT 100
             """
 
