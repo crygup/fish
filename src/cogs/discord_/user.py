@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import math
 import random
@@ -330,26 +331,6 @@ class UserCommands(CogBase):
             buffer = resize_to_limit(buffer, filesize_limit)
             return buffer
 
-    async def do_avatar_command(
-        self,
-        ctx: Context,
-        user: discord.User | discord.Member,
-        avatars: List[asyncpg.Record],
-    ) -> discord.File:
-
-        if ctx.guild is None:
-            raise commands.GuildNotFound("Guild not found")
-
-        fp = await self._make_avatars(
-            ctx.guild.filesize_limit, [x["avatar"] for x in avatars]
-        )
-        file = discord.File(
-            fp,
-            f"{user.id}_avatar_history.png",
-        )
-
-        return file
-
     @commands.group(
         name="avatarhistory", aliases=("avyh",), invoke_without_command=True
     )
@@ -357,120 +338,106 @@ class UserCommands(CogBase):
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows the avatar history of a user."""
-        if ctx.guild is None:
-            return
-        msg = """
-        **THIS COMMAND IS CURRENTLY DISABLED, PLEASE READ!!!**
-        
-        Due to how we were storing avatars, the storage increased really fast.
-        
-        We have a new method for storing them which doesn't take up as much space, but this will take awhile, please be patient.
 
-        Thanks."""
-        await ctx.send(textwrap.dedent(msg))
+        async def url_to_bytes(url) -> bytes:
+            async with ctx.bot.session.get(url) as r:
+                return await r.read()
 
-    @avatar_history.command(name="guild")
+        async with ctx.typing():
+            sql = """
+            SELECT * FROM avatars WHERE user_id = $1
+            ORDER BY created_at DESC LIMIT 100
+            """
+
+            fetch_start = time.perf_counter()
+            records: List[asyncpg.Record] = await self.bot.pool.fetch(
+                sql,
+                user.id,
+            )
+            fetch_end = time.perf_counter()
+
+            if records == []:
+                raise ValueError(f"{user} has no avatar history on record.")
+
+            avatars = await asyncio.gather(
+                *[url_to_bytes(row["avatar"]) for row in records]
+            )
+
+            gen_start = time.perf_counter()
+            fp = await self._make_avatars(ctx.guild.filesize_limit, avatars)
+            file = discord.File(
+                fp,
+                f"{user.id}_avatar_history.png",
+            )
+            gen_end = time.perf_counter()
+
+        if len(records) == 100:
+            sql = """SELECT created_at FROM avatars WHERE user_id = $1 ORDER BY created_at ASC"""
+            first_avatar: datetime.datetime = await self.bot.pool.fetchval(sql, user.id)
+        else:
+            first_avatar = records[-1]["created_at"]
+
+        embed = discord.Embed(timestamp=first_avatar)
+        embed.set_footer(text="First avatar saved")
+        embed.set_author(
+            name=f"{user}'s avatar history", icon_url=user.display_avatar.url
+        )
+        embed.description = f"`Fetching  :` {round(fetch_end - fetch_start, 2)}s\n`Generating:` {round(gen_end - gen_start, 2)}s"
+        embed.set_image(url=f"attachment://{user.id}_avatar_history.png")
+
+        await ctx.send(embed=embed, file=file)
+
+    @avatar_history.command(name="server", aliases=("guild",))
     async def avatar_history_guild(
         self, ctx: Context, *, member: discord.Member = commands.Author
     ):
-        """Shows the guild avatar history of a user."""
+        """Shows the server avatar history of a user."""
 
-    async def insert_avy(self, user: discord.User | discord.Member):
-        sql = """SELECT * FROM avatar_logs WHERE user_id = $1"""
-        results = await self.bot.pool.fetch(sql, user.id)
+        async def url_to_bytes(url) -> bytes:
+            async with ctx.bot.session.get(url) as r:
+                return await r.read()
 
-        if results == []:
-            return
-
-        for result in results:
-            webhook = random.choice(
-                [webhook for _, webhook in self.bot.avatar_webhooks.items()]
-            )
-            avatar = discord.File(BytesIO(result["avatar"]), filename=f"{user.id}.png")
-            message = await webhook.send(
-                f"{user.mention} | {user} | {user.id} | {discord.utils.format_dt(discord.utils.utcnow())}",
-                file=avatar,
-                wait=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-
+        async with ctx.typing():
             sql = """
-            INSERT INTO avatars(user_id, avatar_key, created_at, avatar)
-            VALUES($1, $2, $3, $4)"""
+            SELECT * FROM guild_avatars WHERE user_id = $1 AND member_id = $2
+            ORDER BY created_at DESC LIMIT 100
+            """
 
-            now = discord.utils.utcnow()
-            try:
-                await self.bot.pool.execute(
-                    sql,
-                    user.id,
-                    str(uuid.uuid1()),
-                    now,
-                    message.attachments[0].url,
-                )
-            except asyncpg.UniqueViolationError:
-                pass
-
-    async def insert_avy_guild(self, user: discord.User | discord.Member):
-        sql = """SELECT * FROM guild_avatar_logs  WHERE user_id = $1"""
-        results = await self.bot.pool.fetch(sql, user.id)
-
-        if results == []:
-            return
-
-        for result in results:
-            webhook = random.choice(
-                [webhook for _, webhook in self.bot.avatar_webhooks.items()]
+            fetch_start = time.perf_counter()
+            records: List[asyncpg.Record] = await self.bot.pool.fetch(
+                sql, member.id, ctx.guild.id
             )
-            avatar = discord.File(BytesIO(result["avatar"]), filename=f"{user.id}.png")
-            message = await webhook.send(
-                f"{user.mention} | {user} | {user.id} | {discord.utils.format_dt(discord.utils.utcnow())}",
-                file=avatar,
-                wait=True,
-                allowed_mentions=discord.AllowedMentions.none(),
+            fetch_end = time.perf_counter()
+
+            if records == []:
+                raise ValueError(f"{member} has no server avatar history on record.")
+
+            avatars = await asyncio.gather(
+                *[url_to_bytes(row["avatar"]) for row in records]
             )
 
-            sql = """
-            INSERT INTO guild_avatars(member_id, guild_id, avatar_key, created_at, avatar)
-            VALUES($1, $2, $3, $4, $5)"""
-
-            now = discord.utils.utcnow()
-            try:
-                await self.bot.pool.execute(
-                    sql,
-                    user.id,
-                    result["guild_id"],
-                    str(uuid.uuid1()),
-                    now,
-                    message.attachments[0].url,
-                )
-            except asyncpg.UniqueViolationError:
-                pass
-
-    async def import_method(self, ctx: Context, user: discord.User | discord.Member):
-        sql = """SELECT user_id FROM imported WHERE user_id = $1"""
-        user_id: int | None = await self.bot.pool.fetchval(sql, user.id)
-        if user_id:
-            await ctx.send(
-                "You've already had your avatars imported, if you don't remember doing this someone else did it for you. Don't worry, I'm still logging the new ones!"
+            gen_start = time.perf_counter()
+            fp = await self._make_avatars(ctx.guild.filesize_limit, avatars)
+            file = discord.File(
+                fp,
+                f"{member.id}_avatar_history.png",
             )
-            return
+            gen_end = time.perf_counter()
 
-        start = discord.utils.utcnow()
-        message = await ctx.send("Working on it... <a:loading:974280851762327563>")
-        self.currently_importing.append(user.id)
-        await self.insert_avy(user)
-        await self.insert_avy_guild(user)
+        if len(records) == 100:
+            sql = """SELECT created_at FROM guild_avatars WHERE member_id = $1 AND guild_id = $1 ORDER BY created_at ASC"""
+            first_avatar: datetime.datetime = await self.bot.pool.fetchval(
+                sql, member.id, ctx.guild.id
+            )
+        else:
+            first_avatar = records[-1]["created_at"]
 
-        msg = f"Successfully imported {user}'s avatars, took {human_timedelta(start, suffix=False, brief=True)}."
-
-        try:
-            if message is None:
-                raise ValueError("failure")
-            await message.edit(content=msg)
-        except (discord.Forbidden, discord.HTTPException, ValueError):
-            await ctx.send(msg)
-
-        await self.bot.pool.execute(
-            f"INSERT INTO imported(user_id) VALUES($1)", user.id
+        embed = discord.Embed(timestamp=first_avatar)
+        embed.set_footer(text="First avatar saved")
+        embed.set_author(
+            name=f"{member}'s guild avatar history", icon_url=member.display_avatar.url
         )
-        self.currently_importing.pop(self.currently_importing.index(user.id))
+        embed.description = f"`Fetching  :` {round(fetch_end - fetch_start, 2)}s\n`Generating:` {round(gen_end - gen_start, 2)}s"
+        embed.set_image(url=f"attachment://{member.id}_avatar_history.png")
+
+        await ctx.send(embed=embed, file=file)
