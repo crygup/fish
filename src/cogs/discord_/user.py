@@ -37,7 +37,7 @@ class UserCommands(CogBase):
         embed.set_author(name=str(user), icon_url=user.display_avatar.url)
 
         embed.set_image(url=user.display_avatar.url)
-        sql = """SELECT created_at FROM avatar_logs WHERE user_id = $1 ORDER BY created_at DESC"""
+        sql = """SELECT created_at FROM avatars WHERE user_id = $1 ORDER BY created_at DESC"""
         latest_avatar = await self.bot.pool.fetchval(sql, user.id)
 
         if latest_avatar:
