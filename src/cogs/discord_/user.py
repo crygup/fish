@@ -81,7 +81,8 @@ class UserCommands(CogBase):
     async def avatars(
         self, ctx: Context, user: Union[discord.Member, discord.User] = commands.Author
     ):
-        sql = """SELECT * FROM avatars WHERE user_id = $1"""
+        """Shows all of a users avatars"""
+        sql = """SELECT * FROM avatars WHERE user_id = $1 ORDER BY created_at DESC"""
         results = await self.bot.pool.fetch(sql, user.id)
 
         if results == []:
@@ -390,7 +391,9 @@ class UserCommands(CogBase):
     async def avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
-        """Shows the avatar history of a user."""
+        """Shows the avatar history of a user.
+
+        This will only show the first 100, to view them all and in HD run the command `avatars`"""
 
         async def url_to_bytes(url) -> bytes:
             async with ctx.bot.session.get(url) as r:
