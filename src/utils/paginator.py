@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional
+import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 from cogs.context import Context
@@ -176,6 +177,25 @@ class FieldPageSource(menus.ListPageSource):
                 f"Page {menu.current_page + 1}/{maximum} ({len(self.entries)} entries)"
             )
             self.embed.set_footer(text=text)
+
+        return self.embed
+
+
+class AvatarsPageSource(menus.ListPageSource):
+    """A page source that requires (avatar, created_at) tuple items."""
+
+    def __init__(self, entries: List[Tuple[str, datetime.datetime]], *, per_page=1):
+        super().__init__(entries, per_page=per_page)
+        self.embed = discord.Embed(colour=0x2F3136)
+
+    async def format_page(self, menu, entries: Tuple[str, datetime.datetime]):
+        maximum = self.get_max_pages()
+
+        self.embed.set_footer(
+            text=f"Page {menu.current_page + 1}/{maximum} \nAvatar Changed"
+        )
+        self.embed.timestamp = entries[1]
+        self.embed.set_image(url=entries[0])
 
         return self.embed
 

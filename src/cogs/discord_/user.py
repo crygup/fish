@@ -1,34 +1,43 @@
 import asyncio
 import datetime
+import importlib
 import math
 import random
 import textwrap
 import time
 import uuid
 from io import BytesIO
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import asyncpg
 import discord
 from bot import Bot, Context
 from discord.ext import commands
 from PIL import Image
-from utils import FieldPageSource, Pager, human_timedelta, resize_to_limit, to_thread
+from utils import (
+    FieldPageSource,
+    Pager,
+    human_timedelta,
+    resize_to_limit,
+    to_thread,
+    AvatarsPageSource,
+)
 
 from ._base import CogBase
 from .views import AvatarView
 
 
 class UserCommands(CogBase):
-    def __init__(self, bot: Bot):
-        self.bot = bot
-        self.currently_importing: list[int] = []
-
     @commands.command(name="avatar", aliases=("pfp", "avy", "av"))
     async def avatar(
-        self, ctx: Context, user: Union[discord.Member, discord.User] = commands.Author
+        self,
+        ctx: Context,
+        user: Optional[Union[discord.Member, discord.User]] = commands.Author,
+        number: int = 0,
     ):
         """Gets the avatar of a user"""
+        user = user or ctx.author
+
         embed = discord.Embed(
             color=self.bot.embedcolor
             if user.color == discord.Color.default()
@@ -36,7 +45,25 @@ class UserCommands(CogBase):
         )
         embed.set_author(name=str(user), icon_url=user.display_avatar.url)
 
+        if number != 0:
+            sql = """SELECT * FROM avatars WHERE user_id = $1"""
+            results = await self.bot.pool.fetch(sql, user.id)
+            if results == []:
+                raise ValueError("User has no avatar history saved.")
+
+            try:
+                avatar = results[number + 1]["avatar"]
+            except IndexError:
+                raise ValueError(f"{user} has no avatar at that index.")
+
+            embed.set_image(url=avatar)
+            embed.timestamp = results[number + 1]["created_at"]
+            embed.set_footer(text=f"Showing avatar {number:,} \nAvatar changed")
+            await ctx.send(embed=embed)
+            return
+
         embed.set_image(url=user.display_avatar.url)
+
         sql = """SELECT created_at FROM avatars WHERE user_id = $1 ORDER BY created_at DESC"""
         latest_avatar = await self.bot.pool.fetchval(sql, user.id)
 
@@ -49,6 +76,32 @@ class UserCommands(CogBase):
             view=AvatarView(ctx, user, embed, user.display_avatar),
             check_ref=True,
         )
+
+    @commands.command(name="avatars", aliases=("pfps", "avys", "avs"))
+    async def avatars(
+        self, ctx: Context, user: Union[discord.Member, discord.User] = commands.Author
+    ):
+        sql = """SELECT * FROM avatars WHERE user_id = $1"""
+        results = await self.bot.pool.fetch(sql, user.id)
+
+        if results == []:
+            raise ValueError("User has no avatar history saved.")
+
+        entries: List[Tuple[str, datetime.datetime]] = [
+            (
+                r["avatar"],
+                r["created_at"],
+            )
+            for r in results
+        ]
+
+        source = AvatarsPageSource(entries=entries)
+        source.embed.color = (
+            self.bot.embedcolor if user.color == discord.Color.default() else user.color
+        )
+        source.embed.title = f"Avatars for {user}"
+        pager = Pager(source, ctx=ctx)
+        await pager.start(ctx)
 
     @commands.command(name="banner")
     async def banner(self, ctx: Context, *, user: discord.User = commands.Author):
