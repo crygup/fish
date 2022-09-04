@@ -323,7 +323,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         cogs                   : {len(bot.cogs):,}
         cached messages        : {len(bot.cached_messages):,}
         latency                : {round(bot.latency * 1000, 4)}
-        intents value          : {bot.intents.value}
+        intents value          : {bot.intents.value}ms
         members intent         : {bot.intents.members}
         presences intent       : {bot.intents.presences}
         message content intent : {bot.intents.message_content}
