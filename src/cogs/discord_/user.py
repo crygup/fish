@@ -46,7 +46,9 @@ class UserCommands(CogBase):
         embed.set_author(name=str(user), icon_url=user.display_avatar.url)
 
         if number != 0:
-            sql = """SELECT * FROM avatars WHERE user_id = $1"""
+            sql = (
+                """SELECT * FROM avatars WHERE user_id = $1 ORDER BY created_at DESC"""
+            )
             results = await self.bot.pool.fetch(sql, user.id)
             if results == []:
                 raise ValueError("User has no avatar history saved.")
