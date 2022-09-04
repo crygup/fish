@@ -309,8 +309,12 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
             if discord.utils.find(lambda a: isinstance(a, discord.Game), m.activities)
         ]
         activities = [m for m in members if m.activities]
+        memory_usage = self.process.memory_full_info().uss / 1024**2
+        cpu_usage = self.process.cpu_percent() / psutil.cpu_count()
 
         message = f"""
+        memory                 : {memory_usage:.2f} MiB
+        cpu                    : {cpu_usage:.2f}%
         guilds                 : {len(bot.guilds):,}
         sus guilds             : {len(ctx.sus_guilds):,}
         members                : {members_count:,}
