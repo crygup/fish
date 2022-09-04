@@ -2,12 +2,14 @@ import datetime
 import difflib
 import re
 import textwrap
+from time import perf_counter
 from typing import Dict, List, Optional, Union
 
 import discord
 import psutil
 from bot import Bot, Context
 from discord.ext import commands
+from jishaku.modules import package_version
 from utils import (
     FrontHelpPageSource,
     GuildContext,
@@ -17,6 +19,7 @@ from utils import (
     Unauthorized,
     human_join,
     human_timedelta,
+    natural_size,
 )
 
 from cogs.context import Context
@@ -294,6 +297,14 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
             [result for result in discrims if result["created_at"] >= start]
         )
 
+        psql_start = perf_counter()
+        await bot.pool.execute("SELECT 1")
+        psql_end = perf_counter()
+
+        redis_start = perf_counter()
+        await self.bot.redis.ping()
+        redis_end = perf_counter()
+
         members: List[discord.Member] = []
         [members.extend(g.members) for g in bot.guilds]
         spotify = [
@@ -309,13 +320,19 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
             if discord.utils.find(lambda a: isinstance(a, discord.Game), m.activities)
         ]
         activities = [m for m in members if m.activities]
-        memory_usage = self.process.memory_full_info().uss / 1024**2
+        mem = self.process.memory_full_info()
+        memory_usage = mem.uss / 1024**2
         cpu_usage = self.process.cpu_percent() / psutil.cpu_count()
 
         message = f"""
         memory                 : {memory_usage:.2f} MiB
+        virtual memory         : {natural_size(mem.vms)}
         cpu                    : {cpu_usage:.2f}%
+        pid                    : {self.process.pid}
+        threads                : {self.process.num_threads():,}
+        discord.py             : {discord.__version__}
         guilds                 : {len(bot.guilds):,}
+        jishaku                : v{package_version('jishaku')}
         sus guilds             : {len(ctx.sus_guilds):,}
         members                : {members_count:,}
         spotify activities     : {len(spotify):,}
@@ -326,7 +343,9 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         stickers               : {len(bot.stickers):,}
         cogs                   : {len(bot.cogs):,}
         cached messages        : {len(bot.cached_messages):,}
-        latency                : {round(bot.latency * 1000, 4)}ms
+        websocket latency      : {round(bot.latency * 1000, 4)}ms
+        postgresql latency     : {round(psql_end - psql_start, 4)}ms
+        redis latency          : {round(redis_end - redis_start, 4)}ms
         intents value          : {bot.intents.value}
         members intent         : {bot.intents.members}
         presences intent       : {bot.intents.presences}
