@@ -322,8 +322,8 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         stickers               : {len(bot.stickers):,}
         cogs                   : {len(bot.cogs):,}
         cached messages        : {len(bot.cached_messages):,}
-        latency                : {round(bot.latency * 1000, 4)}
-        intents value          : {bot.intents.value}ms
+        latency                : {round(bot.latency * 1000, 4)}ms
+        intents value          : {bot.intents.value}
         members intent         : {bot.intents.members}
         presences intent       : {bot.intents.presences}
         message content intent : {bot.intents.message_content}
