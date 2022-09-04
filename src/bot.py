@@ -14,8 +14,8 @@ from unittest import result
 import aiohttp
 import aioredis
 import asyncpg
-import cachetools
 import discord
+from cachetools import TTLCache
 from discord.ext import commands
 from ossapi import OssapiV2
 
@@ -85,6 +85,12 @@ class Bot(commands.Bot):
     async def no_dms(self, ctx: Context):
         return ctx.guild is not None
 
+    async def owner_only(self, ctx: Context):
+        if ctx.author.id == self.owner_id:
+            return True
+
+        return not self.owner_only_mode
+
     async def block_list(self, ctx: Context):
         blocked = await self.redis.smembers("block_list")
 
@@ -120,12 +126,22 @@ class Bot(commands.Bot):
                 everyone=False, roles=False, users=True, replied_user=False
             ),
         )
+        self._global_cooldown = commands.CooldownMapping.from_cooldown(
+            20.0, 30.0, commands.BucketType.user
+        )
+        self.messages: TTLCache[str, discord.Message] = TTLCache(
+            maxsize=1000, ttl=300.0
+        )
+        self.owner_only_mode: bool = True if testing else False
+        self.avatar_webhooks: Dict[str, discord.Webhook] = {}
+        self.webhooks: Dict[str, discord.Webhook] = {}
+        self.owner_id = 766953372309127168
+        self.owner_ids = {}
+
         self.config: Dict[str, Any] = config
         self.logger = logger
         self.uptime: datetime.datetime
         self.embedcolor = 0xFAA0C1
-        self.webhooks: Dict[str, discord.Webhook] = {}
-        self.avatar_webhooks: Dict[str, discord.Webhook] = {}
         self.testing = testing
         self.pokemon: List[str] = []
         self.prefixes: Dict[int, List[str]] = {}
@@ -133,15 +149,11 @@ class Bot(commands.Bot):
         self.e_replies = "<:replies:972280398874824724>"
         self._context = Context
         self.select_filler = "\u2800" * 47
-        self._global_cooldown = commands.CooldownMapping.from_cooldown(
-            20.0, 30.0, commands.BucketType.user
-        )
-        self.messages: cachetools.TTLCache[str, discord.Message] = cachetools.TTLCache(
-            maxsize=1000, ttl=300.0
-        )
+
         self.add_check(self.no_dms)
         self.add_check(self.block_list)
         self.add_check(self.no_auto_commands)
+        self.add_check(self.owner_only)
 
     async def on_message_edit(
         self, before: discord.Message, after: discord.Message
