@@ -1,6 +1,7 @@
 import datetime
 import difflib
 import re
+import textwrap
 from typing import Dict, List, Optional, Union
 
 import discord
@@ -54,12 +55,6 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         perms.manage_messages = True
         perms.external_emojis = True
         perms.external_stickers = True
-        perms.manage_guild = True
-        perms.manage_channels = True
-        perms.manage_roles = True
-        perms.kick_members = True
-        perms.ban_members = True
-        perms.manage_nicknames = True
         perms.manage_emojis_and_stickers = True
 
         self.invite_url = discord.utils.oauth_url(bot.user.id, permissions=perms, scopes=("bot",))  # type: ignore
@@ -260,3 +255,89 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         embed.add_field(name="Birthday", value=results["birthday"])
 
         await ctx.send(embed=embed, file=icon_file)
+
+    @commands.command(name="stats", hidden=True)
+    @commands.cooldown(1, 30)
+    async def stats(self, ctx: Context):
+        """This shows a bit more info than about
+
+        Can be hard to read for mobile users, sorry."""
+        bot = self.bot
+        await ctx.trigger_typing()
+        members_count = sum(g.member_count for g in bot.guilds)  # type: ignore
+        start = discord.utils.utcnow().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+        avatars = await bot.pool.fetch("""SELECT * FROM avatars""")
+        avatars_today = len(
+            [result for result in avatars if result["created_at"] >= start]
+        )
+
+        commands = await bot.pool.fetch("""SELECT * FROM command_logs""")
+        commands_today = len(
+            [result for result in commands if result["created_at"] >= start]
+        )
+
+        usernames = await bot.pool.fetch("""SELECT * FROM username_logs""")
+        usernames_today = len(
+            [result for result in usernames if result["created_at"] >= start]
+        )
+
+        nicknames = await bot.pool.fetch("""SELECT * FROM nickname_logs""")
+        nicknames_today = len(
+            [result for result in nicknames if result["created_at"] >= start]
+        )
+
+        discrims = await bot.pool.fetch("""SELECT * FROM discrim_logs""")
+        discrims_today = len(
+            [result for result in discrims if result["created_at"] >= start]
+        )
+
+        members: List[discord.Member] = []
+        [members.extend(g.members) for g in bot.guilds]
+        spotify = [
+            m
+            for m in members
+            if discord.utils.find(
+                lambda a: isinstance(a, discord.Spotify), m.activities
+            )
+        ]
+        games = [
+            m
+            for m in members
+            if discord.utils.find(lambda a: isinstance(a, discord.Game), m.activities)
+        ]
+        activities = [m for m in members if m.activities]
+
+        message = f"""
+        guilds                 : {len(bot.guilds):,}
+        sus guilds             : {len(ctx.sus_guilds):,}
+        members                : {members_count:,}
+        spotify activities     : {len(spotify):,}
+        games                  : {len(games):,}
+        activities             : {len(activities):,}
+        users                  : {len(bot.users):,}
+        emojis                 : {len(bot.emojis):,}
+        stickers               : {len(bot.stickers):,}
+        cogs                   : {len(bot.cogs):,}
+        cached messages        : {len(bot.cached_messages):,}
+        latency                : {round(bot.latency * 1000, 4)}
+        intents value          : {bot.intents.value}
+        members intent         : {bot.intents.members}
+        presences intent       : {bot.intents.presences}
+        message content intent : {bot.intents.message_content}
+        voice clients          : {len(bot.voice_clients):,}
+        avatars logged         : {len(avatars):,}
+        avatars logged today   : {avatars_today:,}
+        usernames logged       : {len(usernames):,}
+        usernames logged today : {usernames_today:,}
+        discrims logged        : {len(discrims):,}
+        discrims logged today  : {discrims_today:,}
+        nicknames logged       : {len(nicknames):,}
+        nicknames logged today : {nicknames_today:,}
+        commands ran           : {len(commands):,}
+        commands ran today     : {commands_today:,}
+        """
+
+        await ctx.send(f"```yaml{textwrap.dedent(message)}```")
