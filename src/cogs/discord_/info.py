@@ -335,7 +335,7 @@ class InfoCommands(CogBase):
         invoke_without_command=True,
     )
     async def server_info_command(
-        self, ctx: Context, guild: Optional[discord.Guild] = None
+        self, ctx: Context, *, guild: Optional[discord.Guild] = None
     ):
         """Get information about a server."""
 
@@ -345,7 +345,7 @@ class InfoCommands(CogBase):
 
     @server_info_command.command(name="icon")
     async def serverinfo_icon(
-        self, ctx: Context, guild: Optional[discord.Guild] = None
+        self, ctx: Context, *, guild: Optional[discord.Guild] = None
     ):
         """Get the server icon."""
         guild = guild or ctx.guild
@@ -367,7 +367,7 @@ class InfoCommands(CogBase):
 
     @server_info_command.command(name="banner")
     async def serverinfo_banner(
-        self, ctx: Context, guild: Optional[discord.Guild] = None
+        self, ctx: Context, *, guild: Optional[discord.Guild] = None
     ):
         """Get the server banner."""
         guild = guild or ctx.guild
@@ -389,7 +389,7 @@ class InfoCommands(CogBase):
 
     @server_info_command.command(name="splash")
     async def serverinfo_splash(
-        self, ctx: Context, guild: Optional[discord.Guild] = None
+        self, ctx: Context, *, guild: Optional[discord.Guild] = None
     ):
         """Get the server splash."""
         guild = guild or ctx.guild
