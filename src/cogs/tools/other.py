@@ -204,7 +204,7 @@ class OtherCommands(CogBase):
         if key is None:
             await self.set_spotify_key()
 
-    @commands.command(name="spotify")
+    @commands.command(name="spotify", aliases=("s",))
     @commands.before_invoke(set_key)
     async def spotify(self, ctx: Context, *, query: str):
         url = "https://api.spotify.com/v1/search"
