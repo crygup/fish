@@ -1,6 +1,8 @@
 from __future__ import annotations
+import asyncio
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+from typing_extensions import reveal_type
 
 import discord
 from bot import Bot, Context
@@ -13,6 +15,8 @@ from utils import (
     SimplePages,
     get_lastfm,
     lastfm_period,
+    url_to_bytes,
+    format_bytes,
 )
 
 
@@ -122,7 +126,6 @@ class LastFm(commands.Cog, name="lastfm"):
             check_ref=True,
         )
 
-    # add time parameter? weekly, monthly, yearly, etc
     @commands.command(name="toptracks", aliases=("tt",))
     async def top_tracks(
         self,
@@ -139,6 +142,7 @@ class LastFm(commands.Cog, name="lastfm"):
             else str(username)
         )
 
+        await ctx.trigger_typing()
         results = await LastfmClient(
             self.bot,
             "2.0",
@@ -176,6 +180,7 @@ class LastFm(commands.Cog, name="lastfm"):
             else str(username)
         )
 
+        await ctx.trigger_typing()
         results = await LastfmClient(
             self.bot,
             "2.0",
@@ -219,6 +224,7 @@ class LastFm(commands.Cog, name="lastfm"):
             else str(username)
         )
 
+        await ctx.trigger_typing()
         results = await LastfmClient(
             self.bot,
             "2.0",
@@ -228,7 +234,7 @@ class LastFm(commands.Cog, name="lastfm"):
             extras=f"&limit=200&period={period}",
         )
         if results["topalbums"]["album"] == []:
-            raise TypeError("No recent tracks found for this user.")
+            raise TypeError("No tracks found for this user.")
 
         info = results["topalbums"]
         data = [
@@ -239,3 +245,50 @@ class LastFm(commands.Cog, name="lastfm"):
         pages.embed.title = f"Top {lastfm_period[period]} albums for {name}"
         pages.embed.color = self.bot.embedcolor
         await pages.start(ctx)
+
+    @commands.command(name="chart", aliases=("c",))
+    async def chart(
+        self,
+        ctx: Context,
+        username: Optional[LastfmConverter] = commands.Author,
+        period: str = commands.parameter(
+            converter=LastfmTimeConverter, default="overall"
+        ),
+    ):
+        """Makes a 3x3 image of your top albums"""
+        name = (
+            await get_lastfm(ctx.bot, ctx.author.id)
+            if username == ctx.author
+            else str(username)
+        )
+
+        await ctx.trigger_typing()
+        results = await LastfmClient(
+            self.bot,
+            "2.0",
+            "user.gettopalbums",
+            "user",
+            name,
+            extras=f"&limit=9&period={period}",
+        )
+
+        data: Dict | None = results.get("topalbums")
+
+        if data is None:
+            raise TypeError("No tracks found for this user.")
+
+        data: Dict | None = data.get("album")
+
+        if data == [] or data is None:
+            raise TypeError("No tracks found for this user.")
+
+        images = await asyncio.gather(
+            *[url_to_bytes(ctx, d["image"][3]["#text"]) for d in data]
+        )
+        fp = await format_bytes(ctx.guild.filesize_limit, images)
+        file = discord.File(
+            fp,
+            f"{name}_chart.png",
+        )
+
+        await ctx.send(file=file)
