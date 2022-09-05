@@ -43,6 +43,11 @@ async def setup_webhooks(bot: Bot):
             url=webhook, session=bot.session
         )
 
+    for name, webhook in bot.config["image_webhooks"].items():
+        bot.image_webhooks[name] = discord.Webhook.from_url(
+            url=webhook, session=bot.session
+        )
+
 
 async def setup_pokemon(bot: Bot):
     url = "https://raw.githubusercontent.com/poketwo/data/master/csv/pokemon.csv"

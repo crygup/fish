@@ -181,6 +181,22 @@ class FieldPageSource(menus.ListPageSource):
         return self.embed
 
 
+class ImageBytesPageSource(menus.ListPageSource):
+    """A page source that requires (avatar, created_at) tuple items."""
+
+    def __init__(self, entries: List[bytes], *, per_page=1):
+        super().__init__(entries, per_page=per_page)
+        self.embed = discord.Embed(colour=0x2F3136)
+
+    async def format_page(self, menu, entries: bytes):
+        maximum = self.get_max_pages()
+
+        self.embed.set_footer(text=f"Page {menu.current_page + 1}/{maximum}")
+        self.embed.set_image(url=f"attachment://image.png")
+
+        return self.embed
+
+
 class AvatarsPageSource(menus.ListPageSource):
     """A page source that requires (avatar, created_at) tuple items."""
 

@@ -16,7 +16,7 @@ async def LastfmClient(
     query: str,
     extras: Optional[str] = None,
 ) -> Dict[Any, Any]:
-    url = f"http://ws.audioscrobbler.com/{version}/?method={method}&{endpoint}={query}&api_key={bot.config['keys']['lastfm_key']}&format=json"
+    url = f"http://ws.audioscrobbler.com/{version}/?method={method}&{endpoint}={query}&api_key={bot.config['keys']['lastfm-key']}&format=json"
     if extras:
         url += f"{extras}"
     async with bot.session.get(url) as response:
@@ -31,7 +31,7 @@ async def SteamClient(
     account: int,
     ids: bool = False,
 ) -> Dict:
-    url = f'https://api.steampowered.com/{endpoint}/{version}/?key={bot.config["keys"]["steam_key"]}&steamid{"s" if ids else ""}={account}'
+    url = f'https://api.steampowered.com/{endpoint}/{version}/?key={bot.config["keys"]["steam-key"]}&steamid{"s" if ids else ""}={account}'
     async with bot.session.get(url) as response:
         response_checker(response)
         return await response.json()
