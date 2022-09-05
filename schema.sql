@@ -143,3 +143,18 @@ CREATE TABLE IF NOT EXISTS afk (
     time TIMESTAMP WITH TIME ZONE,
     PRIMARY KEY (user_id)
 );
+
+/*
+CREATE TABLE IF NOT EXISTS mudae_resets (
+    guild_id BIGINT,
+    rolls_reset TIMESTAMP WITH TIME ZONE,
+    claim_reset TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (guild_id)
+);
+
+CREATE TABLE IF NOT EXISTS mudae_users (
+    guild_id BIGINT,
+    user_id BIGINT,
+    PRIMARY KEY (guild_id, user_id)
+);
+*/
