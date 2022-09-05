@@ -134,6 +134,7 @@ class Bot(commands.Bot):
         )
         self.owner_only_mode: bool = True if testing else False
         self.avatar_webhooks: Dict[str, discord.Webhook] = {}
+        self.image_webhooks: Dict[str, discord.Webhook] = {}
         self.webhooks: Dict[str, discord.Webhook] = {}
         self.owner_id = 766953372309127168
         self.owner_ids = {}
@@ -203,6 +204,9 @@ class Bot(commands.Bot):
         self.pool = connection
         print("Connected to postre database")
 
+        with open("schema.sql") as f:
+            await self.pool.execute(f.read())
+
         self.redis = await aioredis.from_url(
             self.config["databases"]["testing_redis_dns"]
             if self.testing
@@ -213,7 +217,7 @@ class Bot(commands.Bot):
         print("Connected to Redis database")
 
         self.osu = OssapiV2(
-            self.config["keys"]["osu_id"], self.config["keys"]["osu_secret"]
+            self.config["keys"]["osu-id"], self.config["keys"]["osu-secret"]
         )
         print("Connected to osu! account")
 
