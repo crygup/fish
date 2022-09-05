@@ -150,6 +150,7 @@ class Bot(commands.Bot):
         self.e_replies = "<:replies:972280398874824724>"
         self._context = Context
         self.select_filler = "\u2800" * 47
+        self.spotify_key: str | None = None
 
         self.add_check(self.no_dms)
         self.add_check(self.block_list)
