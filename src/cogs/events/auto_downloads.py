@@ -100,7 +100,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
             )
 
         try:
-            os.remove(f"files/videos/{name}.mp4")
+            os.remove(f"src/files/videos/{name}.mp4")
         except (FileNotFoundError, PermissionError):
             pass
 
@@ -116,7 +116,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
             "ogg",
             "wav",
         )
-        for file in os.listdir("files/videos"):
+        for file in os.listdir("src/files/videos"):
             if file.endswith(valid_formats):
                 if file not in self.current_downloads:
-                    os.remove(f"files/videos/{file}")
+                    os.remove(f"src/files/videos/{file}")

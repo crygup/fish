@@ -138,7 +138,7 @@ class DownloadCommands(CogBase):
             )
 
         try:
-            os.remove(f"files/videos/{default_name}.{default_format}")
+            os.remove(f"src/files/videos/{default_name}.{default_format}")
         except (FileNotFoundError, PermissionError):
             pass
 
@@ -154,7 +154,7 @@ class DownloadCommands(CogBase):
             "ogg",
             "wav",
         )
-        for file in os.listdir("files/videos"):
+        for file in os.listdir("src/files/videos"):
             if file.endswith(valid_formats):
                 if file not in self.currently_downloading:
                     os.remove(f"src/files/videos/{file}")
