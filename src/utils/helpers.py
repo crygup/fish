@@ -519,6 +519,40 @@ def format_relative(dt: datetime.datetime) -> str:
     return discord.utils.format_dt(dt, "R")
 
 
+async def url_to_bytes(ctx: Context, url) -> bytes:
+    async with ctx.bot.session.get(url) as r:
+        return await r.read()
+
+
+# https://github.com/CuteFwan/Koishi/blob/master/cogs/avatar.py#L82-L102
+@to_thread
+def format_bytes(filesize_limit: int, images: List[bytes]) -> BytesIO:
+    xbound = math.ceil(math.sqrt(len(images)))
+    ybound = math.ceil(len(images) / xbound)
+    size = int(2520 / xbound)
+
+    with Image.new(
+        "RGBA", size=(xbound * size, ybound * size), color=(0, 0, 0, 0)
+    ) as base:
+        x, y = 0, 0
+        for avy in images:
+            if avy:
+                im = Image.open(BytesIO(avy)).resize(
+                    (size, size), resample=Image.BICUBIC
+                )
+                base.paste(im, box=(x * size, y * size))
+            if x < xbound - 1:
+                x += 1
+            else:
+                x = 0
+                y += 1
+        buffer = BytesIO()
+        base.save(buffer, "png")
+        buffer.seek(0)
+        buffer = resize_to_limit(buffer, filesize_limit)
+        return buffer
+
+
 # https://github.com/CuteFwan/Koishi/blob/master/cogs/utils/images.py#L4-L34
 def resize_to_limit(data: BytesIO, limit: int) -> BytesIO:
     """

@@ -21,6 +21,8 @@ from utils import (
     resize_to_limit,
     to_thread,
     AvatarsPageSource,
+    format_bytes,
+    url_to_bytes,
 )
 
 from ._base import CogBase
@@ -359,34 +361,6 @@ class UserCommands(CogBase):
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
-    # https://github.com/CuteFwan/Koishi/blob/master/cogs/avatar.py#L82-L102
-    @to_thread
-    def _make_avatars(self, filesize_limit: int, avatars: List[bytes]) -> BytesIO:
-        xbound = math.ceil(math.sqrt(len(avatars)))
-        ybound = math.ceil(len(avatars) / xbound)
-        size = int(2520 / xbound)
-
-        with Image.new(
-            "RGBA", size=(xbound * size, ybound * size), color=(0, 0, 0, 0)
-        ) as base:
-            x, y = 0, 0
-            for avy in avatars:
-                if avy:
-                    im = Image.open(BytesIO(avy)).resize(
-                        (size, size), resample=Image.BICUBIC
-                    )
-                    base.paste(im, box=(x * size, y * size))
-                if x < xbound - 1:
-                    x += 1
-                else:
-                    x = 0
-                    y += 1
-            buffer = BytesIO()
-            base.save(buffer, "png")
-            buffer.seek(0)
-            buffer = resize_to_limit(buffer, filesize_limit)
-            return buffer
-
     @commands.group(
         name="avatarhistory", aliases=("avyh",), invoke_without_command=True
     )
@@ -396,10 +370,6 @@ class UserCommands(CogBase):
         """Shows the avatar history of a user.
 
         This will only show the first 100, to view them all and in HD run the command `avatars`"""
-
-        async def url_to_bytes(url) -> bytes:
-            async with ctx.bot.session.get(url) as r:
-                return await r.read()
 
         async with ctx.typing():
             sql = """
@@ -418,11 +388,11 @@ class UserCommands(CogBase):
                 raise ValueError(f"{user} has no avatar history on record.")
 
             avatars = await asyncio.gather(
-                *[url_to_bytes(row["avatar"]) for row in records]
+                *[url_to_bytes(ctx, row["avatar"]) for row in records]
             )
 
             gen_start = time.perf_counter()
-            fp = await self._make_avatars(ctx.guild.filesize_limit, avatars)
+            fp = await format_bytes(ctx.guild.filesize_limit, avatars)
             file = discord.File(
                 fp,
                 f"{user.id}_avatar_history.png",
@@ -475,7 +445,7 @@ class UserCommands(CogBase):
             )
 
             gen_start = time.perf_counter()
-            fp = await self._make_avatars(ctx.guild.filesize_limit, avatars)
+            fp = await format_bytes(ctx.guild.filesize_limit, avatars)
             file = discord.File(
                 fp,
                 f"{member.id}_avatar_history.png",
