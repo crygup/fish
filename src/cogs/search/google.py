@@ -22,11 +22,17 @@ class GoogleCommands(CogBase):
             embed.title = f"Google Search - {query}"[:256]
 
             text = ""
-            items = data["items"][:5]
+            items = data["items"]
 
+            added = 0
             for item in items:
-                text += f"[{item['title']}]({item['link']})\n{item['snippet']}\n\n"
-
+                if added == 5:
+                    break
+                try:
+                    text += f"[{item['title']}]({item['link']})\n{item['snippet']}\n\n"
+                    added += 0
+                except KeyError:
+                    continue
             embed.description = text
 
         await ctx.send(embed=embed)
