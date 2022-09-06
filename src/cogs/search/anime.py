@@ -1,7 +1,7 @@
 import datetime
 import re
 import textwrap
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal as L, Optional, Union
 
 import discord
 from bot import Context
@@ -13,21 +13,17 @@ from ._base import CogBase
 anime_query_data = """
 query ($search: String) {
   Media(search: $search, type: ANIME) {
-    title {
-      english
-      romaji
-    }
-    coverImage {
-      extraLarge
-      color
-    }
     description(asHtml: false)
-    genres
     averageScore
     episodes
     status
     bannerImage
     siteUrl
+    source
+    chapters
+    volumes
+    format
+    type
     startDate {
       year
       month
@@ -42,43 +38,23 @@ query ($search: String) {
       episode
       airingAt
     }
-    source
-  }
-}
-"""
-
-manga_query_data = """
-query ($search: String) {
-  Media(search: $search, type: MANGA) {
     title {
-      english
       romaji
+      english
+      native
     }
     coverImage {
       extraLarge
       color
     }
-    description(asHtml: false)
+    tags {
+      name
+    }
     genres
-    averageScore
-    status
-    bannerImage
-    siteUrl
-    popularity
-    startDate {
-      year
-      month
-      day
+    trailer {
+      site
+      id
     }
-    endDate {
-      year
-      month
-      day
-    }
-    source
-    chapters
-    volumes
-    format
   }
 }
 """
@@ -86,10 +62,14 @@ query ($search: String) {
 
 class AnimeCommands(CogBase):
     async def make_request(
-        self, query: str, mode: Union[Literal["anime"], Literal["manga"]]
+        self, query: str, mode: Union[L["anime"], L["manga"]]
     ) -> Dict[Any, Any]:
 
-        search_query = anime_query_data if mode == "anime" else manga_query_data
+        search_query = (
+            anime_query_data
+            if mode == "anime"
+            else re.sub("ANIME", "MANGA", anime_query_data)
+        )
 
         data = {"query": search_query, "variables": {"search": query}}
         async with self.bot.session.post("https://graphql.anilist.co", json=data) as r:
@@ -107,179 +87,102 @@ class AnimeCommands(CogBase):
                 )
             return results["data"]["Media"]
 
-    @commands.command(name="anime")
-    async def anime(self, ctx: Context, *, query: str):
+    def cleanup_html(self, text: str) -> str:
+        text = re.sub("<br>", "\n", text)
+        text = re.sub("<b>", "**", text)
+        text = re.sub("</b>", "**", text)
 
-        data = await self.make_request(query, "anime")
+        return text
 
-        title: Dict | None = data.get("title")
-        if title is None:
-            anime_title = query
-        else:
-            anime_title = (
-                title.get("romaji")
-                if title.get("english") is None
-                else title.get("english")
-            )
+    def basic_setup(self, data: Dict, query: str) -> discord.Embed:
+        try:
+            title = f"{data['title']['english']}/{data['title']['native']}"
+        except KeyError:
+            title = query
 
         embed = discord.Embed(
-            description=textwrap.shorten(
-                re.sub(r"<br>", "", data["description"]), width=250
-            ),
-            title=str(anime_title).title(),
+            title=title,
             url=data.get("siteUrl"),
+            description=self.cleanup_html(
+                textwrap.shorten(data["description"], width=250)
+            ),
         )
 
-        files = []
-        cover_image: Dict | None = data.get("coverImage")
-        if cover_image is None:
-            color = self.bot.embedcolor
-        else:
-            color = (
-                int(re.sub("#", "0x", cover_image["color"]), 0)
-                if cover_image.get("color")
+        cover: Dict | None = data.get("coverImage")
+        if cover:
+            embed.set_thumbnail(url=cover.get("extraLarge"))
+            embed.color = (
+                discord.Color.from_str(cover["color"])
+                if cover.get("color")
                 else self.bot.embedcolor
             )
-            img = cover_image.get("extraLarge")
-            if img:
-                fp = await ctx.to_bytesio(img)
-                file = discord.File(fp=fp, filename="thumbnail.png")
-                files.append(file)
-                embed.set_thumbnail(url="attachment://thumbnail.png")
 
-        embed.color = color
+        embed.set_image(url=data.get("bannerImage"))
         embed.add_field(
             name="Genres", value=human_join(data["genres"], final="and"), inline=False
         )
-        score = data.get("averageScore")
-        score_text = "Not rated" if score is None else f"{score}/100"
-
-        embed.add_field(name="Score", value=score_text, inline=True)
         embed.add_field(
-            name="Status",
-            value=re.sub("_", " ", data["status"]).capitalize(),
-            inline=True,
+            name="Tags",
+            value=human_join([tag["name"] for tag in data["tags"]][:5], final="and")
+            if data["tags"]
+            else "No tags yet",
+            inline=False,
         )
-        episodes: int | None = data.get("episodes")
-
-        if episodes is None:
-            airing: Dict | None = data.get("nextAiringEpisode")
-            episodes = airing["episode"] - 1 if airing else None
-
         embed.add_field(
-            name="Episodes",
-            value=f"{episodes:,}" if episodes else "No episodes yet",
-            inline=True,
+            name="Score",
+            value=f"{data['averageScore']}/100"
+            if data.get("averageScore")
+            else "Not yet rated",
         )
-
-        banner: str | None = data.get("bannerImage")
-        if banner:
-            fp = await ctx.to_bytesio(banner)
-            file2 = discord.File(fp=fp, filename="image.png")
-            files.append(file2)
-            embed.set_image(url="attachment://image.png")
-
-        start: Dict | None = data.get("startDate")
-        if start:
-            embed.add_field(
-                name="Started",
-                value=f"{start['month'] if start['month'] else '?'}-{start['day'] if start['day'] else '?'}-{start['year'] if start['year'] else '?'}",
-            )
-
-        end: Dict | None = data.get("endDate")
-        if end:
-            embed.add_field(
-                name="Ended",
-                value=f"{end['month'] if end['month'] else '?'}-{end['day'] if end['day'] else '?'}-{end['year'] if end['year'] else '?'}",
-            )
-
-        embed.add_field(name="Source", value=str(data["source"]).title())
-
-        await ctx.send(embed=embed, files=files)
-
-    @commands.command(name="manga")
-    async def manga(self, ctx: Context, *, query: str):
-
-        data = await self.make_request(query, "manga")
-
-        title: Dict | None = data.get("title")
-        if title is None:
-            anime_title = query
-        else:
-            anime_title = (
-                title.get("romaji")
-                if title.get("english") is None
-                else title.get("english")
-            )
-
-        embed = discord.Embed(
-            description=textwrap.shorten(
-                re.sub(r"<br>", "", data["description"]), width=250
-            ),
-            title=str(anime_title).title(),
-            url=data.get("siteUrl"),
-        )
-        files = []
-
-        cover_image: Dict | None = data.get("coverImage")
-        if cover_image is None:
-            color = self.bot.embedcolor
-        else:
-            color = (
-                int(re.sub("#", "0x", cover_image["color"]), 0)
-                if cover_image.get("color")
-                else self.bot.embedcolor
-            )
-            img = cover_image.get("extraLarge")
-            if img:
-                fp = await ctx.to_bytesio(img)
-                file = discord.File(fp=fp, filename="thumbnail.png")
-                files.append(file)
-                embed.set_thumbnail(url="attachment://thumbnail.png")
-
-        embed.color = color
         embed.add_field(
-            name="Genres", value=human_join(data["genres"], final="and"), inline=False
+            name="Status", value=re.sub("_", " ", data["status"]).capitalize()
         )
-        score = data.get("averageScore")
-        score_text = "Not rated" if score is None else f"{score}/100"
+        if type == "anime":
+            episode_text = ""
+            if data.get("episodes"):
+                episode_text = f"{data['episodes']:,}"
+            else:
+                next_airing: Dict | None = data.get("nextAiringEpisode")
+                episode_text = (
+                    f"{next_airing['episode']-1:,} \nNext episode <t:{next_airing['airingAt']}:R>"
+                    if next_airing
+                    else "No episodes yet"
+                )
+            embed.add_field(name="Episodes", value=episode_text)
 
-        embed.add_field(name="Score", value=score_text, inline=True)
-        embed.add_field(
-            name="Status",
-            value=re.sub("_", " ", data["status"]).capitalize(),
-            inline=True,
-        )
-
-        start: Dict | None = data.get("startDate")
-        if start:
-            embed.add_field(
-                name="Started",
-                value=f"{start['month'] if start['month'] else '?'}-{start['day'] if start['day'] else '?'}-{start['year'] if start['year'] else '?'}",
-            )
-
-        end: Dict | None = data.get("endDate")
-        if end:
-            embed.add_field(
-                name="Ended",
-                value=f"{end['month'] if end['month'] else '?'}-{end['day'] if end['day'] else '?'}-{end['year'] if end['year'] else '?'}",
-            )
-
-        banner: str | None = data.get("bannerImage")
-        if banner:
-            fp = await ctx.to_bytesio(banner)
-            file2 = discord.File(fp=fp, filename="image.png")
-            files.append(file2)
-            embed.set_image(url="attachment://image.png")
+        volumes: int | None = data.get("volumes")
+        if volumes:
+            embed.add_field(name="Volumes", value=f"{volumes:,}")
 
         chapters: int | None = data.get("chapters")
         if chapters:
-            embed.add_field(name="Chapters", value=f"{chapters:,}", inline=True)
+            embed.add_field(name="Chapters", value=f"{chapters:,}")
 
-        volumes: int | None = data.get("volumes")
-        if chapters:
-            embed.add_field(name="Volumes", value=f"{volumes:,}", inline=True)
+        trailer_format = {
+            "youtube": "https://www.youtube.com/watch?v=",
+            "dailymotion": "https://www.dailymotion.com/video/",
+        }
+        trailer = data.get("trailer")
+        if trailer:
+            site = trailer_format[trailer["site"]]
+            embed.add_field(
+                name="Trailer", value=f"[Watch here]({site}{trailer['id']})"
+            )
 
-        embed.add_field(name="Source", value=str(data["source"]).title())
+        embed.set_footer(text=f"Source: {str(data['source']).capitalize()}")
 
-        await ctx.send(embed=embed, files=files)
+        return embed
+
+    @commands.command(name="anime")
+    async def anime(self, ctx: Context, *, query: str):
+        """Search for an anime"""
+        data = await self.make_request(query, "anime")
+        embed = self.basic_setup(data, query)
+        await ctx.send(embed=embed)
+
+    @commands.command(name="manga")
+    async def manga(self, ctx: Context, *, query: str):
+        """Search for a manga"""
+        data = await self.make_request(query, "manga")
+        embed = self.basic_setup(data, query)
+        await ctx.send(embed=embed)
