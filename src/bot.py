@@ -48,7 +48,7 @@ def fix_cog(results) -> str:
     return results
 
 
-module_extensions = ["examples", "discord_", "tools", "image"]
+module_extensions = ["examples", "discord_", "tools", "image", "search"]
 cogs = [
     fix_cog(x.as_posix())
     for x in cogs_path.glob("**/*.py")

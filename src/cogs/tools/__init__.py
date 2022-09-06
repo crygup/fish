@@ -8,11 +8,11 @@ from .afk import AfkCommands
 
 
 class Tools(TagCommands, DownloadCommands, OtherCommands, AfkCommands, name="tools"):
+    """Useful tools"""
+
     def __init__(self, bot: Bot):
         super().__init__(bot)
         self.currently_downloading: list[str] = []
-
-    """Useful tools"""
 
     @property
     def display_emoji(self) -> discord.PartialEmoji:
