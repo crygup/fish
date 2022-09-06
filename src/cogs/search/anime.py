@@ -189,7 +189,7 @@ class AnimeCommands(CogBase):
         if end:
             check = (
                 False
-                if any([end["month"] is None, end["day"] is None, end["year"] is None])
+                if end["month"] is None or end["day"] is None or end["year"] is None
                 else True
             )
             if check:
@@ -263,7 +263,7 @@ class AnimeCommands(CogBase):
         if end:
             check = (
                 False
-                if any([end["month"] is None, end["day"] is None, end["year"] is None])
+                if end["month"] is None or end["day"] is None or end["year"] is None
                 else True
             )
             if check:
