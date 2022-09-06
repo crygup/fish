@@ -88,44 +88,6 @@ class LastFm(commands.Cog, name="lastfm"):
 
         await command(ctx, username=username)
 
-    @commands.command(name="cover", aliases=("co",))
-    async def cover(self, ctx: Context, *, query: Optional[str]):
-        """Gets the album cover for the last played track"""
-        if query is None:
-            user = await get_lastfm(ctx.bot, ctx.author.id)
-            info = await LastfmClient(
-                self.bot, "2.0", "user.getrecenttracks", "user", user
-            )
-
-            if info["recenttracks"]["track"] == []:
-                raise TypeError("No recent tracks found for this user.")
-
-            track = info["recenttracks"]["track"][0]
-            title = f'**{track["artist"]["#text"]}** - **[{track["album"]["#text"]}]({track["url"]})**'
-            if track["image"][3]["#text"] == "":
-                raise TypeError(f"No album cover found for {title}")
-            image = await ctx.to_bytesio(track["image"][3]["#text"])
-        else:
-            info = await LastfmClient(self.bot, "2.0", "album.search", "album", query)
-            if info["results"]["albummatches"]["album"] == []:
-                raise TypeError("No album found for this query.")
-            track = info["results"]["albummatches"]["album"][0]
-            title = f'**{track["artist"]}** - **[{track["name"]}]({track["url"]})**'
-            if track["image"][3]["#text"] == "":
-                raise TypeError(
-                    f'No album cover found for `{track["artist"]} - {track["name"]}`'
-                )
-
-            image = await ctx.to_bytesio(track["image"][3]["#text"])
-
-        embed = discord.Embed(description=title)
-        embed.set_image(url="attachment://cover.png")
-        await ctx.send(
-            embed=embed,
-            file=discord.File(fp=image, filename="cover.png"),
-            check_ref=True,
-        )
-
     @commands.command(name="toptracks", aliases=("tt",))
     async def top_tracks(
         self,
