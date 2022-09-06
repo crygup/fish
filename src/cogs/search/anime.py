@@ -182,20 +182,17 @@ class AnimeCommands(CogBase):
         start: Dict | None = data.get("startDate")
         if start:
             embed.add_field(
-                name="Started", value=f"{start['month']}-{start['day']}-{start['year']}"
+                name="Started",
+                value=f"{start['month'] if start['month'] else '?'}-{start['day'] if start['day'] else '?'}-{start['year'] if start['year'] else '?'}",
             )
 
         end: Dict | None = data.get("endDate")
         if end:
-            check = (
-                False
-                if end["month"] is None or end["day"] is None or end["year"] is None
-                else True
+            embed.add_field(
+                name="Ended",
+                value=f"{end['month'] if end['month'] else '?'}-{end['day'] if end['day'] else '?'}-{end['year'] if end['year'] else '?'}",
             )
-            if check:
-                embed.add_field(
-                    name="Ended", value=f"{end['month']}-{end['day']}-{end['year']}"
-                )
+
         embed.add_field(name="Source", value=str(data["source"]).title())
 
         await ctx.send(embed=embed, files=files)
@@ -253,23 +250,20 @@ class AnimeCommands(CogBase):
             value=re.sub("_", " ", data["status"]).capitalize(),
             inline=True,
         )
+
         start: Dict | None = data.get("startDate")
         if start:
             embed.add_field(
-                name="Started", value=f"{start['month']}-{start['day']}-{start['year']}"
+                name="Started",
+                value=f"{start['month'] if start['month'] else '?'}-{start['day'] if start['day'] else '?'}-{start['year'] if start['year'] else '?'}",
             )
 
         end: Dict | None = data.get("endDate")
         if end:
-            check = (
-                False
-                if end["month"] is None or end["day"] is None or end["year"] is None
-                else True
+            embed.add_field(
+                name="Ended",
+                value=f"{end['month'] if end['month'] else '?'}-{end['day'] if end['day'] else '?'}-{end['year'] if end['year'] else '?'}",
             )
-            if check:
-                embed.add_field(
-                    name="Ended", value=f"{end['month']}-{end['day']}-{end['year']}"
-                )
 
         banner: str | None = data.get("bannerImage")
         if banner:
