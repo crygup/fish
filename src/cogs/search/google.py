@@ -30,7 +30,7 @@ class GoogleCommands(CogBase):
                     break
                 try:
                     text += f"[{item['title']}]({item['link']})\n{item['snippet']}\n\n"
-                    added += 0
+                    added += 1
                 except KeyError:
                     continue
             embed.description = text
