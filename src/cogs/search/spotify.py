@@ -79,6 +79,7 @@ class SpotifyCommands(CogBase):
     @commands.command(name="cover", aliases=("co",))
     async def cover(self, ctx: Context, *, query: Optional[str]):
         """Gets the album cover for your recent track or query"""
+        await ctx.trigger_typing()
         if not query:
             name = await get_lastfm(ctx.bot, ctx.author.id)
             info = await LastfmClient(
