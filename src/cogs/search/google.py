@@ -1,17 +1,22 @@
 import discord
 from bot import Context
 from discord.ext import commands
-
+from utils import response_checker
 from ._base import CogBase
 
 
 class GoogleCommands(CogBase):
     @commands.group(name="google", aliases=("g",))
     async def google(self, ctx: Context, *, query: str):
-        url = f"https://customsearch.googleapis.com/customsearch/v1?cx={self.bot.config['keys']['google-id']}&q={query}&key={self.bot.config['keys']['google-search']}"
-
+        url = f"https://customsearch.googleapis.com/customsearch/v1"
+        params = {
+            "cx": self.bot.config["keys"]["google-id"],
+            "q": query,
+            "key": self.bot.config["keys"]["google-search"],
+        }
         await ctx.trigger_typing()
-        async with self.bot.session.get(url) as r:
+        async with self.bot.session.get(url, params=params) as r:
+            response_checker(r)
             data = await r.json()
 
             embed = discord.Embed(color=self.bot.embedcolor)
