@@ -314,19 +314,19 @@ def SteamIDConverter(account: str) -> int:
 
     if profiles is not None:
         account = steam64_from_url(
-            f'https://steamcommunity.com/profiles/{profiles.group("id")}'
+            f'https://steamcommunity.com/profiles/{profiles.group("id")}'  # type: ignore
         )
 
     elif id_url is not None:
         account = steam64_from_url(
-            f'https://steamcommunity.com/id/{id_url.group("id")}'
+            f'https://steamcommunity.com/id/{id_url.group("id")}'  # type: ignore
         )
 
     elif actual_id is not None:
         account = actual_id.group(0)
 
     elif name is not None:
-        account = steam64_from_url(f"https://steamcommunity.com/id/{name.group(0)}")
+        account = steam64_from_url(f"https://steamcommunity.com/id/{name.group(0)}")  # type: ignore
 
     else:
         raise UnknownAccount("Invalid username.")

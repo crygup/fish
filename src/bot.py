@@ -9,7 +9,6 @@ import sys
 import textwrap
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Set
-from unittest import result
 
 import aiohttp
 import aioredis

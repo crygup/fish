@@ -80,6 +80,7 @@ class SpotifyCommands(CogBase):
 
             if info["recenttracks"]["track"] == []:
                 raise ValueError("No recent tracks found for this user.")
+
             track = info["recenttracks"]["track"][0]
             to_search = f"{track['name']} artist:{track['artist']['#text']}"
         else:
