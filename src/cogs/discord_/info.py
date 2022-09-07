@@ -9,11 +9,16 @@ import discord
 from discord.ext import commands
 
 from bot import Bot, Context
-from utils import (EmojiConverter, GuildChannel, get_twemoji, get_user_badges,
-                   human_join)
+from utils import (
+    EmojiConverter,
+    GuildChannel,
+    get_twemoji,
+    get_user_badges,
+    human_join,
+    UserInfoView,
+)
 
 from ._base import CogBase
-from .views import UserInfoView
 
 emoji_extras = {"BPerms": ["Manage Emojis"], "UPerms": ["Manage Emojis"]}
 InfoArgument: TypeAlias = Optional[

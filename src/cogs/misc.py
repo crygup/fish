@@ -8,12 +8,18 @@ from typing import Dict, List, Optional, Union
 import discord
 import psutil
 from discord.ext import commands
-from jishaku.modules import package_version
 
 from bot import Bot, Context
 from cogs.context import Context
-from utils import (SteamConverter, Unauthorized, get_steam_data, human_join,
-                   human_timedelta, natural_size, to_bytesio)
+from utils import (
+    SteamConverter,
+    Unauthorized,
+    get_steam_data,
+    human_join,
+    human_timedelta,
+    natural_size,
+    to_bytesio,
+)
 
 
 async def setup(bot: Bot):
