@@ -39,7 +39,7 @@ async def main():
     bot = Bot(intents, config, testing, logger)
 
     async with bot:
-        await bot.start(config["tokens"]["bot"])
+        await bot.start(config["tokens"]["evi"] if testing else config["tokens"]["bot"])
 
 
 asyncio.run(main())
