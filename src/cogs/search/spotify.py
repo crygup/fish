@@ -6,7 +6,7 @@ from typing import Optional, Union
 import discord
 from bot import Bot, Context
 from discord.ext import commands, tasks
-from utils import LastfmClient, UnknownAccount, get_lastfm
+from utils import LastfmClient, UnknownAccount, get_lastfm, get_sp_cover
 
 from ._base import CogBase
 
@@ -109,10 +109,7 @@ class SpotifyCommands(CogBase):
         await ctx.trigger_typing()
         to_search = await self.get_query(ctx, query)
 
-        data = await self.get_spotify_search_data(to_search, "album")
-
-        data = await self.get_spotify_search_data(to_search, "album")
-        url = data["albums"]["items"][0]["images"][0]["url"]
+        url = await get_sp_cover(self.bot, to_search)
         fp = await self.bot.to_bytesio(url)
         file = discord.File(fp=fp, filename="cover.png")
         await ctx.send(file=file)

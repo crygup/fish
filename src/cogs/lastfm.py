@@ -1,22 +1,25 @@
 from __future__ import annotations
-import asyncio
 
-from typing import Dict, List, Optional
-from typing_extensions import reveal_type
+import asyncio
+from typing import Dict, List
+from typing import Literal as L
+from typing import Optional, Union
 
 import discord
 from bot import Bot, Context
 from discord.ext import commands
 from discord.utils import remove_markdown
+from typing_extensions import reveal_type
 from utils import (
     LastfmClient,
     LastfmConverter,
     LastfmTimeConverter,
     SimplePages,
+    format_bytes,
     get_lastfm,
     lastfm_period,
     url_to_bytes,
-    format_bytes,
+    get_sp_cover,
 )
 
 
@@ -234,18 +237,17 @@ class LastFm(commands.Cog, name="lastfm"):
             extras=f"&limit=9&period={period}",
         )
 
-        data: Dict | None = results.get("topalbums")
-
-        if data is None:
-            raise TypeError("No tracks found for this user.")
-
-        data: Dict | None = data.get("album")
+        data = results["topalbums"].get("album")
 
         if data == [] or data is None:
             raise TypeError("No tracks found for this user.")
 
-        images = await asyncio.gather(
-            *[url_to_bytes(ctx, d["image"][3]["#text"]) for d in data]
+        urls = [
+            await get_sp_cover(self.bot, f"{t['name']} artist:{t['artist']['name']}")
+            for t in data
+        ]
+        images: List[bytes] = await asyncio.gather(
+            *[url_to_bytes(ctx, url) for url in urls]
         )
         fp = await format_bytes(ctx.guild.filesize_limit, images)
         file = discord.File(

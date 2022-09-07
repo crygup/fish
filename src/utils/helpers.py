@@ -59,6 +59,22 @@ Argument: TypeAlias = Optional[
 emoji_regex = r"<(?P<animated>a)?:(?P<name>[a-zA-Z0-9\_]{1,}):(?P<id>[0-9]{1,})>"
 
 
+async def get_sp_cover(bot: Bot, query: str) -> str:
+    url = "https://api.spotify.com/v1/search"
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {bot.spotify_key}",
+    }
+
+    data = {"q": query, "type": "album", "market": "ES", "limit": "1"}
+
+    async with bot.session.get(url, headers=headers, params=data) as r:
+        results = await r.json()
+
+    return results["albums"]["items"][0]["images"][0]["url"]
+
+
 def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         return await asyncio.to_thread(func, *args, **kwargs)
