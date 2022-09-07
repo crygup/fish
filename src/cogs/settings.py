@@ -29,7 +29,7 @@ class Settings(commands.Cog, name="settings"):
         )
         await ctx.bot.redis.hdel(f"accounts:{user_id}", option)
 
-        await ctx.send(f"Your {option} account has been unlinked.")
+        await ctx.send(f"Your {option} account has been unlinked.", ephemeral=True)
 
     async def link_method(self, ctx: Context, user_id: int, option: str, username: str):
         username = username.lower()
@@ -48,7 +48,7 @@ class Settings(commands.Cog, name="settings"):
             )
         await ctx.bot.redis.hset(f"accounts:{user_id}", option, username)
 
-        await ctx.send(f"Your {option} account has been linked.")
+        await ctx.send(f"Your {option} account has been linked.", ephemeral=True)
 
     @commands.group(name="prefix", invoke_without_command=True)
     async def prefix(self, ctx: Context):
@@ -135,7 +135,7 @@ class Settings(commands.Cog, name="settings"):
         embed.add_field(name="Genshin UID", value=accounts["genshin"] or "Not set")
         embed.add_field(name="\u200b", value="\u200b")
 
-        await ctx.send(embed=embed, check_ref=True)
+        await ctx.send(embed=embed, check_ref=True, ephemeral=True)
 
     @commands.hybrid_group(name="set", invoke_without_command=True)
     async def set(self, ctx: Context):
