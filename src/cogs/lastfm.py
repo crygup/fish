@@ -234,7 +234,7 @@ class LastFm(commands.Cog, name="lastfm"):
             "user.gettopalbums",
             "user",
             name,
-            extras=f"&limit=9&period={period}",
+            extras=f"&limit=100&period={period}",
         )
 
         data = results["topalbums"].get("album")
@@ -242,10 +242,22 @@ class LastFm(commands.Cog, name="lastfm"):
         if data == [] or data is None:
             raise TypeError("No tracks found for this user.")
 
-        urls = [
-            await get_sp_cover(self.bot, f"{t['name']} artist:{t['artist']['name']}")
-            for t in data
-        ]
+        urls = []
+
+        total = 0
+        for track in data:
+            if total == 9:
+                break
+            try:
+                urls.append(
+                    await get_sp_cover(
+                        self.bot, f"{track['name']} artist:{track['artist']['name']}"
+                    )
+                )
+                total += 1
+            except IndexError:
+                continue
+
         images: List[bytes] = await asyncio.gather(
             *[url_to_bytes(ctx, url) for url in urls]
         )
