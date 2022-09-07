@@ -1,11 +1,10 @@
-import base64
-import json
 import re
 from typing import Optional
 
 import discord
+from discord.ext import commands
+
 from bot import Bot, Context
-from discord.ext import commands, tasks
 from utils import TenorUrlConverter, human_join
 
 from ._base import CogBase

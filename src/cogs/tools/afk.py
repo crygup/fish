@@ -1,8 +1,9 @@
 import discord
-from bot import Bot, Context
 from discord.ext import commands
-from utils import human_timedelta
 from discord.utils import escape_markdown
+
+from bot import Bot, Context
+from utils import human_timedelta
 
 from ._base import CogBase
 

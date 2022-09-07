@@ -1,9 +1,9 @@
 from typing import Optional
 
 import discord
-from bot import Bot
 from discord.ext import commands
-from utils import GuildContext
+
+from bot import Bot, Context
 
 
 async def setup(bot: Bot):
@@ -18,7 +18,7 @@ class Egg(commands.Cog, name="egg"):
     @commands.is_owner()
     async def egg_invite(
         self,
-        ctx: GuildContext,
+        ctx: Context,
         uses: Optional[int] = 1,
         *,
         member: discord.Member = commands.Author,

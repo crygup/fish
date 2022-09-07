@@ -1,9 +1,11 @@
 from typing import Union
+
 import discord
-from bot import Bot, Context
 from discord.ext import commands
-from utils import IGNORED, SEND, RateLimitExceeded, UnknownAccount
 from yt_dlp import DownloadError
+
+from bot import Bot, Context
+from utils import IGNORED, SEND, RateLimitExceeded
 
 
 async def setup(bot: Bot):

@@ -1,12 +1,14 @@
 import re
 from typing import Dict, List
-import asyncpg
 
+import asyncpg
 import discord
 import pandas as pd
-from bot import Bot
 from discord.ext import commands
-from utils import SimplePages, Context, setup_pokemon, BoolConverter, AuthorView
+
+from bot import Bot
+from utils import (AuthorView, BoolConverter, Context, SimplePages,
+                   setup_pokemon)
 
 
 async def setup(bot: Bot):

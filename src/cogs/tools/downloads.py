@@ -7,10 +7,11 @@ import time
 from typing import Dict, Optional
 
 import discord
-from bot import Bot, Context
 from discord.ext import commands, tasks
-from utils import get_video, natural_size, to_thread
 from yt_dlp import YoutubeDL
+
+from bot import Bot, Context
+from utils import get_video, natural_size, to_thread
 
 from ._base import CogBase
 

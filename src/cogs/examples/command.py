@@ -1,6 +1,6 @@
-import discord
-from bot import Bot, Context
 from discord.ext import commands
+
+from bot import Bot, Context
 
 
 async def setup(bot: Bot):

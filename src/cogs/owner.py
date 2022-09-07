@@ -1,9 +1,7 @@
 import argparse
 import difflib
-import imghdr
 import itertools
 import re
-import shlex
 import textwrap
 import time
 import traceback
@@ -12,22 +10,14 @@ from typing import Dict, List, Optional, Union
 
 import asyncpg
 import discord
-from bot import Bot
 from discord.ext import commands
 from jishaku.codeblocks import codeblock_converter
 from jishaku.paginators import WrappedPaginator
 from tabulate import tabulate
-from utils import (
-    ExtensionConverter,
-    GuildContext,
-    UntilFlag,
-    cleanup_code,
-    plural,
-    NoCover,
-)
 
-from cogs.context import Context, P
-from utils.helpers import AuthorView, response_checker
+from bot import Bot, Context
+from utils import (AuthorView, ExtensionConverter, NoCover, UntilFlag,
+                   cleanup_code, plural, response_checker, to_bytesio)
 
 
 async def setup(bot: Bot):
@@ -259,7 +249,7 @@ class Owner(
         await ctx.send(embed=embed)
 
     @commands.command(name="sql")
-    async def sql(self, ctx: GuildContext, *, query: UntilFlag[SqlCommandFlags]):
+    async def sql(self, ctx: Context, *, query: UntilFlag[SqlCommandFlags]):
         """|coro|
         Executes an SQL query
         Parameters
@@ -338,7 +328,7 @@ class Owner(
     @commands.command(name="block", aliases=("blacklist",))
     async def block(
         self,
-        ctx: GuildContext,
+        ctx: Context,
         snowflake: discord.Object,
         *,
         reason: str = "No reason provided",
@@ -385,7 +375,7 @@ class Owner(
         await ctx.send(
             view=CoverView(ctx, results),
             file=discord.File(
-                await self.bot.to_bytesio(image_url),
+                await to_bytesio(ctx.session, image_url),
                 "cover.png",
                 spoiler=results["albums"]["items"][0]["id"]
                 in await self.bot.redis.smembers("nsfw_covers"),

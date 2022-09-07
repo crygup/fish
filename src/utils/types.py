@@ -1,5 +1,6 @@
-import discord
 from typing import Union
+
+import discord
 
 GuildChannel = Union[
     discord.TextChannel,

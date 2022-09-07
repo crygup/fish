@@ -20,3 +20,4 @@ Wand
 beautifulsoup4
 pre-commit
 PyNaCl
+isort

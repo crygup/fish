@@ -2,8 +2,9 @@ from typing import Annotated, Optional
 
 import asyncpg
 import discord
-from bot import Bot, Context
 from discord.ext import commands
+
+from bot import Bot, Context
 from utils import FieldPageSource, Pager
 
 from ._base import CogBase

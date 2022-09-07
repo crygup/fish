@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-from io import BytesIO
 import logging
 import os
 import pathlib
@@ -9,6 +8,7 @@ import re
 import sys
 import textwrap
 import traceback
+from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, List, Set
 
 import aiohttp
@@ -20,14 +20,8 @@ from discord.ext import commands
 from ossapi import OssapiV2
 
 from cogs.context import Context
-from utils import (
-    setup_accounts,
-    setup_cache,
-    setup_pokemon,
-    setup_prefixes,
-    setup_webhooks,
-    response_checker,
-)
+from utils import (response_checker, setup_accounts, setup_cache,
+                   setup_pokemon, setup_prefixes, setup_webhooks)
 
 if TYPE_CHECKING:
     from utils import Context
@@ -257,19 +251,6 @@ class Bot(commands.Bot):
 
         print(f"Logged in as {self.user}")
 
-    async def close(self):
-        for extension in initial_extensions:
-            try:
-                await self.unload_extension(extension)
-            except Exception:
-                pass
-
-        await self.session.close()
-        await self.pool.close()
-        await self.redis.close()
-
-        await super().close()
-
     async def getch_user(self, user_id: int) -> discord.User:
         user = self.get_user(user_id)
 
@@ -277,24 +258,6 @@ class Bot(commands.Bot):
             user = await self.fetch_user(user_id)
 
         return user
-
-    async def to_bytesio(self, url: str, skip_check: bool = False) -> BytesIO:
-        async with self.session.get(url) as resp:
-            if not skip_check:
-                response_checker(resp)
-
-            data = await resp.read()
-
-        return BytesIO(data)
-
-    async def to_bytes(self, url: str, skip_check: bool = False) -> bytes:
-        async with self.session.get(url) as resp:
-            if not skip_check:
-                response_checker(resp)
-
-            data = await resp.read()
-
-        return data
 
     async def send_error(self, ctx: Context, error: commands.CommandError):
         await ctx.send(f"An unhandled error occured, this error has been reported.")
@@ -324,6 +287,19 @@ class Bot(commands.Bot):
         embed.timestamp = discord.utils.utcnow()
         await self.webhooks["error_logs"].send(embed=embed)
         return
+
+    async def close(self):
+        for extension in initial_extensions:
+            try:
+                await self.unload_extension(extension)
+            except Exception:
+                pass
+
+        await self.session.close()
+        await self.pool.close()
+        await self.redis.close()
+
+        await super().close()
 
 
 if __name__ == "__main__":

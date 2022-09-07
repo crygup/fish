@@ -8,28 +8,20 @@ import sys
 import textwrap
 import time
 from io import BytesIO
-from typing import (
-    TYPE_CHECKING,
-    Awaitable,
-    Callable,
-    ClassVar,
-    List,
-    Optional,
-    ParamSpec,
-    Sequence,
-    Tuple,
-    TypeVar,
-    Union,
-    TypeAlias,
-)
+from typing import (TYPE_CHECKING, Any, Awaitable, Callable, ClassVar, Dict,
+                    List, Optional, ParamSpec, Sequence, Tuple, TypeAlias,
+                    TypeVar, Union)
 
-import bs4
+import aiohttp
 import discord
 from aiohttp import ClientResponse
-from cogs.context import Context
 from dateutil.relativedelta import relativedelta
 from discord.ext import commands
 from PIL import Image, ImageSequence
+from wand.image import Image as wImage
+
+if TYPE_CHECKING:
+    from cogs.context import Context
 
 from .errors import *
 
@@ -60,6 +52,51 @@ Argument: TypeAlias = Optional[
 emoji_regex = r"<(?P<animated>a)?:(?P<name>[a-zA-Z0-9\_]{1,}):(?P<id>[0-9]{1,})>"
 
 
+async def get_lastfm_data(
+    bot: Bot,
+    version: str,
+    method: str,
+    endpoint: str,
+    query: str,
+    extras: Optional[Dict] = None,
+) -> Dict[Any, Any]:
+
+    url = f"http://ws.audioscrobbler.com/{version}/"
+
+    params: Dict[Any, Any] = {
+        "method": method,
+        endpoint: query,
+        "api_key": bot.config["keys"]["lastfm-key"],
+        "format": "json",
+    }
+
+    if extras:
+        params.update(extras)
+
+    async with bot.session.get(url, params=params) as response:
+        response_checker(response)
+        return await response.json()
+
+
+async def get_steam_data(
+    bot: Bot,
+    endpoint: str,
+    version: str,
+    account: int,
+    ids: bool = False,
+) -> Dict:
+    url = f"https://api.steampowered.com/{endpoint}/{version}"
+
+    params: Dict[str, Any] = {
+        "key": bot.config["keys"]["steam-key"],
+        f"steamid{'s' if ids else ''}": account,
+    }
+
+    async with bot.session.get(url, params=params) as response:
+        response_checker(response)
+        return await response.json()
+
+
 async def get_sp_cover(bot: Bot, query: str) -> Tuple[str, bool]:
     url = "https://api.spotify.com/v1/search"
 
@@ -88,49 +125,78 @@ def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
     return wrapper
 
 
-async def template(bot: Bot, assetID: int, ctx: Context):
-    async with bot.session.get(
+async def get_twemoji(
+    session: aiohttp.ClientSession, emoji: str, *, svg: bool = True
+) -> Optional[bytes]:
+    try:
+        folder = ("72x72", "svg")[svg]
+        ext = ("png", "svg")[svg]
+        url = f"https://twemoji.maxcdn.com/v/latest/{folder}/{ord(emoji):x}.{ext}"
+
+        async with session.get(url) as r:
+            if r.ok:
+                byt = await r.read()
+                if svg:
+                    return await svgbytes_to_btyes(byt)
+                else:
+                    return byt
+
+    except Exception:
+        return None
+
+
+@to_thread
+def svgbytes_to_btyes(svg: bytes) -> bytes:
+    with wImage(
+        blob=svg, format="svg", width=500, height=500, background="none"
+    ) as asset:
+        _img = asset.make_blob("png")
+
+    if _img is not None:
+        return _img
+
+    raise TypeError("Failed to convert svg to bytes")
+
+
+async def template(session: aiohttp.ClientSession, assetID: int) -> BytesIO:
+    async with session.get(
         f"https://assetdelivery.roblox.com/v1/asset?id={assetID}"
     ) as r:
         if r.status == 200:
             text = await r.text()
             results = re.search(r"\?id=(?P<id>[0-9]+)", text)
             if results:
-                img = await ctx.to_bytesio(
-                    url=f"https://assetdelivery.roblox.com/v1/asset?id={results.group('id')}"
+                img = await to_bytesio(
+                    session,
+                    url=f"https://assetdelivery.roblox.com/v1/asset?id={results.group('id')}",
                 )
                 return img
 
         raise TypeError(f"Sorry, I couldn't find that asset.`")
 
 
-class AuthorView(discord.ui.View):
-    def __init__(self, ctx: Context, *, timeout: Optional[float] = None):
-        super().__init__(timeout=timeout)
+async def to_bytesio(
+    session: aiohttp.ClientSession, url: str, skip_check: bool = False
+) -> BytesIO:
+    async with session.get(url) as resp:
+        if not skip_check:
+            response_checker(resp)
 
-        self.message: Optional[discord.Message] = None
-        self.ctx = ctx
+        data = await resp.read()
 
-    def disable_all(self) -> None:
-        for button in self.children:
-            if isinstance(button, discord.ui.Button):
-                button.disabled = True
-            if isinstance(button, discord.ui.Select):
-                button.disabled = True
+        return BytesIO(data)
 
-    async def on_timeout(self) -> None:
-        self.disable_all()
-        if self.message:
-            await self.message.edit(view=self)
 
-    async def interaction_check(self, interaction: discord.Interaction):
-        if interaction.user and interaction.user == self.ctx.author:
-            return True
-        await interaction.response.send_message(
-            f'You can\'t use this, sorry. \nIf you\'d like to use this then run the command `{self.ctx.command}{self.ctx.invoked_subcommand or ""}`',
-            ephemeral=True,
-        )
-        return False
+async def to_bytes(
+    session: aiohttp.ClientSession, url: str, skip_check: bool = False
+) -> bytes:
+    async with session.get(url) as resp:
+        if not skip_check:
+            response_checker(resp)
+
+        data = await resp.read()
+
+    return data
 
 
 async def mobile(self) -> None:
@@ -316,10 +382,7 @@ compiled_videos = re.compile(
 )
 
 
-async def get_video(
-    ctx: GuildContext | Context, url: str, auto: bool = False
-) -> Optional[str]:
-
+async def get_video(ctx: Context, url: str, auto: bool = False) -> Optional[str]:
     if not compiled_videos.search(url):
         return None
 
@@ -364,15 +427,6 @@ async def run(cmd: str) -> Optional[str]:
 
     if stderr:
         raise TypeError(f"[stderr]\n{stderr.decode()}")
-
-
-class GuildContext(Context):
-    bot: Bot
-    author: discord.Member
-    guild: discord.Guild
-    channel: Union[discord.VoiceChannel, discord.TextChannel, discord.Thread]
-    me: discord.Member
-    prefix: str
 
 
 class Regexes:
@@ -539,11 +593,6 @@ def human_timedelta(
 
 def format_relative(dt: datetime.datetime) -> str:
     return discord.utils.format_dt(dt, "R")
-
-
-async def url_to_bytes(ctx: Context, url) -> bytes:
-    async with ctx.bot.session.get(url) as r:
-        return await r.read()
 
 
 # https://github.com/CuteFwan/Koishi/blob/master/cogs/avatar.py#L82-L102

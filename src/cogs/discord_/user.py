@@ -5,19 +5,13 @@ from typing import List, Optional, Tuple, Union
 
 import asyncpg
 import discord
-from bot import Context
 from discord.ext import commands
-from utils import (
-    FieldPageSource,
-    Pager,
-    human_timedelta,
-    AvatarsPageSource,
-    format_bytes,
-    url_to_bytes,
-)
+
+from bot import Context
+from utils import (AvatarsPageSource, AvatarView, FieldPageSource, Pager,
+                   format_bytes, human_timedelta, to_bytes)
 
 from ._base import CogBase
-from .views import AvatarView
 
 
 class UserCommands(CogBase):
@@ -379,7 +373,7 @@ class UserCommands(CogBase):
                 raise ValueError(f"{user} has no avatar history on record.")
 
             avatars = await asyncio.gather(
-                *[url_to_bytes(ctx, row["avatar"]) for row in records]
+                *[to_bytes(ctx.session, row["avatar"]) for row in records]
             )
 
             gen_start = time.perf_counter()
@@ -412,10 +406,6 @@ class UserCommands(CogBase):
     ):
         """Shows the server avatar history of a user."""
 
-        async def url_to_bytes(url) -> bytes:
-            async with ctx.bot.session.get(url) as r:
-                return await r.read()
-
         async with ctx.typing():
             sql = """
             SELECT * FROM guild_avatars WHERE member_id = $1 AND guild_id = $2
@@ -432,7 +422,7 @@ class UserCommands(CogBase):
                 raise ValueError(f"{member} has no server avatar history on record.")
 
             avatars = await asyncio.gather(
-                *[url_to_bytes(row["avatar"]) for row in records]
+                *[to_bytes(ctx.session, row["avatar"]) for row in records]
             )
 
             gen_start = time.perf_counter()

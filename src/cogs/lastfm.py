@@ -1,27 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, List
-from typing import Literal as L
-from typing import Optional, Union
+from typing import List, Optional
 
 import discord
-from bot import Bot, Context
 from discord.ext import commands
 from discord.utils import remove_markdown
-from typing_extensions import reveal_type
-from utils import (
-    LastfmClient,
-    LastfmConverter,
-    LastfmTimeConverter,
-    SimplePages,
-    format_bytes,
-    get_lastfm,
-    lastfm_period,
-    url_to_bytes,
-    get_sp_cover,
-    NoCover,
-)
+
+from bot import Bot, Context
+from utils import (LastfmConverter, LastfmTimeConverter, NoCover, SimplePages,
+                   format_bytes, get_lastfm, get_lastfm_data, get_sp_cover,
+                   lastfm_period, to_bytes)
 
 
 async def setup(bot: Bot):
@@ -48,7 +37,7 @@ class LastFm(commands.Cog, name="lastfm"):
         )
 
         async with ctx.typing():
-            info = await LastfmClient(
+            info = await get_lastfm_data(
                 self.bot, "2.0", "user.getrecenttracks", "user", name
             )
 
@@ -109,13 +98,13 @@ class LastFm(commands.Cog, name="lastfm"):
         )
 
         await ctx.trigger_typing()
-        results = await LastfmClient(
+        results = await get_lastfm_data(
             self.bot,
             "2.0",
             "user.gettoptracks",
             "user",
             name,
-            extras=f"&limit=200&period={period}",
+            extras={"limit": 200, "period": period},
         )
         if results["toptracks"]["track"] == []:
             raise TypeError("No recent tracks found for this user.")
@@ -147,13 +136,13 @@ class LastFm(commands.Cog, name="lastfm"):
         )
 
         await ctx.trigger_typing()
-        results = await LastfmClient(
+        results = await get_lastfm_data(
             self.bot,
             "2.0",
             "user.gettopartists",
             "user",
             name,
-            extras=f"&limit=200&period={period}",
+            extras={"limit": 200, "period": period},
         )
         if results["topartists"]["artist"] == []:
             raise TypeError("No recent tracks found for this user.")
@@ -191,13 +180,13 @@ class LastFm(commands.Cog, name="lastfm"):
         )
 
         await ctx.trigger_typing()
-        results = await LastfmClient(
+        results = await get_lastfm_data(
             self.bot,
             "2.0",
             "user.gettopalbums",
             "user",
             name,
-            extras=f"&limit=200&period={period}",
+            extras={"limit": 200, "period": period},
         )
         if results["topalbums"]["album"] == []:
             raise TypeError("No tracks found for this user.")
@@ -229,13 +218,13 @@ class LastFm(commands.Cog, name="lastfm"):
         )
 
         await ctx.trigger_typing()
-        results = await LastfmClient(
+        results = await get_lastfm_data(
             self.bot,
             "2.0",
             "user.gettopalbums",
             "user",
             name,
-            extras=f"&limit=100&period={period}",
+            extras={"limit": 100, "period": period},
         )
 
         data = results["topalbums"].get("album")
@@ -262,7 +251,7 @@ class LastFm(commands.Cog, name="lastfm"):
                 continue
 
         images: List[bytes] = await asyncio.gather(
-            *[url_to_bytes(ctx, url) for url in urls]
+            *[to_bytes(ctx.session, url) for url in urls]
         )
         fp = await format_bytes(ctx.guild.filesize_limit, images)
         file = discord.File(fp, f"{name}_chart.png", spoiler=chart_nsfw)

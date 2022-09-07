@@ -1,10 +1,11 @@
 import discord
-from bot import Bot, Context
+
+from bot import Bot
 
 from .info import InfoCommands
+from .other import OtherCommands
 from .search import SearchCommand
 from .user import UserCommands
-from .other import OtherCommands
 
 
 class Discord(SearchCommand, InfoCommands, UserCommands, OtherCommands, name="discord"):

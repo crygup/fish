@@ -3,19 +3,14 @@ from turtle import title
 
 import bs4
 import discord
-from bot import Bot, Context
 from bs4 import BeautifulSoup
 from dateutil import parser
 from discord.ext import commands
-from utils import (
-    FieldPageSource,
-    Pager,
-    RobloxAccountConverter,
-    RobloxAssetConverter,
-    SimplePages,
-    template,
-    to_thread,
-)
+
+from bot import Bot, Context
+from utils import (FieldPageSource, Pager, RobloxAccountConverter,
+                   RobloxAssetConverter, SimplePages, template, to_bytesio,
+                   to_thread)
 from utils.helpers import human_join
 from utils.roblox import *  # smd
 
@@ -107,7 +102,9 @@ class Roblox(commands.Cog, name="roblox"):
             )
 
             headshot = discord.File(
-                await ctx.to_bytesio(await fetch_headshot(ctx.bot.session, user)),
+                await to_bytesio(
+                    ctx.session, await fetch_headshot(ctx.bot.session, user)
+                ),
                 f"{user}_headshot.png",
             )
 
@@ -224,7 +221,7 @@ class Roblox(commands.Cog, name="roblox"):
         ),
     ):
         """Gets the template from a given asset url or id"""
-        asset = await template(bot=self.bot, ctx=ctx, assetID=assetID)
+        asset = await template(ctx.session, assetID)
         embed = discord.Embed()
         embed.set_image(url=f"attachment://asset.png")
         file = discord.File(fp=asset, filename=f"asset.png")

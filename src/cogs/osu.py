@@ -5,9 +5,10 @@ from typing import Union
 import discord
 from discord.ext import commands
 from ossapi.ossapiv2 import UserIdT
-from utils import BeatmapConverter, BeatmapSetConverter, get_osu, UnknownAccount
 
 from bot import Bot, Context
+from utils import (BeatmapConverter, BeatmapSetConverter, UnknownAccount,
+                   get_osu)
 
 
 async def setup(bot: Bot):

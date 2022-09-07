@@ -1,10 +1,7 @@
-import datetime
-from typing import List, Tuple
-
 import discord
-from bot import Bot
-from discord.ext import commands, tasks
-from utils import GuildContext
+from discord.ext import commands
+
+from bot import Bot, Context
 
 
 async def setup(bot: Bot):
@@ -16,7 +13,7 @@ class CommandEvents(commands.Cog, name="command_events"):
         self.bot = bot
 
     @commands.Cog.listener("on_command_completion")
-    async def on_command_comletion(self, ctx: GuildContext):
+    async def on_command_comletion(self, ctx: Context):
         if ctx.command is None:
             return
 

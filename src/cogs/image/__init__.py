@@ -1,5 +1,6 @@
 import discord
-from bot import Bot, Context
+
+from bot import Bot
 
 from .waifu import Waifus
 

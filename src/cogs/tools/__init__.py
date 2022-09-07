@@ -1,10 +1,11 @@
 import discord
-from bot import Bot, Context
 
+from bot import Bot
+
+from .afk import AfkCommands
 from .downloads import DownloadCommands
 from .other import OtherCommands
 from .tags import TagCommands
-from .afk import AfkCommands
 
 
 class Tools(TagCommands, DownloadCommands, OtherCommands, AfkCommands, name="tools"):

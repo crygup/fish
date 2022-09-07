@@ -1,9 +1,10 @@
 import discord
-from bot import Bot, Context
 
+from bot import Bot
+
+from .anime import AnimeCommands
 from .google import GoogleCommands
 from .spotify import SpotifyCommands
-from .anime import AnimeCommands
 from .youtube import YoutubeCommands
 
 

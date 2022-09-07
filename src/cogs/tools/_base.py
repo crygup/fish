@@ -1,5 +1,6 @@
-from bot import Bot, Context
 from discord.ext.commands import Cog
+
+from bot import Bot, Context
 
 
 class CogBase(Cog):

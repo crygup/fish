@@ -3,8 +3,9 @@ import shlex
 from typing import Optional
 
 import discord
-from bot import Bot, Context
 from discord.ext import commands
+
+from bot import Bot, Context
 from utils import FieldPageSource, Pager, RoleConverter
 
 from ._base import CogBase

@@ -1,12 +1,13 @@
 import re
-from typing import Dict, Optional
+from typing import Dict
 
 import aiohttp
 import discord
-from bot import Bot, Context
 from dateutil.parser import parse
 from discord.ext import commands
-from utils import BoolConverter, response_checker
+
+from bot import Context
+from utils import BoolConverter, response_checker, to_bytesio
 
 from ._base import CogBase
 
@@ -40,7 +41,7 @@ class Waifus(CogBase):
         )
         image_name = f"{data['image_id']}{data['extension']}"
         image_file = discord.File(
-            fp=await ctx.to_bytesio(data["url"]), filename=image_name
+            fp=await to_bytesio(ctx.session, data["url"]), filename=image_name
         )
         embed.set_image(url=f"attachment://{image_name}")
 

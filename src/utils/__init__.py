@@ -5,3 +5,4 @@ from .helpers import *
 from .paginator import *
 from .startup import *
 from .types import *
+from .views import *

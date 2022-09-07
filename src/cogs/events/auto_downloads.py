@@ -5,11 +5,11 @@ import time
 from typing import Dict
 
 import discord
-from bot import Bot, Context
 from discord.ext import commands, tasks
-from typing_extensions import reveal_type
-from utils import get_video, video_regexes, to_thread, natural_size
 from yt_dlp import YoutubeDL
+
+from bot import Bot, Context
+from utils import get_video, natural_size
 
 
 async def setup(bot: Bot):

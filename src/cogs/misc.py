@@ -7,20 +7,13 @@ from typing import Dict, List, Optional, Union
 
 import discord
 import psutil
-from bot import Bot, Context
 from discord.ext import commands
 from jishaku.modules import package_version
-from utils import (
-    SteamClient,
-    SteamConverter,
-    Unauthorized,
-    human_join,
-    human_timedelta,
-    natural_size,
-)
-import jishaku
 
+from bot import Bot, Context
 from cogs.context import Context
+from utils import (SteamConverter, Unauthorized, get_steam_data, human_join,
+                   human_timedelta, natural_size, to_bytesio)
 
 
 async def setup(bot: Bot):
@@ -147,17 +140,17 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
 
         await ctx.typing()
 
-        info: Dict = await SteamClient(ctx.bot, "ISteamUser/GetPlayerSummaries", "v0002", user_id, ids=True)  # type: ignore
-        games: Dict = await SteamClient(ctx.bot, "IPlayerService/GetOwnedGames", "v0001", user_id)  # type: ignore
+        info: Dict = await get_steam_data(ctx.bot, "ISteamUser/GetPlayerSummaries", "v0002", user_id, ids=True)  # type: ignore
+        games: Dict = await get_steam_data(ctx.bot, "IPlayerService/GetOwnedGames", "v0001", user_id)  # type: ignore
 
         try:
-            friends = await SteamClient(ctx.bot, "ISteamUser/GetFriendList", "v0001", user_id)  # type: ignore
+            friends = await get_steam_data(ctx.bot, "ISteamUser/GetFriendList", "v0001", user_id)  # type: ignore
             friends = len(friends["friendslist"]["friends"])
         except Unauthorized:
             friends = 0
 
         info = info["response"]["players"][0]
-        avatar = await ctx.to_bytesio(info["avatarfull"])
+        avatar = await to_bytesio(ctx.session, info["avatarfull"])
         avatar_file = discord.File(avatar, filename="avatar.png")
 
         name = (
@@ -205,7 +198,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
             if isinstance(account, discord.Member)
             else account
         )
-        info: Dict = await SteamClient(ctx.bot, "ISteamUser/GetPlayerSummaries", "v0002", user_id, ids=True)  # type: ignore
+        info: Dict = await get_steam_data(ctx.bot, "ISteamUser/GetPlayerSummaries", "v0002", user_id, ids=True)  # type: ignore
         info = info["response"]["players"][0]
         await ctx.send(f'{info["personaname"]}\'s 64bit steam ID is: `{user_id}`')
 
@@ -237,8 +230,8 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         embed = discord.Embed(
             color=ctx.bot.embedcolor, description=results["description"]
         )
-        icon_fp = await ctx.to_bytesio(
-            f"https://api.genshin.dev/characters/{character}/icon"
+        icon_fp = await to_bytesio(
+            ctx.session, f"https://api.genshin.dev/characters/{character}/icon"
         )
         icon_file = discord.File(icon_fp, filename=f"{character}.png")
 

@@ -5,10 +5,10 @@ import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import discord
-from cogs.context import Context
 from discord.ext import commands, menus
 from discord.ext.commands import Paginator as CommandPaginator
 
+from cogs.context import Context
 from utils import human_join
 
 blurple = discord.ButtonStyle.blurple

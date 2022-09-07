@@ -1,8 +1,8 @@
+from __future__ import annotations
+
 import re
 from typing import TYPE_CHECKING
 
-import aioredis
-import asyncpg
 import discord
 import pandas as pd
 
@@ -10,8 +10,6 @@ from .helpers import add_prefix
 
 if TYPE_CHECKING:
     from bot import Bot
-else:
-    from discord.ext.commands import Bot
 
 
 async def setup_cache(bot: Bot):

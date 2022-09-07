@@ -2,30 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-import textwrap
 from copy import deepcopy
-from io import BytesIO, StringIO
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    ParamSpec,
-    TypeVar,
-    Union,
-)
+from io import StringIO
+from typing import (TYPE_CHECKING, Any, Awaitable, Callable, Dict, List,
+                    Optional, ParamSpec, TypeVar, Union)
 
 import discord
 from aiohttp import ClientSession
 from asyncpg import Connection, Pool
-from discord.context_managers import Typing
 from discord.ext import commands
-from discord.ext.commands.context import DeferTyping
-from typing_extensions import reveal_type
-from wand.image import Image as wImage
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -207,56 +192,6 @@ class Context(commands.Context):
         await view.wait()
         return view.value
 
-    async def get_twemoji(self, emoji: str, *, svg: bool = True) -> Optional[bytes]:
-        try:
-            folder = ("72x72", "svg")[svg]
-            ext = ("png", "svg")[svg]
-            url = f"https://twemoji.maxcdn.com/v/latest/{folder}/{ord(emoji):x}.{ext}"
-
-            async with self.bot.session.get(url) as r:
-                if r.ok:
-                    byt = await r.read()
-                    if svg:
-                        return await self.svgbytes_to_btyes(byt)
-                    else:
-                        return byt
-        except Exception:
-            return None
-
-    @to_thread
-    def svgbytes_to_btyes(self, svg: bytes) -> bytes:
-        with wImage(
-            blob=svg, format="svg", width=500, height=500, background="none"
-        ) as asset:
-            _img = asset.make_blob("png")
-
-        if _img is not None:
-            return _img
-
-        raise TypeError("Failed to convert svg to bytes")
-
-    async def to_bytesio(self, url: str, skip_check: bool = False) -> BytesIO:
-        from utils import response_checker
-
-        async with self.bot.session.get(url) as resp:
-            if not skip_check:
-                response_checker(resp)
-
-            data = await resp.read()
-
-        return BytesIO(data)
-
-    async def to_bytes(self, url: str, skip_check: bool = False) -> bytes:
-        from utils import response_checker
-
-        async with self.bot.session.get(url) as resp:
-            if not skip_check:
-                response_checker(resp)
-
-            data = await resp.read()
-
-        return data
-
     @property
     def session(self) -> ClientSession:
         return self.bot.session
@@ -313,22 +248,16 @@ class Context(commands.Context):
 
         reference = reference or self.message.reference or None
 
-        if self.guild is None:
-            return
-
         if not self.channel.permissions_for(self.guild.me).send_messages:
             try:
                 return await self.author.send(f"I do not have permissions to send messages in {self.channel.mention}.")  # type: ignore
             except discord.Forbidden:
                 return
 
-        if kwargs.get("embed") and kwargs.get("embeds"):
-            raise TypeError("Cannot mix embed and embeds keyword arguments.")
-
         if check_ref:
             async for message in self.channel.history(limit=1):
                 if message.id != self.message.id:
-                    reference = self.message if not reference else reference
+                    reference = self.message
 
         embeds = kwargs.pop("embeds", []) or (
             [kwargs.pop("embed")] if kwargs.get("embed", None) else []
@@ -360,16 +289,12 @@ class Context(commands.Context):
                 return m
             except discord.HTTPException:
                 self._previous_message = None
-                self._previous_message = m = await super().send(
-                    content, reference=reference, **kwargs
-                )
+                self._previous_message = m = await super().send(content, **kwargs)
                 return m
 
-        self._previous_message = m = await super().send(
-            content, reference=reference, **kwargs
-        )
+        self._previous_message = m = await super().send(content, **kwargs)
         self._message_count += 1
-        return m
+        return
 
     async def dagpi(self, url: str) -> Dict[str, str]:
         from utils import RateLimitExceeded, response_checker
@@ -394,9 +319,9 @@ class Context(commands.Context):
 
         return data
 
-    async def trigger_typing(self):
+    async def trigger_typing(self, e: bool = False):
         try:
-            await self.typing()
+            await self.typing(ephemeral=e)
         except:
             pass
 

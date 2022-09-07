@@ -2,8 +2,9 @@ import json
 from typing import Optional, Union
 
 import discord
-from bot import Bot, Context
 from discord.ext import commands
+
+from bot import Bot, Context
 from utils import FieldPageSource, Pager, SimplePages
 
 from ._base import CogBase

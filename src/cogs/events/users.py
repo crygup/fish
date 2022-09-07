@@ -3,8 +3,9 @@ import random
 
 import asyncpg
 import discord
+from discord.ext import commands
+
 from bot import Bot
-from discord.ext import commands, tasks
 
 
 async def setup(bot: Bot):

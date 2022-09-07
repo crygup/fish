@@ -1,11 +1,11 @@
-import datetime
 import textwrap
 from typing import Dict, Optional, TypeVar
-from typing_extensions import reveal_type
+
 import discord
-from bot import Bot, Context
 from discord.ext import commands
-from utils import Argument, FieldPageSource, Pager
+
+from bot import Bot, Context
+from utils import FieldPageSource, Pager, to_bytes
 
 
 async def setup(bot: Bot):
@@ -128,7 +128,7 @@ class Table(commands.Cog, name="table", command_attrs=dict(hidden=True)):
             await ctx.send("User already has a booster role.")
             return
 
-        icon_bytes: bytes | str = await ctx.to_bytes(icon) if icon else ""
+        icon_bytes: bytes | str = await to_bytes(ctx.session, icon) if icon else ""
         color_value = color.value if color else 0
 
         role = await ctx.guild.create_role(

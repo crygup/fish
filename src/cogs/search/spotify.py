@@ -4,10 +4,11 @@ from typing import Literal as L
 from typing import Optional, Union
 
 import discord
-from bot import Bot, Context
 from discord import app_commands
 from discord.ext import commands, tasks
-from utils import LastfmClient, get_lastfm, get_sp_cover
+
+from bot import Context
+from utils import get_lastfm, get_lastfm_data, get_sp_cover, to_bytesio
 
 from ._base import CogBase
 
@@ -55,7 +56,7 @@ class SpotifyCommands(CogBase):
         if not query:
             name = await get_lastfm(self.bot, ctx.author.id)
 
-            info = await LastfmClient(
+            info = await get_lastfm_data(
                 self.bot, "2.0", "user.getrecenttracks", "user", name
             )
 
@@ -89,7 +90,10 @@ class SpotifyCommands(CogBase):
         async with self.bot.session.get(url, headers=headers, params=data) as r:
             results = await r.json()
 
-        return results
+        if results[f"{mode}s"]["items"] == []:
+            raise ValueError("No info found for this query")
+
+        return results[f"{mode}s"]["items"][0]
 
     @commands.hybrid_group(
         name="spotify",
@@ -104,7 +108,7 @@ class SpotifyCommands(CogBase):
         to_search = await self.get_query(ctx, query, "track")
 
         data = await self.get_spotify_search_data(to_search, "track")
-        await ctx.send(data["tracks"]["items"][0]["external_urls"]["spotify"])
+        await ctx.send(data["external_urls"]["spotify"])
 
     @spotify.command(name="album", aliases=("ab",))
     @app_commands.describe(query="The name of the album")
@@ -114,7 +118,7 @@ class SpotifyCommands(CogBase):
         to_search = await self.get_query(ctx, query, "album")
 
         data = await self.get_spotify_search_data(to_search, "album")
-        await ctx.send(data["albums"]["items"][0]["external_urls"]["spotify"])
+        await ctx.send(data["external_urls"]["spotify"])
 
     @spotify.command(name="artist", aliases=("art",))
     @app_commands.describe(query="The name of the artist")
@@ -124,7 +128,7 @@ class SpotifyCommands(CogBase):
         to_search = await self.get_query(ctx, query, "album")
 
         data = await self.get_spotify_search_data(to_search, "artist")
-        await ctx.send(data["artists"]["items"][0]["external_urls"]["spotify"])
+        await ctx.send(data["external_urls"]["spotify"])
 
     @commands.hybrid_command(name="cover", aliases=("co",))
     @app_commands.describe(query="The name of the album")
@@ -134,6 +138,6 @@ class SpotifyCommands(CogBase):
         to_search = await self.get_query(ctx, query, "album")
 
         url, nsfw = await get_sp_cover(self.bot, to_search)
-        fp = await self.bot.to_bytesio(url)
+        fp = await to_bytesio(ctx.session, url)
         file = discord.File(fp=fp, filename="cover.png", spoiler=nsfw)
         await ctx.send(file=file)

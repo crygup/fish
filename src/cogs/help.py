@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import re
 import textwrap
-from typing import Dict, List, Optional, TypeAlias
-from typing_extensions import reveal_type
+from typing import Dict, List, Optional
 
 import discord
-from bot import Bot, Context
 from discord.ext import commands
-from utils import FrontHelpPageSource, Pager, human_join, AuthorView
+
+from bot import Bot, Context
+from utils import AuthorView, human_join
 
 
 async def setup(bot: Bot):

@@ -1,6 +1,7 @@
 import discord
-from bot import Bot
 from discord.ext import commands
+
+from bot import Bot
 
 
 async def setup(bot: Bot):
