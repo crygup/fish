@@ -257,7 +257,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
 
         await ctx.send(embed=embed, file=icon_file)
 
-    @commands.hybrid_command(name="stats", hidden=True)
+    @commands.command(name="stats", hidden=True)
     @commands.cooldown(1, 30)
     async def stats(self, ctx: Context):
         """This shows a bit more info than about
@@ -360,4 +360,4 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         commands ran today     : {commands_today:,}
         """
 
-        await ctx.send(f"```yaml{textwrap.dedent(message)}```", ephemeral=True)
+        await ctx.send(f"```yaml{textwrap.dedent(message)}```")

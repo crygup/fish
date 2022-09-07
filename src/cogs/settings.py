@@ -111,7 +111,7 @@ class Settings(commands.Cog, name="settings"):
             await ctx.send("This prefix does not exist.")
             return
 
-    @commands.hybrid_command(name="accounts")
+    @commands.command(name="accounts")
     async def accounts(self, ctx: Context, *, user: discord.User = commands.Author):
         """Shows your linked accounts"""
         accounts = await ctx.bot.pool.fetchrow(
@@ -135,15 +135,14 @@ class Settings(commands.Cog, name="settings"):
         embed.add_field(name="Genshin UID", value=accounts["genshin"] or "Not set")
         embed.add_field(name="\u200b", value="\u200b")
 
-        await ctx.send(embed=embed, check_ref=True, ephemeral=True)
+        await ctx.send(embed=embed, check_ref=True)
 
-    @commands.hybrid_group(name="set", invoke_without_command=True)
+    @commands.group(name="set", invoke_without_command=True)
     async def set(self, ctx: Context):
         """Sets your profile for a site"""
         await ctx.send_help(ctx.command)
 
     @set.command(name="lastfm", aliases=["fm"])
-    @app_commands.describe(username="Your last.fm username")
     async def set_lastfm(self, ctx: Context, username: str):
         """Sets your last.fm account"""
         if not re.fullmatch(r"[a-zA-Z0-9_-]{2,15}", username):
@@ -152,7 +151,6 @@ class Settings(commands.Cog, name="settings"):
         await self.link_method(ctx, ctx.author.id, "lastfm", username)
 
     @set.command(name="osu")
-    @app_commands.describe(username="Your last.fm username")
     async def set_osu(self, ctx: Context, *, username: str):
         """Sets your osu! account"""
         if not re.fullmatch(r"[a-zA-Z0-9_\s-]{2,16}", username):
@@ -161,21 +159,18 @@ class Settings(commands.Cog, name="settings"):
         await self.link_method(ctx, ctx.author.id, "osu", username)
 
     @set.command(name="steam")
-    @app_commands.describe(username="Your steam username")
     async def set_steam(self, ctx: Context, username: str):
         """Sets your steam account"""
         SteamIDConverter(username)
         await self.link_method(ctx, ctx.author.id, "steam", username)
 
     @set.command(name="roblox")
-    @app_commands.describe(username="Your roblox username")
     async def set_roblox(self, ctx: Context, *, username: str):
         """Sets your roblox account"""
 
         await self.link_method(ctx, ctx.author.id, "roblox", username)
 
     @set.command(name="genshin")
-    @app_commands.describe(user_id="Your genshin user id")
     async def set_genshin(self, ctx: Context, *, user_id: str):
         """Sets your genshin account"""
         if not re.match(r"[0-9]{4,15}", user_id):
@@ -183,7 +178,7 @@ class Settings(commands.Cog, name="settings"):
 
         await self.link_method(ctx, ctx.author.id, "genshin", user_id)
 
-    @commands.hybrid_group(name="unlink", invoke_without_command=True)
+    @commands.group(name="unlink", invoke_without_command=True)
     async def unlink(self, ctx: Context):
         """Unlinks your account"""
         await ctx.send_help(ctx.command)
