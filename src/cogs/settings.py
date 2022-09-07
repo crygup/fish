@@ -175,13 +175,13 @@ class Settings(commands.Cog, name="settings"):
         await self.link_method(ctx, ctx.author.id, "roblox", username)
 
     @set.command(name="genshin")
-    @app_commands.describe(username="Your genshin user id")
-    async def set_genshin(self, ctx: Context, *, uid: str):
+    @app_commands.describe(user_id="Your genshin user id")
+    async def set_genshin(self, ctx: Context, *, user_id: str):
         """Sets your genshin account"""
-        if not re.match(r"[0-9]{4,15}", uid):
+        if not re.match(r"[0-9]{4,15}", user_id):
             raise UnknownAccount("Invalid UID.")
 
-        await self.link_method(ctx, ctx.author.id, "genshin", uid)
+        await self.link_method(ctx, ctx.author.id, "genshin", user_id)
 
     @commands.hybrid_group(name="unlink", invoke_without_command=True)
     async def unlink(self, ctx: Context):
