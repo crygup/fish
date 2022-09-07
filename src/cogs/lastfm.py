@@ -20,6 +20,7 @@ from utils import (
     lastfm_period,
     url_to_bytes,
     get_sp_cover,
+    NoCover,
 )
 
 
@@ -255,7 +256,7 @@ class LastFm(commands.Cog, name="lastfm"):
                     )
                 )
                 total += 1
-            except IndexError:
+            except (IndexError, NoCover):
                 continue
 
         images: List[bytes] = await asyncio.gather(

@@ -6,7 +6,7 @@ from typing import Optional, Union
 import discord
 from bot import Bot, Context
 from discord.ext import commands, tasks
-from utils import LastfmClient, UnknownAccount, get_lastfm, get_sp_cover
+from utils import LastfmClient, get_lastfm, get_sp_cover
 
 from ._base import CogBase
 
@@ -50,7 +50,7 @@ class SpotifyCommands(CogBase):
         if key is None:
             await self.set_spotify_key()
 
-    async def get_query(self, ctx: Context, query: Optional[str]) -> str:
+    async def get_query(self, ctx: Context, query: Optional[str], mode: str) -> str:
         if not query:
             name = await get_lastfm(self.bot, ctx.author.id)
 
@@ -62,7 +62,8 @@ class SpotifyCommands(CogBase):
                 raise ValueError("No recent tracks found for this user.")
 
             track = info["recenttracks"]["track"][0]
-            return f"{track['name']} artist:{track['artist']['#text']}"
+            begin = {"track": track["name"], "album": track["album"]["#text"]}
+            return f"{begin[mode]} artist:{track['artist']['#text']}"
         else:
             return query
 
@@ -89,7 +90,7 @@ class SpotifyCommands(CogBase):
     async def spotify(self, ctx: Context, query: Optional[str]):
         """Search for a track on spotify"""
         await ctx.trigger_typing()
-        to_search = await self.get_query(ctx, query)
+        to_search = await self.get_query(ctx, query, "track")
 
         data = await self.get_spotify_search_data(to_search, "track")
         await ctx.send(data["tracks"]["items"][0]["external_urls"]["spotify"])
@@ -98,7 +99,7 @@ class SpotifyCommands(CogBase):
     async def album(self, ctx: Context, query: Optional[str]):
         """Search for an album on spotify"""
         await ctx.trigger_typing()
-        to_search = await self.get_query(ctx, query)
+        to_search = await self.get_query(ctx, query, "album")
 
         data = await self.get_spotify_search_data(to_search, "album")
         await ctx.send(data["albums"]["items"][0]["external_urls"]["spotify"])
@@ -107,7 +108,7 @@ class SpotifyCommands(CogBase):
     async def cover(self, ctx: Context, query: Optional[str]):
         """Get the cover for an album on spotify"""
         await ctx.trigger_typing()
-        to_search = await self.get_query(ctx, query)
+        to_search = await self.get_query(ctx, query, "album")
 
         url = await get_sp_cover(self.bot, to_search)
         fp = await self.bot.to_bytesio(url)

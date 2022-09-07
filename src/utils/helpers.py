@@ -72,7 +72,11 @@ async def get_sp_cover(bot: Bot, query: str) -> str:
     async with bot.session.get(url, headers=headers, params=data) as r:
         results = await r.json()
 
-    return results["albums"]["items"][0]["images"][0]["url"]
+    try:
+        return results["albums"]["items"][0]["images"][0]["url"]
+    except (IndexError, KeyError):
+        print(results)
+        raise NoCover("No cover found for this album, sorry.")
 
 
 def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:

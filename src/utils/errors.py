@@ -60,6 +60,10 @@ class RateLimitExceeded(commands.BadArgument):
     pass
 
 
+class NoCover(commands.BadArgument):
+    pass
+
+
 IGNORED = (
     commands.CommandNotFound,
     commands.NotOwner,
@@ -87,4 +91,5 @@ SEND = (
     ImageTooLarge,
     InvalidColor,
     RateLimitExceeded,
+    NoCover,
 )
