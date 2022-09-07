@@ -304,7 +304,7 @@ class Context(commands.Context):
 
         self._previous_message = m = await super().send(content, **kwargs)
         self._message_count += 1
-        return self._previous_message
+        return m
 
     async def dagpi(self, url: str) -> Dict[str, str]:
         from utils import RateLimitExceeded, response_checker
