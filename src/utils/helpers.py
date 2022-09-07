@@ -17,6 +17,7 @@ from typing import (
     Optional,
     ParamSpec,
     Sequence,
+    Tuple,
     TypeVar,
     Union,
     TypeAlias,
@@ -59,7 +60,7 @@ Argument: TypeAlias = Optional[
 emoji_regex = r"<(?P<animated>a)?:(?P<name>[a-zA-Z0-9\_]{1,}):(?P<id>[0-9]{1,})>"
 
 
-async def get_sp_cover(bot: Bot, query: str) -> str:
+async def get_sp_cover(bot: Bot, query: str) -> Tuple[str, bool]:
     url = "https://api.spotify.com/v1/search"
 
     headers = {
@@ -73,9 +74,10 @@ async def get_sp_cover(bot: Bot, query: str) -> str:
         results = await r.json()
 
     try:
-        return results["albums"]["items"][0]["images"][0]["url"]
+        return results["albums"]["items"][0]["images"][0]["url"], results["albums"][
+            "items"
+        ][0]["id"] in await bot.redis.smembers("nsfw_covers")
     except (IndexError, KeyError):
-        print(results)
         raise NoCover("No cover found for this album, sorry.")
 
 

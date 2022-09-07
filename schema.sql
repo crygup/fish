@@ -158,3 +158,8 @@ CREATE TABLE IF NOT EXISTS mudae_users (
     PRIMARY KEY (guild_id, user_id)
 );
 */
+
+CREATE TABLE IF NOT EXISTS nsfw_covers (
+    album_id TEXT,
+    PRIMARY KEY (album_id)
+);

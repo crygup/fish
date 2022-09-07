@@ -1,7 +1,13 @@
 {
-  "python.formatting.provider": "black",
-  "editor.formatOnSave": true,
-  "editor.cursorSurroundingLines": 15,
-  "editor.cursorSmoothCaretAnimation": true,
-  "editor.cursorBlinking": "phase"
+	"python.formatting.provider": "black",
+	"editor.formatOnSave": true,
+	"editor.cursorSurroundingLines": 15,
+	"editor.cursorSmoothCaretAnimation": true,
+	"editor.cursorBlinking": "phase",
+	"editor.guides.highlightActiveIndentation": "always",
+	"editor.guides.bracketPairsHorizontal": false,
+	"editor.guides.indentation": false,
+	"editor.lineNumbers": "off",
+	"prettier.useTabs": true,
+	"workbench.tree.indent": 8
 }

@@ -246,15 +246,17 @@ class LastFm(commands.Cog, name="lastfm"):
         urls = []
 
         total = 0
+        chart_nsfw = False
         for track in data:
             if total == 9:
                 break
             try:
-                urls.append(
-                    await get_sp_cover(
-                        self.bot, f"{track['name']} artist:{track['artist']['name']}"
-                    )
+                url, nsfw = await get_sp_cover(
+                    self.bot, f"{track['name']} artist:{track['artist']['name']}"
                 )
+                urls.append(url)
+                if nsfw:
+                    chart_nsfw = True
                 total += 1
             except (IndexError, NoCover):
                 continue
@@ -263,9 +265,6 @@ class LastFm(commands.Cog, name="lastfm"):
             *[url_to_bytes(ctx, url) for url in urls]
         )
         fp = await format_bytes(ctx.guild.filesize_limit, images)
-        file = discord.File(
-            fp,
-            f"{name}_chart.png",
-        )
+        file = discord.File(fp, f"{name}_chart.png", spoiler=chart_nsfw)
 
         await ctx.send(file=file)

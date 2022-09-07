@@ -33,6 +33,10 @@ async def setup_cache(bot: Bot):
     for row in afk:
         await bot.redis.sadd("afk_users", row["user_id"])
 
+    covers = await bot.pool.fetch("SELECT * FROM nsfw_covers")
+    for row in covers:
+        await bot.redis.sadd("nsfw_covers", row["album_id"])
+
 
 async def setup_webhooks(bot: Bot):
     for name, webhook in bot.config["webhooks"].items():

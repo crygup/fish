@@ -133,7 +133,7 @@ class SpotifyCommands(CogBase):
         await ctx.trigger_typing()
         to_search = await self.get_query(ctx, query, "album")
 
-        url = await get_sp_cover(self.bot, to_search)
+        url, nsfw = await get_sp_cover(self.bot, to_search)
         fp = await self.bot.to_bytesio(url)
-        file = discord.File(fp=fp, filename="cover.png")
+        file = discord.File(fp=fp, filename="cover.png", spoiler=nsfw)
         await ctx.send(file=file)
