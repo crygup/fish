@@ -4,7 +4,7 @@ import discord
 from bot import Bot
 from discord import app_commands
 from discord.ext import commands
-from utils import get_lastfm, LastfmClient, UnknownAccount
+from utils import get_lastfm, LastfmClient, UnknownAccount, get_sp_cover
 from typing import Literal as L
 
 
@@ -96,8 +96,7 @@ class Spotify(commands.GroupCog, name="spotify"):
             await interaction.edit_original_response(content=str(e))
             return
 
-        data = await self.get_spotify_search_data(to_search, "album")
-        url = data["albums"]["items"][0]["images"][0]["url"]
+        url = await get_sp_cover(self.bot, to_search)
         fp = await self.bot.to_bytesio(url)
         file = discord.File(fp=fp, filename="cover.png")
         await interaction.edit_original_response(attachments=[file])
