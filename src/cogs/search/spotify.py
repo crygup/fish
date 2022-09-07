@@ -1,18 +1,17 @@
 import base64
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+from typing import Literal as L
+from typing import Optional, Union
 
 import discord
 from bot import Bot, Context
 from discord.ext import commands, tasks
-from utils import LastfmClient, get_lastfm
+from utils import LastfmClient, UnknownAccount, get_lastfm
 
 from ._base import CogBase
 
 
 class SpotifyCommands(CogBase):
-    def __init__(self, bot: Bot):
-        self.bot = bot
-
     async def cog_unload(self):
         self.set_key_task.cancel()
 
@@ -51,7 +50,27 @@ class SpotifyCommands(CogBase):
         if key is None:
             await self.set_spotify_key()
 
-    async def get_spotify_search_data(self, query: str) -> Dict:
+    async def get_query(self, ctx: Context, query: Optional[str]) -> str:
+        if not query:
+            name = await get_lastfm(self.bot, ctx.author.id)
+
+            info = await LastfmClient(
+                self.bot, "2.0", "user.getrecenttracks", "user", name
+            )
+
+            if info["recenttracks"]["track"] == []:
+                raise ValueError("No recent tracks found for this user.")
+
+            track = info["recenttracks"]["track"][0]
+            return f"{track['name']} artist:{track['artist']['#text']}"
+        else:
+            return query
+
+    async def get_spotify_search_data(
+        self,
+        query: str,
+        mode: Union[L["track"], L["album"]],
+    ) -> Dict:
         url = "https://api.spotify.com/v1/search"
 
         headers = {
@@ -59,55 +78,41 @@ class SpotifyCommands(CogBase):
             "Authorization": f"Bearer {self.bot.spotify_key}",
         }
 
-        data = {"q": query, "type": "track", "market": "ES", "limit": "1"}
+        data = {"q": query, "type": mode, "market": "ES", "limit": "1"}
 
         async with self.bot.session.get(url, headers=headers, params=data) as r:
             results = await r.json()
-            if results["tracks"]["items"] == []:
-                raise ValueError("Couldn't find any tracks.")
 
-        return results["tracks"]["items"][0]
+        return results
 
-    @commands.command(name="spotify", aliases=("s",))
-    @commands.before_invoke(set_key)
-    async def spotify(self, ctx: Context, *, query: Optional[str]):
+    @commands.group(name="spotify", aliases=("sp",), invoke_without_command=True)
+    async def spotify(self, ctx: Context, query: Optional[str]):
+        """Search for a track on spotify"""
         await ctx.trigger_typing()
-        if not query:
-            name = await get_lastfm(ctx.bot, ctx.author.id)
-            info = await LastfmClient(
-                self.bot, "2.0", "user.getrecenttracks", "user", name
-            )
+        to_search = await self.get_query(ctx, query)
 
-            if info["recenttracks"]["track"] == []:
-                raise ValueError("No recent tracks found for this user.")
+        data = await self.get_spotify_search_data(to_search, "track")
+        await ctx.send(data["tracks"]["items"][0]["external_urls"]["spotify"])
 
-            track = info["recenttracks"]["track"][0]
-            to_search = f"{track['name']} artist:{track['artist']['#text']}"
-        else:
-            to_search = query
+    @spotify.command(name="album", aliases=("ab",))
+    async def album(self, ctx: Context, query: Optional[str]):
+        """Search for an album on spotify"""
+        await ctx.trigger_typing()
+        to_search = await self.get_query(ctx, query)
 
-        data = await self.get_spotify_search_data(to_search)
-        await ctx.send(data["external_urls"]["spotify"])
+        data = await self.get_spotify_search_data(to_search, "album")
+        await ctx.send(data["albums"]["items"][0]["external_urls"]["spotify"])
 
     @commands.command(name="cover", aliases=("co",))
-    async def cover(self, ctx: Context, *, query: Optional[str]):
-        """Gets the album cover for your recent track or query"""
+    async def cover(self, ctx: Context, query: Optional[str]):
+        """Get the cover for an album on spotify"""
         await ctx.trigger_typing()
-        if not query:
-            name = await get_lastfm(ctx.bot, ctx.author.id)
-            info = await LastfmClient(
-                self.bot, "2.0", "user.getrecenttracks", "user", name
-            )
+        to_search = await self.get_query(ctx, query)
 
-            if info["recenttracks"]["track"] == []:
-                raise ValueError("No recent tracks found for this user.")
-            track = info["recenttracks"]["track"][0]
-            to_search = f"{track['name']} artist:{track['artist']['#text']}"
-        else:
-            to_search = query
+        data = await self.get_spotify_search_data(to_search, "album")
 
-        data = await self.get_spotify_search_data(to_search)
-        url = data["album"]["images"][0]["url"]
-        fp = await ctx.to_bytesio(url)
+        data = await self.get_spotify_search_data(to_search, "album")
+        url = data["albums"]["items"][0]["images"][0]["url"]
+        fp = await self.bot.to_bytesio(url)
         file = discord.File(fp=fp, filename="cover.png")
         await ctx.send(file=file)

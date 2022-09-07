@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from io import BytesIO
 import logging
 import os
 import pathlib
@@ -25,6 +26,7 @@ from utils import (
     setup_pokemon,
     setup_prefixes,
     setup_webhooks,
+    response_checker,
 )
 
 if TYPE_CHECKING:
@@ -275,6 +277,24 @@ class Bot(commands.Bot):
             user = await self.fetch_user(user_id)
 
         return user
+
+    async def to_bytesio(self, url: str, skip_check: bool = False) -> BytesIO:
+        async with self.session.get(url) as resp:
+            if not skip_check:
+                response_checker(resp)
+
+            data = await resp.read()
+
+        return BytesIO(data)
+
+    async def to_bytes(self, url: str, skip_check: bool = False) -> bytes:
+        async with self.session.get(url) as resp:
+            if not skip_check:
+                response_checker(resp)
+
+            data = await resp.read()
+
+        return data
 
     async def send_error(self, ctx: Context, error: commands.CommandError):
         await ctx.send(f"An unhandled error occured, this error has been reported.")

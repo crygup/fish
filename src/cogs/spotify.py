@@ -85,3 +85,19 @@ class Spotify(commands.GroupCog, name="spotify"):
         await interaction.edit_original_response(
             content=data["albums"]["items"][0]["external_urls"]["spotify"]
         )
+
+    @app_commands.command(description="Get the cover of an album")
+    @app_commands.describe(query="The name of the album")
+    async def cover(self, interaction: discord.Interaction, query: Optional[str]):
+        await interaction.response.defer(thinking=True)
+        try:
+            to_search = await self.get_query(interaction, query)
+        except ValueError as e:
+            await interaction.edit_original_response(content=str(e))
+            return
+
+        data = await self.get_spotify_search_data(to_search, "album")
+        url = data["albums"]["items"][0]["images"][0]["url"]
+        fp = await self.bot.to_bytesio(url)
+        file = discord.File(fp=fp, filename="cover.png")
+        await interaction.edit_original_response(attachments=[file])
