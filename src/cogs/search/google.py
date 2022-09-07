@@ -1,12 +1,17 @@
 import discord
 from bot import Context
+from discord import app_commands
 from discord.ext import commands
 from utils import response_checker
+
 from ._base import CogBase
 
 
 class GoogleCommands(CogBase):
-    @commands.hybrid_command(name="google", aliases=("g",))
+    @commands.hybrid_command(
+        name="google", aliases=("g",), description="Search something on the web"
+    )
+    @app_commands.describe(query="What are you searching for?")
     async def google(self, ctx: Context, *, query: str):
         """Search something on the web"""
         url = f"https://customsearch.googleapis.com/customsearch/v1"

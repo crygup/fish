@@ -1,14 +1,13 @@
 from __future__ import annotations
-import textwrap
 
-from typing import Any, Dict, List, Literal, Tuple
-from typing import Literal as L
-from typing import Union
+import textwrap
+from typing import Any, Dict, List
 
 import discord
 from bot import Context
+from discord import app_commands
 from discord.ext import commands
-from utils import response_checker, AuthorView
+from utils import AuthorView, response_checker
 
 from ._base import CogBase
 
@@ -53,16 +52,27 @@ class YoutubeCommands(CogBase):
         await ctx.send(url, view=view)
 
     @commands.hybrid_group(
-        name="youtube", aliases=("yt",), invoke_without_command=True, fallback="video"
+        name="youtube",
+        aliases=("yt",),
+        invoke_without_command=True,
+        fallback="video",
+        description="Search for a video",
     )
+    @app_commands.describe(query="Video to search for")
     async def youtube(self, ctx: Context, *, query: str):
         await self.search_method(ctx, query, "video")
 
-    @youtube.command(name="channel", aliases=("ch",))
+    @youtube.command(
+        name="channel", aliases=("ch",), description="Search for a playlist"
+    )
+    @app_commands.describe(query="Channel to search for")
     async def youtube_channel(self, ctx: Context, *, query: str):
         await self.search_method(ctx, query, "channel")
 
-    @youtube.command(name="playlist", aliases=("pl",))
+    @youtube.command(
+        name="playlist", aliases=("pl",), description="Search for a playlist"
+    )
+    @app_commands.describe(query="Playlist to search for")
     async def youtube_playlist(self, ctx: Context, *, query: str):
         await self.search_method(ctx, query, "playlist")
 
