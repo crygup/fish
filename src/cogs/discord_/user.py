@@ -1,25 +1,16 @@
 import asyncio
 import datetime
-import importlib
-import math
-import random
-import textwrap
 import time
-import uuid
-from io import BytesIO
 from typing import List, Optional, Tuple, Union
 
 import asyncpg
 import discord
-from bot import Bot, Context
+from bot import Context
 from discord.ext import commands
-from PIL import Image
 from utils import (
     FieldPageSource,
     Pager,
     human_timedelta,
-    resize_to_limit,
-    to_thread,
     AvatarsPageSource,
     format_bytes,
     url_to_bytes,
