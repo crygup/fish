@@ -335,8 +335,9 @@ class Context(commands.Context):
         )
         if embeds:
             for embed in embeds:
-                if embed.color is None:
-                    embed.color = self.bot.embedcolor
+                embed.color = (
+                    self.bot.embedcolor if embed.color is None else embed.color
+                )
 
         kwargs["embeds"] = embeds
 

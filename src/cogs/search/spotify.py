@@ -126,7 +126,7 @@ class SpotifyCommands(CogBase):
         data = await self.get_spotify_search_data(to_search, "artist")
         await ctx.send(data["artists"]["items"][0]["external_urls"]["spotify"])
 
-    @commands.command(name="cover", aliases=("co",))
+    @commands.hybrid_command(name="cover", aliases=("co",))
     @app_commands.describe(query="The name of the album")
     async def cover(self, ctx: Context, query: Optional[str]):
         """Get the cover for an album on spotify"""

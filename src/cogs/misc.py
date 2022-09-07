@@ -11,9 +11,6 @@ from bot import Bot, Context
 from discord.ext import commands
 from jishaku.modules import package_version
 from utils import (
-    FrontHelpPageSource,
-    GuildContext,
-    Pager,
     SteamClient,
     SteamConverter,
     Unauthorized,
@@ -21,6 +18,7 @@ from utils import (
     human_timedelta,
     natural_size,
 )
+import jishaku
 
 from cogs.context import Context
 
@@ -259,14 +257,14 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
 
         await ctx.send(embed=embed, file=icon_file)
 
-    @commands.command(name="stats", hidden=True)
+    @commands.hybrid_command(name="stats", hidden=True)
     @commands.cooldown(1, 30)
     async def stats(self, ctx: Context):
         """This shows a bit more info than about
 
         Can be hard to read for mobile users, sorry."""
         bot = self.bot
-        await ctx.trigger_typing()
+        await ctx.typing(ephemeral=True)
         members_count = sum(g.member_count for g in bot.guilds)  # type: ignore
         start = discord.utils.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -332,7 +330,6 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         threads                : {self.process.num_threads():,}
         discord.py             : {discord.__version__}
         guilds                 : {len(bot.guilds):,}
-        jishaku                : v{package_version('jishaku')}
         sus guilds             : {len(ctx.sus_guilds):,}
         members                : {members_count:,}
         spotify activities     : {len(spotify):,}
@@ -343,9 +340,9 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         stickers               : {len(bot.stickers):,}
         cogs                   : {len(bot.cogs):,}
         cached messages        : {len(bot.cached_messages):,}
-        websocket latency      : {round(bot.latency * 1000, 4)}ms
-        postgresql latency     : {round(psql_end - psql_start, 4)}ms
-        redis latency          : {round(redis_end - redis_start, 4)}ms
+        websocket latency      : {round(bot.latency * 1000, 3)}ms
+        postgresql latency     : {round(psql_end - psql_start, 3)}ms
+        redis latency          : {round(redis_end - redis_start, 3)}ms
         intents value          : {bot.intents.value}
         members intent         : {bot.intents.members}
         presences intent       : {bot.intents.presences}
@@ -363,4 +360,4 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         commands ran today     : {commands_today:,}
         """
 
-        await ctx.send(f"```yaml{textwrap.dedent(message)}```")
+        await ctx.send(f"```yaml{textwrap.dedent(message)}```", ephemeral=True)

@@ -4,15 +4,9 @@ from typing import Optional
 import asyncpg
 import discord
 from bot import Bot, Context
+from discord import app_commands
 from discord.ext import commands
-from utils import (
-    SteamIDConverter,
-    UnknownAccount,
-    SimplePages,
-    FieldPageSource,
-    Pager,
-    add_prefix,
-)
+from utils import FieldPageSource, Pager, SteamIDConverter, UnknownAccount, add_prefix
 
 
 async def setup(bot: Bot):
@@ -117,7 +111,7 @@ class Settings(commands.Cog, name="settings"):
             await ctx.send("This prefix does not exist.")
             return
 
-    @commands.command(name="accounts")
+    @commands.hybrid_command(name="accounts")
     async def accounts(self, ctx: Context, *, user: discord.User = commands.Author):
         """Shows your linked accounts"""
         accounts = await ctx.bot.pool.fetchrow(
@@ -143,12 +137,13 @@ class Settings(commands.Cog, name="settings"):
 
         await ctx.send(embed=embed, check_ref=True)
 
-    @commands.group(name="set", invoke_without_command=True)
+    @commands.hybrid_group(name="set", invoke_without_command=True)
     async def set(self, ctx: Context):
         """Sets your profile for a site"""
         await ctx.send_help(ctx.command)
 
     @set.command(name="lastfm", aliases=["fm"])
+    @app_commands.describe(username="Your last.fm username")
     async def set_lastfm(self, ctx: Context, username: str):
         """Sets your last.fm account"""
         if not re.fullmatch(r"[a-zA-Z0-9_-]{2,15}", username):
@@ -157,6 +152,7 @@ class Settings(commands.Cog, name="settings"):
         await self.link_method(ctx, ctx.author.id, "lastfm", username)
 
     @set.command(name="osu")
+    @app_commands.describe(username="Your last.fm username")
     async def set_osu(self, ctx: Context, *, username: str):
         """Sets your osu! account"""
         if not re.fullmatch(r"[a-zA-Z0-9_\s-]{2,16}", username):
@@ -165,18 +161,21 @@ class Settings(commands.Cog, name="settings"):
         await self.link_method(ctx, ctx.author.id, "osu", username)
 
     @set.command(name="steam")
+    @app_commands.describe(username="Your steam username")
     async def set_steam(self, ctx: Context, username: str):
         """Sets your steam account"""
         SteamIDConverter(username)
         await self.link_method(ctx, ctx.author.id, "steam", username)
 
     @set.command(name="roblox")
+    @app_commands.describe(username="Your roblox username")
     async def set_roblox(self, ctx: Context, *, username: str):
         """Sets your roblox account"""
 
         await self.link_method(ctx, ctx.author.id, "roblox", username)
 
     @set.command(name="genshin")
+    @app_commands.describe(username="Your genshin user id")
     async def set_genshin(self, ctx: Context, *, uid: str):
         """Sets your genshin account"""
         if not re.match(r"[0-9]{4,15}", uid):
@@ -184,7 +183,7 @@ class Settings(commands.Cog, name="settings"):
 
         await self.link_method(ctx, ctx.author.id, "genshin", uid)
 
-    @commands.group(name="unlink", invoke_without_command=True)
+    @commands.hybrid_group(name="unlink", invoke_without_command=True)
     async def unlink(self, ctx: Context):
         """Unlinks your account"""
         await ctx.send_help(ctx.command)
