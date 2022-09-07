@@ -4,8 +4,18 @@ import asyncio
 import subprocess
 from copy import deepcopy
 from io import StringIO
-from typing import (TYPE_CHECKING, Any, Awaitable, Callable, Dict, List,
-                    Optional, ParamSpec, TypeVar, Union)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    ParamSpec,
+    TypeVar,
+    Union,
+)
 
 import discord
 from aiohttp import ClientSession
@@ -244,7 +254,7 @@ class Context(commands.Context):
         reference: Optional[Union[discord.Message, discord.MessageReference]] = None,
         check_ref: Optional[bool] = False,
         **kwargs: Any,
-    ) -> discord.Message | None:
+    ) -> discord.Message:
 
         reference = reference or self.message.reference or None
 
@@ -252,7 +262,7 @@ class Context(commands.Context):
             try:
                 return await self.author.send(f"I do not have permissions to send messages in {self.channel.mention}.")  # type: ignore
             except discord.Forbidden:
-                return
+                return  # type: ignore
 
         if check_ref:
             async for message in self.channel.history(limit=1):
@@ -294,7 +304,7 @@ class Context(commands.Context):
 
         self._previous_message = m = await super().send(content, **kwargs)
         self._message_count += 1
-        return
+        return self._previous_message
 
     async def dagpi(self, url: str) -> Dict[str, str]:
         from utils import RateLimitExceeded, response_checker

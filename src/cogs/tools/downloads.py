@@ -112,7 +112,7 @@ class DownloadCommands(CogBase):
                 }
             ]
 
-        message = await ctx.reply("Downloading video")
+        message = await ctx.send("Downloading video")
 
         self.currently_downloading.append(f"{default_name}.{default_format}")
 
