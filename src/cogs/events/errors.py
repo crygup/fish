@@ -1,7 +1,8 @@
+from typing import Union
 import discord
 from bot import Bot, Context
 from discord.ext import commands
-from utils import IGNORED, SEND, RateLimitExceeded
+from utils import IGNORED, SEND, RateLimitExceeded, UnknownAccount
 from yt_dlp import DownloadError
 
 
@@ -16,10 +17,30 @@ class ErrorEvents(commands.Cog, name="error_events"):
             users=True, roles=False, everyone=False, replied_user=False
         )
 
+    async def do_error(self, ctx: Context, error: str):
+        if ctx.interaction:
+            try:
+                await ctx.interaction.response.send_message(
+                    error, allowed_mentions=self.mentions
+                )
+            except (discord.HTTPException, discord.InteractionResponded):
+                await ctx.interaction.edit_original_response(
+                    content=error, allowed_mentions=self.mentions
+                )
+        else:
+            await ctx.send(error, allowed_mentions=self.mentions)
+
     @commands.Cog.listener("on_command_error")
-    async def on_command_error(self, ctx: Context, error: commands.CommandError):
+    async def on_command_error(
+        self,
+        ctx: Context,
+        error: Union[commands.CommandError, commands.HybridCommandError],
+    ):
         if hasattr(ctx.command, "on_error"):
             return
+
+        if isinstance(error, commands.HybridCommandError):
+            error = error.original.original  # type: ignore
 
         cog = ctx.cog
         if cog and cog._get_overridden_method(cog.cog_command_error) is not None:
@@ -38,8 +59,8 @@ class ErrorEvents(commands.Cog, name="error_events"):
             if ctx.command is None:
                 return
 
-            return await ctx.send(
-                f"{ctx.command.name.capitalize()} has been disabled temporarily."
+            return await self.do_error(
+                ctx, f"{ctx.command.name.capitalize()} has been disabled temporarily."
             )
 
         elif isinstance(error, (commands.CommandOnCooldown, RateLimitExceeded)):
@@ -49,17 +70,17 @@ class ErrorEvents(commands.Cog, name="error_events"):
                 pass
 
         elif isinstance(error, DownloadError):
-            await ctx.send("Invalid video url.")
+            await self.do_error(ctx, "Invalid video url.")
 
         elif (
             isinstance(error, discord.HTTPException)
             and ctx.command
             and ctx.command.name == "download"
         ):
-            await ctx.send("Video too large, try a shorter video.")
+            await self.do_error(ctx, "Video too large, try a shorter video.")
 
         elif isinstance(error, SEND):
-            await ctx.send(str(error), allowed_mentions=self.mentions)
+            await self.do_error(ctx, str(error))
 
         elif isinstance(error, IGNORED):
             return

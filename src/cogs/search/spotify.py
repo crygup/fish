@@ -5,6 +5,7 @@ from typing import Optional, Union
 
 import discord
 from bot import Bot, Context
+from discord import app_commands
 from discord.ext import commands, tasks
 from utils import LastfmClient, get_lastfm, get_sp_cover
 
@@ -62,7 +63,11 @@ class SpotifyCommands(CogBase):
                 raise ValueError("No recent tracks found for this user.")
 
             track = info["recenttracks"]["track"][0]
-            begin = {"track": track["name"], "album": track["album"]["#text"]}
+            begin = {
+                "track": track["name"],
+                "album": track["album"]["#text"],
+                "artist": None,
+            }
             return f"{begin[mode]} artist:{track['artist']['#text']}"
         else:
             return query
@@ -70,7 +75,7 @@ class SpotifyCommands(CogBase):
     async def get_spotify_search_data(
         self,
         query: str,
-        mode: Union[L["track"], L["album"]],
+        mode: Union[L["track"], L["album"], L["artist"]],
     ) -> Dict:
         url = "https://api.spotify.com/v1/search"
 
@@ -86,7 +91,13 @@ class SpotifyCommands(CogBase):
 
         return results
 
-    @commands.group(name="spotify", aliases=("sp",), invoke_without_command=True)
+    @commands.hybrid_group(
+        name="spotify",
+        aliases=("sp", "s"),
+        invoke_without_command=True,
+        fallback="track",
+    )
+    @app_commands.describe(query="The name of the track")
     async def spotify(self, ctx: Context, query: Optional[str]):
         """Search for a track on spotify"""
         await ctx.trigger_typing()
@@ -96,6 +107,7 @@ class SpotifyCommands(CogBase):
         await ctx.send(data["tracks"]["items"][0]["external_urls"]["spotify"])
 
     @spotify.command(name="album", aliases=("ab",))
+    @app_commands.describe(query="The name of the album")
     async def album(self, ctx: Context, query: Optional[str]):
         """Search for an album on spotify"""
         await ctx.trigger_typing()
@@ -104,7 +116,18 @@ class SpotifyCommands(CogBase):
         data = await self.get_spotify_search_data(to_search, "album")
         await ctx.send(data["albums"]["items"][0]["external_urls"]["spotify"])
 
+    @spotify.command(name="artist", aliases=("art",))
+    @app_commands.describe(query="The name of the artist")
+    async def artist(self, ctx: Context, query: Optional[str]):
+        """Search for an artist on spotify"""
+        await ctx.trigger_typing()
+        to_search = await self.get_query(ctx, query, "album")
+
+        data = await self.get_spotify_search_data(to_search, "artist")
+        await ctx.send(data["artists"]["items"][0]["external_urls"]["spotify"])
+
     @commands.command(name="cover", aliases=("co",))
+    @app_commands.describe(query="The name of the album")
     async def cover(self, ctx: Context, query: Optional[str]):
         """Get the cover for an album on spotify"""
         await ctx.trigger_typing()
