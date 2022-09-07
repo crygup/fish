@@ -52,15 +52,17 @@ class YoutubeCommands(CogBase):
         view = YoutubeView(ctx, videos, type)
         await ctx.send(url, view=view)
 
-    @commands.group(name="youtube", aliases=("yt",), invoke_without_command=True)
+    @commands.hybrid_group(
+        name="youtube", aliases=("yt",), invoke_without_command=True, fallback="video"
+    )
     async def youtube(self, ctx: Context, *, query: str):
         await self.search_method(ctx, query, "video")
 
-    @youtube.group(name="channel", aliases=("ch",))
+    @youtube.command(name="channel", aliases=("ch",))
     async def youtube_channel(self, ctx: Context, *, query: str):
         await self.search_method(ctx, query, "channel")
 
-    @youtube.group(name="playlist", aliases=("pl",))
+    @youtube.command(name="playlist", aliases=("pl",))
     async def youtube_playlist(self, ctx: Context, *, query: str):
         await self.search_method(ctx, query, "playlist")
 

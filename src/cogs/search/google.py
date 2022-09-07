@@ -6,8 +6,9 @@ from ._base import CogBase
 
 
 class GoogleCommands(CogBase):
-    @commands.group(name="google", aliases=("g",))
+    @commands.hybrid_command(name="google", aliases=("g",))
     async def google(self, ctx: Context, *, query: str):
+        """Search something on the web"""
         url = f"https://customsearch.googleapis.com/customsearch/v1"
         params = {
             "cx": self.bot.config["keys"]["google-id"],
