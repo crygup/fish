@@ -190,22 +190,27 @@ class Settings(commands.Cog, name="settings"):
 
     @unlink.command(name="lastfm")
     async def unlink_lastfm(self, ctx: Context):
+        """Unlinks your last.fm account"""
         await self.unlink_method(ctx, ctx.author.id, "lastfm")
 
     @unlink.command(name="osu")
     async def unlink_osu(self, ctx: Context):
+        """Unlinks your osu account"""
         await self.unlink_method(ctx, ctx.author.id, "osu")
 
     @unlink.command(name="steam")
     async def unlink_steam(self, ctx: Context):
+        """Unlinks your steam account"""
         await self.unlink_method(ctx, ctx.author.id, "steam")
 
     @unlink.command(name="roblox")
     async def unlink_roblox(self, ctx: Context):
+        """Unlinks your roblox account"""
         await self.unlink_method(ctx, ctx.author.id, "roblox")
 
     @unlink.command(name="genshin")
     async def unlink_genshin(self, ctx: Context):
+        """Unlinks your genshin account"""
         await self.unlink_method(ctx, ctx.author.id, "genshin")
 
     @commands.group(
