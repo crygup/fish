@@ -102,7 +102,7 @@ class SpotifyCommands(CogBase):
         fallback="track",
     )
     @app_commands.describe(query="The name of the track")
-    async def spotify(self, ctx: Context, query: Optional[str]):
+    async def spotify(self, ctx: Context, *, query: Optional[str]):
         """Search for a track on spotify"""
         await ctx.trigger_typing()
         to_search = await self.get_query(ctx, query, "track")
@@ -112,7 +112,7 @@ class SpotifyCommands(CogBase):
 
     @spotify.command(name="album", aliases=("ab",))
     @app_commands.describe(query="The name of the album")
-    async def album(self, ctx: Context, query: Optional[str]):
+    async def album(self, ctx: Context, *, query: Optional[str]):
         """Search for an album on spotify"""
         await ctx.trigger_typing()
         to_search = await self.get_query(ctx, query, "album")
@@ -122,7 +122,7 @@ class SpotifyCommands(CogBase):
 
     @spotify.command(name="artist", aliases=("art",))
     @app_commands.describe(query="The name of the artist")
-    async def artist(self, ctx: Context, query: Optional[str]):
+    async def artist(self, ctx: Context, *, query: Optional[str]):
         """Search for an artist on spotify"""
         await ctx.trigger_typing()
         to_search = await self.get_query(ctx, query, "album")
@@ -132,7 +132,7 @@ class SpotifyCommands(CogBase):
 
     @commands.hybrid_command(name="cover", aliases=("co",))
     @app_commands.describe(query="The name of the album")
-    async def cover(self, ctx: Context, query: Optional[str]):
+    async def cover(self, ctx: Context, *, query: Optional[str]):
         """Get the cover for an album on spotify"""
         await ctx.trigger_typing()
         to_search = await self.get_query(ctx, query, "album")
