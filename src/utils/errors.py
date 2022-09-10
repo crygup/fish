@@ -64,6 +64,10 @@ class NoCover(commands.BadArgument):
     pass
 
 
+class InvalidDateProvided(commands.BadArgument):
+    pass
+
+
 IGNORED = (
     commands.CommandNotFound,
     commands.NotOwner,

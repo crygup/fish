@@ -4,19 +4,26 @@ import pathlib
 import random
 import re
 from io import BytesIO
-from typing import (TYPE_CHECKING, Generic, List, Optional, Tuple, Type,
-                    TypeAlias, TypeVar, Union)
+from typing import (
+    TYPE_CHECKING,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeAlias,
+    TypeVar,
+    Union,
+)
 
 import discord
 from aiohttp import ClientResponse
 from braceexpand import UnbalancedBracesError, braceexpand  # type: ignore
 from discord.ext import commands
 from discord.ext.commands import FlagConverter
-from ossapi.ossapiv2 import BeatmapIdT, UserIdT
+from ossapi.ossapiv2 import BeatmapIdT
 from steam.steamid import steam64_from_url
 from wand.color import Color
-
-from cogs.context import Context
 
 from .errors import InvalidColor, UnknownAccount
 from .helpers import Regexes, get_lastfm, get_roblox, get_twemoji, to_bytesio
@@ -24,6 +31,7 @@ from .roblox import fetch_user_id_by_name
 
 if TYPE_CHECKING:
     from bot import Bot
+    from cogs.context import Context
 
 FCT = TypeVar("FCT", bound="FlagConverter")
 

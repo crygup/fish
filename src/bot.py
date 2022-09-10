@@ -8,7 +8,6 @@ import re
 import sys
 import textwrap
 import traceback
-from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, List, Set
 
 import aiohttp
@@ -20,8 +19,13 @@ from discord.ext import commands
 from ossapi import OssapiV2
 
 from cogs.context import Context
-from utils import (response_checker, setup_accounts, setup_cache,
-                   setup_pokemon, setup_prefixes, setup_webhooks)
+from utils import (
+    setup_accounts,
+    setup_cache,
+    setup_pokemon,
+    setup_prefixes,
+    setup_webhooks,
+)
 
 if TYPE_CHECKING:
     from utils import Context

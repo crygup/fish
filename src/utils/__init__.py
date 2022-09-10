@@ -6,3 +6,5 @@ from .paginator import *
 from .startup import *
 from .types import *
 from .views import *
+from .reminders import *
+from .regexes import *

@@ -8,9 +8,22 @@ import sys
 import textwrap
 import time
 from io import BytesIO
-from typing import (TYPE_CHECKING, Any, Awaitable, Callable, ClassVar, Dict,
-                    List, Optional, ParamSpec, Sequence, Tuple, TypeAlias,
-                    TypeVar, Union)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    ClassVar,
+    Dict,
+    List,
+    Optional,
+    ParamSpec,
+    Sequence,
+    Tuple,
+    TypeAlias,
+    TypeVar,
+    Union,
+)
 
 import aiohttp
 import discord
@@ -48,8 +61,6 @@ Argument: TypeAlias = Optional[
     | discord.Message
     | str
 ]
-
-emoji_regex = r"<(?P<animated>a)?:(?P<name>[a-zA-Z0-9\_]{1,}):(?P<id>[0-9]{1,})>"
 
 
 async def get_lastfm_data(

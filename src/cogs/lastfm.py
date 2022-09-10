@@ -8,9 +8,18 @@ from discord.ext import commands
 from discord.utils import remove_markdown
 
 from bot import Bot, Context
-from utils import (LastfmConverter, LastfmTimeConverter, NoCover, SimplePages,
-                   format_bytes, get_lastfm, get_lastfm_data, get_sp_cover,
-                   lastfm_period, to_bytes)
+from utils import (
+    LastfmConverter,
+    LastfmTimeConverter,
+    NoCover,
+    SimplePages,
+    format_bytes,
+    get_lastfm,
+    get_lastfm_data,
+    get_sp_cover,
+    lastfm_period,
+    to_bytes,
+)
 
 
 async def setup(bot: Bot):

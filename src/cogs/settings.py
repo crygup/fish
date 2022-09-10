@@ -7,8 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot import Bot, Context
-from utils import (FieldPageSource, Pager, SteamIDConverter, UnknownAccount,
-                   add_prefix)
+from utils import FieldPageSource, Pager, SteamIDConverter, UnknownAccount, add_prefix
 
 
 async def setup(bot: Bot):

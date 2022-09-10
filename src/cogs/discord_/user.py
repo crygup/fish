@@ -8,8 +8,15 @@ import discord
 from discord.ext import commands
 
 from bot import Context
-from utils import (AvatarsPageSource, AvatarView, FieldPageSource, Pager,
-                   format_bytes, human_timedelta, to_bytes)
+from utils import (
+    AvatarsPageSource,
+    AvatarView,
+    FieldPageSource,
+    Pager,
+    format_bytes,
+    human_timedelta,
+    to_bytes,
+)
 
 from ._base import CogBase
 

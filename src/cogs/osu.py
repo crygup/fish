@@ -7,8 +7,7 @@ from discord.ext import commands
 from ossapi.ossapiv2 import UserIdT
 
 from bot import Bot, Context
-from utils import (BeatmapConverter, BeatmapSetConverter, UnknownAccount,
-                   get_osu)
+from utils import BeatmapConverter, BeatmapSetConverter, UnknownAccount, get_osu
 
 
 async def setup(bot: Bot):

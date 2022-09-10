@@ -16,8 +16,16 @@ from jishaku.paginators import WrappedPaginator
 from tabulate import tabulate
 
 from bot import Bot, Context
-from utils import (AuthorView, ExtensionConverter, NoCover, UntilFlag,
-                   cleanup_code, plural, response_checker, to_bytesio)
+from utils import (
+    AuthorView,
+    ExtensionConverter,
+    NoCover,
+    UntilFlag,
+    cleanup_code,
+    plural,
+    response_checker,
+    to_bytesio,
+)
 
 
 async def setup(bot: Bot):

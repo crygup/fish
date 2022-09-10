@@ -1,5 +1,4 @@
 import discord
-
 from bot import Bot
 
 from .afk import AfkCommands
@@ -8,7 +7,13 @@ from .other import OtherCommands
 from .tags import TagCommands
 
 
-class Tools(TagCommands, DownloadCommands, OtherCommands, AfkCommands, name="tools"):
+class Tools(
+    TagCommands,
+    DownloadCommands,
+    OtherCommands,
+    AfkCommands,
+    name="tools",
+):
     """Useful tools"""
 
     def __init__(self, bot: Bot):

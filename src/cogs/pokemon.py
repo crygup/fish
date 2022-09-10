@@ -7,8 +7,7 @@ import pandas as pd
 from discord.ext import commands
 
 from bot import Bot
-from utils import (AuthorView, BoolConverter, Context, SimplePages,
-                   setup_pokemon)
+from utils import AuthorView, BoolConverter, Context, SimplePages, setup_pokemon
 
 
 async def setup(bot: Bot):
