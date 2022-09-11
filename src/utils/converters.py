@@ -38,6 +38,7 @@ FCT = TypeVar("FCT", bound="FlagConverter")
 Argument: TypeAlias = Optional[
     discord.Member
     | discord.User
+    | discord.Emoji
     | discord.PartialEmoji
     | discord.Role
     | discord.Message
@@ -153,6 +154,9 @@ class ImageConverter(commands.Converter):
         elif isinstance(argument, discord.PartialEmoji):
             if argument.is_custom_emoji():
                 return BytesIO(await argument.read())
+
+        elif isinstance(argument, discord.Emoji):
+            return BytesIO(await argument.read())
 
         elif isinstance(argument, discord.Role):
             if argument.display_icon:

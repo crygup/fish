@@ -3,9 +3,10 @@ import discord
 from bot import Bot
 
 from .waifu import Waifus
+from .manipulation import Manipulation
 
 
-class Image(Waifus, name="image"):
+class Image(Waifus, Manipulation, name="image"):
     """Image related stuff"""
 
     @property
