@@ -52,7 +52,7 @@ class Manipulation(CogBase):
 
         await ctx.send(file=file)
 
-    @commands.command(name="caption")
+    @commands.command(name="caption", hidden=True, enabled=False)
     async def caption(
         self,
         ctx: Context,
