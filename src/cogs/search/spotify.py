@@ -85,7 +85,7 @@ class SpotifyCommands(CogBase):
             "Authorization": f"Bearer {self.bot.spotify_key}",
         }
 
-        data = {"q": query, "type": mode, "market": "ES", "limit": "1"}
+        data = {"q": query, "type": mode, "market": "EN", "limit": "1"}
 
         async with self.bot.session.get(url, headers=headers, params=data) as r:
             results = await r.json()
