@@ -10,16 +10,17 @@ from typing import Dict, List, Optional, Union
 
 import asyncpg
 import discord
+from bot import Bot, Context
 from discord.ext import commands
 from jishaku.codeblocks import codeblock_converter
 from jishaku.paginators import WrappedPaginator
 from tabulate import tabulate
-
-from bot import Bot, Context
 from utils import (
     AuthorView,
     ExtensionConverter,
     NoCover,
+    Pager,
+    SimplePages,
     UntilFlag,
     cleanup_code,
     plural,
@@ -359,6 +360,17 @@ class Owner(
     @commands.group(name="dev", invoke_without_command=True)
     async def dev(self, ctx: Context):
         """Developer commands"""
+
+    @dev.command(name="servers")
+    async def dev_serers(self, ctx: Context):
+        guilds: List[discord.Guild] = sorted(self.bot.guilds, key=lambda g: g.member_count, reverse=True)  # type: ignore
+        data = [
+            f"{g} | {g.id} | {sum(not m.bot for m in g.members):,} | {sum(m.bot for m in g.members):,}"
+            for g in guilds
+        ]
+        pages = SimplePages(entries=data, per_page=10, ctx=ctx)
+        pages.embed.title = "Servers"
+        await pages.start(ctx)
 
     @dev.command(name="cover")
     async def dev_cover(self, ctx: Context, *, query: str):

@@ -5,6 +5,7 @@ from .afk import AfkCommands
 from .downloads import DownloadCommands
 from .other import OtherCommands
 from .tags import TagCommands
+from .money import MoneyCommands
 
 
 class Tools(
@@ -12,6 +13,7 @@ class Tools(
     DownloadCommands,
     OtherCommands,
     AfkCommands,
+    MoneyCommands,
     name="tools",
 ):
     """Useful tools"""
