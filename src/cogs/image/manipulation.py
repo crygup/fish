@@ -17,14 +17,14 @@ if TYPE_CHECKING:
 class Manipulation(CogBase):
     @to_thread
     def resize_method(
-        self, image: BytesIO, width: Optional[int], height: Optional[int]
+        self, image: BytesIO, height: Optional[int], width: Optional[int]
     ) -> BytesIO:
         with PImage.open(image) as output:
             output_buffer = BytesIO()
 
             height = height or output.height
             width = width or output.width
-            resized = output.resize((width, height))
+            resized = output.resize((height, width))
             resized.save(output_buffer, "png")
             output_buffer.seek(0)
 
@@ -34,8 +34,8 @@ class Manipulation(CogBase):
     async def resize(
         self,
         ctx: Context,
-        width: Optional[int],
         height: Optional[int],
+        width: Optional[int],
         *,
         image: Argument = commands.parameter(
             default=None, displayed_default="[image=None]"
@@ -47,7 +47,7 @@ class Manipulation(CogBase):
 
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-        output = await self.resize_method(new_image, height, width)
+        output = await self.resize_method(new_image, width, height)
         file = discord.File(output, filename="resize.png")
 
         await ctx.send(file=file)
