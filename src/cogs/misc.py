@@ -360,3 +360,10 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         """
 
         await ctx.send(f"```yaml{textwrap.dedent(message)}```")
+
+    @commands.command(name="monark", hidden=True)
+    @commands.cooldown(1, 5)
+    async def monark(self, ctx: Context):
+        await ctx.send(
+            "https://cdn.discordapp.com/attachments/884188416835723285/1006540930448375919/IMG_0886.jpg"
+        )
