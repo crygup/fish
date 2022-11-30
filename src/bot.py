@@ -62,6 +62,7 @@ os.environ["JISHAKU_NO_DM_TRACEBACK"] = "True"
 
 async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
     default = ["fish "] if not bot.testing else ["fish. "]
+
     if message.guild is None:
         return commands.when_mentioned_or(*default)(bot, message)
 
@@ -71,6 +72,12 @@ async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
         prefixes = []
 
     packed = default + prefixes
+
+    comp = re.compile("^(" + "|".join(map(re.escape, packed)) + ").*", flags=re.I)  # type: ignore
+    match = comp.match(message.content)
+
+    if match is not None:
+        return commands.when_mentioned_or(*[match.group(1)])(bot, message)
 
     return commands.when_mentioned_or(*packed)(bot, message)
 
@@ -119,7 +126,7 @@ class Bot(commands.Bot):
         super().__init__(
             command_prefix=get_prefix,
             intents=intents,
-            case_insensitive=False,
+            case_insensitive=True,
             strip_after_prefix=True,
             allowed_mentions=discord.AllowedMentions(
                 everyone=False, roles=False, users=True, replied_user=False
@@ -204,7 +211,7 @@ class Bot(commands.Bot):
         self.pool = connection
         print("Connected to postre database")
 
-        with open("schema.sql") as f:
+        with open("schema.sql", "r") as f:
             await self.pool.execute(f.read())
 
         self.redis = await aioredis.from_url(
