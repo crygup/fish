@@ -44,6 +44,10 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 P = ParamSpec("P")
 
+
+default_headers = {"User-Agent": f"aiohttp/{aiohttp.__version__}; fish_bot"}
+
+
 lastfm_period = {
     "overall": "overall",
     "7day": "weekly",

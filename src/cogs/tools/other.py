@@ -2,10 +2,12 @@ import re
 from typing import Optional
 
 import discord
+from bs4 import BeautifulSoup
 from discord.ext import commands
+from playwright.async_api import async_playwright
 
-from bot import Bot, Context
-from utils import TenorUrlConverter, human_join
+from bot import Context
+from utils import human_join, to_thread, default_headers
 
 from ._base import CogBase
 
@@ -67,12 +69,42 @@ class OtherCommands(CogBase):
                 content=f'Successfully stole {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(results)})*.'
             )
 
+    @to_thread
+    def get_real_url(self, text: str) -> str:
+        scraper = BeautifulSoup(text, "html.parser")
+        container = scraper.find(id="single-gif-container")
+        if not container:
+            raise ValueError("Couldn't find anything.")
+
+        try:
+            element = container.find("div").find("div").find("img")  # type: ignore
+        except Exception as e:
+            raise ValueError(f"Something went wrong. \n{e}")
+
+        if element is None:
+            raise ValueError(f"Something went wrong.")
+
+        return element["src"]  # type: ignore
+
     @commands.command(name="tenor")
     async def tenor(self, ctx: commands.Context, url: str):
         """Gets the actual gif URL from a tenor link"""
+        pattern = re.compile(r"https://tenor.com/view/(.*){1,}-[0-9]{1,}")
 
-        real_url = await TenorUrlConverter().convert(ctx, url)
-        await ctx.send(f"Here is the real url: {real_url}")
+        real_url = pattern.search(url)
+
+        if not real_url:
+            await ctx.send("Invalid Tenor URL.")
+            return
+
+        async with self.bot.session.get(
+            real_url.group(0), headers=default_headers
+        ) as resp:
+            text = await resp.text()
+
+        url = await self.get_real_url(text)
+
+        await ctx.send(f"Here is the real URL: {url}")
 
     # @commands.command(name="wordle", aliases=("word",), hidden=True)
     # @commands.is_owner()

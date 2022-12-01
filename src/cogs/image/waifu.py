@@ -7,11 +7,14 @@ from dateutil.parser import parse
 from discord.ext import commands
 
 from bot import Context
-from utils import BoolConverter, response_checker, to_bytesio
+from utils import (
+    BoolConverter,
+    response_checker,
+    to_bytesio,
+    default_headers as headers,
+)
 
 from ._base import CogBase
-
-headers = {"User-Agent": f"aiohttp/{aiohttp.__version__}; fish_bot"}
 
 
 class Waifus(CogBase):
