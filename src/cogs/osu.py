@@ -1,13 +1,25 @@
 from __future__ import annotations
 
-from typing import Union
+import datetime
+import re
+import textwrap
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import discord
+from discord import ui
 from discord.ext import commands
-from ossapi.ossapiv2 import UserIdT
+from ossapi.ossapiv2 import Beatmap, Beatmapset, Score, ScoreTypeT, User
 
-from bot import Bot, Context
-from utils import BeatmapConverter, BeatmapSetConverter, UnknownAccount, get_osu
+from utils import (
+    BeatmapConverter,
+    OsuAccountConverter,
+    OsuProfileView,
+    human_join,
+    to_thread,
+)
+
+if TYPE_CHECKING:
+    from bot import Bot, Context
 
 
 async def setup(bot: Bot):
@@ -24,146 +36,121 @@ class Osu(commands.Cog, name="osu"):
     def display_emoji(self) -> discord.PartialEmoji:
         return discord.PartialEmoji(name="osu", id=1006847555616919642)
 
-    @commands.group(name="osu", invoke_without_command=True)
+    @commands.command(name="osu")
     async def osu_command(
-        self,
-        ctx: Context,
-        account: Union[int, discord.User, str, UserIdT] = commands.Author,
+        self, ctx: Context, *, user: Union[discord.User, str] = commands.Author
     ):
-        """Gets stats for an osu! account.
+        account = await OsuAccountConverter().convert(ctx, user)
 
-        You can either give an accuont ID or a username."""
-        if isinstance(account, (discord.User, discord.Member)):
-            account = await get_osu(ctx.bot, account.id)
-
-        try:
-            account = self.bot.osu.user(account)
-        except ValueError:
-            raise UnknownAccount("Unknown account.")
-
-        e = discord.Embed(
-            url=f"https://osu.ppy.sh/users/{account.id}",
+        country = f":flag_{account.country.code.lower()}: " if account.country else ""
+        embed = discord.Embed(
             color=self.bot.embedcolor,
+            title=f"{country}{account.username}",
             timestamp=account.join_date,
+            url=f"https://osu.ppy.sh/users/{account.id}",
         )
-        e.set_author(name=account.username, icon_url=account.avatar_url)
-        e.set_thumbnail(url=account.avatar_url)
-        e.set_footer(text=f"ID: {account.id} \nCreated at")
+        embed.set_thumbnail(url=account.avatar_url)
 
-        followers = f"{(account.follower_count):,}"
-        e.add_field(name="Name", value=account.username)
-        e.add_field(
-            name="Country",
-            value=account.country.name.capitalize() if account.country else "Unknown",
-        )
-        e.add_field(name="Followers", value=followers)
+        footer_text = ""
 
         stats = account.statistics
-        if stats is not None:
-            if stats.global_rank:
-                e.add_field(name="Rank", value=f"{stats.global_rank:,}")
-                e.add_field(name="Country Rank", value=f"{stats.country_rank:,}")
-            e.add_field(name="PP", value=f"{stats.pp:,}")
-            e.add_field(name="Accuracy", value=f"{stats.hit_accuracy:.2f}%")
-            e.add_field(name="Level", value=f"{stats.level.current:,}")
-            e.add_field(name="Play Count", value=f"{stats.play_count:,}")
+        if stats:
+            embed.add_field(name="Global Ranking", value=f"{stats.global_rank or 0:,}")
+            embed.add_field(
+                name="Country Ranking", value=f"{stats.country_rank or 0:,}"
+            )
+            embed.add_field(name="PP", value=f"{stats.pp or 0:,}")
 
-        await ctx.send(embed=e, check_ref=True)
+            embed.add_field(
+                name="Play time", value=str(datetime.timedelta(seconds=stats.play_time))
+            )
 
-    @osu_command.command(name="set")
-    async def osu_set(self, ctx: Context, username: str):
-        """Alias for set osu command"""
+            # fmt: off
+            if any([stats.global_rank is None, stats.country_rank is None, stats.pp is None]):
+                footer_text += "Note: if rank statistics are shown as 0 this could be due to no recent activity\n"
+            # fmt: on
 
-        command = self.bot.get_command("set osu")
+        if account.previous_usernames:
+            usernames = account.previous_usernames
+            if usernames:
+                first_5 = usernames[:5]
+                humaned_joined = human_join([f"`{u}`" for u in first_5], final="and")
+                remaining = usernames[5:]
+                text = f"{humaned_joined}"
 
-        if command is None:
-            return
+                if remaining:
+                    text += f"\n*({len(remaining)} remaining)*"
 
-        await command(ctx, username=username)
+                embed.add_field(name="Past Usernames", value=text, inline=False)
 
-    @commands.command(name="beatmap", aliases=["bm"])
-    async def osu_beatmap(self, ctx: Context, beatmap_id: BeatmapConverter):
-        """Gets info about a beatmap.
+        footer_text += f"ID: {account.id} \nJoined "
+        embed.set_footer(text=footer_text)
+        await ctx.send(embed=embed, view=OsuProfileView(ctx, account, embed))
 
-        You can either give a beatmap ID or a beatmap link."""
+    @to_thread
+    def to_bms(self, beatmap: Beatmap) -> Beatmapset:
+        return beatmap.beatmapset()
 
-        try:
-            bm = self.bot.osu.beatmap(beatmap_id)  # type: ignore
-        except ValueError:
-            raise UnknownAccount("Unknown beatmap.")
-
-        bm_set = bm.beatmapset()
-        ranked = bm_set.ranked_date
-        submitted = (
-            discord.utils.format_dt(bm_set.submitted_date, "R")
-            if bm_set.submitted_date
-            else "Not submitted"
-        )
-        e = discord.Embed(
-            url=bm.url,
+    @commands.command(name="beatmap", aliases=("bm",))
+    async def beatmap_command(
+        self,
+        ctx: Context,
+        beatmap: Beatmap = commands.parameter(
+            converter=BeatmapConverter, displayed_default="<beatmap url or id>"
+        ),
+    ):
+        bms = await self.to_bms(beatmap)
+        embed = discord.Embed(
+            title=f"{bms.title}",
             color=self.bot.embedcolor,
-            timestamp=ranked,
+            timestamp=beatmap.last_updated,
+            url=beatmap.url,
         )
-        e.set_author(name=f"{bm.version}/{bm_set.title}")
-        e.add_field(
-            name="Creator",
-            value=f'[{bm_set.creator}](https://osu.ppy.sh/users/{bm_set.creator} "Link to profile")',
+        embed.add_field(
+            name="<:bpm:1050857111497744434> BPM",
+            value=f"{beatmap.bpm or 0}",
         )
-        e.add_field(name="Artist", value=bm_set.artist)
-        e.add_field(name="Beatmap set ID", value=bm_set.id)
-        e.add_field(name="Submitted", value=submitted)
-        e.add_field(name="Status", value=bm.ranked.name.title())
-        e.add_field(name="Playcount", value=f"{bm.playcount:,}")
-        e.add_field(
-            name="Objects",
-            value=f"**Circles**: {bm.count_circles:,}\n"
-            f"**Sliders**: {bm.count_sliders:,}\n"
-            f"**Spinners**: {bm.count_spinners:,}",
+        embed.add_field(
+            name="<:count_circles:1050857112793792572> Circle count",
+            value=f"{beatmap.count_circles:,}",
         )
-        bpm = f"{bm.bpm:,}" if bm.bpm else "Not set"
-        e.add_field(
-            name="Difficulty",
-            value=f"**BPM**: {bpm}\n" f"**CS**: {bm.cs:,}\n" f"**AR**: {bm.ar:,}\n",
+        embed.add_field(
+            name="<:bpm:1050857111497744434> Slider count",
+            value=f"{beatmap.count_sliders:,}",
         )
-        max_combo = f"{bm.max_combo:,}" if bm.max_combo else "Not set"
-        e.add_field(name="Max combo", value=max_combo)
-        e.set_footer(text=f"ID: {bm.id} \n{'Ranked at' if ranked else 'Not ranked'}")
-        await ctx.send(embed=e, check_ref=True)
+        embed.add_field(
+            name="<:length:1050857116052762744> Length",
+            value="00:00"
+            if beatmap.total_length == 0
+            else re.sub(
+                r"0:(0{1,})?",
+                "",
+                str(datetime.timedelta(seconds=beatmap.total_length)),
+            ),
+            inline=False,
+        )
 
-    @commands.command(name="beatmapset", aliases=["bms"])
-    async def osu_beatmapset(self, ctx: Context, beatmap_id: BeatmapSetConverter):
-        """Gets info about a beatmap set.
+        # removed the "deleted at" field as this could mess with the alignment if it actually exists
 
-        You can either give a beatmap ID or a beatmap link."""
+        stats_text = f"""
+        **Circle size**: {beatmap.cs}
+        **HP drain**: {beatmap.drain}
+        **Accuracy**: {beatmap.accuracy}
+        **Approach rate**: {beatmap.ar}
+        """
 
-        try:
-            bm = self.bot.osu.beatmapset(beatmap_id)  # type: ignore
-        except ValueError:
-            raise UnknownAccount("Unknown beatmap set.")
+        max_combo = beatmap.max_combo or 0
 
-        ranked = bm.ranked_date
-        e = discord.Embed(
-            url=f"https://osu.ppy.sh/beatmapsets/{bm.id}",
-            color=self.bot.embedcolor,
-            timestamp=bm.ranked_date,
+        stats_text_2 = f"""
+        **Play count**: {beatmap.playcount:,}
+        **Pass count**: {beatmap.passcount:,}
+        **Max combo**: {max_combo:,}
+        """
+        embed.add_field(name="Stats", value=textwrap.dedent(stats_text), inline=True)
+        embed.add_field(name="Stats", value=textwrap.dedent(stats_text_2), inline=True)
+        embed.set_footer(
+            text=f"{beatmap.ranked.name.capitalize()}  - \U00002b50 {beatmap.difficulty_rating} \nLast updated "
         )
-        e.set_author(name=bm.title)
-        e.add_field(
-            name="Creator",
-            value=f'[{bm.creator}](https://osu.ppy.sh/users/{bm.creator} "Link to profile")',
-        )
-        e.add_field(name="Artist", value=bm.artist)
-        e.add_field(name="Playcount", value=f"{bm.play_count:,}")
-        e.add_field(name="Status", value=f"{bm.ranked.name.title()}")
-        e.add_field(
-            name="Beatmaps", value=len(bm.beatmaps) if bm.beatmaps else "No beatmaps"
-        )
-        e.add_field(name="Favorites", value=f"{bm.favourite_count:,}")
-        e.add_field(
-            name="Submitted",
-            value=discord.utils.format_dt(bm.submitted_date, "R")
-            if bm.submitted_date
-            else "Not submitted",
-        )
-        e.set_footer(text=f"ID: {bm.id} \n{'Ranked at' if ranked else 'Not ranked'}")
-        await ctx.send(embed=e, check_ref=True)
+        await ctx.send(embed=embed)
+
+        # removed beatmapset command as it doesn't really provide any more information than the beatmap command, it would be pointless

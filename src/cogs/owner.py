@@ -156,7 +156,7 @@ class Owner(
 
     @commands.command(name="unload")
     async def unload(self, ctx: Context, *extensions: ExtensionConverter):
-        """Reloads a cog"""
+        """Unloads a cog"""
 
         paginator = WrappedPaginator(prefix="", suffix="")
 

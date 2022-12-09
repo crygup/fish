@@ -13,3 +13,9 @@ short_time = re.compile(
     """,
     re.VERBOSE,
 )
+
+beatmapset_re = re.compile(
+    r"https://osu.ppy.sh/beatmapsets/(?P<set>[0-9]{1,})#(?P<mode>osu|taiko|fruits|mania)/(?P<map>[0-9]{1,})"
+)
+beatmap_re = re.compile(r"https://osu.ppy.sh/beatmaps/(?P<id>[0-9]{1,})")
+id_re = re.compile(r"(?P<id>[0-9]{1,})")

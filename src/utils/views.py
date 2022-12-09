@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import re
+import textwrap
 from typing import TYPE_CHECKING, List, Optional, Union
 
 import discord
 from discord.ext import commands
+from ossapi.ossapiv2 import User as OsuUser, ScoreTypeT, Score
+
+from .helpers import OsuMods, to_thread
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -565,3 +569,92 @@ class UserInfoView(AuthorView):
         self.nicknames_check = True
         await interaction.response.defer()
         await command(self.ctx, user=self.user)
+
+
+class OsuProfileDropdown(discord.ui.Select):
+    def __init__(
+        self, ctx: Context, account: OsuUser, index_embed: discord.Embed
+    ) -> None:
+        options = [
+            discord.SelectOption(label="Index", emoji="\U0001f3e0", value="index"),
+            discord.SelectOption(label="Top Plays", emoji="\U0001f3c6", value="top"),
+            discord.SelectOption(
+                label="Recent Plays", emoji="\U000023f3", value="recent"
+            ),
+        ]
+        self.index_embed = index_embed
+        self.top_embed: Optional[discord.Embed] = None
+        self.recent_embed: Optional[discord.Embed] = None
+
+        self.account = account
+        self.ctx = ctx
+        super().__init__(min_values=1, max_values=1, options=options)
+
+    @to_thread
+    def get_plays(self, account: int, method: ScoreTypeT) -> List[Score]:
+        return self.ctx.bot.osu.user_scores(account, method)
+
+    def make_embed(self, account: OsuUser, plays: List[Score]) -> discord.Embed:
+        country = f":flag_{account.country.code.lower()}: " if account.country else ""
+        embed = discord.Embed(
+            color=self.ctx.bot.embedcolor,
+            title=f"{country}{account.username}",
+            url=f"https://osu.ppy.sh/users/{account.id}",
+        )
+
+        embed.set_thumbnail(url=account.avatar_url)
+        for play in plays:
+            if play.beatmapset:
+                desc = f"""
+                **Accuracy**: {"100%" if play.accuracy == 1 else f'{str(play.accuracy)[2:4]}%'}
+                {discord.utils.format_dt(play.created_at, 'f')}
+                """
+
+                # fmt: off
+                joined_mods = " ".join([OsuMods[mod.short_name()] for mod in play.mods.decompose(clean=True)])
+                # fmt: on
+
+                embed.add_field(
+                    name=f"{play.beatmapset.title} {joined_mods}",
+                    value=textwrap.dedent(desc),
+                    inline=False,
+                )
+        return embed
+
+    async def get_embed(self) -> discord.Embed:
+        account = self.account
+
+        embed = self.index_embed
+        if self.values[0] == "top":
+            if self.top_embed:
+                return self.top_embed
+
+            top_plays = (await self.get_plays(account.id, "best"))[:5]
+            embed = self.make_embed(account, top_plays)
+            self.top_embed = embed
+
+        elif self.values[0] == "recent":
+            if self.recent_embed:
+                return self.recent_embed
+
+            recent_plays = (await self.get_plays(account.id, "recent"))[:5]
+            embed = self.make_embed(account, recent_plays)
+            self.recent_embed = embed
+
+        return embed
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.message:
+            await interaction.message.edit(embed=await self.get_embed())
+            await interaction.response.defer()
+            return
+
+        return await interaction.response.send_message(
+            "Something messed up.", ephemeral=True
+        )
+
+
+class OsuProfileView(AuthorView):
+    def __init__(self, ctx: Context, account: OsuUser, index_embed: discord.Embed):
+        super().__init__(ctx)
+        self.add_item(OsuProfileDropdown(ctx, account, index_embed))

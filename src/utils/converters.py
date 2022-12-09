@@ -21,12 +21,13 @@ from aiohttp import ClientResponse
 from braceexpand import UnbalancedBracesError, braceexpand  # type: ignore
 from discord.ext import commands
 from discord.ext.commands import FlagConverter
-from ossapi.ossapiv2 import BeatmapIdT
+from ossapi.ossapiv2 import Beatmap, BeatmapIdT, Beatmapset, BeatmapsetIdT, User
 from steam.steamid import steam64_from_url
 from wand.color import Color
 
 from .errors import InvalidColor, UnknownAccount
-from .helpers import Regexes, get_lastfm, get_roblox, get_twemoji, to_bytesio
+from .helpers import Regexes, get_lastfm, get_roblox, get_twemoji, to_bytesio, to_thread
+from .regexes import beatmap_re, beatmapset_re, id_re
 from .roblox import fetch_user_id_by_name
 
 if TYPE_CHECKING:
@@ -44,6 +45,28 @@ Argument: TypeAlias = Optional[
     | discord.Message
     | str
 ]
+
+
+class OsuAccountConverter(commands.Converter):
+    """Converts text to an osu accounts"""
+
+    @to_thread
+    def get_user(self, ctx: Context, account) -> User:
+        return ctx.bot.osu.user(account)
+
+    async def convert(self, ctx: Context, argument: Union[discord.User, str]) -> User:
+        bot = ctx.bot
+
+        if not isinstance(argument, str):
+            account = await bot.redis.hget(f"accounts:{argument.id}", "osu")
+            if not account:
+                raise UnknownAccount(f"{argument} has not set an osu! accuont yet.")
+
+            argument = account
+        else:
+            argument = re.sub(r"https://osu.ppy.sh/users/", "", argument)
+
+        return await self.get_user(ctx, argument)
 
 
 class ColorConverter(commands.Converter):
@@ -243,41 +266,45 @@ class BeatmapConverter(commands.Converter):
     Converts beatmaps
     """
 
-    async def convert(self, ctx: Context, argument: str) -> BeatmapIdT:
-        pattern = r"(?P<beatmap>[0-9]{1,7})"
-        results = re.search(pattern, argument)
+    @to_thread
+    def get_beatmap(self, ctx: Context, beatmapid: int) -> Beatmap:
+        return ctx.bot.osu.beatmap(beatmapid)
 
-        if results:
-            return int(results.group("beatmap"))
+    async def convert(self, ctx: Context, argument: str) -> Beatmap:
+        beatmapset_check = beatmapset_re.search(argument)
+        if beatmapset_check:
+            return await self.get_beatmap(ctx, int(beatmapset_check.group("map")))
 
-        pattern = r"(https?:\/\/)?osu.ppy.sh\/beatmapsets\/(?P<beatmapset>[0-9]{1,7})(#osu\/(?P<beatmap>[0-9]{1,7}))?"
-        results = re.search(pattern, argument)
+        beatmap_check = beatmap_re.search(argument)
+        if beatmap_check:
+            return await self.get_beatmap(ctx, int(beatmap_check.group("id")))
 
-        if results:
-            return int(results.group("beatmap"))
+        id_check = id_re.search(argument)
+        if id_check:
+            return await self.get_beatmap(ctx, int(id_check.group("id")))
 
-        raise UnknownAccount("Invalid beatmap set")
+        raise ValueError("Unknown beatmap")
 
 
-class BeatmapSetConverter(commands.Converter):
+class BeatmapsetConverter(commands.Converter):
     """
-    Converts beatmaps
+    Converts beatmapsets
     """
 
-    async def convert(self, ctx: Context, argument: str):
-        pattern = r"(?P<beatmapset>[0-9]{1,7})"
-        results = re.search(pattern, argument)
+    @to_thread
+    def get_beatmapset(self, ctx: Context, beatmapsetid: int) -> Beatmapset:
+        return ctx.bot.osu.beatmapset(beatmapsetid)
 
-        if results:
-            return int(results.group("beatmapset"))
+    async def convert(self, ctx: Context, argument: str) -> Beatmapset:
+        beatmapset_check = beatmapset_re.search(argument)
+        if beatmapset_check:
+            return await self.get_beatmapset(ctx, int(beatmapset_check.group("map")))
 
-        pattern = r"(https?:\/\/)?osu.ppy.sh\/beatmapsets\/(?P<beatmapset>[0-9]{1,7})(#osu\/(?P<beatmap>[0-9]{1,7}))?"
-        results = re.search(pattern, argument)
+        id_check = id_re.search(argument)
+        if id_check:
+            return await self.get_beatmapset(ctx, int(id_check.group("id")))
 
-        if results:
-            return int(results.group("beatmapset"))
-
-        raise UnknownAccount("Invalid beatmap set")
+        raise ValueError("Unknown beatmapset")
 
 
 class LastfmConverter(commands.Converter):
