@@ -19,6 +19,7 @@ from typing import (
 import discord
 from aiohttp import ClientResponse
 from braceexpand import UnbalancedBracesError, braceexpand  # type: ignore
+from bs4 import BeautifulSoup
 from discord.ext import commands
 from discord.ext.commands import FlagConverter
 from ossapi.ossapiv2 import Beatmap, BeatmapIdT, Beatmapset, BeatmapsetIdT, User
@@ -26,7 +27,15 @@ from steam.steamid import steam64_from_url
 from wand.color import Color
 
 from .errors import InvalidColor, UnknownAccount
-from .helpers import Regexes, get_lastfm, get_roblox, get_twemoji, to_bytesio, to_thread
+from .helpers import (
+    Regexes,
+    get_lastfm,
+    get_roblox,
+    get_twemoji,
+    to_bytesio,
+    to_thread,
+    default_headers,
+)
 from .regexes import beatmap_re, beatmapset_re, id_re
 from .roblox import fetch_user_id_by_name
 
@@ -194,49 +203,13 @@ class ImageConverter(commands.Converter):
             if unicode_emoji:
                 return BytesIO(unicode_emoji)
 
-            url = await UrlConverter().convert(ctx, argument)
+            url = await TenorUrlConverter().convert(ctx, argument)
 
             if url:
-                return BytesIO(url)
+                async with ctx.bot.session.get(url) as resp:
+                    return BytesIO(await resp.read())
 
         raise TypeError("Unable to convert to image")
-
-
-class UrlConverter(commands.Converter):
-    """Converts a URL to an image"""
-
-    async def find_tenor_gif(self, ctx: Context, response: ClientResponse) -> bytes:
-        bad_arg = commands.BadArgument("An Error occured when fetching the tenor GIF")
-        try:
-            content = await response.text()
-            if match := Regexes.TENOR_GIF_REGEX.search(content):
-                async with ctx.bot.session.get(match.group()) as gif:
-                    if gif.ok:
-                        return await gif.read()
-                    else:
-                        raise bad_arg
-            else:
-                raise bad_arg
-        except Exception:
-            raise bad_arg
-
-    async def convert(self, ctx: Context, argument: str) -> bytes:
-
-        bad_arg = TypeError("Invalid URL")
-        argument = argument.strip("<>")
-        try:
-            async with ctx.bot.session.get(argument) as r:
-                if r.ok:
-                    if r.content_type.startswith("image/"):
-                        return await r.read()
-                    elif Regexes.TENOR_PAGE_REGEX.fullmatch(argument):
-                        return await self.find_tenor_gif(ctx, r)
-                    else:
-                        raise bad_arg
-                else:
-                    raise bad_arg
-        except Exception:
-            raise bad_arg
 
 
 class LastfmTimeConverter(commands.Converter):
@@ -540,24 +513,39 @@ class UntilFlag(Generic[FCT]):
 
 
 class TenorUrlConverter(commands.Converter):
-    async def convert(self, ctx: commands.Context[Bot], url: str) -> str:
-        response = await ctx.bot.session.get(url)
-
-        failed = commands.BadArgument("An Error occured when fetching the tenor GIF")
+    @to_thread
+    def get_real_url(self, text: str) -> str:
+        scraper = BeautifulSoup(text, "html.parser")
+        container = scraper.find(id="single-gif-container")
+        if not container:
+            raise ValueError("Couldn't find anything.")
 
         try:
-            content = await response.text()
-            if match := Regexes.TENOR_GIF_REGEX.search(content):
-                async with ctx.bot.session.get(match.group()) as gif:
-                    if gif.ok:
-                        return str(gif.url)
-                    else:
-                        raise failed
-            else:
-                raise failed
+            element = container.find("div").find("div").find("img")  # type: ignore
+        except Exception as e:
+            raise ValueError(f"Something went wrong. \n{e}")
 
-        except Exception:
-            raise failed
+        if element is None:
+            raise ValueError(f"Something went wrong.")
+
+        return element["src"]  # type: ignore
+
+    async def convert(self, ctx: commands.Context[Bot], url: str) -> str:
+        pattern = re.compile(r"https://tenor.com/view/(.*){1,}-[0-9]{1,}")
+
+        real_url = pattern.search(url)
+
+        if not real_url:
+            raise ValueError("Invalid Tenor URL.")
+
+        async with ctx.bot.session.get(
+            real_url.group(0), headers=default_headers
+        ) as resp:
+            text = await resp.text()
+
+        url = await self.get_real_url(text)
+
+        return url
 
 
 class BoolConverter(commands.Converter):

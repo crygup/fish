@@ -66,6 +66,15 @@ Argument: TypeAlias = Optional[
     | str
 ]
 
+NonOptionalArgument: TypeAlias = Union[
+    discord.Member,
+    discord.User,
+    discord.PartialEmoji,
+    discord.Role,
+    discord.Message,
+    str,
+]
+
 
 async def get_lastfm_data(
     bot: Bot,

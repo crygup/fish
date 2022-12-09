@@ -16,6 +16,8 @@ from utils import (
     get_user_badges,
     human_join,
     UserInfoView,
+    Argument,
+    TenorUrlConverter,
 )
 
 from ._base import CogBase
@@ -646,6 +648,44 @@ class InfoCommands(CogBase):
             filename=f'emoji.{"gif" if emoji.animated else "png"}'
         )
         await ctx.send(embed=embed, file=file)
+
+    @emoji.command(name="create", extras=emoji_extras)
+    @commands.has_guild_permissions(manage_emojis=True)
+    @commands.bot_has_guild_permissions(manage_emojis=True)
+    async def emoji_create(
+        self,
+        ctx: Context,
+        name,
+        *,
+        image: Union[discord.Emoji, discord.PartialEmoji, discord.Attachment, str],
+    ):
+        if isinstance(image, (discord.Emoji, discord.PartialEmoji)):
+            try:
+                to_upload = await image.read()
+            except ValueError:
+                raise TypeError("Image is not a custom emoji.")
+        elif isinstance(image, discord.Attachment):
+            to_upload = await image.read()
+        else:
+            try:
+                url = await TenorUrlConverter().convert(ctx, image)
+            except ValueError:
+                url = image
+
+            async with self.bot.session.get(url) as resp:
+                to_upload = await resp.read()
+
+        try:
+            emoji = await ctx.guild.create_custom_emoji(
+                name=name,
+                image=to_upload,
+                reason=f"Created by {ctx.author} ({ctx.author.id})",
+            )
+        except discord.HTTPException as e:
+            await ctx.send(str(e))
+            return
+
+        await ctx.send(f"Successfully created {emoji}")
 
     @emoji.command(name="rename", extras=emoji_extras)
     @commands.has_guild_permissions(manage_emojis=True)

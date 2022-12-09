@@ -7,7 +7,7 @@ from discord.ext import commands
 from playwright.async_api import async_playwright
 
 from bot import Context
-from utils import human_join, to_thread, default_headers
+from utils import human_join, to_thread, default_headers, TenorUrlConverter
 
 from ._base import CogBase
 
@@ -89,20 +89,7 @@ class OtherCommands(CogBase):
     @commands.command(name="tenor")
     async def tenor(self, ctx: commands.Context, url: str):
         """Gets the actual gif URL from a tenor link"""
-        pattern = re.compile(r"https://tenor.com/view/(.*){1,}-[0-9]{1,}")
-
-        real_url = pattern.search(url)
-
-        if not real_url:
-            await ctx.send("Invalid Tenor URL.")
-            return
-
-        async with self.bot.session.get(
-            real_url.group(0), headers=default_headers
-        ) as resp:
-            text = await resp.text()
-
-        url = await self.get_real_url(text)
+        url = await TenorUrlConverter().convert(ctx, url)
 
         await ctx.send(f"Here is the real URL: {url}")
 
