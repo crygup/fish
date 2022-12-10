@@ -15,7 +15,7 @@ from typing import (
     TypeVar,
     Union,
 )
-
+import imghdr
 import discord
 from aiohttp import ClientResponse
 from braceexpand import UnbalancedBracesError, braceexpand  # type: ignore
@@ -26,7 +26,7 @@ from ossapi.ossapiv2 import Beatmap, BeatmapIdT, Beatmapset, BeatmapsetIdT, User
 from steam.steamid import steam64_from_url
 from wand.color import Color
 
-from .errors import InvalidColor, UnknownAccount
+from .errors import InvalidColor, UnknownAccount, NotTenorUrl
 from .helpers import (
     Regexes,
     get_lastfm,
@@ -203,11 +203,16 @@ class ImageConverter(commands.Converter):
             if unicode_emoji:
                 return BytesIO(unicode_emoji)
 
-            url = await TenorUrlConverter().convert(ctx, argument)
+            try:
+                url = await TenorUrlConverter().convert(ctx, argument)
 
-            if url:
-                async with ctx.bot.session.get(url) as resp:
-                    return BytesIO(await resp.read())
+            except NotTenorUrl:
+                url = argument
+
+            async with ctx.bot.session.get(url) as resp:
+                file = BytesIO(await resp.read())
+                if imghdr.what(file):  # type: ignore # tested and works shut up
+                    return file
 
         raise TypeError("Unable to convert to image")
 
@@ -536,7 +541,7 @@ class TenorUrlConverter(commands.Converter):
         real_url = pattern.search(url)
 
         if not real_url:
-            raise ValueError("Invalid Tenor URL.")
+            raise NotTenorUrl("Invalid Tenor URL.")
 
         async with ctx.bot.session.get(
             real_url.group(0), headers=default_headers

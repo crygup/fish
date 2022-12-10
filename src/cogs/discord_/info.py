@@ -1,4 +1,5 @@
 import argparse
+import imghdr
 import random
 import re
 import shlex
@@ -10,14 +11,15 @@ from discord.ext import commands
 
 from bot import Bot, Context
 from utils import (
+    Argument,
     EmojiConverter,
     GuildChannel,
+    NotTenorUrl,
+    TenorUrlConverter,
+    UserInfoView,
     get_twemoji,
     get_user_badges,
     human_join,
-    UserInfoView,
-    Argument,
-    TenorUrlConverter,
 )
 
 from ._base import CogBase
@@ -669,11 +671,16 @@ class InfoCommands(CogBase):
         else:
             try:
                 url = await TenorUrlConverter().convert(ctx, image)
-            except ValueError:
+
+            except NotTenorUrl:
                 url = image
 
-            async with self.bot.session.get(url) as resp:
-                to_upload = await resp.read()
+            async with ctx.bot.session.get(url) as resp:
+                file = await resp.read()
+                if imghdr.what(BytesIO(file)):  # type: ignore # tested and works shut up
+                    to_upload = file
+                else:
+                    raise ValueError("Invalid image supplied.")
 
         try:
             emoji = await ctx.guild.create_custom_emoji(
