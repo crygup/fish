@@ -17,13 +17,16 @@ import discord
 from cachetools import TTLCache
 from discord.ext import commands
 from ossapi import OssapiV2
+from tweepy.asynchronous import AsyncClient, AsyncStreamingClient
 
 from cogs.context import Context
 from utils import (
     setup_accounts,
     setup_cache,
+    setup_live_twitter,
     setup_pokemon,
     setup_prefixes,
+    setup_twitter,
     setup_webhooks,
 )
 
@@ -87,6 +90,8 @@ class Bot(commands.Bot):
     pool: asyncpg.Pool
     redis: aioredis.Redis
     exts: Set[str]
+    twitter: AsyncClient
+    live_twitter: AsyncStreamingClient
 
     async def no_dms(self, ctx: Context):
         return ctx.guild is not None
@@ -142,6 +147,7 @@ class Bot(commands.Bot):
         self.avatar_webhooks: Dict[str, discord.Webhook] = {}
         self.image_webhooks: Dict[str, discord.Webhook] = {}
         self.webhooks: Dict[str, discord.Webhook] = {}
+        self.feed_webhooks: Dict[int, List[discord.Webhook]] = {}
         self.owner_id = 766953372309127168
         self.owner_ids = {}
 
@@ -242,6 +248,12 @@ class Bot(commands.Bot):
 
         await setup_accounts(self)
         print("Setup accounts")
+
+        await setup_twitter(self)
+        print("Setup twitter")
+
+        await setup_live_twitter(self)
+        print("Setup live twitter")
 
         self.exts = set(initial_extensions + cogs)
 

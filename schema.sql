@@ -173,3 +173,22 @@ CREATE TABLE IF NOT EXISTS reminders (
     start TIMESTAMP WITH TIME ZONE,
     end_time TIMESTAMP WITH TIME ZONE
 );
+
+
+CREATE TABLE IF NOT EXISTS twitter_feed (
+    tweeter_id BIGINT,
+    guild_id BIGINT,
+    channel_id BIGINT,
+    webhook TEXT,
+    include_replies BOOLEAN,
+    created_at TIMESTAMP WITH TIME ZONE,
+    author_id BIGINT
+);
+
+-- CREATE TABLE IF NOT EXISTS instagram_feed (
+--     author_id BIGINT,
+--     channel_id BIGINT,
+--     include_replies BOOLEAN,
+--     created_at TIMESTAMP WITH TIME ZONE,
+--     feed_author_id BIGINT
+-- );

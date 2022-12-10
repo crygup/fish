@@ -1,12 +1,11 @@
 git+https://github.com/Rapptz/discord-ext-menus
 git+https://github.com/Gorialis/jishaku
-git+https://github.com/tweepy/tweepy.git#egg=tweepy[async]
+tweeyp[async]
 discord.py==2.0.0
 asyncpg
 toml
 tabulate
 python-dateutil
-Pillow
 pandas
 yt-dlp
 psutil
@@ -21,3 +20,4 @@ beautifulsoup4
 pre-commit
 PyNaCl
 parsedatetime
+playwright

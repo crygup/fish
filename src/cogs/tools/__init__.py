@@ -6,6 +6,7 @@ from .downloads import DownloadCommands
 from .other import OtherCommands
 from .tags import TagCommands
 from .money import MoneyCommands
+from .feed import FeedCommands
 
 
 class Tools(
@@ -14,6 +15,7 @@ class Tools(
     OtherCommands,
     AfkCommands,
     MoneyCommands,
+    FeedCommands,
     name="tools",
 ):
     """Useful tools"""
