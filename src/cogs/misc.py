@@ -364,6 +364,17 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
     @commands.command(name="monark", hidden=True)
     @commands.cooldown(1, 5)
     async def monark(self, ctx: Context):
+        """monark said this"""
         await ctx.send(
             "https://cdn.discordapp.com/attachments/884188416835723285/1006540930448375919/IMG_0886.jpg"
+        )
+
+    @commands.command(name="merica", hidden=True)
+    @commands.cooldown(1, 5)
+    async def merica(self, ctx: Context, *, text: str):
+        """we love america!!!"""
+
+        await ctx.send(
+            re.sub(" ", " \U0001f1fa\U0001f1f8 ", text),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
