@@ -16,14 +16,10 @@ if TYPE_CHECKING:
 
 class Manipulation(CogBase):
     @to_thread
-    def resize_method(
-        self, image: BytesIO, height: Optional[int], width: Optional[int]
-    ) -> BytesIO:
+    def resize_method(self, image: BytesIO, height: int, width: int) -> BytesIO:
         with PImage.open(image) as output:
             output_buffer = BytesIO()
 
-            height = height or output.height
-            width = width or output.width
             resized = output.resize((height, width))
             resized.save(output_buffer, "png")
             output_buffer.seek(0)
@@ -34,15 +30,15 @@ class Manipulation(CogBase):
     async def resize(
         self,
         ctx: Context,
-        height: Optional[int],
-        width: Optional[int],
+        height: int,
+        width: int,
         *,
         image: Argument = commands.parameter(
             default=None, displayed_default="[image=None]"
         ),
     ):
         """Resizes an image"""
-        if width and width > 2000 or height and height > 2000:
+        if width > 2000 or height > 2000:
             raise ValueError("Width or height is too big, keep it under 2000px please.")
 
         await ctx.trigger_typing()
