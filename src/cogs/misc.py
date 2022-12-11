@@ -375,6 +375,6 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         """we love america!!!"""
 
         await ctx.send(
-            re.sub(" ", " \U0001f1fa\U0001f1f8 ", text),
+            re.sub(" ", " \U0001f1fa\U0001f1f8 ", text)[:2000],
             allowed_mentions=discord.AllowedMentions.none(),
         )
