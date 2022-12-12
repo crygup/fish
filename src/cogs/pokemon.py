@@ -212,8 +212,8 @@ class WTPModal(discord.ui.Modal, title="Who's that Pokémon?"):
         required=True,
     )
 
-    def do_we_add_s(self, number: int):
-        return True if number > 1 or number == 0 else False
+    def do_we_add_s(self, number: int) -> str:
+        return "s" if number > 1 or number == 0 else ""
 
     async def update_data(self) -> discord.Embed:
         correct_name = str(self.data["Data"]["name"]).lower()
