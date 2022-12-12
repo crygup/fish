@@ -134,7 +134,12 @@ async def setup_live_twitter(bot: Bot):
         async def on_connection_error(self):
             self.disconnect()
 
-    streaming_client = client(bot.config["twitter"]["bearer"])
-    streaming_client.filter()
+    try:
+        streaming_client = client(bot.config["twitter"]["bearer"])
+        streaming_client.filter()
+    except Exception as e:
+        await setup_live_twitter(bot)
+        bot.logger.warn(f"hey the streaming client logged out, restarting.", exc_info=e)
+        return
 
     bot.live_twitter = streaming_client
