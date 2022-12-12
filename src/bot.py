@@ -283,7 +283,7 @@ class Bot(commands.Bot):
 
         return user
 
-    async def send_error(self, ctx: Context, error: commands.CommandError):
+    async def send_error(self, ctx: Context, error: commands.CommandError | Exception):
         await ctx.send(f"An unhandled error occured, this error has been reported.")
         embed = discord.Embed(title="Command Error", colour=self.embedcolor)
         embed.add_field(name="Name", value=ctx.command.qualified_name)

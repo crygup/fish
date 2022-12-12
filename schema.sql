@@ -192,3 +192,11 @@ CREATE TABLE IF NOT EXISTS twitter_feed (
 --     created_at TIMESTAMP WITH TIME ZONE,
 --     feed_author_id BIGINT
 -- );
+
+
+CREATE TABLE IF NOT EXISTS pokemon_guesses (
+    pokemon_name TEXT,
+    author_id BIGINT,
+    correct BIGINT DEFAULT 0,
+    incorrect BIGINT DEFAULT 0
+);

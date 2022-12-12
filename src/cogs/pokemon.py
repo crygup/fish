@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List
+from typing import Dict, List, Any
 
 import asyncpg
 import discord
@@ -7,7 +7,14 @@ import pandas as pd
 from discord.ext import commands
 
 from bot import Bot
-from utils import AuthorView, BoolConverter, Context, SimplePages, setup_pokemon
+from utils import (
+    AuthorView,
+    BoolConverter,
+    Context,
+    SimplePages,
+    setup_pokemon,
+    to_bytesio,
+)
 
 
 async def setup(bot: Bot):
@@ -180,45 +187,95 @@ class Pokemon(commands.Cog, name="pokemon"):
             ctx, "alolan ", "Pokémon with a alolan region alternative"
         )
 
-    # @commands.command(name="wtp", hidden=True)
-    # @commands.is_owner()
-    # async def wtp(
-    #    self,
-    #    ctx: Context,
-    #    public=commands.parameter(
-    #        converter=BoolConverter, default="no", displayed_default="[bool=no]"
-    #    ),
-    # ):
-    #    data = await ctx.dagpi("https://api.dagpi.xyz/data/wtp")
-    #    embed = discord.Embed(color=self.bot.embedcolor)
-    #    embed.set_author(name="Who's that pokemon?")
-    #    image = await ctx.to_bytesio(data["question"])
-    #    file = discord.File(fp=image, filename="pokemon.png")
-    #    embed.set_image(url="attachment://pokemon.png")
-    #    await ctx.send(embed=embed, file=file, view=WTPView(ctx, data))
+    @commands.command(name="wtp", hidden=True)
+    @commands.is_owner()
+    async def wtp(
+        self,
+        ctx: Context,
+        public=commands.parameter(
+            converter=BoolConverter, default="no", displayed_default="[bool=no]"
+        ),
+    ):
+        await ctx.trigger_typing()
+        data = await ctx.dagpi("https://api.dagpi.xyz/data/wtp")
+        embed = discord.Embed(color=self.bot.embedcolor)
+        embed.set_author(name="Who's that pokemon?")
+        image = await to_bytesio(ctx.session, data["question"])
+        file = discord.File(fp=image, filename="pokemon.png")
+        embed.set_image(url="attachment://pokemon.png")
+        await ctx.send(embed=embed, file=file, view=WTPView(ctx, data))
 
 
-class WTPModal(discord.ui.Modal, title="Who's That Pokémon?"):
-    def __init__(self, ctx: Context, data: Dict[str, str]):
+class WTPModal(discord.ui.Modal, title="Who's that Pokémon?"):
+    def __init__(self, ctx: Context, data: Dict[Any, Any]):
+        super().__init__()
         self.ctx = ctx
         self.data = data
 
-    name = discord.ui.TextInput(
-        label="Who's That Pokémon?",
-        placeholder="Enter your guess here.",
-        required=True,
+    pokemon = discord.ui.TextInput(
+        label="Who's that Pokémon?",
         style=discord.TextStyle.short,
+        required=True,
     )
 
+    async def update_data(self) -> discord.Embed:
+        correct_name = str(self.data["Data"]["name"]).lower()
+        given_name = self.pokemon.value.lower()
+        correct: bool = correct_name == given_name
+        embed = discord.Embed(color=0x008341 if correct else 0xFF0000)
+        embed.set_author(name="Correct!" if correct else "Incorrect!")
+
+        # we really shouldn't be making 2 calls to the database for one command but for UX reasons, we have to.
+        data = await self.ctx.bot.pool.fetchrow(
+            "SELECT * FROM pokemon_guesses WHERE pokemon_name = $1 AND author_id = $2",
+            correct_name,
+            self.ctx.author.id,
+        )
+
+        if data:
+            sql = f"""
+            UPDATE pokemon_guesses SET {'correct' if correct else 'incorrect'} + 1 WHERE pokemon_name = $1 AND author_id = $2 RETURNING *
+            """
+
+            new_data = await self.ctx.bot.pool.fetchrow(
+                sql, correct_name, self.ctx.author.id
+            )
+        else:
+            sql = f"""
+            INSERT INTO pokemon_guesses (pokemon_name, author_id, {'correct' if correct else 'incorrect'}) VALUES($1, $2, $3) RETURNING *
+            """
+            new_data = await self.ctx.bot.pool.fetchrow(
+                sql, correct_name, self.ctx.author.id, 1
+            )
+
+        embed.set_footer(
+            text=f"You've got {correct_name.title()} correct {new_data['correct']:,} times and incorrect {new_data['incorrect']:,} times"  # type: ignore # i think pyright is just broken or something
+        )
+
+        return embed
+
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message(f"{self.name.value}!", ephemeral=True)
+        embed = await self.update_data()
+
+        file = discord.File(
+            await to_bytesio(self.ctx.session, self.data["answer"]),
+            filename="pokemon.png",
+        )
+
+        embed.set_image(url="attachment://pokemon.png")
+
+        if interaction.message:
+            await interaction.message.edit(attachments=[file], embed=embed, view=None)
+            await interaction.response.defer()
+            return
+
+        await interaction.response.send_message("Something went wrong!", ephemeral=True)
 
     async def on_error(
         self, interaction: discord.Interaction, error: Exception
     ) -> None:
-        await interaction.response.send_message(
-            "Oops! Something went wrong.", ephemeral=True
-        )
+
+        await self.ctx.bot.send_error(self.ctx, error)
 
 
 class WTPView(AuthorView):
