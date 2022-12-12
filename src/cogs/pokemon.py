@@ -212,6 +212,9 @@ class WTPModal(discord.ui.Modal, title="Who's that Pokémon?"):
         required=True,
     )
 
+    def do_we_add_s(self, number: int):
+        return True if number > 1 or number == 0 else False
+
     async def update_data(self) -> discord.Embed:
         correct_name = str(self.data["Data"]["name"]).lower()
         given_name = self.pokemon.value.lower()
@@ -243,7 +246,7 @@ class WTPModal(discord.ui.Modal, title="Who's that Pokémon?"):
             )
 
         embed.set_footer(
-            text=f"You've got {correct_name.title()} correct {new_data['correct']:,} time{'s' if new_data['correct'] > 1 else ''} and incorrect {new_data['incorrect']:,} time{'s' if new_data['incorrect'] > 1 else ''}"  # type: ignore # i think pyright is just broken or something
+            text=f"You've got {correct_name.title()} correct {new_data['correct']:,} time{self.do_we_add_s(new_data['correct'])} and incorrect {new_data['incorrect']:,} time{self.do_we_add_s(new_data['incorrect'])}"  # type: ignore # i think pyright is just broken or something
         )
 
         return embed
