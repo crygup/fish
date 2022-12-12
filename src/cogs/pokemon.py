@@ -189,13 +189,7 @@ class Pokemon(commands.Cog, name="pokemon"):
 
     @commands.command(name="wtp", hidden=True)
     @commands.is_owner()
-    async def wtp(
-        self,
-        ctx: Context,
-        public=commands.parameter(
-            converter=BoolConverter, default="no", displayed_default="[bool=no]"
-        ),
-    ):
+    async def wtp(self, ctx: Context):
         await ctx.trigger_typing()
         data = await ctx.dagpi("https://api.dagpi.xyz/data/wtp")
         embed = discord.Embed(color=self.bot.embedcolor)
@@ -249,7 +243,7 @@ class WTPModal(discord.ui.Modal, title="Who's that Pokémon?"):
             )
 
         embed.set_footer(
-            text=f"You've got {correct_name.title()} correct {new_data['correct']:,} times and incorrect {new_data['incorrect']:,} times"  # type: ignore # i think pyright is just broken or something
+            text=f"You've got {correct_name.title()} correct {new_data['correct']:,} time{'s' if new_data['correct'] > 1 else ''} and incorrect {new_data['incorrect']:,} time{'s' if new_data['incorrect'] > 1 else ''}"  # type: ignore # i think pyright is just broken or something
         )
 
         return embed
