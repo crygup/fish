@@ -15,7 +15,7 @@ class Tools(
     OtherCommands,
     AfkCommands,
     MoneyCommands,
-    FeedCommands,
+    # FeedCommands, # it's not working at the moment due to random shut downs of the live twitter client so until that's fixed it's shut down
     name="tools",
 ):
     """Useful tools"""
