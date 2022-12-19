@@ -6,7 +6,7 @@ from typing import Dict
 
 import discord
 from discord.ext import commands, tasks
-from yt_dlp import YoutubeDL
+import yt_dlp
 
 from bot import Bot, Context
 from utils import get_video, natural_size
@@ -25,7 +25,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
         )
 
     async def download_video(self, video: str, options: Dict):
-        with YoutubeDL(options) as ydl:
+        with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download(video)
 
     @commands.Cog.listener("on_message")
@@ -70,6 +70,9 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
             "outtmpl": f"src/files/videos/{name}.%(ext)s",
             "quiet": True,
             "max_filesize": ctx.guild.filesize_limit,
+            "match_filter": yt_dlp.utils.match_filter_func(
+                "!is_live & !live & filesize"
+            ),
         }
 
         if pattern.search(video):

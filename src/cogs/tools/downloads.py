@@ -7,8 +7,8 @@ import time
 from typing import Dict, Optional
 
 import discord
+import yt_dlp
 from discord.ext import commands, tasks
-from yt_dlp import YoutubeDL
 
 from bot import Bot, Context
 from utils import get_video, natural_size, to_thread
@@ -34,7 +34,7 @@ class DownloadCommands(CogBase):
 
     @to_thread
     def download_video(self, video: str, options: Dict):
-        with YoutubeDL(options) as ydl:
+        with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download(video)
 
     @commands.command(name="download", aliases=("dl",))
@@ -98,6 +98,9 @@ class DownloadCommands(CogBase):
             "outtmpl": f"src/files/videos/{default_name}.%(ext)s",
             "quiet": True,
             "max_filesize": ctx.guild.filesize_limit,
+            "match_filter": yt_dlp.utils.match_filter_func(
+                "!is_live & !live & filesize"
+            ),
         }
 
         if pattern.search(video):
