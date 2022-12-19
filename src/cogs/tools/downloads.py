@@ -4,14 +4,14 @@ import re
 import secrets
 import shlex
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 import discord
 import yt_dlp
 from discord.ext import commands, tasks
 
 from bot import Bot, Context
-from utils import get_video, natural_size, to_thread
+from utils import get_video, natural_size, to_thread, VideoIsLive
 
 from ._base import CogBase
 
@@ -36,6 +36,10 @@ class DownloadCommands(CogBase):
     def download_video(self, video: str, options: Dict):
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download(video)
+
+    def match_filter(self, info: Dict[Any, Any], incomplete):
+        if info.get("live_status", None) == "is_live":
+            raise VideoIsLive("Can not download live videos.")
 
     @commands.command(name="download", aliases=("dl",))
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -98,9 +102,7 @@ class DownloadCommands(CogBase):
             "outtmpl": f"src/files/videos/{default_name}.%(ext)s",
             "quiet": True,
             "max_filesize": ctx.guild.filesize_limit,
-            "match_filter": yt_dlp.utils.match_filter_func(
-                "!is_live & !live & filesize"
-            ),
+            "match_filter": self.match_filter,
         }
 
         if pattern.search(video):

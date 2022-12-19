@@ -2,14 +2,14 @@ import os
 import re
 import secrets
 import time
-from typing import Dict
+from typing import Dict, Any
 
 import discord
 from discord.ext import commands, tasks
 import yt_dlp
 
 from bot import Bot, Context
-from utils import get_video, natural_size
+from utils import get_video, natural_size, VideoIsLive
 
 
 async def setup(bot: Bot):
@@ -27,6 +27,10 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
     async def download_video(self, video: str, options: Dict):
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download(video)
+
+    def match_filter(self, info: Dict[Any, Any], incomplete):
+        if info.get("live_status", None) == "is_live":
+            raise VideoIsLive("Can not download live videos.")
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):
@@ -70,9 +74,7 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
             "outtmpl": f"src/files/videos/{name}.%(ext)s",
             "quiet": True,
             "max_filesize": ctx.guild.filesize_limit,
-            "match_filter": yt_dlp.utils.match_filter_func(
-                "!is_live & !live & filesize"
-            ),
+            "match_filter": self.match_filter,
         }
 
         if pattern.search(video):
