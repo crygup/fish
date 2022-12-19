@@ -122,11 +122,6 @@ async def setup_twitter(bot: Bot):
 async def setup_live_twitter(bot: Bot):
     class client(AsyncStreamingClient):
         async def on_tweet(self, tweet):
-            tweet = await bot.twitter.get_tweet(
-                tweet.id,
-                expansions=["author_id", "in_reply_to_user_id"],
-                user_fields=["profile_image_url"],
-            )
             webhooks = bot.feed_webhooks[int(tweet.includes["users"][0].id)]  # type: ignore # shut up
             for webhook in webhooks:
                 await webhook.send(f"https://twitter.com/{tweet.includes['users'][0].username}/status/{tweet.data.id}")  # type: ignore # SHUT UP
@@ -134,12 +129,15 @@ async def setup_live_twitter(bot: Bot):
         async def on_connection_error(self):
             self.disconnect()
 
-    try:
-        streaming_client = client(bot.config["twitter"]["bearer"])
-        streaming_client.filter()
-    except Exception as e:
-        await setup_live_twitter(bot)
-        bot.logger.warn(f"hey the streaming client logged out, restarting.", exc_info=e)
-        return
+        async def on_exception(self, exception: Exception):
+            bot.logger.warn("Error with tweepy", exc_info=exception)
 
+        async def run(self):
+            self.filter(
+                expansions=["author_id", "in_reply_to_user_id"],
+                user_fields=["profile_image_url"],
+            )
+
+    streaming_client = client(bot.config["twitter"]["bearer"])
+    await streaming_client.run()
     bot.live_twitter = streaming_client

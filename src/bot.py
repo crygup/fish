@@ -249,12 +249,12 @@ class Bot(commands.Bot):
         await setup_accounts(self)
         print("Setup accounts")
 
-        if not self.testing:
-            await setup_twitter(self)
-            print("Setup twitter")
+        # if not self.testing:
+        await setup_twitter(self)
+        print("Setup twitter")
 
-            await setup_live_twitter(self)
-            print("Setup live twitter")
+        # await setup_live_twitter(self) # removing live twitter for a bit
+        # print("Setup live twitter")
 
         self.exts = set(initial_extensions + cogs)
 
