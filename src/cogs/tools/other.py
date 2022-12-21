@@ -1,13 +1,13 @@
 import re
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import discord
 from bs4 import BeautifulSoup
 from discord.ext import commands
-from playwright.async_api import async_playwright
+from dateutil.parser import parse
 
 from bot import Context
-from utils import human_join, to_thread, default_headers, TenorUrlConverter
+from utils import human_join, to_thread, UrbanPageSource, TenorUrlConverter, Pager
 
 from ._base import CogBase
 
@@ -154,3 +154,21 @@ class OtherCommands(CogBase):
     #    )
     #
     #    await ctx.send(embed=embed)
+
+    @commands.command(name="urban")
+    async def urban(self, ctx: Context, *, word: str):
+        """Search for a word on urban
+
+        Warning: could be NSFW"""
+
+        url = "https://api.urbandictionary.com/v0/define"
+
+        async with ctx.session.get(url, params={"term": word}) as resp:
+            json = await resp.json()
+            data: List[Dict[Any, Any]] = json.get("list", [])
+            if not data:
+                return await ctx.send("Nothing was found for this phrase.")
+
+        p = UrbanPageSource(data, per_page=4)
+        menu = Pager(p, ctx=ctx)
+        await menu.start(ctx)

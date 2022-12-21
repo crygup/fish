@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 from discord.ext import commands, menus
 from discord.ext.commands import Paginator as CommandPaginator
-
+from dateutil.parser import parse
 from cogs.context import Context
 from utils import human_join
 
@@ -160,12 +161,14 @@ class Pager(discord.ui.View):
 class FieldPageSource(menus.ListPageSource):
     """A page source that requires (field_name, field_value) tuple items."""
 
-    def __init__(self, entries, *, per_page=12, footer: bool = False):
+    def __init__(
+        self, entries: List[Tuple[str, str]], *, per_page=12, footer: bool = False
+    ):
         super().__init__(entries, per_page=per_page)
         self.footer = footer
         self.embed = discord.Embed(colour=0x2F3136)
 
-    async def format_page(self, menu, entries):
+    async def format_page(self, menu, entries: Tuple[str, str]):
         self.embed.clear_fields()
 
         for key, value in entries:
@@ -179,6 +182,46 @@ class FieldPageSource(menus.ListPageSource):
             self.embed.set_footer(text=text)
 
         return self.embed
+
+
+class UrbanPageSource(menus.ListPageSource):
+    """A page source that requires Dict[Any, Any] tuple items."""
+
+    BRACKETED = re.compile(r"(\[(.+?)\])")
+
+    def __init__(
+        self, entries: List[Dict[Any, Any]], *, per_page=12, footer: bool = False
+    ):
+        super().__init__(entries, per_page=per_page)
+        self.footer = footer
+        self.embed = discord.Embed(colour=0x2F3136)
+
+    # credit to Danny for this https://github.com/Rapptz/RoboDanny/blob/rewrite/cogs/buttons.py#L50-L58
+    def cleanup_definition(self, definition: str, *, regex=BRACKETED) -> str:
+        def repl(m):
+            word = m.group(2)
+            return f'[{word}](http://{word.replace(" ", "-")}.urbanup.com)'
+
+        ret = regex.sub(repl, definition)
+        if len(ret) >= 2048:
+            return ret[0:2000] + " [...]"
+        return ret
+
+    async def format_page(self, menu, entries: Dict[Any, Any]):
+        data = entries[0]
+        embed = self.embed
+        embed.clear_fields()
+        maximum = self.get_max_pages()
+
+        embed.title = data["word"]
+        embed.description = self.cleanup_definition(data["definition"])
+        embed.timestamp = parse(data["written_on"])
+
+        embed.set_footer(
+            text=f"Page {menu.current_page + 1}/{maximum} \nUploaded by {data['author']}"
+        )
+
+        return embed
 
 
 class ImageBytesPageSource(menus.ListPageSource):
