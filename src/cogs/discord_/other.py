@@ -1,13 +1,18 @@
+from __future__ import annotations
+
 import json
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 import discord
 from discord.ext import commands
 
-from bot import Bot, Context
 from utils import FieldPageSource, Pager, SimplePages
 
 from ._base import CogBase
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 class OtherCommands(CogBase):

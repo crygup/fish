@@ -6,22 +6,17 @@ import math
 import re
 import sys
 import textwrap
-import time
 from io import BytesIO
 from typing import (
     TYPE_CHECKING,
     Any,
     Awaitable,
     Callable,
-    ClassVar,
     Dict,
     List,
     Optional,
-    ParamSpec,
     Sequence,
     Tuple,
-    TypeAlias,
-    TypeVar,
     Union,
 )
 
@@ -30,51 +25,27 @@ import discord
 from aiohttp import ClientResponse
 from dateutil.relativedelta import relativedelta
 from discord.ext import commands
-from PIL import Image, ImageSequence
-from wand.color import Color
+from PIL import Image as PImage
+from PIL import ImageSequence
 from wand.image import Image as wImage
 
-if TYPE_CHECKING:
-    from cogs.context import Context
-
-from .errors import *
+from ..vars import USER_FLAGS, VIDEOS_RE, P, T, video_regexes
+from ..vars.errors import (
+    BadGateway,
+    BadRequest,
+    Forbidden,
+    NoCover,
+    NotFound,
+    ResponseError,
+    ServerErrorResponse,
+    Unauthorized,
+    UnknownAccount,
+)
+from .classes import plural
 
 if TYPE_CHECKING:
     from bot import Bot
-
-T = TypeVar("T")
-P = ParamSpec("P")
-
-
-default_headers = {"User-Agent": f"aiohttp/{aiohttp.__version__}; fish_bot"}
-
-
-lastfm_period = {
-    "overall": "overall",
-    "7day": "weekly",
-    "1month": "monthly",
-    "3month": "quarterly",
-    "6month": "half-yearly",
-    "12month": "yearly",
-}
-
-Argument: TypeAlias = Optional[
-    discord.Member
-    | discord.User
-    | discord.PartialEmoji
-    | discord.Role
-    | discord.Message
-    | str
-]
-
-NonOptionalArgument: TypeAlias = Union[
-    discord.Member,
-    discord.User,
-    discord.PartialEmoji,
-    discord.Role,
-    discord.Message,
-    str,
-]
+    from cogs.context import Context
 
 
 async def get_lastfm_data(
@@ -303,23 +274,6 @@ async def get_osu(bot: Bot, user_id: int) -> str:
     return name
 
 
-USER_FLAGS = {
-    "staff": "<:staff:949147468124262420> Discord Staff",
-    "partner": "<:partner:949147457839829043> Discord Partner",
-    "hypesquad": "<:hypesquad:949147451942649916> HypeSquad",
-    "bug_hunter": "<:bughunterlv1:949147440219553873> Bug Hunter",
-    "bug_hunter_level_2": "<:bughunterlv2:949147441935024178> Bug Hunter 2",
-    "hypesquad_bravery": "<:bravery:949147435333218305> HypeSquad Bravery",
-    "hypesquad_brilliance": "<:brillance:949147436880912405> HypeSquad Brilliance",
-    "hypesquad_balance": "<:balance:949147429733793832> HypeSquad Balance",
-    "early_supporter": "<:earlysupporter:949147447756726342> Early Supporter",
-    "verified_bot_developer": "<:bot_dev:949147434204946472> Bot Developer",
-    "verified_bot": "<:bot:949147432598515723> Verified Bot",
-    "discord_certified_moderator": "<:certified_moderator:949147443264622643> Moderator",
-    "system": "<:system:949147469357387817> System",
-}
-
-
 async def get_user_badges(
     member: Union[discord.Member, discord.User],
     ctx: Context,
@@ -350,66 +304,8 @@ async def get_user_badges(
     return user_flags
 
 
-video_regexes = {
-    "tiktok": {
-        "regex": re.compile(
-            r"https://(www|vt|vm|m).tiktok.com/(@)?[a-zA-Z0-9_-]{3,}(/video/[0-9]{1,})?"
-        ),
-        "nsfw": False,
-    },
-    "instagram": {
-        "regex": re.compile(
-            r"https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,}"
-        ),
-        "nsfw": False,
-    },
-    "twitch": {
-        "regex": re.compile(r"https?://clips.twitch.tv/[a-zA-Z0-9_-]"),
-        "nsfw": False,
-    },
-    "twitter": {
-        "regex": re.compile(r"https?://twitter.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19}"),
-        "nsfw": True,
-    },
-    "reddit": {
-        "regex": re.compile(
-            r"https?://(www.)reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6}"
-        ),
-        "nsfw": True,
-    },
-    "youtube_clip": {
-        "regex": re.compile(r"https://(www.)?youtube.com/clip/[A-Za-z0-9_-]{1,}"),
-        "nsfw": False,
-    },
-    "youtube_short": {
-        "regex": re.compile(r"https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}"),
-        "nsfw": False,
-    },
-    "youtube": {
-        "regex": re.compile(
-            r"https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})"
-        ),
-        "nsfw": False,
-    },
-}
-
-compiled_videos = re.compile(
-    r"""
-    (?P<tiktok>(https://(www|vt|vm|m).tiktok.com/(@)?[a-zA-Z0-9_-]{3,}(/video/[0-9]{1,})?))?
-    (?P<instagram>(https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,}))?
-    (?P<twitch>(https?://clips.twitch.tv/[a-zA-Z0-9_-]*))?
-    (?P<twitter>(https?://twitter.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19}))?
-    (?P<reddit>(https?://(www.)?reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6}))?
-    (?P<youtube_clip>(https://youtube.com/clip/[A-Za-z0-9_-]{1,}))?
-    (?P<youtube>(https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})))?
-    (?P<youtube_shorts>(https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}))?
-    """,
-    re.VERBOSE,
-)
-
-
 async def get_video(ctx: Context, url: str, auto: bool = False) -> Optional[str]:
-    if not compiled_videos.search(url):
+    if not VIDEOS_RE.search(url):
         return None
 
     for _, data in video_regexes.items():
@@ -455,18 +351,6 @@ async def run(cmd: str) -> Optional[str]:
         raise TypeError(f"[stderr]\n{stderr.decode()}")
 
 
-class Regexes:
-    TENOR_PAGE_REGEX: ClassVar[re.Pattern] = re.compile(
-        r"https?://(www\.)?tenor\.com/view/\S+"
-    )
-    TENOR_GIF_REGEX: ClassVar[re.Pattern] = re.compile(
-        r"https?://(www\.)?c\.tenor\.com/\S+/\S+\.gif"
-    )
-    CUSTOM_EMOJI_REGEX: ClassVar[re.Pattern] = re.compile(
-        r"<(a)?:([a-zA-Z0-9_]{2,32}):([0-9]{18,22})>"
-    )
-
-
 def cleanup_code(content: str) -> str:
     """Automatically removes code blocks from the code."""
 
@@ -474,57 +358,6 @@ def cleanup_code(content: str) -> str:
         return "\n".join(content.split("\n")[1:-1])
 
     return content.strip("` \n")
-
-
-class plural:
-    def __init__(self, value: int):
-        self.value: int = value
-
-    def __format__(self, format_spec: str) -> str:
-        v = self.value
-        singular, sep, plural = format_spec.partition("|")
-        plural = plural or f"{singular}s"
-        if abs(v) != 1:
-            return f"{v} {plural}"
-        return f"{v} {singular}"
-
-
-class Timer:
-    def __init__(self):
-        self._start = None
-        self._end = None
-
-    def start(self):
-        self._start = time.perf_counter()
-
-    def stop(self):
-        self._end = time.perf_counter()
-
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop()
-
-    def __int__(self):
-        return round(self.time)
-
-    def __float__(self):
-        return self.time
-
-    def __str__(self):
-        return str(self.time)
-
-    def __repr__(self):
-        return f"<Timer time={self.time}>"
-
-    @property
-    def time(self):
-        if self._end is None or self._start is None:
-            return 0
-
-        return self._end - self._start
 
 
 def human_join(seq: Sequence[str], delim=", ", final="or", spaces: bool = True) -> str:
@@ -628,14 +461,14 @@ def format_bytes(filesize_limit: int, images: List[bytes]) -> BytesIO:
     ybound = math.ceil(len(images) / xbound)
     size = int(2520 / xbound)
 
-    with Image.new(
+    with PImage.new(
         "RGBA", size=(xbound * size, ybound * size), color=(0, 0, 0, 0)
     ) as base:
         x, y = 0, 0
         for avy in images:
             if avy:
-                im = Image.open(BytesIO(avy)).resize(
-                    (size, size), resample=Image.BICUBIC
+                im = PImage.open(BytesIO(avy)).resize(
+                    (size, size), resample=PImage.BICUBIC
                 )
                 base.paste(im, box=(x * size, y * size))
             if x < xbound - 1:
@@ -658,10 +491,12 @@ def resize_to_limit(data: BytesIO, limit: int) -> BytesIO:
     """
     current_size = data.getbuffer().nbytes
     while current_size > limit:
-        with Image.open(data) as im:
+        with PImage.open(data) as im:
             data = BytesIO()
             if im.format == "PNG":
-                im = im.resize(tuple([i // 2 for i in im.size]), resample=Image.BICUBIC)
+                im = im.resize(
+                    tuple([i // 2 for i in im.size]), resample=PImage.BICUBIC
+                )
                 im.save(data, "png")
             elif im.format == "GIF":
                 durations = []
@@ -669,7 +504,7 @@ def resize_to_limit(data: BytesIO, limit: int) -> BytesIO:
                 for frame in ImageSequence.Iterator(im):
                     durations.append(frame.info["duration"])
                     new_frames.append(
-                        frame.resize([i // 2 for i in im.size], resample=Image.BICUBIC)
+                        frame.resize([i // 2 for i in im.size], resample=PImage.BICUBIC)
                     )
                 new_frames[0].save(
                     data,
@@ -716,21 +551,13 @@ def response_checker(response: ClientResponse) -> bool:
         )
 
 
-OsuMods = {
-    "DT": "<:doubletime:1047996368528089118>",
-    "NM": "",
-    "NF": "<:nofail:1047996491731574834>",
-    "EZ": "<:easy:1047996366628065301>",
-    "TD": "<:target:1047996484563509299>",
-    "HD": "<:hidden:1047996494373998602>",
-    "HR": "<:hardrock:1047996495519039529>",
-    "SD": "<:suddendeath:1047996485960208535>",
-    "RX": "<:relax:1047996489131106325>",
-    "HT": "<:halftime:1047996364207947847>",
-    "NC": "<:nightcore:1047996493107318866>",
-    "FL": "<:flashlight:1047996365155872829>",
-    "AT": "<:at:1047996488044773396>",
-    "SO": "<:spunout:1047996487151398942>",
-    "AP": "<:autoplay:1047996370881101947>",
-    "PF": "<:perfect:1047996490435543040>",
-}
+def is_table(ctx: Context) -> bool:
+    return ctx.guild.id == 848507662437449750
+
+
+def has_mod(ctx: Context) -> bool:
+    return 884182961702977599 in [r.id for r in ctx.author.roles]
+
+
+def yes_no():
+    return "no"

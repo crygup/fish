@@ -3,12 +3,11 @@ from __future__ import annotations
 import datetime
 import re
 import textwrap
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Union
 
 import discord
-from discord import ui
 from discord.ext import commands
-from ossapi.ossapiv2 import Beatmap, Beatmapset, Score, ScoreTypeT, User
+from ossapi.ossapiv2 import Beatmap, Beatmapset
 
 from utils import (
     BeatmapConverter,

@@ -1,17 +1,25 @@
+from __future__ import annotations
+
 import re
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import discord
 from bs4 import BeautifulSoup
 from discord.ext import commands
-from dateutil.parser import parse
 
-from bot import Context
-from utils import human_join, to_thread, UrbanPageSource, TenorUrlConverter, Pager
+from utils import (
+    Pager,
+    TenorUrlConverter,
+    UrbanPageSource,
+    emoji_extras,
+    human_join,
+    to_thread,
+)
 
 from ._base import CogBase
 
-emoji_extras = {"BPerms": ["Manage Emojis"], "UPerms": ["Manage Emojis"]}
+if TYPE_CHECKING:
+    from cogs.context import Context
 
 
 class OtherCommands(CogBase):

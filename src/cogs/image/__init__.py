@@ -1,9 +1,14 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import discord
 
-from bot import Bot
-
-from .waifu import Waifus
 from .manipulation import Manipulation
+from .waifu import Waifus
+
+if TYPE_CHECKING:
+    from bot import Bot
 
 
 class Image(Waifus, Manipulation, name="image"):

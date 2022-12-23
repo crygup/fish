@@ -6,9 +6,11 @@ from typing import TYPE_CHECKING, List, Optional, Union
 
 import discord
 from discord.ext import commands
-from ossapi.ossapiv2 import User as OsuUser, ScoreTypeT, Score
+from ossapi.ossapiv2 import Score, ScoreTypeT
+from ossapi.ossapiv2 import User as OsuUser
 
-from .helpers import OsuMods, to_thread
+from ..helpers import to_thread
+from ..vars import BURPLE, GREEN, RED, OsuMods
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -69,7 +71,7 @@ class AvatarView(AuthorView):
         self.embed.set_image(url=self.asset.url)
         await interaction.response.edit_message(embed=self.embed)
 
-    @discord.ui.button(label="Avatar", row=0, style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Avatar", row=0, style=BURPLE)
     async def avatar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.user.avatar is None:
             return
@@ -78,7 +80,7 @@ class AvatarView(AuthorView):
 
         await self.edit_message(interaction)
 
-    @discord.ui.button(label="Default", row=0, style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Default", row=0, style=BURPLE)
     async def default(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
@@ -86,7 +88,7 @@ class AvatarView(AuthorView):
 
         await self.edit_message(interaction)
 
-    @discord.ui.button(label="Server", row=0, style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Server", row=0, style=BURPLE)
     async def server(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not isinstance(self.user, discord.Member) or self.user.guild_avatar is None:
             return
@@ -105,7 +107,7 @@ class AvatarView(AuthorView):
 
         return True
 
-    @discord.ui.button(label="Quality", row=2, style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Quality", row=2, style=GREEN)
     async def quality(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
@@ -118,7 +120,7 @@ class AvatarView(AuthorView):
         )
         await interaction.response.defer()
 
-    @discord.ui.button(label="Format", row=2, style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Format", row=2, style=GREEN)
     async def _format(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
@@ -131,7 +133,7 @@ class AvatarView(AuthorView):
         )
         await interaction.response.defer()
 
-    @discord.ui.button(label="Save", row=2, style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Save", row=2, style=GREEN)
     async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.message is None:
             return
@@ -164,10 +166,8 @@ class QualityView(AuthorView):
         self.asset = asset
         self.add_item(QualityDropdown(ctx, user, embed, asset))
 
-    @discord.ui.button(label="Go back", row=1, style=discord.ButtonStyle.red)
-    async def go_back(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    @discord.ui.button(label="Go back", row=1, style=RED)
+    async def go_back(self, interaction: discord.Interaction, _):
         if interaction.message is None:
             return
 
@@ -228,10 +228,8 @@ class FormatView(AuthorView):
         self.asset = asset
         self.add_item(FormatDropdown(ctx, user, embed, asset))
 
-    @discord.ui.button(label="Go back", row=1, style=discord.ButtonStyle.red)
-    async def go_back(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    @discord.ui.button(label="Go back", row=1, style=RED)
+    async def go_back(self, interaction: discord.Interaction, _):
         if interaction.message is None:
             return
 
@@ -524,7 +522,7 @@ class UserInfoView(AuthorView):
 
         self.ctx.bot.logger.error(error)
 
-    @discord.ui.button(label="Avatar History", row=2, style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Avatar History", row=2, style=BURPLE)
     async def avyh(self, interaction: discord.Interaction, __):
         command = self.ctx.bot.get_command("avyh")
         if command is None:
@@ -538,9 +536,7 @@ class UserInfoView(AuthorView):
         await interaction.response.defer()
         await command(self.ctx, user=self.user)
 
-    @discord.ui.button(
-        label="Username History", row=2, style=discord.ButtonStyle.blurple
-    )
+    @discord.ui.button(label="Username History", row=2, style=BURPLE)
     async def usernames(self, interaction: discord.Interaction, __):
         command = self.ctx.bot.get_command("usernames")
         if command is None:
@@ -554,9 +550,7 @@ class UserInfoView(AuthorView):
         await interaction.response.defer()
         await command(self.ctx, user=self.user)
 
-    @discord.ui.button(
-        label="Nickname History", row=2, style=discord.ButtonStyle.blurple
-    )
+    @discord.ui.button(label="Nickname History", row=2, style=BURPLE)
     async def nicknames(self, interaction: discord.Interaction, __):
         command = self.ctx.bot.get_command("nicknames")
         if command is None:

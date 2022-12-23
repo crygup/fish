@@ -1,44 +1,37 @@
+from __future__ import annotations
+
 import datetime
 import difflib
-from io import BytesIO
 import re
 import textwrap
 from time import perf_counter
-from typing import Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import discord
 import psutil
 from discord.ext import commands
 
-from bot import Bot, Context
-from cogs.context import Context
 from utils import (
+    ImageConverter,
     SteamConverter,
     Unauthorized,
     get_steam_data,
     human_join,
     human_timedelta,
     natural_size,
+    status_state,
     to_bytesio,
-    ImageConverter,
 )
 
-from .image.functions import add_images, gif_maker, text_to_image
+from .image.functions import gif_maker, text_to_image
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):
     await bot.add_cog(Miscellaneous(bot))
-
-
-status_state = {
-    0: "Offline",
-    1: "Online",
-    2: "Busy",
-    3: "Away",
-    4: "Snooze",
-    5: "Looking to trade",
-    6: "Looking to play",
-}
 
 
 class Miscellaneous(commands.Cog, name="miscellaneous"):
@@ -346,10 +339,6 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         websocket latency      : {round(bot.latency * 1000, 3)}ms
         postgresql latency     : {round(psql_end - psql_start, 3)}ms
         redis latency          : {round(redis_end - redis_start, 3)}ms
-        intents value          : {bot.intents.value}
-        members intent         : {bot.intents.members}
-        presences intent       : {bot.intents.presences}
-        message content intent : {bot.intents.message_content}
         voice clients          : {len(bot.voice_clients):,}
         avatars logged         : {len(avatars):,}
         avatars logged today   : {avatars_today:,}

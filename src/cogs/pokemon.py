@@ -1,20 +1,17 @@
+from __future__ import annotations
+
 import re
-from typing import Dict, List, Any
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import asyncpg
 import discord
-import pandas as pd
 from discord.ext import commands
 
-from bot import Bot
-from utils import (
-    AuthorView,
-    BoolConverter,
-    Context,
-    SimplePages,
-    setup_pokemon,
-    to_bytesio,
-)
+from utils import AuthorView, SimplePages, setup_pokemon, to_bytesio
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):

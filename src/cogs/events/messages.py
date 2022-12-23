@@ -1,9 +1,12 @@
-from typing import List, Tuple
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, List, Tuple
 
 import discord
 from discord.ext import commands
 
-from bot import Bot
+if TYPE_CHECKING:
+    from bot import Bot
 
 
 async def setup(bot: Bot):

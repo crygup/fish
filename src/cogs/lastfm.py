@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 import discord
 from discord.ext import commands
 from discord.utils import remove_markdown
 
-from bot import Bot, Context
 from utils import (
     LastfmConverter,
     LastfmTimeConverter,
@@ -20,6 +19,10 @@ from utils import (
     lastfm_period,
     to_bytes,
 )
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):

@@ -1,11 +1,16 @@
-from typing import Union
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Union
 
 import discord
 from discord.ext import commands
 from yt_dlp import DownloadError
 
-from bot import Bot, Context
 from utils import IGNORED, SEND, RateLimitExceeded
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):

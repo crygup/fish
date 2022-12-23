@@ -1,11 +1,18 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import discord
 from discord.ext import commands
 from discord.utils import escape_markdown
 
-from bot import Bot, Context
 from utils import human_timedelta
 
 from ._base import CogBase
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 class AfkCommands(CogBase):

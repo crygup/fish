@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import datetime
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-import discord
 import parsedatetime
-from dateutil.relativedelta import relativedelta
 from discord.ext import commands
-from parsedatetime.context import pdtContext
 
-from .errors import InvalidDateProvided
-from .regexes import short_time
+from ..vars.errors import InvalidDateProvided
 
 if TYPE_CHECKING:
     from cogs.context import Context

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import difflib
 import itertools
@@ -6,20 +8,19 @@ import textwrap
 import time
 import traceback
 from io import BytesIO
-from typing import Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import asyncpg
 import discord
-from bot import Bot, Context
 from discord.ext import commands
 from jishaku.codeblocks import codeblock_converter
 from jishaku.paginators import WrappedPaginator
 from tabulate import tabulate
+
 from utils import (
     AuthorView,
     ExtensionConverter,
     NoCover,
-    Pager,
     SimplePages,
     UntilFlag,
     cleanup_code,
@@ -27,6 +28,10 @@ from utils import (
     response_checker,
     to_bytesio,
 )
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):

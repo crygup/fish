@@ -23,7 +23,6 @@ from cogs.context import Context
 from utils import (
     setup_accounts,
     setup_cache,
-    setup_live_twitter,
     setup_pokemon,
     setup_prefixes,
     setup_twitter,
@@ -39,6 +38,9 @@ initial_extensions = [
     "cogs.context",
     "cogs.events.errors",
     "cogs.help",
+    "utils.discord_",
+    "utils.helpers",
+    "utils.vars",
 ]
 cogs_path = pathlib.Path("./src/cogs")
 
@@ -50,13 +52,31 @@ def fix_cog(results) -> str:
     return results
 
 
-module_extensions = ["examples", "discord_", "tools", "image", "search"]
 cogs = [
-    fix_cog(x.as_posix())
-    for x in cogs_path.glob("**/*.py")
-    if x.parent.name not in module_extensions
+    "cogs.discord_",
+    "cogs.image",
+    "cogs.search",
+    "cogs.tools",
+    "cogs.lastfm",
+    "cogs.misc",
+    "cogs.osu",
+    "cogs.pokemon",
+    "cogs.roblox",
+    "cogs.settings",
+    # servers
+    "cogs.servers.egg",
+    "cogs.servers.jawntards",
+    "cogs.servers.table",
+    # events
+    "cogs.events.auto_downloads",
+    "cogs.events.auto_reactions",
+    "cogs.events.commands",
+    "cogs.events.errors",
+    "cogs.events.guilds",
+    "cogs.events.members",
+    "cogs.events.messages",
+    "cogs.events.users",
 ]
-cogs.extend([f"cogs.{x}" for x in module_extensions])
 
 os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
@@ -158,8 +178,6 @@ class Bot(commands.Bot):
         self.testing = testing
         self.pokemon: List[str] = []
         self.prefixes: Dict[int, List[str]] = {}
-        self.e_reply = "<:reply:972280355136606209>"
-        self.e_replies = "<:replies:972280398874824724>"
         self._context = Context
         self.select_filler = "\u2800" * 47
         self.spotify_key: str | None = None

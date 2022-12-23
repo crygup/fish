@@ -6,10 +6,11 @@ import discord
 import tweepy
 from discord.ext import commands
 
-if TYPE_CHECKING:
-    from bot import Bot, Context
-
 from ._base import CogBase
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 class FeedCommands(CogBase):

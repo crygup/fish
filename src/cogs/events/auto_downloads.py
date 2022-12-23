@@ -1,15 +1,20 @@
+from __future__ import annotations
+
 import os
 import re
 import secrets
 import time
-from typing import Dict, Any
+from typing import TYPE_CHECKING, Dict, Any
 
 import discord
 from discord.ext import commands, tasks
 import yt_dlp
 
-from bot import Bot, Context
 from utils import get_video, natural_size, VideoIsLive
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):

@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import random
+from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
 
-from bot import Bot
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):

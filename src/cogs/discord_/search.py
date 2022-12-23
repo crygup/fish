@@ -1,14 +1,19 @@
+from __future__ import annotations
+
 import argparse
 import shlex
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import discord
 from discord.ext import commands
 
-from bot import Bot, Context
 from utils import FieldPageSource, Pager, RoleConverter
 
 from ._base import CogBase
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 class Arguments(argparse.ArgumentParser):

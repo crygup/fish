@@ -6,29 +6,25 @@ from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
-from PIL import Image, ImageOps
+from PIL import Image
 
 from utils import Argument, ImageConverter, to_thread
 
 from ._base import CogBase
-from .functions import add_images, gif_maker, text_to_image
+from .functions import (
+    add_images,
+    gif_maker,
+    invert_method,
+    layer_image,
+    resize_method,
+    text_to_image,
+)
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
 class Manipulation(CogBase):
-    @to_thread
-    def resize_method(self, image: BytesIO, height: int, width: int) -> BytesIO:
-        with Image.open(image) as output:
-            output_buffer = BytesIO()
-
-            resized = output.resize((height, width))
-            resized.save(output_buffer, "png")
-            output_buffer.seek(0)
-
-            return output_buffer
-
     @commands.command(name="resize")
     async def resize(
         self,
@@ -46,24 +42,10 @@ class Manipulation(CogBase):
 
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-        output = await self.resize_method(new_image, width, height)
+        output = await resize_method(new_image, width, height)
         file = discord.File(output, filename="resize.png")
 
         await ctx.send(file=file)
-
-    @to_thread
-    def layer_image(self, image: BytesIO, cover_file: str) -> BytesIO:
-        with Image.open(image) as output:
-            output_buffer = BytesIO()
-
-            with Image.open(cover_file) as cover:
-                resized_to_fit = cover.resize((output.width, output.height))
-                output.paste(resized_to_fit, mask=resized_to_fit)
-
-            output.save(output_buffer, "png")
-            output_buffer.seek(0)
-
-            return output_buffer
 
     @commands.command(name="debunked")
     async def debunked(
@@ -77,7 +59,7 @@ class Manipulation(CogBase):
         """Adds a debunked image on another"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-        output = await self.layer_image(new_image, "src/files/assets/debunked.png")
+        output = await layer_image(new_image, "src/files/assets/debunked.png")
         file = discord.File(output, filename="debunked.png")
 
         await ctx.send(file=file)
@@ -94,25 +76,10 @@ class Manipulation(CogBase):
         """Adds a gay flag image on another"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-        output = await self.layer_image(new_image, "src/files/assets/gay.png")
+        output = await layer_image(new_image, "src/files/assets/gay.png")
         file = discord.File(output, filename="gay.png")
 
         await ctx.send(file=file)
-
-    @to_thread
-    def invert_method(self, image: BytesIO) -> BytesIO:
-        with Image.open(image) as output:
-            output_buffer = BytesIO()
-
-            new_im = Image.new("RGB", (output.width, output.height))
-            new_im.paste(output)
-
-            inverted = ImageOps.invert(new_im)
-
-            inverted.save(output_buffer, "png")
-            output_buffer.seek(0)
-
-            return output_buffer
 
     @commands.command(name="invert")
     async def invert(
@@ -126,7 +93,7 @@ class Manipulation(CogBase):
         """Inverts the colors of an image"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-        output = await self.invert_method(new_image)
+        output = await invert_method(new_image)
         file = discord.File(output, filename="inverted.png")
 
         await ctx.send(file=file)

@@ -1,13 +1,15 @@
 import re
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import asyncpg
 import discord
-from discord import app_commands
 from discord.ext import commands
 
-from bot import Bot, Context
 from utils import FieldPageSource, Pager, SteamIDConverter, UnknownAccount, add_prefix
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):

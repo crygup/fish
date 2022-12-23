@@ -1,16 +1,18 @@
+from __future__ import annotations
+
 import base64
-from typing import Any, Dict
-from typing import Literal as L
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from bot import Context
 from utils import get_lastfm, get_lastfm_data, get_sp_cover, to_bytesio
 
 from ._base import CogBase
+
+if TYPE_CHECKING:
+    from cogs.context import Context
 
 
 class SpotifyCommands(CogBase):
@@ -76,7 +78,7 @@ class SpotifyCommands(CogBase):
     async def get_spotify_search_data(
         self,
         query: str,
-        mode: Union[L["track"], L["album"], L["artist"]],
+        mode: Union[Literal["track"], Literal["album"], Literal["artist"]],
     ) -> Dict:
         url = "https://api.spotify.com/v1/search"
 

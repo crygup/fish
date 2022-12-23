@@ -1,19 +1,24 @@
+from __future__ import annotations
+
 import argparse
 import os
 import re
 import secrets
 import shlex
 import time
-from typing import Dict, Optional, Any
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import discord
 import yt_dlp
 from discord.ext import commands, tasks
 
-from bot import Bot, Context
-from utils import get_video, natural_size, to_thread, VideoIsLive
+from utils import VideoIsLive, get_video, natural_size, to_thread
 
 from ._base import CogBase
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 class Arguments(argparse.ArgumentParser):

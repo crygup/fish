@@ -1,12 +1,19 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import discord
-from bot import Bot
 
 from .afk import AfkCommands
 from .downloads import DownloadCommands
+from .money import MoneyCommands
 from .other import OtherCommands
 from .tags import TagCommands
-from .money import MoneyCommands
-from .feed import FeedCommands
+
+# from .feed import FeedCommands # it's not working at the moment due to random shut downs of the live twitter client so until that's fixed it's shut down
+
+if TYPE_CHECKING:
+    from bot import Bot
 
 
 class Tools(
@@ -15,7 +22,7 @@ class Tools(
     OtherCommands,
     AfkCommands,
     MoneyCommands,
-    # FeedCommands, # it's not working at the moment due to random shut downs of the live twitter client so until that's fixed it's shut down
+    # FeedCommands,
     name="tools",
 ):
     """Useful tools"""

@@ -1,20 +1,18 @@
-import re
-from typing import Dict
+from __future__ import annotations
 
-import aiohttp
+import re
+from typing import TYPE_CHECKING, Dict
+
 import discord
 from dateutil.parser import parse
 from discord.ext import commands
 
-from bot import Context
-from utils import (
-    BoolConverter,
-    response_checker,
-    to_bytesio,
-    default_headers as headers,
-)
+from utils import BoolConverter, response_checker, to_bytesio, default_headers
 
 from ._base import CogBase
+
+if TYPE_CHECKING:
+    from cogs.context import Context
 
 
 class Waifus(CogBase):
@@ -23,7 +21,9 @@ class Waifus(CogBase):
 
         params = {"is_nsfw": "false", "selected_tags": tag}
 
-        async with self.bot.session.get(url, params=params, headers=headers) as r:
+        async with self.bot.session.get(
+            url, params=params, headers=default_headers
+        ) as r:
             response_checker(r)
 
             data = await r.json()

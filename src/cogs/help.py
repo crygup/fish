@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import re
 import textwrap
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import discord
 from discord.ext import commands
 
-from bot import Bot, Context
 from utils import AuthorView, human_join
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):

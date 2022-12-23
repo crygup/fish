@@ -1,22 +1,24 @@
-import argparse
+from __future__ import annotations
+
 import imghdr
 import random
 import re
-import shlex
 from io import BytesIO
-from typing import Dict, Optional, TypeAlias, Union
+from typing import TYPE_CHECKING, Dict, Optional, Union
 
 import discord
 from discord.ext import commands
 
-from bot import Bot, Context
 from utils import (
-    Argument,
+    REPLIES,
+    REPLY,
     EmojiConverter,
     GuildChannel,
+    InfoArgument,
     NotTenorUrl,
     TenorUrlConverter,
     UserInfoView,
+    emoji_extras,
     get_twemoji,
     get_user_badges,
     human_join,
@@ -24,10 +26,9 @@ from utils import (
 
 from ._base import CogBase
 
-emoji_extras = {"BPerms": ["Manage Emojis"], "UPerms": ["Manage Emojis"]}
-InfoArgument: TypeAlias = Optional[
-    discord.Member | discord.User | discord.Role | discord.Guild | GuildChannel
-]
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 class InfoCommands(CogBase):
@@ -76,7 +77,7 @@ class InfoCommands(CogBase):
                     name=f"Joined",
                     value=f"Position #{order:,}\n"
                     f'{discord.utils.format_dt(user.joined_at, "R")}\n'
-                    f'{self.bot.e_reply}{discord.utils.format_dt(user.joined_at, "D")}\n',
+                    f'{REPLY}{discord.utils.format_dt(user.joined_at, "D")}\n',
                 )
 
         embed.add_field(name="Images", value="\n".join(images))
@@ -130,8 +131,7 @@ class InfoCommands(CogBase):
         bots = sum(1 for m in channel.members if m.bot)
         embed.add_field(
             name=f"{len(channel.members):,} Members",
-            value=f"{self.bot.e_replies}{humans:,} Humans\n"
-            f"{self.bot.e_reply}{bots:,} Bots",
+            value=f"{REPLIES}{humans:,} Humans\n" f"{REPLY}{bots:,} Bots",
         )
 
         embed.add_field(
@@ -153,8 +153,7 @@ class InfoCommands(CogBase):
         bots = sum(1 for m in channel.members if m.bot)
         embed.add_field(
             name=f"{len(channel.members):,} Members",
-            value=f"{self.bot.e_replies}{humans:,} Humans\n"
-            f"{self.bot.e_reply}{bots:,} Bots",
+            value=f"{REPLIES}{humans:,} Humans\n" f"{REPLY}{bots:,} Bots",
         )
 
         vc_limit = (
@@ -178,9 +177,9 @@ class InfoCommands(CogBase):
 
         embed.add_field(
             name=f"{len(channel.channels):,} Channels",
-            value=f"{self.bot.e_reply}{len(channel.text_channels):,} Text\n"
-            f"{self.bot.e_replies}{len(channel.voice_channels):,} Voice\n"
-            f"{self.bot.e_reply}{len(channel.stage_channels):,} stage_channels",
+            value=f"{REPLY}{len(channel.text_channels):,} Text\n"
+            f"{REPLIES}{len(channel.voice_channels):,} Voice\n"
+            f"{REPLY}{len(channel.stage_channels):,} stage_channels",
         )
         return embed
 
@@ -220,9 +219,9 @@ class InfoCommands(CogBase):
         bots = sum(1 for m in channel.members if m.bot)
         embed.add_field(
             name=f"{len(channel.members):,} Members",
-            value=f"{self.bot.e_replies}{len(channel.moderators):,} Moderators\n"
-            f"{self.bot.e_replies}{humans:,} Humans\n"
-            f"{self.bot.e_reply}{bots:,} Bots",
+            value=f"{REPLIES}{len(channel.moderators):,} Moderators\n"
+            f"{REPLIES}{humans:,} Humans\n"
+            f"{REPLY}{bots:,} Bots",
         )
 
         vc_limit = (
@@ -301,36 +300,32 @@ class InfoCommands(CogBase):
         bots = sum(1 for m in guild.members if m.bot)
         embed.add_field(
             name=f"{guild.member_count:,} Members",
-            value=f"{self.bot.e_replies}{humans:,} Humans\n"
-            f"{self.bot.e_reply}{bots:,} Bots",
+            value=f"{REPLIES}{humans:,} Humans\n" f"{REPLY}{bots:,} Bots",
         )
 
         embed.add_field(
             name=f"{len(guild.channels):,} Channels",
-            value=f"{self.bot.e_replies}{len(guild.text_channels):,} Text\n"
-            f"{self.bot.e_reply}{len(guild.voice_channels):,} Voice\n",
+            value=f"{REPLIES}{len(guild.text_channels):,} Text\n"
+            f"{REPLY}{len(guild.voice_channels):,} Voice\n",
         )
 
         animated = sum(1 for e in guild.emojis if e.animated)
         static = sum(1 for e in guild.emojis if not e.animated)
         embed.add_field(
             name=f"{len(guild.emojis):,} Emojis",
-            value=f"{self.bot.e_replies}{animated:,} Animated\n"
-            f"{self.bot.e_reply}{static:,} Static\n",
+            value=f"{REPLIES}{animated:,} Animated\n" f"{REPLY}{static:,} Static\n",
         )
 
         embed.add_field(
             name=f"Level {guild.premium_tier}",
-            value=f"{self.bot.e_replies}{len(guild.premium_subscribers):,} Boosters\n"
-            f"{self.bot.e_reply}{guild.premium_subscription_count:,} Boosts",
+            value=f"{REPLIES}{len(guild.premium_subscribers):,} Boosters\n"
+            f"{REPLY}{guild.premium_subscription_count:,} Boosts",
         )
 
         owner_mention = guild.owner.mention if guild.owner else "\U00002754"
-        embed.add_field(name="Owner", value=f"{self.bot.e_reply}{owner_mention}\n")
+        embed.add_field(name="Owner", value=f"{REPLY}{owner_mention}\n")
 
-        embed.add_field(
-            name="Roles", value=f"{self.bot.e_reply}{len(guild.roles):,} Roles\n"
-        )
+        embed.add_field(name="Roles", value=f"{REPLY}{len(guild.roles):,} Roles\n")
 
         embed.add_field(
             name="Images",
@@ -525,14 +520,13 @@ class InfoCommands(CogBase):
         humans = sum(1 for m in role.members if not m.bot)
         embed.add_field(
             name=f"{len(role.members):,} Members",
-            value=f"{self.bot.e_replies}{humans:,} Humans\n"
-            f"{self.bot.e_reply}{bots:,} Bots",
+            value=f"{REPLIES}{humans:,} Humans\n" f"{REPLY}{bots:,} Bots",
         )
 
         embed.add_field(
             name="Color",
-            value=f"{self.bot.e_replies}{hex(role.color.value).replace('0x', '#')}\n"
-            f"{self.bot.e_reply}{str(role.color.to_rgb()).replace('(', '').replace(')', '')}",
+            value=f"{REPLIES}{hex(role.color.value).replace('0x', '#')}\n"
+            f"{REPLY}{str(role.color.to_rgb()).replace('(', '').replace(')', '')}",
         )
 
         embed.add_field(
@@ -628,16 +622,14 @@ class InfoCommands(CogBase):
 
             embed.add_field(
                 name="Guild",
-                value=f"{ctx.bot.e_replies}{str(emoji.guild)}\n"
-                f"{ctx.bot.e_reply}{emoji.guild.id}",
+                value=f"{REPLIES}{str(emoji.guild)}\n" f"{REPLY}{emoji.guild.id}",
             )
 
             femoji = await emoji.guild.fetch_emoji(emoji.id)
             if femoji.user:
                 embed.add_field(
                     name="Created by",
-                    value=f"{ctx.bot.e_replies}{str(femoji.user)}\n"
-                    f"{ctx.bot.e_reply}{femoji.user.id}",
+                    value=f"{REPLIES}{str(femoji.user)}\n" f"{REPLY}{femoji.user.id}",
                 )
 
         embed.add_field(

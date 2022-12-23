@@ -3,7 +3,7 @@
 import textwrap
 from io import BytesIO
 
-from PIL import Image, ImageDraw, ImageFont, ImageSequence
+from PIL import Image, ImageDraw, ImageFont, ImageSequence, ImageOps
 
 from utils import to_thread
 
@@ -113,3 +113,46 @@ def gif_maker(image: BytesIO, text: BytesIO) -> BytesIO:
     )
     output_buffer.seek(0)
     return output_buffer
+
+
+@to_thread
+def invert_method(image: BytesIO) -> BytesIO:
+    with Image.open(image) as output:
+        output_buffer = BytesIO()
+
+        new_im = Image.new("RGB", (output.width, output.height))
+        new_im.paste(output)
+
+        inverted = ImageOps.invert(new_im)
+
+        inverted.save(output_buffer, "png")
+        output_buffer.seek(0)
+
+        return output_buffer
+
+
+@to_thread
+def layer_image(image: BytesIO, cover_file: str) -> BytesIO:
+    with Image.open(image) as output:
+        output_buffer = BytesIO()
+
+        with Image.open(cover_file) as cover:
+            resized_to_fit = cover.resize((output.width, output.height))
+            output.paste(resized_to_fit, mask=resized_to_fit)
+
+        output.save(output_buffer, "png")
+        output_buffer.seek(0)
+
+        return output_buffer
+
+
+@to_thread
+def resize_method(image: BytesIO, height: int, width: int) -> BytesIO:
+    with Image.open(image) as output:
+        output_buffer = BytesIO()
+
+        resized = output.resize((height, width))
+        resized.save(output_buffer, "png")
+        output_buffer.seek(0)
+
+        return output_buffer

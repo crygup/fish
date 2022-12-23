@@ -1,11 +1,17 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot import Context
 from utils import response_checker
 
 from ._base import CogBase
+
+if TYPE_CHECKING:
+    from cogs.context import Context
 
 
 class GoogleCommands(CogBase):

@@ -22,30 +22,10 @@ from aiohttp import ClientSession
 from asyncpg import Connection, Pool
 from discord.ext import commands
 
-T = TypeVar("T")
-P = ParamSpec("P")
-
-
-def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
-    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-        return await asyncio.to_thread(func, *args, **kwargs)
-
-    return wrapper
-
+from utils import VALID_EDIT_KWARGS
 
 if TYPE_CHECKING:
     from bot import Bot
-
-
-VALID_EDIT_KWARGS: Dict[str, Any] = {
-    "content": None,
-    "embeds": [],
-    "attachments": [],
-    "suppress": False,
-    "delete_after": None,
-    "allowed_mentions": None,
-    "view": None,
-}
 
 
 class ContextCog(commands.Cog, name="context"):

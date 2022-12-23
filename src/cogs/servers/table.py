@@ -1,26 +1,20 @@
+from __future__ import annotations
+
 import textwrap
-from typing import Dict, Optional, TypeVar
+from typing import TYPE_CHECKING, Dict, Optional
 
 import discord
 from discord.ext import commands
 
-from bot import Bot, Context
-from utils import FieldPageSource, Pager, to_bytes
+from utils import FieldPageSource, Pager, has_mod, is_table, to_bytes
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):
     await bot.add_cog(Table(bot))
-
-
-def is_table(ctx: Context) -> bool:
-    return ctx.guild.id == 848507662437449750
-
-
-T = TypeVar("T")
-
-
-def has_mod(ctx: Context) -> bool:
-    return 884182961702977599 in [r.id for r in ctx.author.roles]
 
 
 class Table(commands.Cog, name="table", command_attrs=dict(hidden=True)):

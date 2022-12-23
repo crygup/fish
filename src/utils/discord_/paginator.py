@@ -3,14 +3,18 @@ from __future__ import annotations
 import asyncio
 import datetime
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import discord
+from dateutil.parser import parse
 from discord.ext import commands, menus
 from discord.ext.commands import Paginator as CommandPaginator
-from dateutil.parser import parse
-from cogs.context import Context
-from utils import human_join
+
+from ..helpers import human_join
+from ..vars import CHECK, TRASH, PREVIOUS, GO_TO_PAGE, NEXT
+
+if TYPE_CHECKING:
+    from cogs.context import Context
 
 blurple = discord.ButtonStyle.blurple
 red = discord.ButtonStyle.red
@@ -107,17 +111,17 @@ class Pager(discord.ui.View):
         )
         return False
 
-    @discord.ui.button(emoji="<:cr_previous:957720022506156062>", style=blurple)
+    @discord.ui.button(emoji=PREVIOUS, style=blurple)
     async def go_to_previous_page(self, interaction: discord.Interaction, __):
         """go to the previous page"""
         await self.show_checked_page(interaction, self.current_page - 1)
 
-    @discord.ui.button(emoji="<:cr_next:957720022418096138>", style=blurple)
+    @discord.ui.button(emoji=NEXT, style=blurple)
     async def go_to_next_page(self, interaction: discord.Interaction, __):
         """go to the next page"""
         await self.show_checked_page(interaction, self.current_page + 1)
 
-    @discord.ui.button(emoji="<:cr_gopage:957720582357651507>", style=blurple)
+    @discord.ui.button(emoji=GO_TO_PAGE, style=blurple)
     async def go_to_number_page(self, interaction: discord.Interaction, __):
         max_pages = self.source.get_max_pages()
         menu = self
@@ -149,12 +153,12 @@ class Pager(discord.ui.View):
 
         await interaction.response.send_modal(GoPage())
 
-    @discord.ui.button(emoji="<:cr_trash:957720024360042506>", style=red)
+    @discord.ui.button(emoji=TRASH, style=red)
     async def stop_pages(self, interaction: discord.Interaction, __):
         """stops the pagination session."""
         await interaction.response.defer()
         await interaction.delete_original_response()
-        await self.ctx.message.add_reaction("<:cr_check:956022530521563136>")
+        await self.ctx.message.add_reaction(CHECK)
         self.stop()
 
 

@@ -7,7 +7,7 @@ import discord
 import pandas as pd
 from tweepy.asynchronous import AsyncStreamingClient, AsyncClient
 
-from .helpers import add_prefix
+from ..helpers import add_prefix
 
 if TYPE_CHECKING:
     from bot import Bot

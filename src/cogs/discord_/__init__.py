@@ -1,11 +1,16 @@
-import discord
+from __future__ import annotations
 
-from bot import Bot
+from typing import TYPE_CHECKING
+
+import discord
 
 from .info import InfoCommands
 from .other import OtherCommands
 from .search import SearchCommand
 from .user import UserCommands
+
+if TYPE_CHECKING:
+    from bot import Bot
 
 
 class Discord(SearchCommand, InfoCommands, UserCommands, OtherCommands, name="discord"):

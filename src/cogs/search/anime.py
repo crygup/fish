@@ -1,70 +1,23 @@
+from __future__ import annotations
+
 import re
 import textwrap
-from typing import Any, Dict
-from typing import Literal as L
-from typing import Union
+from typing import TYPE_CHECKING, Any, Dict, Literal, Union
 
 import discord
 from discord.ext import commands
 
-from bot import Context
-from utils import human_join, response_checker
+from utils import anime_query_data, human_join, response_checker
 
 from ._base import CogBase
 
-anime_query_data = """
-query ($search: String) {
-  Media(search: $search, type: ANIME) {
-    description(asHtml: false)
-    averageScore
-    episodes
-    status
-    bannerImage
-    siteUrl
-    source
-    chapters
-    volumes
-    format
-    type
-    startDate {
-      year
-      month
-      day
-    }
-    endDate {
-      year
-      month
-      day
-    }
-    nextAiringEpisode {
-      episode
-      airingAt
-    }
-    title {
-      romaji
-      english
-      native
-    }
-    coverImage {
-      extraLarge
-      color
-    }
-    tags {
-      name
-    }
-    genres
-    trailer {
-      site
-      id
-    }
-  }
-}
-"""
+if TYPE_CHECKING:
+    from cogs.context import Context
 
 
 class AnimeCommands(CogBase):
     async def make_request(
-        self, query: str, mode: Union[L["anime"], L["manga"]]
+        self, query: str, mode: Union[Literal["anime"], Literal["manga"]]
     ) -> Dict[Any, Any]:
 
         search_query = (

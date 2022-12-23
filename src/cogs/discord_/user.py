@@ -1,13 +1,14 @@
+from __future__ import annotations
+
 import asyncio
 import datetime
 import time
-from typing import List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import asyncpg
 import discord
 from discord.ext import commands
 
-from bot import Context
 from utils import (
     AvatarsPageSource,
     AvatarView,
@@ -19,6 +20,10 @@ from utils import (
 )
 
 from ._base import CogBase
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 class UserCommands(CogBase):

@@ -1,13 +1,18 @@
-from typing import Annotated, Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Annotated, Optional
 
 import asyncpg
 import discord
 from discord.ext import commands
 
-from bot import Bot, Context
 from utils import FieldPageSource, Pager
 
 from ._base import CogBase
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 class TagName(commands.clean_content):

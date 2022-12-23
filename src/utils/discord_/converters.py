@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import imghdr
 import pathlib
 import random
 import re
@@ -15,29 +16,26 @@ from typing import (
     TypeVar,
     Union,
 )
-import imghdr
+
 import discord
-from aiohttp import ClientResponse
 from braceexpand import UnbalancedBracesError, braceexpand  # type: ignore
 from bs4 import BeautifulSoup
 from discord.ext import commands
 from discord.ext.commands import FlagConverter
-from ossapi.ossapiv2 import Beatmap, BeatmapIdT, Beatmapset, BeatmapsetIdT, User
+from ossapi.ossapiv2 import Beatmap, Beatmapset, User
 from steam.steamid import steam64_from_url
 from wand.color import Color
 
-from .errors import InvalidColor, UnknownAccount, NotTenorUrl
-from .helpers import (
-    Regexes,
-    get_lastfm,
-    get_roblox,
-    get_twemoji,
-    to_bytesio,
-    to_thread,
+from ..vars.errors import InvalidColor, NotTenorUrl, UnknownAccount
+from ..helpers import get_lastfm, get_roblox, get_twemoji, to_bytesio, to_thread
+from ..helpers.roblox import fetch_user_id_by_name
+from ..vars import (
+    OSU_BEATMAP_RE,
+    OSU_BEATMAPSET_RE,
+    OSU_ID_RE,
+    TENOR_PAGE_RE,
     default_headers,
 )
-from .regexes import beatmap_re, beatmapset_re, id_re
-from .roblox import fetch_user_id_by_name
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -249,15 +247,15 @@ class BeatmapConverter(commands.Converter):
         return ctx.bot.osu.beatmap(beatmapid)
 
     async def convert(self, ctx: Context, argument: str) -> Beatmap:
-        beatmapset_check = beatmapset_re.search(argument)
+        beatmapset_check = OSU_BEATMAPSET_RE.search(argument)
         if beatmapset_check:
             return await self.get_beatmap(ctx, int(beatmapset_check.group("map")))
 
-        beatmap_check = beatmap_re.search(argument)
+        beatmap_check = OSU_BEATMAP_RE.search(argument)
         if beatmap_check:
             return await self.get_beatmap(ctx, int(beatmap_check.group("id")))
 
-        id_check = id_re.search(argument)
+        id_check = OSU_ID_RE.search(argument)
         if id_check:
             return await self.get_beatmap(ctx, int(id_check.group("id")))
 
@@ -274,11 +272,11 @@ class BeatmapsetConverter(commands.Converter):
         return ctx.bot.osu.beatmapset(beatmapsetid)
 
     async def convert(self, ctx: Context, argument: str) -> Beatmapset:
-        beatmapset_check = beatmapset_re.search(argument)
+        beatmapset_check = OSU_BEATMAPSET_RE.search(argument)
         if beatmapset_check:
             return await self.get_beatmapset(ctx, int(beatmapset_check.group("map")))
 
-        id_check = id_re.search(argument)
+        id_check = OSU_ID_RE.search(argument)
         if id_check:
             return await self.get_beatmapset(ctx, int(id_check.group("id")))
 
@@ -536,9 +534,7 @@ class TenorUrlConverter(commands.Converter):
         return element["src"]  # type: ignore
 
     async def convert(self, ctx: commands.Context[Bot], url: str) -> str:
-        pattern = re.compile(r"https://tenor.com/view/(.*){1,}-[0-9]{1,}")
-
-        real_url = pattern.search(url)
+        real_url = TENOR_PAGE_RE.search(url)
 
         if not real_url:
             raise NotTenorUrl("Invalid Tenor URL.")

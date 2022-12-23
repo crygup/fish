@@ -1,6 +1,10 @@
-from discord.ext.commands import Cog
+from __future__ import annotations
 
-from bot import Bot
+from discord.ext.commands import Cog
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot import Bot
 
 
 class CogBase(Cog):

@@ -17,9 +17,11 @@ from utils import (
     template,
     to_bytesio,
     to_thread,
+    human_join,
+    REPLIES,
+    REPLY,
 )
-from utils.helpers import human_join
-from utils.roblox import *  # smd
+from utils.helpers.roblox import *  # smd
 
 
 async def setup(bot: Bot):
@@ -85,7 +87,7 @@ class Roblox(commands.Cog, name="roblox"):
             onlinestatus = await fetch_onlinestatus(ctx.bot.session, user)
             onlinestatus_str = ["Offline", "Online"][onlinestatus["IsOnline"]]
             if not onlinestatus["IsOnline"]:
-                onlinestatus_str += f'\n{ctx.bot.e_reply}Last seen {discord.utils.format_dt(parser.parse(onlinestatus["LastOnline"]), "R")}'
+                onlinestatus_str += f'\n{REPLY}Last seen {discord.utils.format_dt(parser.parse(onlinestatus["LastOnline"]), "R")}'
 
             embed.add_field(name="Status", value=onlinestatus_str)
 

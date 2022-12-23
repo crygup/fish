@@ -1,11 +1,14 @@
-import discord
+from typing import TYPE_CHECKING
 
-from bot import Bot
+import discord
 
 from .anime import AnimeCommands
 from .google import GoogleCommands
 from .spotify import SpotifyCommands
 from .youtube import YoutubeCommands
+
+if TYPE_CHECKING:
+    from bot import Bot
 
 
 class Tools(
