@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import textwrap
-from turtle import title
+from typing import TYPE_CHECKING
 
 import bs4
 import discord
@@ -7,21 +9,24 @@ from bs4 import BeautifulSoup
 from dateutil import parser
 from discord.ext import commands
 
-from bot import Bot, Context
 from utils import (
+    REPLIES,
+    REPLY,
     FieldPageSource,
     Pager,
     RobloxAccountConverter,
     RobloxAssetConverter,
     SimplePages,
+    human_join,
     template,
     to_bytesio,
     to_thread,
-    human_join,
-    REPLIES,
-    REPLY,
 )
 from utils.helpers.roblox import *  # smd
+
+if TYPE_CHECKING:
+    from bot import Bot
+    from cogs.context import Context
 
 
 async def setup(bot: Bot):
