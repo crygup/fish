@@ -31,6 +31,7 @@ from aiohttp import ClientResponse
 from dateutil.relativedelta import relativedelta
 from discord.ext import commands
 from PIL import Image, ImageSequence
+from wand.color import Color
 from wand.image import Image as wImage
 
 if TYPE_CHECKING:
@@ -155,7 +156,8 @@ async def get_twemoji(
     try:
         folder = ("72x72", "svg")[svg]
         ext = ("png", "svg")[svg]
-        url = f"https://twemoji.maxcdn.com/v/latest/{folder}/{ord(emoji):x}.{ext}"
+        formatted = "-".join([f"{ord(char):x}" for char in emoji])
+        url = f"https://twemoji.maxcdn.com/v/latest/{folder}/{formatted}.{ext}"
 
         async with session.get(url) as r:
             if r.ok:
