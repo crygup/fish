@@ -1,5 +1,6 @@
 import datetime
 import difflib
+from io import BytesIO
 import re
 import textwrap
 from time import perf_counter
@@ -19,7 +20,10 @@ from utils import (
     human_timedelta,
     natural_size,
     to_bytesio,
+    ImageConverter,
 )
+
+from .image.functions import add_images, gif_maker, text_to_image
 
 
 async def setup(bot: Bot):
@@ -378,3 +382,24 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
             re.sub(" ", " \U0001f1fa\U0001f1f8 ", text)[:2000],
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    @commands.command(name="feedback")
+    @commands.is_owner()
+    async def feedback(
+        self,
+        ctx: Context,
+        *,
+        text: str = commands.parameter(displayed_default="<text>"),
+    ):
+        """We appreciate your love and feedback!"""
+        await ctx.trigger_typing()
+        boxed = await text_to_image(text)
+        asset = await gif_maker(
+            await ImageConverter().convert(
+                ctx,
+                "https://cdn.discordapp.com/attachments/1055712784458989598/1055712870857461811/feedback.gif",
+            ),
+            boxed,
+        )
+
+        await ctx.send(file=discord.File(asset, filename=f"feedback.gif"))
