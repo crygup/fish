@@ -185,7 +185,6 @@ class Pokemon(commands.Cog, name="pokemon"):
         )
 
     @commands.command(name="wtp", hidden=True)
-    @commands.is_owner()
     async def wtp(self, ctx: Context):
         await ctx.trigger_typing()
         data = await ctx.dagpi("https://api.dagpi.xyz/data/wtp")
