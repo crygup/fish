@@ -18,6 +18,10 @@ from .functions import (
     layer_image,
     resize_method,
     text_to_image,
+    blur_method,
+    kuwahara_method,
+    sharpen_method,
+    spread_method,
 )
 
 if TYPE_CHECKING:
@@ -163,3 +167,67 @@ class Manipulation(CogBase):
         await ctx.send(
             file=discord.File(asset, filename=f"caption.{'gif' if gif else 'png'}")
         )
+
+    @commands.command(name="blur")
+    async def blur(
+        self,
+        ctx: Context,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Blurs an image"""
+        await ctx.trigger_typing()
+        new_image = await ImageConverter().convert(ctx, image)
+
+        asset = await blur_method(new_image)
+
+        await ctx.send(file=discord.File(asset, filename=f"blur.png"))
+
+    @commands.command(name="kuwahara", aliases=("paint",))
+    async def kuwahara(
+        self,
+        ctx: Context,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Kuwaharas an image"""
+        await ctx.trigger_typing()
+        new_image = await ImageConverter().convert(ctx, image)
+
+        asset = await kuwahara_method(new_image)
+
+        await ctx.send(file=discord.File(asset, filename=f"kuwahara.png"))
+
+    @commands.command(name="sharpen")
+    async def sharpen(
+        self,
+        ctx: Context,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Sharpens an image"""
+        await ctx.trigger_typing()
+        new_image = await ImageConverter().convert(ctx, image)
+
+        asset = await sharpen_method(new_image)
+
+        await ctx.send(file=discord.File(asset, filename=f"kuwahara.png"))
+
+    @commands.command(name="spread")
+    async def spread(
+        self,
+        ctx: Context,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Spreads an image"""
+        await ctx.trigger_typing()
+        new_image = await ImageConverter().convert(ctx, image)
+
+        asset = await spread_method(new_image)
+
+        await ctx.send(file=discord.File(asset, filename=f"kuwahara.png"))

@@ -3,7 +3,8 @@
 import textwrap
 from io import BytesIO
 
-from PIL import Image, ImageDraw, ImageFont, ImageSequence, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageSequence
+from wand.image import Image as wImage
 
 from utils import to_thread
 
@@ -158,3 +159,47 @@ def resize_method(image: BytesIO, height: int, width: int) -> BytesIO:
         output_buffer.seek(0)
 
         return output_buffer
+
+
+@to_thread
+def blur_method(image: BytesIO, scale: int = 3) -> BytesIO:
+    with wImage(file=image) as output:
+        buffer = BytesIO()
+        output.blur(radius=0, sigma=scale)
+
+        output.save(buffer)
+        buffer.seek(0)
+        return buffer
+
+
+@to_thread
+def kuwahara_method(image: BytesIO, scale: float = 1.5) -> BytesIO:
+    with wImage(file=image) as output:
+        buffer = BytesIO()
+        output.kuwahara(radius=2, sigma=scale)
+
+        output.save(buffer)
+        buffer.seek(0)
+        return buffer
+
+
+@to_thread
+def sharpen_method(image: BytesIO, scale: int = 4) -> BytesIO:
+    with wImage(file=image) as output:
+        buffer = BytesIO()
+        output.sharpen(radius=8, sigma=scale)
+
+        output.save(buffer)
+        buffer.seek(0)
+        return buffer
+
+
+@to_thread
+def spread_method(image: BytesIO) -> BytesIO:
+    with wImage(file=image) as output:
+        buffer = BytesIO()
+        output.spread(radius=8)
+
+        output.save(buffer)
+        buffer.seek(0)
+        return buffer
