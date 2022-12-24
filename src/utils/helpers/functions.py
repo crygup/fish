@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from bot import Bot
     from cogs.context import Context
 
+
 class plural:
     def __init__(self, value: int):
         self.value: int = value
@@ -63,6 +64,7 @@ class plural:
         if abs(v) != 1:
             return f"{v} {plural}"
         return f"{v} {singular}"
+
 
 async def get_lastfm_data(
     bot: Bot,
@@ -157,10 +159,10 @@ def svgbytes_to_btyes(svg: bytes) -> bytes:
     with wImage(
         blob=svg, format="svg", width=500, height=500, background="none"
     ) as asset:
-        _img = asset.make_blob("png")
+        img = asset.make_blob("png")
 
-    if _img is not None:
-        return _img
+    if img is not None:
+        return img
 
     raise TypeError("Failed to convert svg to bytes")
 
@@ -179,7 +181,7 @@ async def template(session: aiohttp.ClientSession, assetID: int) -> BytesIO:
                 )
                 return img
 
-        raise TypeError(f"Sorry, I couldn't find that asset.`")
+        raise TypeError(f"Sorry, I couldn't find that asset.")
 
 
 async def to_bytesio(

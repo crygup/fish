@@ -14,7 +14,7 @@ def text_to_image(text: str) -> BytesIO:
     output_buffer = BytesIO()
 
     text = textwrap.fill(text, 25)
-    font = ImageFont.truetype("src/files/assets/fonts/arial.ttf", 50)
+    font = ImageFont.truetype("src/files/assets/fonts/wsr.otf", 50)
     padding = 50
 
     images = [Image.new("RGBA", (1, 1), color=(255, 255, 255)) for _ in range(2)]

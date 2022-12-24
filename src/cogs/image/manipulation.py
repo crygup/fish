@@ -148,7 +148,7 @@ class Manipulation(CogBase):
         self,
         ctx: Context,
         image: Argument = commands.parameter(
-            default=commands.Author, displayed_default="[image=None]"
+            default=None, displayed_default="[image=None]"
         ),
         *,
         text: str = commands.parameter(displayed_default="<text>"),
@@ -179,10 +179,12 @@ class Manipulation(CogBase):
         """Blurs an image"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-
         asset = await blur_method(new_image)
+        gif = imghdr.what(asset) == "gif"  # type: ignore
 
-        await ctx.send(file=discord.File(asset, filename=f"blur.png"))
+        await ctx.send(
+            file=discord.File(asset, filename=f"blur.{'gif' if gif else 'png'}")
+        )
 
     @commands.command(name="kuwahara", aliases=("paint",))
     async def kuwahara(
@@ -195,10 +197,12 @@ class Manipulation(CogBase):
         """Kuwaharas an image"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-
         asset = await kuwahara_method(new_image)
+        gif = imghdr.what(asset) == "gif"  # type: ignore
 
-        await ctx.send(file=discord.File(asset, filename=f"kuwahara.png"))
+        await ctx.send(
+            file=discord.File(asset, filename=f"kuwahara.{'gif' if gif else 'png'}")
+        )
 
     @commands.command(name="sharpen")
     async def sharpen(
@@ -211,10 +215,12 @@ class Manipulation(CogBase):
         """Sharpens an image"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-
         asset = await sharpen_method(new_image)
+        gif = imghdr.what(asset) == "gif"  # type: ignore
 
-        await ctx.send(file=discord.File(asset, filename=f"kuwahara.png"))
+        await ctx.send(
+            file=discord.File(asset, filename=f"sharpen.{'gif' if gif else 'png'}")
+        )
 
     @commands.command(name="spread")
     async def spread(
@@ -227,7 +233,9 @@ class Manipulation(CogBase):
         """Spreads an image"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-
         asset = await spread_method(new_image)
+        gif = imghdr.what(asset) == "gif"  # type: ignore
 
-        await ctx.send(file=discord.File(asset, filename=f"kuwahara.png"))
+        await ctx.send(
+            file=discord.File(asset, filename=f"spread.{'gif' if gif else 'png'}")
+        )

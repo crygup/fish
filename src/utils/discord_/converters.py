@@ -16,6 +16,7 @@ from typing import (
     TypeVar,
     Union,
 )
+from aiohttp.client_exceptions import InvalidURL
 
 import discord
 from braceexpand import UnbalancedBracesError, braceexpand  # type: ignore
@@ -35,6 +36,7 @@ from ..vars import (
     OSU_ID_RE,
     TENOR_PAGE_RE,
     default_headers,
+    BlankException,
 )
 
 if TYPE_CHECKING:
@@ -44,8 +46,7 @@ if TYPE_CHECKING:
 FCT = TypeVar("FCT", bound="FlagConverter")
 
 Argument: TypeAlias = Optional[
-    discord.Member
-    | discord.User
+    discord.User
     | discord.Emoji
     | discord.PartialEmoji
     | discord.Role
@@ -116,103 +117,95 @@ class ImageConverter(commands.Converter):
     Converts to a BytesIO image
     """
 
-    def get_embed_image(
-        self,
-        embed: discord.Embed,
-        skip_author: bool = True,
-        skip_footer: bool = True,
-        skip_thumbnail: bool = False,
-        skip_image: bool = False,
-        ignore_errors: bool = False,
-    ) -> str | None:
-        """
-        Returns any image url in an embed
-        """
+    async def from_embed(self, ctx: Context, embed: discord.Embed) -> BytesIO:
+        if embed.image and embed.image.url:
+            return await to_bytesio(ctx.session, embed.image.url)
 
-        url = None
-        if embed.image and embed.image.url and not skip_image:
-            url = embed.image.url
+        if embed.thumbnail and embed.thumbnail.url:
+            return await to_bytesio(ctx.session, embed.thumbnail.url)
 
-        if embed.thumbnail and embed.thumbnail.url and not skip_thumbnail:
-            url = embed.thumbnail.url
+        raise BlankException("No image found in embed")
 
-        if embed.author and embed.author.icon_url and not skip_author:
-            url = embed.author.icon_url
+    async def from_str(self, ctx: Context, content: str) -> BytesIO:
+        emoji = await get_twemoji(ctx.session, content)
+        if emoji:
+            return BytesIO(emoji)
 
-        if embed.footer and embed.footer.icon_url and not skip_footer:
-            url = embed.footer.icon_url
+        try:
+            url = await TenorUrlConverter().convert(ctx, content)
+        except NotTenorUrl:
+            url = content
 
-        if not ignore_errors:
-            raise TypeError("No image found")
+        try:
+            async with ctx.session.get(url) as resp:
+                if resp.ok:
+                    accepted_types = ["gif", "png", "jpeg", "webp"]
+                    image = BytesIO(await resp.read())
+                    what = imghdr.what(image)  # type: ignore
+                    if what in accepted_types:
+                        return image
+        except InvalidURL:
+            pass
 
-        return url
+        raise BlankException("Couldn't convert image")
 
-    async def get_from_message(self, ctx: Context, message: discord.Message) -> BytesIO:
-        if message.reference:
-            ref: discord.Message = message.reference.resolved  # type: ignore
+    async def from_message(self, ctx: Context, message: discord.Message, skip_author: bool = False) -> BytesIO:  # type: ignore
+        if message.attachments:
+            return BytesIO(await message.attachments[0].read())
 
-            if ref.embeds and self.get_embed_image(ref.embeds[0], ignore_errors=True):
-                return await to_bytesio(ctx.session, self.get_embed_image(ref.embeds[0]))  # type: ignore
+        if message.embeds:
+            for embed in message.embeds:
+                try:
+                    image = await self.from_embed(ctx, embed)
+                except BlankException:
+                    pass
+                else:
+                    return image
 
-            if ref.attachments:
-                return BytesIO(await ref.attachments[0].read())
+        if message.content:
+            try:
+                await self.from_str(ctx, message.content)
+            except BlankException:
+                pass
 
-            return BytesIO(
-                await ref.author.display_avatar.replace(format="png", size=512).read()
-            )
+        if not skip_author:
+            return BytesIO(await message.author.display_avatar.replace(size=512).read())
+
+        raise BlankException("Could not get image from message")
+
+    async def convert(self, ctx: Context, argument: Argument) -> BytesIO:
+        message = ctx.message
 
         if message.attachments:
             return BytesIO(await message.attachments[0].read())
 
-        return BytesIO(
-            await message.author.display_avatar.replace(format="png", size=512).read()
-        )
-
-    async def convert(self, ctx: Context, argument: Argument) -> BytesIO:
-
         if argument is None:
-            return await self.get_from_message(ctx, ctx.message)
+            async for msg in ctx.channel.history(limit=10, before=message):
+                try:
+                    return await self.from_message(ctx, msg, True)
+                except BlankException:
+                    continue
 
-        if isinstance(argument, discord.Message):
-            return await self.get_from_message(ctx, argument)
+        if isinstance(argument, discord.User):
+            return BytesIO(await argument.display_avatar.replace(size=512).read())
 
-        elif isinstance(argument, (discord.User, discord.Member)):
-            return BytesIO(
-                await argument.display_avatar.replace(format="png", size=512).read()
-            )
-
-        elif isinstance(argument, discord.PartialEmoji):
-            if argument.is_custom_emoji():
+        if isinstance(argument, (discord.Emoji, discord.PartialEmoji)):
+            try:
                 return BytesIO(await argument.read())
+            except ValueError:
+                pass
 
-        elif isinstance(argument, discord.Emoji):
-            return BytesIO(await argument.read())
-
-        elif isinstance(argument, discord.Role):
-            if argument.display_icon:
-                if isinstance(argument.display_icon, str):
-                    raise TypeError("Role icon must be a custom emoji")
-
+        if isinstance(argument, discord.Role):
+            if argument.display_icon and not isinstance(argument.display_icon, str):
                 return BytesIO(await argument.display_icon.read())
 
-        elif isinstance(argument, str):
-            unicode_emoji = await get_twemoji(ctx.session, str(argument))
-
-            if unicode_emoji:
-                return BytesIO(unicode_emoji)
-
+        if isinstance(argument, str):
             try:
-                url = await TenorUrlConverter().convert(ctx, argument)
+                await self.from_str(ctx, argument)
+            except BlankException:
+                pass
 
-            except NotTenorUrl:
-                url = argument
-
-            async with ctx.bot.session.get(url) as resp:
-                file = BytesIO(await resp.read())
-                if imghdr.what(file):  # type: ignore # tested and works shut up
-                    return file
-
-        raise TypeError("Unable to convert to image")
+        return BytesIO(await message.author.display_avatar.replace(size=512).read())
 
 
 class LastfmTimeConverter(commands.Converter):
