@@ -98,6 +98,7 @@ def gif_maker(image: BytesIO, text: BytesIO) -> BytesIO:
 
         new_image.paste(text_image, (center_x, 0))
         new_image.paste(frame, (0, text_image.height))
+        new_image.info["duration"] = frame.info["duration"]
 
         new_images.append(new_image)
 
@@ -110,6 +111,7 @@ def gif_maker(image: BytesIO, text: BytesIO) -> BytesIO:
         format="gif",
         optimize=False,
         loop=0,
+        disposal=2,
     )
     output_buffer.seek(0)
     return output_buffer
