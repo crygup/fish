@@ -14,6 +14,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     Optional,
     Sequence,
     Tuple,
@@ -25,29 +26,43 @@ import discord
 from aiohttp import ClientResponse
 from dateutil.relativedelta import relativedelta
 from discord.ext import commands
-from PIL import Image as PImage
-from PIL import ImageSequence
+from PIL import Image as PImage, ImageSequence
 from wand.image import Image as wImage
 
-from ..vars import USER_FLAGS, VIDEOS_RE, P, T, video_regexes
-from ..vars.errors import (
+from ..vars import (
+    USER_FLAGS,
+    VIDEOS_RE,
     BadGateway,
     BadRequest,
+    BlankException,
     Forbidden,
     NoCover,
     NotFound,
     NoTwemojiFound,
+    P,
     ResponseError,
     ServerErrorResponse,
+    T,
     Unauthorized,
     UnknownAccount,
+    video_regexes,
 )
-from .classes import plural
 
 if TYPE_CHECKING:
     from bot import Bot
     from cogs.context import Context
 
+class plural:
+    def __init__(self, value: int):
+        self.value: int = value
+
+    def __format__(self, format_spec: str) -> str:
+        v = self.value
+        singular, sep, plural = format_spec.partition("|")
+        plural = plural or f"{singular}s"
+        if abs(v) != 1:
+            return f"{v} {plural}"
+        return f"{v} {singular}"
 
 async def get_lastfm_data(
     bot: Bot,
@@ -556,3 +571,72 @@ def has_mod(ctx: Context) -> bool:
 
 def yes_no():
     return "no"
+
+
+def action_test(
+    ctx: Context,
+    author: discord.Member,
+    target: Union[discord.Member, discord.User],
+    action: Union[Literal["ban"], Literal["kick"]],
+) -> bool:
+
+    if isinstance(target, discord.User):
+        return True
+
+    if author == target:
+        raise BlankException(f"Why are you trying to {action} yourself?")
+
+    if target.id == ctx.me.id:
+        message = f"I am unable to {action} myself."
+
+        if target.top_role > ctx.me.top_role:
+            message += " You do have permission to remove me if you'd like though."
+
+        raise BlankException(message)
+
+    if target == ctx.guild.owner:
+        raise BlankException(f"I can't {action} the owner, sorry.")
+
+    if target.top_role >= ctx.me.top_role:
+        raise BlankException(f"I cannot {action} this user due to role hierarchy.")
+
+    if author == ctx.guild.owner:
+        return True
+
+    if target.top_role >= author.top_role:
+        raise BlankException(f"You cannot {action} this user due to role hierarchy.")
+
+    return True
+
+
+async def get_or_fetch_member(
+    guild: discord.Guild, member_id: int
+) -> Optional[discord.Member]:
+    member = guild.get_member(member_id)
+    if member is not None:
+        return member
+
+    members = await guild.query_members(limit=1, user_ids=[member_id], cache=True)
+    if not members:
+        return None
+
+    return members[0]
+
+
+async def get_or_fetch_user(bot: Bot, user_id: int) -> discord.User:
+    user = bot.get_user(user_id)
+
+    if user is None:
+        user = await bot.fetch_user(user_id)
+
+    return user
+
+
+def can_execute_action(
+    ctx: Context, user: discord.Member, target: discord.Member
+) -> bool:
+    return (
+        user.id == ctx.bot.owner_id
+        or user == ctx.guild.owner
+        or user.top_role > target.top_role
+    )

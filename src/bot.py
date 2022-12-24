@@ -63,6 +63,7 @@ cogs = [
     "cogs.pokemon",
     "cogs.roblox",
     "cogs.settings",
+    "cogs.moderation",
     # servers
     "cogs.servers.egg",
     "cogs.servers.jawntards",
@@ -292,14 +293,6 @@ class Bot(commands.Bot):
             self.uptime = discord.utils.utcnow()
 
         print(f"Logged in as {self.user}")
-
-    async def getch_user(self, user_id: int) -> discord.User:
-        user = self.get_user(user_id)
-
-        if user is None:
-            user = await self.fetch_user(user_id)
-
-        return user
 
     async def send_error(self, ctx: Context, error: commands.CommandError | Exception):
         await ctx.send(f"An unhandled error occured, this error has been reported.")

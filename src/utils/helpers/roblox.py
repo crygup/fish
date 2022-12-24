@@ -2,7 +2,7 @@ from typing import Dict, List
 
 from aiohttp import ClientSession
 
-from . import response_checker
+from .functions import response_checker
 
 
 async def fetch_usernames(session: ClientSession, account_id: int) -> List[str]:

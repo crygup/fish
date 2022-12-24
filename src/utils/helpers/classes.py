@@ -1,17 +1,16 @@
+from __future__ import annotations
+
 import time
+from typing import TYPE_CHECKING, Optional
 
+import discord
+from discord.ext import commands
 
-class plural:
-    def __init__(self, value: int):
-        self.value: int = value
+from ..vars import BlankException
+from .functions import can_execute_action, get_or_fetch_member
 
-    def __format__(self, format_spec: str) -> str:
-        v = self.value
-        singular, sep, plural = format_spec.partition("|")
-        plural = plural or f"{singular}s"
-        if abs(v) != 1:
-            return f"{v} {plural}"
-        return f"{v} {singular}"
+if TYPE_CHECKING:
+    from cogs.context import Context
 
 
 class Timer:
@@ -50,3 +49,41 @@ class Timer:
             return 0
 
         return self._end - self._start
+
+
+class ActionReason(commands.Converter):
+    async def convert(self, ctx: Context, argument: str):
+        ret = f"{ctx.author} (ID: {ctx.author.id}): {argument}"
+
+        if len(ret) > 512:
+            reason_max = 512 - len(ret) + len(argument)
+            raise BlankException(f"Reason is too long ({len(argument)}/{reason_max})")
+        return ret
+
+
+class MemberID(commands.Converter):
+    async def convert(self, ctx: Context, argument: str):
+        try:
+            m = await commands.MemberConverter().convert(ctx, argument)
+        except commands.BadArgument:
+            try:
+                member_id = int(argument, base=10)
+            except ValueError:
+                raise commands.BadArgument(
+                    f"{argument} is not a valid member or member ID."
+                ) from None
+            else:
+                m = await get_or_fetch_member(ctx.guild, member_id)
+                if m is None:
+                    # hackban case
+                    return type(
+                        "_Hackban",
+                        (),
+                        {"id": member_id, "__str__": lambda s: f"Member ID {s.id}"},
+                    )()
+
+        if not can_execute_action(ctx, ctx.author, m):
+            raise commands.BadArgument(
+                "You cannot do this action on this user due to role hierarchy."
+            )
+        return m

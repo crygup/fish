@@ -1,6 +1,5 @@
 import re
 from re import Pattern
-from typing import ClassVar
 
 
 # https://github.com/Rapptz/RoboDanny/blob/rewrite/cogs/utils/time.py#L23-L34

@@ -21,6 +21,7 @@ from utils import (
     natural_size,
     status_state,
     to_bytesio,
+    get_or_fetch_user,
 )
 
 from .image.functions import gif_maker, text_to_image
@@ -87,7 +88,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         )
         memory_usage = self.process.memory_full_info().uss / 1024**2
         cpu_usage = self.process.cpu_percent() / psutil.cpu_count()
-        cr = await self.bot.getch_user(766953372309127168)
+        cr = await get_or_fetch_user(bot=self.bot, user_id=766953372309127168)
 
         e = discord.Embed(
             description="cool discord bot",

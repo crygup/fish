@@ -6,11 +6,10 @@ from typing import TYPE_CHECKING, List, Optional, Union
 
 import discord
 from discord.ext import commands
-from ossapi.ossapiv2 import Score, ScoreTypeT
-from ossapi.ossapiv2 import User as OsuUser
+from ossapi.ossapiv2 import User as OsuUser, Score, ScoreTypeT
 
 from ..helpers import to_thread
-from ..vars import BURPLE, GREEN, RED, OsuMods
+from ..vars import BURPLE, GREEN, RED, TRASH, OsuMods, CHECK
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -652,3 +651,18 @@ class OsuProfileView(AuthorView):
     def __init__(self, ctx: Context, account: OsuUser, index_embed: discord.Embed):
         super().__init__(ctx)
         self.add_item(OsuProfileDropdown(ctx, account, index_embed))
+
+
+class DeleteView(AuthorView):
+    def __init__(self, ctx: Context):
+        super().__init__(ctx)
+
+    @discord.ui.button(emoji=TRASH, style=RED)
+    async def delete(self, interaction: discord.Interaction, _):
+        if interaction.message:
+            await interaction.message.delete()
+
+        try:
+            await self.ctx.message.add_reaction(CHECK)
+        except: # blank except because this failing will never raise any suspicion
+            pass
