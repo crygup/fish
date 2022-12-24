@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 
 
-class UnknownAccount(Exception):
+class BlankException(Exception):
     def __init__(self, message: str) -> None:
         self.message = message
         super().__init__(message)
@@ -11,22 +11,20 @@ class UnknownAccount(Exception):
         return self.message
 
 
-class VideoIsLive(Exception):
-    def __init__(self, message: str) -> None:
-        self.message = message
-        super().__init__(message)
-
-    def __str__(self) -> str:
-        return self.message
+class UnknownAccount(BlankException):
+    pass
 
 
-class NotTenorUrl(Exception):
-    def __init__(self, message: str) -> None:
-        self.message = message
-        super().__init__(message)
+class NoTwemojiFound(BlankException):
+    pass
 
-    def __str__(self) -> str:
-        return self.message
+
+class VideoIsLive(BlankException):
+    pass
+
+
+class NotTenorUrl(BlankException):
+    pass
 
 
 class ResponseError(Exception):
@@ -92,6 +90,7 @@ IGNORED = (
     commands.CheckFailure,
 )
 SEND = (
+    BlankException,
     VideoIsLive,
     NotTenorUrl,
     discord.HTTPException,

@@ -36,6 +36,7 @@ from ..vars.errors import (
     Forbidden,
     NoCover,
     NotFound,
+    NoTwemojiFound,
     ResponseError,
     ServerErrorResponse,
     Unauthorized,
@@ -121,22 +122,16 @@ def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
     return wrapper
 
 
-async def get_twemoji(
-    session: aiohttp.ClientSession, emoji: str, *, svg: bool = True
-) -> Optional[bytes]:
+async def get_twemoji(session: aiohttp.ClientSession, emoji: str) -> Optional[bytes]:
     try:
-        folder = ("72x72", "svg")[svg]
-        ext = ("png", "svg")[svg]
         formatted = "-".join([f"{ord(char):x}" for char in emoji])
-        url = f"https://twemoji.maxcdn.com/v/latest/{folder}/{formatted}.{ext}"
+        url = f"https://twemoji.maxcdn.com/v/latest/svg/{formatted}.svg"
 
         async with session.get(url) as r:
             if r.ok:
-                byt = await r.read()
-                if svg:
-                    return await svgbytes_to_btyes(byt)
-                else:
-                    return byt
+                return await svgbytes_to_btyes(await r.read())
+
+            raise NoTwemojiFound("Couldn't find emoji.")
 
     except Exception:
         return None
