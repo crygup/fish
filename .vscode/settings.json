@@ -7,7 +7,6 @@
 	"editor.guides.highlightActiveIndentation": "always",
 	"editor.guides.bracketPairsHorizontal": false,
 	"editor.guides.indentation": false,
-	"editor.lineNumbers": "off",
 	"prettier.useTabs": true,
 	"workbench.tree.indent": 8
 }

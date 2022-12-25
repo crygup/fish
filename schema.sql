@@ -200,3 +200,14 @@ CREATE TABLE IF NOT EXISTS pokemon_guesses (
     correct BIGINT DEFAULT 0,
     incorrect BIGINT DEFAULT 0
 );
+
+
+CREATE TABLE IF NOT EXISTS reminders (
+    id SERIAL PRIMARY KEY,
+    expires TIMESTAMP,
+    created TIMESTAMP DEFAULT (now() at time zone 'utc'),
+    event TEXT,
+    extra JSONB DEFAULT ('{}'::jsonb)
+);
+
+CREATE INDEX IF NOT EXISTS reminders_expires_idx ON reminders (expires);

@@ -1,7 +1,9 @@
 from __future__ import annotations
+import json
 
 import re
 from typing import TYPE_CHECKING, Dict
+import asyncpg
 
 import discord
 import pandas as pd
@@ -141,3 +143,27 @@ async def setup_live_twitter(bot: Bot):
     streaming_client = client(bot.config["twitter"]["bearer"])
     await streaming_client.run()
     bot.live_twitter = streaming_client
+
+
+async def create_pool(bot: Bot, connection_url: str):
+    def _encode_jsonb(value):
+        return json.dumps(value)
+
+    def _decode_jsonb(value):
+        return json.loads(value)
+
+    async def init(con):
+        await con.set_type_codec(
+            "jsonb",
+            schema="pg_catalog",
+            encoder=_encode_jsonb,
+            decoder=_decode_jsonb,
+            format="text",
+        )
+
+    connection = await asyncpg.create_pool(connection_url, init=init)
+    if connection is None:
+        bot.logger.error("Failed to connect to database")
+        raise Exception()
+
+    bot.pool = connection

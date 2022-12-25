@@ -462,10 +462,6 @@ def human_timedelta(
             return " ".join(output) + output_suffix
 
 
-def format_relative(dt: datetime.datetime) -> str:
-    return discord.utils.format_dt(dt, "R")
-
-
 # https://github.com/CuteFwan/Koishi/blob/master/cogs/avatar.py#L82-L102
 @to_thread
 def format_bytes(filesize_limit: int, images: List[bytes]) -> BytesIO:

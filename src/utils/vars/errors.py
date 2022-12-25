@@ -11,6 +11,10 @@ class BlankException(Exception):
         return self.message
 
 
+class BadTimeTransform(BlankException):
+    pass
+
+
 class UnknownAccount(BlankException):
     pass
 

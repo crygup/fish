@@ -6,6 +6,8 @@ from discord.ext import commands
 
 from .classes import *
 from .functions import *
+from .timer import *
+from .roblox import *
 
 if TYPE_CHECKING:
     from bot import Bot

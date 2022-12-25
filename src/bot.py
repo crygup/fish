@@ -27,6 +27,7 @@ from utils import (
     setup_prefixes,
     setup_twitter,
     setup_webhooks,
+    create_pool,
 )
 
 if TYPE_CHECKING:
@@ -222,19 +223,14 @@ class Bot(commands.Bot):
 
     async def setup_hook(self):
         self.session = aiohttp.ClientSession()
-        _database = (
+
+        await create_pool(
+            self,
             self.config["databases"]["testing_psql"]
             if self.testing
-            else self.config["databases"]["psql"]
+            else self.config["databases"]["psql"],
         )
-        connection = await asyncpg.create_pool(_database)
-
-        if connection is None:
-            self.logger.error("Failed to connect to database")
-            return
-
-        self.pool = connection
-        print("Connected to postre database")
+        print("Connected to postgre database")
 
         with open("schema.sql", "r") as f:
             await self.pool.execute(f.read())
@@ -246,7 +242,7 @@ class Bot(commands.Bot):
             encoding="utf-8",
             decode_responses=True,
         )
-        print("Connected to Redis database")
+        print("Connected to redis database")
 
         self.osu = OssapiV2(
             self.config["keys"]["osu-id"], self.config["keys"]["osu-secret"]
