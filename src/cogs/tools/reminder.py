@@ -177,7 +177,8 @@ class ReminderCommands(CogBase):
         return timer
 
     @commands.group(
-        aliases=["timer", "remind", "remindme"],
+        name="remind",
+        aliases=["timer", "remind", "remindme", "reminder"],
         usage="<when>",
         invoke_without_command=True,
     )
