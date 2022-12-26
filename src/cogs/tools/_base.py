@@ -13,5 +13,3 @@ if TYPE_CHECKING:
 class CogBase(Cog):
     def __init__(self, bot: Bot):
         self.bot: Bot = bot
-        self._have_data = asyncio.Event()
-        self._current_timer: PGTimer | None = None

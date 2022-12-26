@@ -1,20 +1,24 @@
 from __future__ import annotations
+
 import asyncio
 import datetime
 import textwrap
-
-
 from typing import TYPE_CHECKING, Annotated, Any, Optional
+
 import asyncpg
-
 import discord
-
-from ._base import CogBase
 from discord.ext import commands
-from utils import timer as timer_module, plural, PGTimer, FieldPageSource, Pager
+
+from utils import FieldPageSource, Pager, PGTimer, plural
+from utils import timer as timer_module
 
 if TYPE_CHECKING:
+    from bot import Bot
     from cogs.context import Context
+
+
+async def setup(bot: Bot):
+    await bot.add_cog(Reminders(bot))
 
 
 class MaybeAcquire:
@@ -37,12 +41,15 @@ class MaybeAcquire:
             await self.pool.release(self._connection)
 
 
-class ReminderCommands(CogBase):
+class Reminders(commands.Cog, name="reminder"):
+    def __init__(self, bot: Bot):
+        self.bot: Bot = bot
+        self._have_data = asyncio.Event()
+        self._current_timer: Optional[PGTimer] = None
+        self._task = bot.loop.create_task(self.dispatch_timers())
+
     async def cog_unload(self):
         self._task.cancel()
-
-    async def cog_load(self) -> None:
-        self._task = self.bot.loop.create_task(self.dispatch_timers())
 
     async def get_active_timer(
         self, *, connection: Optional[asyncpg.Connection] = None, days: int = 7
@@ -313,9 +320,6 @@ class ReminderCommands(CogBase):
             reference = None
 
         try:
-            if reference:
-                await channel.send(msg, reference=reference)
-            else:
-                await channel.send(msg)
+            await channel.send(msg, reference=reference)  # type:ignore
         except discord.HTTPException:
             return
