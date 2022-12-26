@@ -17,6 +17,7 @@ from utils import (
     format_bytes,
     human_timedelta,
     to_bytes,
+    format_status,
 )
 
 from ._base import CogBase
@@ -250,7 +251,7 @@ class UserCommands(CogBase):
 
         if member is None or member and member.id == me.id:
             await ctx.send(
-                f"Hello, I have been awake for {human_timedelta(bot.uptime,suffix=False)}."
+                f"Hello, I have been awake for {human_timedelta(bot.uptime, suffix=False)}."
             )
             return
 
@@ -258,15 +259,13 @@ class UserCommands(CogBase):
             "SELECT time FROM uptime_logs WHERE user_id = $1", member.id
         )
 
-        if results is None:
-            await ctx.send(
-                f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} as long as I can tell.'
-            )
-            return
-
-        await ctx.send(
-            f'{member} has been {"on " if member.status is discord.Status.dnd else ""}{member.raw_status} for {human_timedelta(results,suffix=False)}.'
+        message = (
+            f"{member} has been {format_status(member)} for {human_timedelta(results, suffix=False)}."
+            if results
+            else f"{member} has been {format_status(member)} as long as I can tell."
         )
+
+        await ctx.send(message)
 
     @commands.command(name="usernames", aliases=("names",))
     async def usernames(self, ctx: Context, user: discord.User = commands.Author):

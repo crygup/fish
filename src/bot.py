@@ -65,7 +65,6 @@ cogs = [
     "cogs.roblox",
     "cogs.settings",
     "cogs.moderation",
-    "cogs.reminder",
     # servers
     "cogs.servers.egg",
     "cogs.servers.jawntards",

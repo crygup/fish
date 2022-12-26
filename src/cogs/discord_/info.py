@@ -1,4 +1,5 @@
 from __future__ import annotations
+import datetime
 
 import imghdr
 import random
@@ -22,6 +23,7 @@ from utils import (
     get_twemoji,
     get_user_badges,
     human_join,
+    format_status,
 )
 
 from ._base import CogBase
@@ -36,8 +38,8 @@ class InfoCommands(CogBase):
         self.bot = bot
 
     async def user_info(self, ctx: Context, user: Union[discord.Member, discord.User]):
-        fuser = await ctx.bot.fetch_user(user.id)
-        badges = await get_user_badges(member=user, fetched_user=fuser, ctx=ctx)
+        fetched_user = await ctx.bot.fetch_user(user.id)
+        badges = await get_user_badges(member=user, fetched_user=fetched_user, ctx=ctx)
 
         embed = discord.Embed(timestamp=user.created_at)
         embed.description = user.mention
@@ -49,19 +51,8 @@ class InfoCommands(CogBase):
             name="Badges", value="\n".join(badges) if badges else "\U0000274c No Badges"
         )
 
-        images = []
-        images.append(f"[Default Avatar]({user.default_avatar.url})")
-        if user.avatar:
-            images.append(f"[Avatar]({user.avatar.url})")
-
-        if fuser.banner:
-            images.append(f"[Banner]({fuser.banner.url})")
-
         name = str(user)
         if isinstance(user, discord.Member):
-            if user.guild_avatar:
-                images.append(f"[Guild Avatar]({user.guild_avatar.url})")
-
             if user.nick:
                 name += f"  •  {user.nick}"
 
@@ -80,13 +71,24 @@ class InfoCommands(CogBase):
                     f'{REPLY}{discord.utils.format_dt(user.joined_at, "D")}\n',
                 )
 
-        embed.add_field(name="Images", value="\n".join(images))
+            results: Optional[datetime.datetime] = await self.bot.pool.fetchval(
+                "SELECT time FROM uptime_logs WHERE user_id = $1", user.id
+            )
+            formatted = (
+                f'{discord.utils.format_dt(results, "D")}\n{REPLY}{discord.utils.format_dt(results, "R")}'
+                if results
+                else "As long as I remember."
+            )
+            embed.add_field(
+                name=f"{format_status(user)} {'since' if results else ''}".capitalize(),
+                value=formatted,
+            )
 
         embed.set_author(name=name, icon_url=user.display_avatar.url)
 
         await ctx.send(
             embed=embed,
-            view=UserInfoView(ctx, user, embed),
+            view=UserInfoView(ctx, user, fetched_user, embed),
         )
 
     @commands.command(
@@ -103,8 +105,6 @@ class InfoCommands(CogBase):
         user: Union[discord.Member, discord.User] = commands.Author,
     ):
         """Get information about a user."""
-        if user is None:
-            raise commands.UserNotFound(user)
 
         await self.user_info(ctx, user)
 

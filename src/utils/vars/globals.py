@@ -13,6 +13,22 @@ from .regexes import (
     YT_CLIP_RE,
     YT_SHORT_RE,
 )
+from .emojis import (
+    STAFF,
+    PARTNER,
+    HYPESQUAD,
+    BUG_HUNTER,
+    BUG_HUNTER_LEVEL_2,
+    HS_BALANCE,
+    HS_BRAVERY,
+    HS_BRILLIANCE,
+    EARLY_SUPPORTER,
+    VERIFIED_BOT,
+    VERIFIED_BOT_DEV,
+    CERTIFIED_MODERATOR,
+    SYSTEM,
+    ACTIVE_DEVELOPER,
+)
 
 BURPLE = discord.ButtonStyle.blurple
 GREEN = discord.ButtonStyle.green
@@ -33,19 +49,20 @@ lastfm_period = {
 
 
 USER_FLAGS = {
-    "staff": "<:staff:949147468124262420> Discord Staff",
-    "partner": "<:partner:949147457839829043> Discord Partner",
-    "hypesquad": "<:hypesquad:949147451942649916> HypeSquad",
-    "bug_hunter": "<:bughunterlv1:949147440219553873> Bug Hunter",
-    "bug_hunter_level_2": "<:bughunterlv2:949147441935024178> Bug Hunter 2",
-    "hypesquad_bravery": "<:bravery:949147435333218305> HypeSquad Bravery",
-    "hypesquad_brilliance": "<:brillance:949147436880912405> HypeSquad Brilliance",
-    "hypesquad_balance": "<:balance:949147429733793832> HypeSquad Balance",
-    "early_supporter": "<:earlysupporter:949147447756726342> Early Supporter",
-    "verified_bot_developer": "<:bot_dev:949147434204946472> Bot Developer",
-    "verified_bot": "<:bot:949147432598515723> Verified Bot",
-    "discord_certified_moderator": "<:certified_moderator:949147443264622643> Moderator",
-    "system": "<:system:949147469357387817> System",
+    "staff": f"{STAFF} Discord Staff",
+    "partner": f"{PARTNER} Discord Partner",
+    "hypesquad": f"{HYPESQUAD} HypeSquad",
+    "bug_hunter": f"{BUG_HUNTER} Bug Hunter",
+    "bug_hunter_level_2": f"{BUG_HUNTER_LEVEL_2} Bug Hunter 2",
+    "hypesquad_bravery": f"{HS_BRAVERY} HypeSquad Bravery",
+    "hypesquad_brilliance": f"{HS_BRILLIANCE} HypeSquad Brilliance",
+    "hypesquad_balance": f"{HS_BALANCE}HypeSquad Balance",
+    "early_supporter": f"{EARLY_SUPPORTER} Early Supporter",
+    "verified_bot_developer": f"{VERIFIED_BOT_DEV} Bot Developer",
+    "verified_bot": f"{VERIFIED_BOT} Verified Bot",
+    "discord_certified_moderator": f"{CERTIFIED_MODERATOR} Moderator",
+    "system": f"{SYSTEM} System",
+    "active_developer": f"{ACTIVE_DEVELOPER} Active Developer",
 }
 
 video_regexes = {

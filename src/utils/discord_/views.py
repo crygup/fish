@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import textwrap
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 import discord
 from discord.ext import commands
@@ -285,10 +285,12 @@ class UserInfoDropdown(discord.ui.Select):
         self,
         ctx: Context,
         user: Union[discord.Member, discord.User],
+        fetched_user: discord.User,
         original_embed: discord.Embed,
     ):
         self.user = user
         self.ctx: Context = ctx
+        self.fetched_user = fetched_user
         self.original_embed = original_embed
 
         # Set the options that will be presented inside the dropdown
@@ -299,14 +301,14 @@ class UserInfoDropdown(discord.ui.Select):
                 emoji="\U0001f3e0",
                 value="index",
             ),
+            discord.SelectOption(
+                label="Avatar",
+                description=f"{user.name}'s avatar",
+                emoji="\U0001f3a8",
+                value="avatar",
+            ),
         ]
         member_options = [
-            discord.SelectOption(
-                label="Roles",
-                description=f"{user.name}'s roles",
-                emoji="\U0001f9fb",
-                value="roles",
-            ),
             discord.SelectOption(
                 label="Devices",
                 description=f"{user.name}'s current devices",
@@ -329,6 +331,16 @@ class UserInfoDropdown(discord.ui.Select):
             ),
         ]
 
+        if fetched_user.banner:
+            options.append(
+                discord.SelectOption(
+                    label="Banner",
+                    description=f"{user.name}'s banner",
+                    emoji="\U0001f5bc\U0000fe0f",
+                    value="banner",
+                )
+            )
+
         if user.bot:
             options.extend(bot_options)
 
@@ -337,21 +349,30 @@ class UserInfoDropdown(discord.ui.Select):
 
         super().__init__(min_values=1, max_values=1, options=options)
 
-    async def role_callback(
-        self, member: discord.Member, ctx: Context
+    async def avatar_callback(
+        self, user: Union[discord.Member, discord.User], ctx: Context
     ) -> discord.Embed:
-        roles = sorted(member.roles, key=lambda role: role.position, reverse=True)
-        roles = [
-            role.mention if role.id != ctx.guild.id else "`@everyone`" for role in roles
-        ]
-        embed = discord.Embed(
-            color=ctx.bot.embedcolor,
-            description="\n".join(roles),
-        )
-        embed.set_author(
-            name=f"{member.name}'s roles", icon_url=member.display_avatar.url
-        )
-        embed.set_footer(text="\u2800" * 47)
+        images = [f"[Default Avatar]({user.default_avatar.url})"]
+
+        if user.avatar:
+            images.append(f"[Avatar]({user.avatar.url})")
+
+        if isinstance(user, discord.Member) and user.guild_avatar:
+            images.append(f"[Guild avatar]({user.guild_avatar.url})")
+
+        embed = discord.Embed(color=ctx.bot.embedcolor, description=", ".join(images))
+        embed.set_author(name=f"{user.name}'s avatar", icon_url=user.display_avatar.url)
+        embed.set_image(url=user.display_avatar.url)
+        embed.set_footer(text=f"Run fish pfp for more details")
+        return embed
+
+    async def banner_callback(self, __, ctx: Context) -> discord.Embed:
+        user = self.fetched_user
+        assert user.banner is not None
+
+        embed = discord.Embed(color=ctx.bot.embedcolor)
+        embed.set_author(name=f"{user.name}'s banner", icon_url=user.display_avatar.url)
+        embed.set_image(url=user.banner.url)
         return embed
 
     async def device_callback(
@@ -462,27 +483,17 @@ class UserInfoDropdown(discord.ui.Select):
         ctx = self.ctx
         member = self.user
 
-        if ctx.guild is None:
-            raise commands.GuildNotFound("Unknown guild")
+        choice = self.values[0]
+        choices: Dict[str, Callable] = {
+            "devices": self.device_callback,
+            "perms": self.perms_callback,
+            "botinfo": self.botinfo_callback,
+            "avatar": self.avatar_callback,
+            "banner": self.banner_callback,
+        }
 
-        if self.values[0] == "roles":
-            if not isinstance(member, discord.Member):
-                return
-            embed = await self.role_callback(member, ctx)
-
-        elif self.values[0] == "devices":
-            if not isinstance(member, discord.Member):
-                return
-            embed = await self.device_callback(member, ctx)
-
-        elif self.values[0] == "perms":
-            if not isinstance(member, discord.Member):
-                return
-            embed = await self.perms_callback(member, ctx)
-
-        elif self.values[0] == "botinfo":
-            embed = await self.botinfo_callback(member, ctx)
-
+        if choice in [key for key, _ in choices.items()]:
+            embed = await choices[choice](member, ctx)  # type: ignore # wont be user
         else:
             embed = self.original_embed
 
@@ -494,13 +505,14 @@ class UserInfoView(AuthorView):
         self,
         ctx: Context,
         user: Union[discord.Member, discord.User],
+        fetched_user: discord.User,
         original_embed: discord.Embed,
     ):
         super().__init__(ctx)
         self.ctx = ctx
         self.user = user
         if isinstance(user, discord.Member) or user.bot:
-            self.add_item(UserInfoDropdown(ctx, user, original_embed))
+            self.add_item(UserInfoDropdown(ctx, user, fetched_user, original_embed))
 
         if not isinstance(user, discord.Member):
             self.nicknames.disabled = True
@@ -664,5 +676,5 @@ class DeleteView(AuthorView):
 
         try:
             await self.ctx.message.add_reaction(CHECK)
-        except: # blank except because this failing will never raise any suspicion
+        except:  # blank except because this failing will never raise any suspicion
             pass
