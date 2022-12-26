@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Dict, Optional
 import discord
 from discord.ext import commands
 
-from utils import FieldPageSource, Pager, has_mod, is_table, to_bytes
+from utils import FieldPageSource, Pager, has_mod, is_table, to_bytes, get_or_fetch_user
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -82,7 +82,7 @@ class Table(commands.Cog, name="table", command_attrs=dict(hidden=True)):
             await ctx.send("No booster role found.")
             return
 
-        role_author = await self.bot.getch_user(results["author_id"])
+        role_author = await get_or_fetch_user(self.bot, results["author_id"])
         role = ctx.guild.get_role(results["role_id"])
         not_found = "\U00002753 Not Found"
 

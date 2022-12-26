@@ -6,7 +6,7 @@ import asyncpg
 import discord
 from discord.ext import commands
 
-from utils import FieldPageSource, Pager
+from utils import FieldPageSource, Pager, get_or_fetch_user
 
 from ._base import CogBase
 
@@ -185,7 +185,7 @@ class TagCommands(CogBase):
         entries = [
             (
                 r["name"],
-                f'{(await self.bot.getch_user(r["author_id"])).mention} | {discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")}',
+                f'{(await get_or_fetch_user(self.bot, r["author_id"])).mention} | {discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")}',
             )
             for r in results
         ]
@@ -211,7 +211,7 @@ class TagCommands(CogBase):
             return
 
         embed = discord.Embed(color=self.bot.embedcolor)
-        author = await self.bot.getch_user(tag["author_id"])
+        author = await get_or_fetch_user(self.bot, tag["author_id"])
         embed.set_author(name=str(author), icon_url=author.display_avatar.url)
         embed.add_field(
             name="Created",
