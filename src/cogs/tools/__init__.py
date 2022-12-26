@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import discord
 
@@ -10,6 +10,7 @@ from .downloads import DownloadCommands
 from .money import MoneyCommands
 from .other import OtherCommands
 from .tags import TagCommands
+from .reminder import ReminderCommands
 
 # from .feed import FeedCommands # it's not working at the moment due to random shut downs of the live twitter client so until that's fixed it's shut down
 
@@ -24,6 +25,7 @@ class Tools(
     OtherCommands,
     AfkCommands,
     MoneyCommands,
+    ReminderCommands,
     # FeedCommands,
     name="tools",
 ):
@@ -32,6 +34,9 @@ class Tools(
     def __init__(self, bot: Bot):
         super().__init__(bot)
         self.currently_downloading: list[str] = []
+        self._have_data = asyncio.Event()
+        self._current_timer: Optional[PGTimer] = None
+        self._task = bot.loop.create_task(self.dispatch_timers())
 
     @property
     def display_emoji(self) -> discord.PartialEmoji:
