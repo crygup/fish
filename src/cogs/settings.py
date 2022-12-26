@@ -7,7 +7,14 @@ import asyncpg
 import discord
 from discord.ext import commands
 
-from utils import FieldPageSource, Pager, SteamIDConverter, UnknownAccount, add_prefix
+from utils import (
+    FieldPageSource,
+    Pager,
+    SteamIDConverter,
+    UnknownAccount,
+    add_prefix,
+    get_or_fetch_user,
+)
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -68,7 +75,7 @@ class Settings(commands.Cog, name="settings"):
         entries = [
             (
                 record["prefix"],
-                f'{discord.utils.format_dt(record["time"], "R")}  |  {discord.utils.format_dt(record["time"], "d")} | {(await self.bot.getch_user(record["author_id"])).mention}',
+                f'{discord.utils.format_dt(record["time"], "R")}  |  {discord.utils.format_dt(record["time"], "d")} | {(await get_or_fetch_user(self.bot, record["author_id"])).mention}',
             )
             for record in results
         ]
