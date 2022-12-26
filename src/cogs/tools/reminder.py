@@ -160,3 +160,33 @@ class ReminderCommands(CogBase):
             await channel.send(msg, reference=reference)  # type:ignore
         except discord.HTTPException:
             return
+
+    @commands.command(name="reminders", ignore_extra=False)
+    async def reminders(self, ctx: Context):
+        """Shows the 10 latest currently running reminders.
+
+        Alias for remind list"""
+        query = """SELECT id, expires, extra #>> '{args,2}'
+                   FROM reminders
+                   WHERE event = 'reminder'
+                   AND extra #>> '{args,0}' = $1
+                   ORDER BY expires;
+                """
+
+        records = await ctx.db.fetch(query, str(ctx.author.id))
+
+        if len(records) == 0:
+            return await ctx.send("No reminders.")
+
+        entries = [
+            (
+                f"{_id}: {timer_module.format_relative(expires)}",
+                textwrap.shorten(message, width=512),
+            )
+            for _id, expires, message in records
+        ]
+
+        p = FieldPageSource(entries, per_page=10)
+        p.embed.title = f"Reminders for {ctx.author}"
+        menu = Pager(p, ctx=ctx)
+        await menu.start(ctx)
