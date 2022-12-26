@@ -381,7 +381,8 @@ class UserCommands(CogBase):
             fetch_end = time.perf_counter()
 
             if records == []:
-                raise ValueError(f"{user} has no avatar history on record.")
+                await ctx.send(f"{user} has no avatar history on record.")
+                return
 
             avatars = await asyncio.gather(
                 *[to_bytes(ctx.session, row["avatar"]) for row in records]
