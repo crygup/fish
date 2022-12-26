@@ -4,7 +4,7 @@ import datetime
 import textwrap
 
 
-from typing import TYPE_CHECKING, Annotated, Any, Optional, Sequence
+from typing import TYPE_CHECKING, Annotated, Any, Optional
 import asyncpg
 
 import discord
@@ -14,8 +14,6 @@ from discord.ext import commands
 from utils import timer as timer_module, plural, PGTimer, FieldPageSource, Pager
 
 if TYPE_CHECKING:
-    from typing_extensions import Self
-
     from cogs.context import Context
 
 
@@ -309,9 +307,15 @@ class ReminderCommands(CogBase):
         message_id = timer.kwargs.get("message_id")
         msg = f"<@{author_id}>, reminder from {timer.human_delta}: {message}"
 
-        reference = await channel.fetch_message(message_id) if message_id else None
+        try:
+            reference = await channel.fetch_message(message_id) if message_id else None
+        except:
+            reference = None
 
         try:
-            msg = await channel.send(msg, reference=reference)  # type: ignore
+            if reference:
+                await channel.send(msg, reference=reference)
+            else:
+                await channel.send(msg)
         except discord.HTTPException:
             return
