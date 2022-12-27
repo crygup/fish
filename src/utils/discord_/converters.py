@@ -214,7 +214,7 @@ class LastfmTimeConverter(commands.Converter):
     """
 
     async def convert(self, ctx: Context, argument: str) -> str:
-        response = "overall"
+        response = "7day"
 
         if re.search("7d|weekly|week", argument, re.IGNORECASE):
             response = "7day"
@@ -283,18 +283,14 @@ class LastfmConverter(commands.Converter):
 
     async def convert(self, ctx: Context, argument: str) -> str:
         if argument.lower().startswith("fm:"):
-            name = argument[3:]
+            return argument[3:]
 
-        else:
-            try:
-                user = await commands.UserConverter().convert(ctx, argument)
-            except commands.UserNotFound:
-                user = None
+        try:
+            user = await commands.UserConverter().convert(ctx, argument)
+        except commands.UserNotFound:
+            return argument
 
-            if user is None:
-                raise commands.UserNotFound(argument)
-
-            name = await get_lastfm(ctx.bot, user.id)
+        name = await get_lastfm(ctx.bot, user.id)
 
         return name
 

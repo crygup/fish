@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import textwrap
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Annotated, List, Optional
 
 import discord
 from discord.ext import commands
@@ -106,9 +106,7 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(
-            converter=LastfmTimeConverter, default="overall"
-        ),
+        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
     ):
         """Gets top tracks"""
         name = (
@@ -144,9 +142,7 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(
-            converter=LastfmTimeConverter, default="overall"
-        ),
+        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
     ):
         """Gets top artists"""
         name = (
@@ -188,9 +184,7 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(
-            converter=LastfmTimeConverter, default="overall"
-        ),
+        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
     ):
         """Gets top albums"""
         name = (
@@ -226,9 +220,7 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(
-            converter=LastfmTimeConverter, default="overall"
-        ),
+        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
     ):
         """Makes a 3x3 image of your top albums"""
         name = (
