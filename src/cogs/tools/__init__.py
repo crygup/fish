@@ -9,10 +9,8 @@ from .afk import AfkCommands
 from .downloads import DownloadCommands
 from .money import MoneyCommands
 from .other import OtherCommands
-from .tags import TagCommands
 from .reminder import ReminderCommands
-
-# from .feed import FeedCommands # it's not working at the moment due to random shut downs of the live twitter client so until that's fixed it's shut down
+from .tags import TagCommands
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -26,7 +24,6 @@ class Tools(
     AfkCommands,
     MoneyCommands,
     ReminderCommands,
-    # FeedCommands,
     name="tools",
 ):
     """Useful tools"""

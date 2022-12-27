@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING
 
 import asyncpg
 import discord
 import pandas as pd
-from tweepy.asynchronous import AsyncClient, AsyncStreamingClient
+from tweepy.asynchronous import AsyncClient
 
 from ..helpers import add_prefix
 
@@ -41,17 +41,6 @@ async def setup_cache(bot: Bot):
     covers = await bot.pool.fetch("SELECT * FROM nsfw_covers")
     for row in covers:
         await bot.redis.sadd("nsfw_covers", row["album_id"])
-
-    feed = await bot.pool.fetch("SELECT * FROM twitter_feed")
-    for row in feed:
-        try:
-            bot.feed_webhooks[row["tweeter_id"]].append(
-                discord.Webhook.from_url(row["webhook"], session=bot.session)
-            )
-        except KeyError:
-            bot.feed_webhooks[row["tweeter_id"]] = [
-                discord.Webhook.from_url(row["webhook"], session=bot.session)
-            ]
 
 
 async def setup_webhooks(bot: Bot):
@@ -117,30 +106,6 @@ async def setup_twitter(bot: Bot):
         access_token=config["access_token"],
         access_token_secret=config["access_secret"],
     )
-
-
-async def setup_live_twitter(bot: Bot):
-    class client(AsyncStreamingClient):
-        async def on_tweet(self, tweet):
-            webhooks = bot.feed_webhooks[int(tweet.includes["users"][0].id)]  # type: ignore # shut up
-            for webhook in webhooks:
-                await webhook.send(f"https://twitter.com/{tweet.includes['users'][0].username}/status/{tweet.data.id}")  # type: ignore # SHUT UP
-
-        async def on_connection_error(self):
-            self.disconnect()
-
-        async def on_exception(self, exception: Exception):
-            bot.logger.warn("Error with tweepy", exc_info=exception)
-
-        async def run(self):
-            self.filter(
-                expansions=["author_id", "in_reply_to_user_id"],
-                user_fields=["profile_image_url"],
-            )
-
-    streaming_client = client(bot.config["twitter"]["bearer"])
-    await streaming_client.run()
-    bot.live_twitter = streaming_client
 
 
 async def create_pool(bot: Bot, connection_url: str):

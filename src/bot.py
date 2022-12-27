@@ -8,7 +8,7 @@ import re
 import sys
 import textwrap
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Set, Optional
 
 import aiohttp
 import aioredis
@@ -170,7 +170,6 @@ class Bot(commands.Bot):
         self.avatar_webhooks: Dict[str, discord.Webhook] = {}
         self.image_webhooks: Dict[str, discord.Webhook] = {}
         self.webhooks: Dict[str, discord.Webhook] = {}
-        self.feed_webhooks: Dict[int, List[discord.Webhook]] = {}
         self.owner_id = 766953372309127168
         self.owner_ids = {}
 
@@ -183,7 +182,7 @@ class Bot(commands.Bot):
         self.prefixes: Dict[int, List[str]] = {}
         self._context = Context
         self.select_filler = "\u2800" * 47
-        self.spotify_key: str | None = None
+        self.spotify_key: Optional[str] = None
 
         self.add_check(self.no_dms)
         self.add_check(self.block_list)
