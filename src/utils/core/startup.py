@@ -1,13 +1,13 @@
 from __future__ import annotations
-import json
 
+import json
 import re
 from typing import TYPE_CHECKING, Dict
-import asyncpg
 
+import asyncpg
 import discord
 import pandas as pd
-from tweepy.asynchronous import AsyncStreamingClient, AsyncClient
+from tweepy.asynchronous import AsyncClient, AsyncStreamingClient
 
 from ..helpers import add_prefix
 
@@ -16,6 +16,10 @@ if TYPE_CHECKING:
 
 
 async def setup_cache(bot: Bot):
+    prefixes = await bot.pool.fetch("SELECT * FROM guild_prefixes")
+    for record in prefixes:
+        add_prefix(bot, record["guild_id"], record["prefix"])
+
     guild_settings = await bot.pool.fetch("SELECT * FROM guild_settings")
     for guild in guild_settings:
         if guild["poketwo"]:
@@ -104,12 +108,6 @@ async def setup_accounts(bot: Bot):
             )
 
 
-async def setup_prefixes(bot: Bot):
-    prefixes = await bot.pool.fetch("SELECT * FROM guild_prefixes")
-    for record in prefixes:
-        add_prefix(bot, record["guild_id"], record["prefix"])
-
-
 async def setup_twitter(bot: Bot):
     config = bot.config["twitter"]
     bot.twitter = AsyncClient(
@@ -163,7 +161,6 @@ async def create_pool(bot: Bot, connection_url: str):
 
     connection = await asyncpg.create_pool(connection_url, init=init)
     if connection is None:
-        bot.logger.error("Failed to connect to database")
-        raise Exception()
+        raise Exception("Failed to connect to database")
 
     bot.pool = connection

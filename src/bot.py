@@ -18,13 +18,13 @@ from cachetools import TTLCache
 from discord.ext import commands
 from ossapi import OssapiV2
 from tweepy.asynchronous import AsyncClient, AsyncStreamingClient
+from lastfm import AsyncClient as LastfmAsyncClient
 
 from cogs.context import Context
 from utils import (
     setup_accounts,
     setup_cache,
     setup_pokemon,
-    setup_prefixes,
     setup_twitter,
     setup_webhooks,
     create_pool,
@@ -114,6 +114,7 @@ class Bot(commands.Bot):
     exts: Set[str]
     twitter: AsyncClient
     live_twitter: AsyncStreamingClient
+    lastfm: LastfmAsyncClient
 
     async def no_dms(self, ctx: Context):
         return ctx.guild is not None
@@ -244,6 +245,11 @@ class Bot(commands.Bot):
         )
         print("Connected to redis database")
 
+        self.lastfm = LastfmAsyncClient(
+            self.config["keys"]["lastfm-key"], session=self.session
+        )
+        print("Connected to lastfm client")
+
         self.osu = OssapiV2(
             self.config["keys"]["osu-id"], self.config["keys"]["osu-secret"]
         )
@@ -257,9 +263,6 @@ class Bot(commands.Bot):
 
         await setup_pokemon(self)
         print("Loaded pokemon")
-
-        await setup_prefixes(self)
-        print("Setup prefixes")
 
         await setup_accounts(self)
         print("Setup accounts")

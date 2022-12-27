@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import textwrap
 from typing import TYPE_CHECKING, List, Optional
 
 import discord
@@ -18,6 +20,7 @@ from utils import (
     get_sp_cover,
     lastfm_period,
     to_bytes,
+    BlankException,
 )
 
 if TYPE_CHECKING:
@@ -48,38 +51,43 @@ class LastFm(commands.Cog, name="lastfm"):
             else str(username)
         )
 
-        async with ctx.typing():
-            info = await get_lastfm_data(
-                self.bot, "2.0", "user.getrecenttracks", "user", name
-            )
+        try:
+            track = (
+                await self.bot.lastfm.fetch_user_recent_tracks(
+                    user=name, extended=True, limit=1
+                )
+            )[0]
+        except IndexError:
+            raise BlankException(f"{name} has no recent tracks.")
 
-            if info["recenttracks"]["track"] == []:
-                raise TypeError("No recent tracks found for this user.")
+        description = f"""
+        **Artist**: {track.artist.name}
+        **Track**: {track.name}
+        **Album**: {track.album.name}
+        """
 
-            track = info["recenttracks"]["track"][0]
-            user = info["recenttracks"]["@attr"]["user"]
-            scrobbles = f"{int(info['recenttracks']['@attr']['total']):,}"
-            playing = "Now playing" if not track.get("date") else "Last track for"
-            artist = track["artist"]["#text"]
-            name = track["name"]
-            album = track["album"]["#text"]
+        loved = f"\U00002764\U0000fe0f " if track.loved else ""
+        footer_text = f"{loved}{name} has {track.attr.total_scrobbles:,} scrobbles"
 
-            scrobbled = (
-                f'\n**Scrobbled**: <t:{track["date"]["uts"]}:R>'
-                if track.get("date")
-                else ""
-            )
-            embed = discord.Embed(
-                description=f"**Artist**: {remove_markdown(artist)} \n**Track**: {remove_markdown(name)} \n**Album**: {remove_markdown(album)} {scrobbled}",
-            )
-            embed.set_thumbnail(url=track["image"][3]["#text"])
-            embed.set_author(
-                name=f"{playing} - {remove_markdown(user)}",
-                url=track["url"],
-                icon_url=ctx.author.display_avatar.url,
-            )
-            embed.set_footer(text=f"{user} has {scrobbles} scrobbles")
+        if track.played_at:
+            footer_text += "\nLast scrobble"
 
+        embed = discord.Embed(
+            color=self.bot.embedcolor,
+            description=textwrap.dedent(description),
+            timestamp=track.played_at.replace(tzinfo=datetime.timezone.utc)
+            if track.played_at
+            else None,
+        )
+
+        embed.set_author(
+            name=f"{'Now playing -' if track.now_playing else 'Last track for - '} {name}",
+            url=track.url,
+            icon_url=ctx.author.display_avatar.url,
+        )
+
+        embed.set_thumbnail(url=track.images.extra_large or track.images.large)
+        embed.set_footer(text=footer_text)
         await ctx.send(embed=embed, check_ref=True)
 
     @last_fm.command(name="set")
