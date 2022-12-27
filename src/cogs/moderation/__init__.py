@@ -5,12 +5,13 @@ from typing import TYPE_CHECKING, List
 import discord
 from .main import Main
 from .mass import Mass
+from .purge import PurgeCog
 
 if TYPE_CHECKING:
     from bot import Bot
 
 
-class Moderation(Main, Mass, name="moderation"):
+class Moderation(Main, Mass, PurgeCog, name="moderation"):
     """Simple moderation utilities"""
 
     @property

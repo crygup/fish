@@ -161,9 +161,10 @@ class OtherCommands(CogBase):
         data = await self.bot.http.get_channel(channel.id)
         to_send = json.dumps(data, indent=4, sort_keys=True)
 
-        if len(to_send) + 50 + len(str(channel)) > 2000:
+        msg = f"```Viewing raw data for {channel}``````json\n{to_send}\n```"
+        if len(msg) > 2000:
             file = ctx.too_big(to_send)
             await ctx.send("File too large", file=file)
             return
 
-        await ctx.send(f"```Viewing raw data for {channel}``````json\n{to_send}\n```")
+        await ctx.send(msg)

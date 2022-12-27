@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import dataclass
 
 import datetime
 import time
@@ -111,11 +112,9 @@ class MemberID(commands.Converter):
         return m
 
 
+@dataclass
 class RockPaperScissors:
-    def __init__(
-        self, choice: Union[Literal["rock"], Literal["paper"], Literal["scissors"]]
-    ):
-        self.choice = choice
+    choice: Union[Literal["rock"], Literal["paper"], Literal["scissors"]]
 
     def __lt__(self, other: RockPaperScissors) -> bool:
         if self.choice == "rock":
