@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import difflib
+import random
 import re
 import textwrap
 from time import perf_counter
@@ -22,6 +23,7 @@ from utils import (
     status_state,
     to_bytesio,
     get_or_fetch_user,
+    RPSView,
 )
 
 from .image.functions import gif_maker, text_to_image
@@ -393,3 +395,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         )
 
         await ctx.send(file=discord.File(asset, filename=f"feedback.gif"))
+
+    @commands.command(name="rock-paper-scissors", aliases=("rockpaperscissors", "rps"))
+    async def RPSCommand(self, ctx: Context):
+        await ctx.send(view=RPSView(ctx))

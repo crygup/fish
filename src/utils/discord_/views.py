@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import random
 import re
 import textwrap
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 import discord
 from discord.ext import commands
-from ossapi.ossapiv2 import User as OsuUser, Score, ScoreTypeT
+from ossapi.ossapiv2 import Score, ScoreTypeT
+from ossapi.ossapiv2 import User as OsuUser
 
+from ..helpers import RockPaperScissors as RPS
 from ..helpers import to_thread
-from ..vars import BURPLE, GREEN, RED, TRASH, OsuMods, CHECK
+from ..vars import BURPLE, CHECK, GREEN, RED, TRASH, OsuMods
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -678,3 +681,26 @@ class DeleteView(AuthorView):
             await self.ctx.message.add_reaction(CHECK)
         except:  # blank except because this failing will never raise any suspicion
             pass
+
+
+class RPSView(AuthorView):
+    bot_choice = random.choice((RPS("rock"), RPS("paper"), RPS("scissors")))
+
+    async def send_result(self, choice: RPS, interaction: discord.Interaction):
+        assert interaction.message is not None
+        await interaction.message.edit(
+            content=f"You {['lose', 'win'][choice > self.bot_choice]}! I chose {self.bot_choice}.",
+            view=None,
+        )
+
+    @discord.ui.button(label="Rock", emoji="\U0001faa8")
+    async def rock_button(self, interaction: discord.Interaction, _):
+        await self.send_result(RPS("rock"), interaction)
+
+    @discord.ui.button(label="Paper", emoji="\U0001f4c4")
+    async def paper_button(self, interaction: discord.Interaction, _):
+        await self.send_result(RPS("paper"), interaction)
+
+    @discord.ui.button(label="Scissors", emoji="\U00002702\U0000fe0f")
+    async def scissors_button(self, interaction: discord.Interaction, _):
+        await self.send_result(RPS("scissors"), interaction)

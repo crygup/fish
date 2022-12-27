@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 import time
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, TypeAlias, Union
 
 import asyncpg
 import discord
@@ -109,3 +109,43 @@ class MemberID(commands.Converter):
                 "You cannot do this action on this user due to role hierarchy."
             )
         return m
+
+
+class RockPaperScissors:
+    def __init__(
+        self, choice: Union[Literal["rock"], Literal["paper"], Literal["scissors"]]
+    ):
+        self.choice = choice
+
+    def __lt__(self, other: RockPaperScissors) -> bool:
+        if self.choice == "rock":
+            if other.choice == "scissors":
+                return True
+
+        elif self.choice == "paper":
+            if other.choice == "rock":
+                return True
+
+        elif self.choice == "scissors":
+            if other.choice == "paper":
+                return True
+
+        return False
+
+    def __gt__(self, other: RockPaperScissors) -> bool:
+        if self.choice == "rock":
+            if other.choice == "paper":
+                return True
+
+        elif self.choice == "paper":
+            if other.choice == "scissors":
+                return True
+
+        elif self.choice == "scissors":
+            if other.choice == "rock":
+                return True
+
+        return False
+
+    def __str__(self) -> str:
+        return self.choice
