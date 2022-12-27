@@ -186,24 +186,6 @@ class Manipulation(CogBase):
             file=discord.File(asset, filename=f"blur.{'gif' if gif else 'png'}")
         )
 
-    @commands.command(name="kuwahara", aliases=("paint",))
-    async def kuwahara(
-        self,
-        ctx: Context,
-        image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
-        ),
-    ):
-        """Kuwaharas an image"""
-        await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
-        asset = await kuwahara_method(new_image)
-        gif = imghdr.what(asset) == "gif"  # type: ignore
-
-        await ctx.send(
-            file=discord.File(asset, filename=f"kuwahara.{'gif' if gif else 'png'}")
-        )
-
     @commands.command(name="sharpen")
     async def sharpen(
         self,
