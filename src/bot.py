@@ -140,9 +140,12 @@ class Bot(commands.Bot):
         return True
 
     async def no_auto_commands(self, ctx: Context):
-        return str(ctx.channel.id) not in await self.redis.smembers(
-            "auto_download_channels"
-        )
+        if ctx.command.name == 'download':
+            return str(ctx.channel.id) not in await self.redis.smembers(
+                "auto_download_channels"
+            )
+        
+        return True
 
     def __init__(
         self,
@@ -181,7 +184,6 @@ class Bot(commands.Bot):
         self.pokemon: List[str] = []
         self.prefixes: Dict[int, List[str]] = {}
         self._context = Context
-        self.select_filler = "\u2800" * 47
         self.spotify_key: Optional[str] = None
 
         self.add_check(self.no_dms)

@@ -146,30 +146,9 @@ class Context(commands.Context):
         *,
         timeout: float = 60.0,
         delete_after: bool = True,
+        files: Optional[List[discord.File]] = None,
         author_id: Optional[int] = None,
     ) -> Optional[bool]:
-        """An interactive reaction confirmation dialog.
-        Parameters
-        -----------
-        message: str
-            The message to show along with the prompt.
-        timeout: float
-            How long to wait before returning.
-        delete_after: bool
-            Whether to delete the confirmation message after we're done.
-        reacquire: bool
-            Whether to release the database connection and then acquire it
-            again when we're done.
-        author_id: Optional[int]
-            The member who should respond to the prompt. Defaults to the author of the
-            Context's message.
-        Returns
-        --------
-        Optional[bool]
-            ``True`` if explicit confirm,
-            ``False`` if explicit deny,
-            ``None`` if deny due to timeout
-        """
 
         author_id = author_id or self.author.id
         view = ConfirmationView(
@@ -178,7 +157,7 @@ class Context(commands.Context):
             ctx=self,
             author_id=author_id,
         )
-        view.message = await self.send(message, view=view)
+        view.message = await self.send(message, files=files, view=view)
         await view.wait()
         return view.value
 

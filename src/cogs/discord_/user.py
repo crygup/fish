@@ -414,9 +414,14 @@ class UserCommands(CogBase):
 
     @avatar_history.command(name="server", aliases=("guild",))
     async def avatar_history_guild(
-        self, ctx: Context, *, member: discord.Member = commands.Author
+        self,
+        ctx: Context,
+        guild: Optional[discord.Guild] = None,
+        *,
+        member: discord.Member = commands.Author,
     ):
         """Shows the server avatar history of a user."""
+        guild = guild or ctx.guild
 
         async with ctx.typing():
             sql = """
@@ -426,7 +431,7 @@ class UserCommands(CogBase):
 
             fetch_start = time.perf_counter()
             records: List[asyncpg.Record] = await self.bot.pool.fetch(
-                sql, member.id, ctx.guild.id
+                sql, member.id, guild.id
             )
             fetch_end = time.perf_counter()
 
@@ -438,7 +443,7 @@ class UserCommands(CogBase):
             )
 
             gen_start = time.perf_counter()
-            fp = await format_bytes(ctx.guild.filesize_limit, avatars)
+            fp = await format_bytes(guild.filesize_limit, avatars)
             file = discord.File(
                 fp,
                 f"{member.id}_avatar_history.png",
@@ -448,7 +453,7 @@ class UserCommands(CogBase):
         if len(records) == 100:
             sql = """SELECT created_at FROM guild_avatars WHERE member_id = $1 AND guild_id = $1 ORDER BY created_at ASC"""
             first_avatar: datetime.datetime = await self.bot.pool.fetchval(
-                sql, member.id, ctx.guild.id
+                sql, member.id, guild.id
             )
         else:
             first_avatar = records[-1]["created_at"]

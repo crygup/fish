@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 import asyncpg
 import discord
@@ -14,6 +14,8 @@ from utils import (
     UnknownAccount,
     add_prefix,
     get_or_fetch_user,
+    plural,
+    to_bytesio,
 )
 
 if TYPE_CHECKING:
@@ -258,24 +260,21 @@ class Settings(commands.Cog, name="settings"):
         result = await self.bot.pool.fetchval(sql, ctx.guild.id)
 
         if result is not None:
-            await ctx.send(f"Auto-download is already setup here.")
-            return
+            return await ctx.send(f"Auto-download is already setup here.")
 
         if channel is None:
             if not ctx.me.guild_permissions.manage_channels:
-                await ctx.send(
+                return await ctx.send(
                     f"I cannot create a channel so you can either make one yourself or use `{ctx.prefix}auto_download set <channel>` to set an already made one."
                 )
-                return
 
             response = await ctx.prompt(
                 "You didn't provide a channel so I will create one, is this okay?"
             )
             if response is None:
-                await ctx.send(
+                return await ctx.send(
                     f"Okay, I won't create a channel, instead specify one with `{ctx.prefix}auto_download set <channel>`."
                 )
-                return
 
             channel = await ctx.guild.create_text_channel(
                 name=f"auto-download",
@@ -293,14 +292,12 @@ class Settings(commands.Cog, name="settings"):
 
             await self.bot.pool.execute(sql, ctx.guild.id, channel.id)
             await self.bot.redis.sadd("auto_download_channels", channel.id)
-            await ctx.send(f"Auto-download is now set to {channel.mention}.")
-            return
+            return await ctx.send(f"Auto-download is now set to {channel.mention}.")
 
         if not channel.permissions_for(ctx.me).send_messages:
-            await ctx.send(
+            return await ctx.send(
                 f"I don't have permission to send messages in {channel.mention}."
             )
-            return
 
         first_sql = """SELECT guild_id FROM guild_settings WHERE guild_id = $1"""
         results = await self.bot.pool.fetchval(first_sql, ctx.guild.id)
@@ -324,10 +321,9 @@ class Settings(commands.Cog, name="settings"):
         result = await self.bot.pool.fetchval(sql, ctx.guild.id)
 
         if not result:
-            await ctx.send(
+            return await ctx.send(
                 "This server does not have an auto-download channel set yet."
             )
-            return
 
         if not isinstance(result, int):
             return
@@ -338,8 +334,7 @@ class Settings(commands.Cog, name="settings"):
                 f"Are you sure you want to delete {channel.mention}?"
             )
             if not results:
-                await ctx.send(f"Well I didn't want to delete it anyway.")
-                return
+                return await ctx.send(f"Well I didn't want to delete it anyway.")
 
         sql = """UPDATE guild_settings SET auto_download = NULL WHERE guild_id = $1"""
         await self.bot.pool.execute(sql, ctx.guild.id)
@@ -383,3 +378,128 @@ class Settings(commands.Cog, name="settings"):
         await ctx.send(
             f"{'Enabled' if value else 'Disabled'} auto-reactions in this server."
         )
+
+    @commands.group(name="data", invoke_without_command=True)
+    async def data_group(self, ctx: Context):
+        """Manage your data I store on you."""
+        await ctx.send_help(ctx.command)
+
+    @data_group.group(name="avatars", invoke_without_command=True)
+    async def avatars_data(self, ctx: Context):
+        avatars: Optional[int] = await self.bot.pool.fetchval(
+            "SELECT COUNT(avatar) FROM avatars WHERE user_id = $1", ctx.author.id
+        )
+
+        guild_avatars: Optional[int] = await self.bot.pool.fetchval(
+            "SELECT COUNT(avatar) FROM guild_avatars WHERE member_id = $1",
+            ctx.author.id,
+        )
+
+        await ctx.send(
+            f"I currently have {plural(avatars or 0):avatar} and {plural(guild_avatars or 0):guild avatar} from you stored."
+        )
+
+    @avatars_data.group(name="delete", aliases=("remove",), invoke_without_command=True)
+    async def delete_avatars(self, ctx: Context, id: Optional[int] = None):
+        avatars: List[asyncpg.Record] = await self.bot.pool.fetch(
+            "SELECT * FROM avatars WHERE user_id = $1 ORDER BY created_at DESC",
+            ctx.author.id,
+        )
+        if id:
+            try:
+                avatar = avatars[id - 1]
+            except:
+                return await ctx.send("Couldn't find an avatar at that index for you.")
+
+            file = discord.File(
+                await to_bytesio(ctx.session, avatar["avatar"]), filename="avatar.png"
+            )
+
+            prompt = await ctx.prompt(
+                "Are you sure you want to delete this avatar from your avatars? This action **CANNOT** be undone.",
+                files=[file],
+                timeout=10,
+            )
+
+            if not prompt:
+                return await ctx.send("Good, I didn't want to delete it anyway.")
+
+            await self.bot.pool.execute(
+                "DELETE FROM avatars WHERE avatar_key = $1 AND user_id = $2",
+                avatar["avatar_key"],
+                ctx.author.id,
+            )
+
+            return await ctx.send(f"Successfully deleted that avatar.")
+
+        prompt = await ctx.prompt(
+            "Are you sure you want to delete **ALL OF YOUR AVATARS**? This action **CANNOT** be undone.",
+            timeout=10,
+        )
+
+        if not prompt:
+            return await ctx.send("Good, I didn't want to delete them anyway.")
+
+        deleted = await self.bot.pool.fetch(
+            "DELETE FROM avatars WHERE user_id = $1 RETURNING avatar",
+            ctx.author.id,
+        )
+
+        await ctx.send(f"Deleted {plural(len(deleted)):avatar}")
+
+    @delete_avatars.command(name="guild", aliases=("server",))
+    async def delete_guild_avatars(
+        self,
+        ctx: Context,
+        guild: Optional[discord.Guild] = commands.CurrentGuild,
+        id: Optional[int] = None,
+    ):
+        guild = guild or ctx.guild
+        avatars: List[asyncpg.Record] = await self.bot.pool.fetch(
+            "SELECT * FROM guild_avatars WHERE member_id = $1 AND guild_id = $2 ORDER BY created_at DESC",
+            ctx.author.id,
+            guild.id,
+        )
+        if id:
+            try:
+                avatar = avatars[id - 1]
+            except:
+                return await ctx.send("Couldn't find an avatar at that index for you.")
+
+            file = discord.File(
+                await to_bytesio(ctx.session, avatar["avatar"]), filename="avatar.png"
+            )
+
+            prompt = await ctx.prompt(
+                "Are you sure you want to delete this avatar from your guild avatars? This action **CANNOT** be undone.",
+                files=[file],
+                timeout=10,
+            )
+
+            if not prompt:
+                return await ctx.send("Good, I didn't want to delete it anyway.")
+
+            await self.bot.pool.execute(
+                "DELETE FROM guild_avatars WHERE avatar_key = $1 AND member_id = $2 AND guild_id = $3",
+                avatar["avatar_key"],
+                ctx.author.id,
+                guild.id,
+            )
+
+            return await ctx.send(f"Successfully deleted that avatar.")
+
+        prompt = await ctx.prompt(
+            "Are you sure you want to delete **ALL OF YOUR AVATARS**? This action **CANNOT** be undone.",
+            timeout=10,
+        )
+
+        if not prompt:
+            return await ctx.send("Good, I didn't want to delete them anyway.")
+
+        deleted = await self.bot.pool.fetch(
+            "DELETE FROM guild_avatars WHERE member_id = $1 AND guild_id = $2 RETURNING avatar",
+            ctx.author.id,
+            guild.id,
+        )
+
+        await ctx.send(f"Deleted {plural(len(deleted)):guild avatar}")
