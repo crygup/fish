@@ -2,6 +2,7 @@ from discord import PartialEmoji
 
 CHECK: PartialEmoji = PartialEmoji(name="cr_check", id=956022530521563136)
 TRASH: PartialEmoji = PartialEmoji(name="cr_trash", id=957720024360042506)
+X: PartialEmoji = PartialEmoji(name="cr_x", id=956869589822750762)
 PREVIOUS: PartialEmoji = PartialEmoji(name="cr_previous", id=957720022506156062)
 NEXT: PartialEmoji = PartialEmoji(name="cr_next", id=957720022418096138)
 GO_TO_PAGE: PartialEmoji = PartialEmoji(name="cr_gopage", id=957720582357651507)
