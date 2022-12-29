@@ -179,13 +179,6 @@ class ImageConverter(commands.Converter):
         if message.attachments:
             return BytesIO(await message.attachments[0].read())
 
-        if argument is None:
-            async for msg in ctx.channel.history(limit=10, before=message):
-                try:
-                    return await self.from_message(ctx, msg, True)
-                except BlankException:
-                    continue
-
         if isinstance(argument, discord.User):
             return BytesIO(await argument.display_avatar.replace(size=512).read())
 
@@ -204,6 +197,12 @@ class ImageConverter(commands.Converter):
                 await self.from_str(ctx, argument)
             except BlankException:
                 pass
+
+        async for msg in ctx.channel.history(limit=10, before=message):
+            try:
+                return await self.from_message(ctx, msg, True)
+            except BlankException:
+                continue
 
         return BytesIO(await message.author.display_avatar.replace(size=512).read())
 

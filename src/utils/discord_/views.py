@@ -704,3 +704,47 @@ class RPSView(AuthorView):
     @discord.ui.button(label="Scissors", emoji="\U00002702\U0000fe0f")
     async def scissors_button(self, interaction: discord.Interaction, _):
         await self.send_result(RPS("scissors"), interaction)
+
+
+class CoverView(AuthorView):
+    def __init__(self, ctx: Context, data: Dict):
+        self.data = data
+        super().__init__(ctx)
+
+    @discord.ui.button(label="Mark NSFW", style=discord.ButtonStyle.red)
+    async def mark_nsfw(self, interaction: discord.Interaction, __):
+        sql = """INSERT INTO nsfw_covers(album_id) VALUES ($1)"""
+        cover_id = self.data["albums"]["items"][0]["id"]
+        bot = self.ctx.bot
+        await bot.pool.execute(sql, cover_id)
+        await bot.redis.sadd("nsfw_covers", cover_id)
+
+        if interaction.message is None:
+            return
+
+        await interaction.message.edit(
+            content=f"Successfully marked `{cover_id}` as NSFW.",
+            attachments=[
+                await interaction.message.attachments[0].to_file(spoiler=True)
+            ],
+        )
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Unmark NSFW", style=discord.ButtonStyle.green)
+    async def unmark_nsfw(self, interaction: discord.Interaction, __):
+        sql = """DELETE FROM nsfw_covers WHERE album_id = $1"""
+        cover_id = self.data["albums"]["items"][0]["id"]
+        bot = self.ctx.bot
+        await bot.pool.execute(sql, cover_id)
+        await bot.redis.srem("nsfw_covers", cover_id)
+
+        if interaction.message is None:
+            return
+
+        await interaction.message.edit(
+            content=f"Successfully unmarked `{cover_id}` as NSFW.",
+            attachments=[
+                await interaction.message.attachments[0].to_file(spoiler=False)
+            ],
+        )
+        await interaction.response.defer()

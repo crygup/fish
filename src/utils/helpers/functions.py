@@ -639,7 +639,6 @@ def can_execute_action(
         or user.top_role > target.top_role
     )
 
+
 def format_status(member: discord.Member) -> str:
-    return (
-        f'{"on " if member.status is discord.Status.dnd else ""}{member.raw_status}'
-    )
+    return f'{"on " if member.status is discord.Status.dnd else ""}{member.raw_status}'

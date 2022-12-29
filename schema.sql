@@ -211,3 +211,9 @@ CREATE TABLE IF NOT EXISTS reminders (
 );
 
 CREATE INDEX IF NOT EXISTS reminders_expires_idx ON reminders (expires);
+
+CREATE TABLE IF NOT EXISTS steam_games (
+    app_id BIGINT,
+    name TEXT,
+    PRIMARY KEY (app_id)
+)

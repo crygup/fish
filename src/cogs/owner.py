@@ -8,7 +8,7 @@ import textwrap
 import time
 import traceback
 from io import BytesIO
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 import asyncpg
 import discord
@@ -18,7 +18,7 @@ from jishaku.paginators import WrappedPaginator
 from tabulate import tabulate
 
 from utils import (
-    AuthorView,
+    CoverView,
     ExtensionConverter,
     NoCover,
     SimplePages,
@@ -27,6 +27,7 @@ from utils import (
     plural,
     response_checker,
     to_bytesio,
+    CHECK,
 )
 
 if TYPE_CHECKING:
@@ -407,46 +408,28 @@ class Owner(
             ),
         )
 
+    @commands.command(name="update_steam_games")
+    async def update_steam_games(self, ctx: Context):
+        url = f"http://api.steampowered.com/ISteamApps/GetAppList/v0002/?key={self.bot.config['keys']['steam-key']}&format=json"
 
-class CoverView(AuthorView):
-    def __init__(self, ctx: Context, data: Dict):
-        self.data = data
-        super().__init__(ctx)
+        to_insert: List[Tuple[int, str]] = []
+        async with ctx.typing():
+            async with ctx.session.get(url) as resp:
+                data = await resp.json()
 
-    @discord.ui.button(label="Mark NSFW", style=discord.ButtonStyle.red)
-    async def mark_nsfw(self, interaction: discord.Interaction, __):
-        sql = """INSERT INTO nsfw_covers(album_id) VALUES ($1)"""
-        cover_id = self.data["albums"]["items"][0]["id"]
-        bot = self.ctx.bot
-        await bot.pool.execute(sql, cover_id)
-        await bot.redis.sadd("nsfw_covers", cover_id)
+                for app_details in data["applist"]["apps"]:
+                    app_name = app_details["name"]
+                    to_insert.append(
+                        (
+                            app_details["appid"],
+                            app_name
+                            if app_name
+                            else "fishie:[NO NAME PROVIDED. EMPTY SPACE]",
+                        )
+                    )
 
-        if interaction.message is None:
-            return
+            sql = """INSERT INTO steam_games (app_id, name) VALUES($1, $2) ON CONFLICT DO NOTHING"""
+            print(to_insert[0])
+            await self.bot.pool.executemany(sql, to_insert)
 
-        await interaction.message.edit(
-            content=f"Successfully marked `{cover_id}` as NSFW.",
-            attachments=[
-                await interaction.message.attachments[0].to_file(spoiler=True)
-            ],
-        )
-        await interaction.response.defer()
-
-    @discord.ui.button(label="Unmark NSFW", style=discord.ButtonStyle.green)
-    async def unmark_nsfw(self, interaction: discord.Interaction, __):
-        sql = """DELETE FROM nsfw_covers WHERE album_id = $1"""
-        cover_id = self.data["albums"]["items"][0]["id"]
-        bot = self.ctx.bot
-        await bot.pool.execute(sql, cover_id)
-        await bot.redis.srem("nsfw_covers", cover_id)
-
-        if interaction.message is None:
-            return
-
-        await interaction.message.edit(
-            content=f"Successfully unmarked `{cover_id}` as NSFW.",
-            attachments=[
-                await interaction.message.attachments[0].to_file(spoiler=False)
-            ],
-        )
-        await interaction.response.defer()
+        await ctx.send(str(CHECK))
