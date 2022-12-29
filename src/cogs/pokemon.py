@@ -227,7 +227,7 @@ class WTPModal(discord.ui.Modal, title="Who's that Pokémon?"):
 
         if data:
             sql = f"""
-            UPDATE pokemon_guesses SET {'correct' if correct else 'incorrect'} + 1 WHERE pokemon_name = $1 AND author_id = $2 RETURNING *
+            UPDATE pokemon_guesses SET {'correct' if correct else 'incorrect'} = {'correct' if correct else 'incorrect'} + 1 WHERE pokemon_name = $1 AND author_id = $2 RETURNING *
             """
 
             new_data = await self.ctx.bot.pool.fetchrow(
