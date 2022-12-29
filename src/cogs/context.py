@@ -169,10 +169,7 @@ class Context(commands.Context):
         self, message: discord.Message, delay: Optional[int] = None
     ) -> None:
         try:
-            if delay is not None:
-                await message.delete(delay=delay)
-            else:
-                await message.delete()
+            await message.delete(delay=delay)
         except (discord.Forbidden, discord.HTTPException, discord.NotFound):
             pass
 
