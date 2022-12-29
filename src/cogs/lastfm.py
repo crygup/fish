@@ -74,14 +74,14 @@ class LastFm(commands.Cog, name="lastfm"):
 
         embed = discord.Embed(
             color=self.bot.embedcolor,
-            description=textwrap.dedent(description),
+            description=textwrap.dedent(discord.utils.escape_markdown(description)),
             timestamp=track.played_at.replace(tzinfo=datetime.timezone.utc)
             if track.played_at
             else None,
         )
 
         embed.set_author(
-            name=f"{'Now playing -' if track.now_playing else 'Last track for - '} {name}",
+            name=f"{'Now playing -' if track.now_playing else 'Last track for - '} {discord.utils.escape_markdown(name)}",
             url=track.url,
             icon_url=ctx.author.display_avatar.url,
         )
