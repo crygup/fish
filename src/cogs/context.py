@@ -93,6 +93,7 @@ class Context(commands.Context):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.pool = self.bot.pool
+        self.redis = self.bot.redis
         self._db: Optional[Union[Pool, Connection]] = None
         self._message_count: int = 0
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(

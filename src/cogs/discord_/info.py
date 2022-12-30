@@ -1,12 +1,14 @@
 from __future__ import annotations
-import datetime
+import asyncio
 
+import datetime
 import imghdr
 import random
 import re
 from io import BytesIO
-from typing import TYPE_CHECKING, Dict, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
+import asyncpg
 import discord
 from discord.ext import commands
 
@@ -20,10 +22,16 @@ from utils import (
     TenorUrlConverter,
     UserInfoView,
     emoji_extras,
+    format_status,
     get_twemoji,
     get_user_badges,
     human_join,
-    format_status,
+    to_bytes,
+    format_bytes,
+    BlankException,
+    Pager,
+    AvatarsPageSource,
+    FieldPageSource,
 )
 
 from ._base import CogBase
@@ -261,7 +269,7 @@ class InfoCommands(CogBase):
             discord.StageChannel: self.stage_channel_info,
         }
 
-        if channel not in type_to_info:
+        if type(channel) not in type_to_info:
             commands.ChannelNotFound(str(channel))
 
         embed = type_to_info[type(channel)](channel)
@@ -349,15 +357,122 @@ class InfoCommands(CogBase):
 
         await self.server_info(ctx, guild)
 
+    @server_info_command.command(name="icons")
+    async def server_info_icons(
+        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+    ):
+        """Shows all of a guilds icons"""
+        guild = guild or ctx.guild
+
+        sql = (
+            """SELECT * FROM guild_icons WHERE guild_id = $1 ORDER BY created_at DESC"""
+        )
+        results = await self.bot.pool.fetch(sql, guild.id)
+
+        if results == []:
+            raise BlankException(f"{guild} has no icon history on record.")
+
+        entries: List[Tuple[str, datetime.datetime]] = [
+            (
+                r["icon"],
+                r["created_at"],
+            )
+            for r in results
+        ]
+
+        source = AvatarsPageSource(entries=entries)
+        source.embed.color = self.bot.embedcolor
+        source.embed.title = f"Icons for {guild}"
+        pager = Pager(source, ctx=ctx)
+        await pager.start(ctx)
+
+    @server_info_command.command("iconhistory", aliases=("iconh",))
+    async def serverinfo_iconhistory(
+        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+    ):
+        """Shows the icon history of a guild.
+
+        This will only show the first 100, to view them all and in HD run the command `serverinfo icons`
+        """
+        guild = guild or ctx.guild
+
+        async with ctx.typing():
+            sql = """
+            SELECT * FROM guild_icons WHERE guild_id = $1
+            ORDER BY created_at DESC LIMIT 100
+            """
+
+            records: List[asyncpg.Record] = await self.bot.pool.fetch(
+                sql,
+                guild.id,
+            )
+
+            if records == []:
+                raise BlankException(f"{guild} has no icon history on record.")
+
+            icons = await asyncio.gather(
+                *[to_bytes(ctx.session, row["icon"]) for row in records]
+            )
+
+            fp = await format_bytes(ctx.guild.filesize_limit, icons)
+            file = discord.File(
+                fp,
+                f"{guild.id}_icon_history.png",
+            )
+
+        if len(records) >= 100:
+            first_icon: datetime.datetime = await self.bot.pool.fetchval(
+                """SELECT created_at FROM guild_icons WHERE guild_id = $1 ORDER BY created_at ASC""",
+                guild.id,
+            )
+        else:
+            first_icon = records[-1]["created_at"]
+
+        embed = discord.Embed(timestamp=first_icon)
+        embed.set_footer(text="First icon saved")
+        embed.set_author(
+            name=f"{guild}'s icon history",
+            icon_url=guild.icon.url if guild.icon else None,
+        )
+        embed.set_image(url=f"attachment://{guild.id}_icon_history.png")
+
+        await ctx.send(embed=embed, file=file)
+
+    @server_info_command.command(name="names")
+    async def serverinfo_names(
+        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+    ):
+        """Shows the past names for a guild"""
+        guild = guild or ctx.guild
+
+        results = await self.bot.pool.fetch(
+            "SELECT * FROM guild_name_logs WHERE guild_id = $1 ORDER BY created_at DESC",
+            guild.id,
+        )
+
+        if results == []:
+            raise BlankException(f"I have no name history on record for {guild}.")
+
+        entries = [
+            (
+                r["name"],
+                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")}',
+            )
+            for r in results
+        ]
+
+        source = FieldPageSource(entries=entries)
+        source.embed.color = self.bot.embedcolor
+        source.embed.title = f"Names for {guild}"
+        pager = Pager(source, ctx=ctx)
+        await pager.start(ctx)
+
     @server_info_command.command(name="icon")
     async def serverinfo_icon(
         self, ctx: Context, *, guild: Optional[discord.Guild] = None
     ):
         """Get the server icon."""
         guild = guild or ctx.guild
-
-        if not guild:
-            raise commands.GuildNotFound("Unknown guild")
 
         if not guild.icon:
             raise commands.GuildNotFound("Guild has no icon")

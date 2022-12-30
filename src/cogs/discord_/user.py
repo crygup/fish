@@ -18,6 +18,7 @@ from utils import (
     human_timedelta,
     to_bytes,
     format_status,
+    BlankException,
 )
 
 from ._base import CogBase
@@ -255,6 +256,9 @@ class UserCommands(CogBase):
             )
             return
 
+        if "uptime" in await self.bot.redis.smembers(f"opted_out:{member.id}"):
+            raise BlankException(f"Sorry, {member} has opted out from uptime logging.")
+
         results: Optional[datetime.datetime] = await bot.pool.fetchval(
             "SELECT time FROM uptime_logs WHERE user_id = $1", member.id
         )
@@ -276,7 +280,7 @@ class UserCommands(CogBase):
         )
 
         if results == []:
-            await ctx.send(f"I have no username records for {user}")
+            await ctx.send(f"I have no username records for {user}.")
             return
 
         entries = [
@@ -358,7 +362,9 @@ class UserCommands(CogBase):
         await pager.start(ctx)
 
     @commands.group(
-        name="avatarhistory", aliases=("avyh",), invoke_without_command=True
+        name="avatarhistory",
+        aliases=("avyh", "pfph", "avh"),
+        invoke_without_command=True,
     )
     async def avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
@@ -373,12 +379,10 @@ class UserCommands(CogBase):
             ORDER BY created_at DESC LIMIT 100
             """
 
-            fetch_start = time.perf_counter()
             records: List[asyncpg.Record] = await self.bot.pool.fetch(
                 sql,
                 user.id,
             )
-            fetch_end = time.perf_counter()
 
             if records == []:
                 await ctx.send(f"{user} has no avatar history on record.")
@@ -388,17 +392,17 @@ class UserCommands(CogBase):
                 *[to_bytes(ctx.session, row["avatar"]) for row in records]
             )
 
-            gen_start = time.perf_counter()
             fp = await format_bytes(ctx.guild.filesize_limit, avatars)
             file = discord.File(
                 fp,
                 f"{user.id}_avatar_history.png",
             )
-            gen_end = time.perf_counter()
 
-        if len(records) == 100:
-            sql = """SELECT created_at FROM avatars WHERE user_id = $1 ORDER BY created_at ASC"""
-            first_avatar: datetime.datetime = await self.bot.pool.fetchval(sql, user.id)
+        if len(records) >= 100:
+            first_avatar: datetime.datetime = await self.bot.pool.fetchval(
+                """SELECT created_at FROM avatars WHERE user_id = $1 ORDER BY created_at ASC""",
+                user.id,
+            )
         else:
             first_avatar = records[-1]["created_at"]
 
@@ -407,7 +411,6 @@ class UserCommands(CogBase):
         embed.set_author(
             name=f"{user}'s avatar history", icon_url=user.display_avatar.url
         )
-        embed.description = f"`Fetching  :` {round(fetch_end - fetch_start, 2)}s\n`Generating:` {round(gen_end - gen_start, 2)}s"
         embed.set_image(url=f"attachment://{user.id}_avatar_history.png")
 
         await ctx.send(embed=embed, file=file)

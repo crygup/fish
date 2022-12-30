@@ -16,6 +16,12 @@ CREATE TABLE IF NOT EXISTS avatars (
     PRIMARY KEY(user_id, avatar_key)
 );
 
+CREATE TABLE IF NOT EXISTS opted_out (
+    user_id BIGINT,
+    items TEXT[],
+    PRIMARY KEY (user_id)
+);
+
 CREATE TABLE IF NOT EXISTS guild_avatars (
     member_id BIGINT,
     guild_id BIGINT,
@@ -23,6 +29,14 @@ CREATE TABLE IF NOT EXISTS guild_avatars (
     created_at TIMESTAMP WITH TIME ZONE,
     avatar TEXT,
     PRIMARY KEY(member_id, avatar_key, guild_id)
+);
+
+CREATE TABLE IF NOT EXISTS guild_icons (
+    guild_id BIGINT,
+    icon_key TEXT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    icon TEXT,
+    PRIMARY KEY(icon_key, guild_id)
 );
 
 CREATE TABLE IF NOT EXISTS username_logs (
@@ -41,6 +55,12 @@ CREATE TABLE IF NOT EXISTS nickname_logs (
     user_id BIGINT,
     guild_id BIGINT,
     nickname TEXT,
+    created_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS guild_name_logs (
+    guild_id BIGINT,
+    name TEXT,
     created_at TIMESTAMP WITH TIME ZONE
 );
 

@@ -42,6 +42,11 @@ async def setup_cache(bot: Bot):
     for row in covers:
         await bot.redis.sadd("nsfw_covers", row["album_id"])
 
+    opted_out = await bot.pool.fetch("SELECT * FROM opted_out")
+    for row in opted_out:
+        for item in row["items"]:
+            await bot.redis.sadd(f"opted_out:{row['user_id']}", item)
+
 
 async def setup_webhooks(bot: Bot):
     for name, webhook in bot.config["webhooks"].items():
@@ -54,6 +59,11 @@ async def setup_webhooks(bot: Bot):
 
     for name, webhook in bot.config["image_webhooks"].items():
         bot.image_webhooks[name] = discord.Webhook.from_url(
+            url=webhook, session=bot.session
+        )
+
+    for name, webhook in bot.config["icon-webhooks"].items():
+        bot.icon_webhooks[name] = discord.Webhook.from_url(
             url=webhook, session=bot.session
         )
 

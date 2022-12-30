@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Literal, Optional, Set, TypeAlias, Union
 
 import asyncpg
 import discord
@@ -16,6 +16,9 @@ from utils import (
     get_or_fetch_user,
     plural,
     to_bytesio,
+    BlankException,
+    human_join,
+    CHECK,
 )
 
 if TYPE_CHECKING:
@@ -25,6 +28,17 @@ if TYPE_CHECKING:
 
 async def setup(bot: Bot):
     await bot.add_cog(Settings(bot))
+
+
+Logger = [
+    "avatars",
+    "guild avatars",
+    "nicknames",
+    "discrims",
+    "usernames",
+    "joins",
+    "uptime",
+]
 
 
 class Settings(commands.Cog, name="settings"):
@@ -384,22 +398,13 @@ class Settings(commands.Cog, name="settings"):
         """Manage your data I store on you."""
         await ctx.send_help(ctx.command)
 
-    @data_group.group(name="avatars", invoke_without_command=True)
-    async def avatars_data(self, ctx: Context):
-        avatars: Optional[int] = await self.bot.pool.fetchval(
-            "SELECT COUNT(avatar) FROM avatars WHERE user_id = $1", ctx.author.id
-        )
+    @data_group.group(name="remove", aliases=("delete",), invoke_without_command=True)
+    async def remove_group(self, ctx: Context):
+        await ctx.send_help(ctx.command)
 
-        guild_avatars: Optional[int] = await self.bot.pool.fetchval(
-            "SELECT COUNT(avatar) FROM guild_avatars WHERE member_id = $1",
-            ctx.author.id,
-        )
-
-        await ctx.send(
-            f"I currently have {plural(avatars or 0):avatar} and {plural(guild_avatars or 0):guild avatar} from you stored."
-        )
-
-    @avatars_data.group(name="delete", aliases=("remove",), invoke_without_command=True)
+    @remove_group.group(
+        name="avatars", aliases=("pfps", "avs", "avys"), invoke_without_command=True
+    )
     async def delete_avatars(self, ctx: Context, id: Optional[int] = None):
         avatars: List[asyncpg.Record] = await self.bot.pool.fetch(
             "SELECT * FROM avatars WHERE user_id = $1 ORDER BY created_at DESC",
@@ -503,3 +508,247 @@ class Settings(commands.Cog, name="settings"):
         )
 
         await ctx.send(f"Deleted {plural(len(deleted)):guild avatar}")
+
+    @remove_group.command(name="usernames")
+    async def remove_usernames(self, ctx: Context):
+        records = await ctx.pool.fetch(
+            """SELECT * FROM username_logs WHERE user_id = $1""", ctx.author.id
+        )
+
+        if records == []:
+            raise BlankException("I have no username history on record for you.")
+
+        prompt = await ctx.prompt(
+            f"Are you sure you want to delete {plural(len(records)):username}? This action **CANNOT** be undone."
+        )
+
+        if not prompt:
+            return await ctx.send("Good, I didn't want to delete them anyway.")
+
+        deleted = await self.bot.pool.fetch(
+            "DELETE FROM username_logs WHERE user_id = $1 RETURNING username",
+            ctx.author.id,
+        )
+
+        await ctx.send(f"Deleted {plural(len(deleted)):username}")
+
+    @remove_group.command(name="discrims", aliases=("discriminators",))
+    async def remove_discrims(self, ctx: Context):
+        records = await ctx.pool.fetch(
+            """SELECT * FROM discrim_logs WHERE user_id = $1""", ctx.author.id
+        )
+
+        if records == []:
+            raise BlankException("I have no discriminator history on record for you.")
+
+        prompt = await ctx.prompt(
+            f"Are you sure you want to delete {plural(len(records)):discriminator}? This action **CANNOT** be undone."
+        )
+
+        if not prompt:
+            return await ctx.send("Good, I didn't want to delete them anyway.")
+
+        deleted = await self.bot.pool.fetch(
+            "DELETE FROM discrim_logs WHERE user_id = $1 RETURNING discrim",
+            ctx.author.id,
+        )
+
+        await ctx.send(f"Deleted {plural(len(deleted)):discriminator}")
+
+    @remove_group.command(name="nicknames")
+    async def remove_nicknames(
+        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+    ):
+        guild = guild or ctx.guild
+        records = await ctx.pool.fetch(
+            """SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2""",
+            ctx.author.id,
+            guild.id,
+        )
+
+        if records == []:
+            raise BlankException(
+                "I have no nickname history on record for you for this guild."
+            )
+
+        prompt = await ctx.prompt(
+            f"Are you sure you want to delete {plural(len(records)):nickname}? This action **CANNOT** be undone."
+        )
+
+        if not prompt:
+            return await ctx.send("Good, I didn't want to delete them anyway.")
+
+        deleted = await self.bot.pool.fetch(
+            "DELETE FROM nickname_logs WHERE user_id = $1 AND guild_id = $2 RETURNING nickname",
+            ctx.author.id,
+            guild.id,
+        )
+
+        await ctx.send(f"Deleted {plural(len(deleted)):username}")
+
+    @remove_group.command(name="uptime")
+    async def remove_uptime(
+        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+    ):
+        guild = guild or ctx.guild
+        records = await ctx.pool.fetch(
+            """SELECT * FROM uptime_logs WHERE user_id = $1""",
+            ctx.author.id,
+            guild.id,
+        )
+
+        if records == []:
+            raise BlankException("I have no uptime history on record for you.")
+
+        prompt = await ctx.prompt(
+            f"Are you sure you want to opt out of having your uptime tracked?? This action **CANNOT** be undone."
+        )
+
+        if not prompt:
+            return await ctx.send("Good, I didn't want to do that anyway.")
+
+        deleted = await self.bot.pool.fetch(
+            "DELETE FROM uptime_logs WHERE user_id = $1",
+            ctx.author.id,
+            guild.id,
+        )
+
+        await ctx.send(f"Deleted {plural(len(deleted)):username}")
+
+    @remove_group.group(name="guild", invoke_without_command=True)
+    async def remove_guild_group(self, ctx: Context):
+        await ctx.send_help(ctx.command)
+
+    @remove_guild_group.command(name="icons")
+    @commands.has_guild_permissions(administrator=True)
+    async def remove_guild_icons(
+        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+    ):
+        guild = guild or ctx.guild
+
+        records = await ctx.pool.fetch(
+            """SELECT * FROM guild_icons WHERE guild_id = $1""",
+            guild.id,
+        )
+
+        if records == []:
+            raise BlankException("I have no icon history on record for this guild.")
+
+        prompt = await ctx.prompt(
+            f"Are you sure you want to delete {plural(len(records)):icon}? This action **CANNOT** be undone."
+        )
+
+        if not prompt:
+            return await ctx.send("Good, I didn't want to delete them anyway.")
+
+        deleted = await self.bot.pool.fetch(
+            "DELETE FROM guild_ioncs WHERE guild_id = $1 RETURNING icon",
+            guild.id,
+        )
+
+        await ctx.send(f"Deleted {plural(len(deleted)):icon}")
+
+    @remove_guild_group.command(name="bans")
+    @commands.has_guild_permissions(administrator=True)
+    async def remove_guild_bans(
+        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+    ):
+        guild = guild or ctx.guild
+
+        records = await ctx.pool.fetch(
+            """SELECT * FROM guild_bans WHERE guild_id = $1""",
+            guild.id,
+        )
+
+        if records == []:
+            raise BlankException("I have no ban history on record for this guild.")
+
+        prompt = await ctx.prompt(
+            f"Are you sure you want to delete {plural(len(records)):ban log}? This action **CANNOT** be undone."
+        )
+
+        if not prompt:
+            return await ctx.send("Good, I didn't want to delete them anyway.")
+
+        deleted = await self.bot.pool.fetch(
+            "DELETE FROM guild_bans WHERE guild_id = $1 RETURNING target_id",
+            guild.id,
+        )
+
+        await ctx.send(f"Deleted {plural(len(deleted)):ban log}")
+
+    @remove_guild_group.command(name="names")
+    @commands.has_guild_permissions(administrator=True)
+    async def remove_guild_names(
+        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+    ):
+        guild = guild or ctx.guild
+
+        records = await ctx.pool.fetch(
+            """SELECT * FROM guild_name_logs WHERE guild_id = $1""",
+            guild.id,
+        )
+
+        if records == []:
+            raise BlankException("I have no name history on record for this guild.")
+
+        prompt = await ctx.prompt(
+            f"Are you sure you want to delete {plural(len(records)):guild name}? This action **CANNOT** be undone."
+        )
+
+        if not prompt:
+            return await ctx.send("Good, I didn't want to delete them anyway.")
+
+        deleted = await self.bot.pool.fetch(
+            "DELETE FROM guild_name_logs WHERE guild_id = $1 RETURNING target_id",
+            guild.id,
+        )
+
+        await ctx.send(f"Deleted {plural(len(deleted)):guild name}")
+
+    @commands.group(name="opt", invoke_without_command=True)
+    async def opt_group(self, ctx: Context):
+        """Opt in or out of a logger
+
+        Due to technical reasons, opting out from `guild names`, `guild bans` and `guild icons` is not possible yet, but you can still delete the data at any time."""
+        items: Set[str] = await ctx.redis.smembers(f"opted_out:{ctx.author.id}")
+
+        if items == set():
+            raise BlankException(
+                "You haven't opted out of any loggers. good on you \U0001f609"
+            )
+
+        await ctx.send(
+            f"You have opted out from {human_join([f'`{item}`' for item in items], final='and')}"
+        )
+
+    @opt_group.command(name="in")
+    async def opt_in(self, ctx: Context, *, logger: str):
+        if logger.lower() not in Logger:
+            raise BlankException(
+                f"Logger must be one of {human_join([f'`{log}`' for log in Logger])}"
+            )
+
+        sql = """UPDATE opted_out SET items = array_remove(opted_out.items, $1) WHERE user_id = $2"""
+
+        await ctx.pool.execute(sql, logger, ctx.author.id)
+        await ctx.redis.srem(f"opted_out:{ctx.author.id}", logger)
+        await ctx.send(str(CHECK))
+
+    @opt_group.command(name="out")
+    async def opt_out(self, ctx: Context, *, logger: str):
+        if logger.lower() not in Logger:
+            raise BlankException(
+                f"Logger must be one of {human_join([f'`{log}`' for log in Logger])}"
+            )
+
+        sql = """
+        INSERT INTO opted_out (user_id, items) VALUES ($1, ARRAY [$2]) 
+        ON CONFLICT (user_id) DO UPDATE
+        SET items = array_append(opted_out.items, $2) 
+        WHERE opted_out.user_id = $1
+        """
+
+        await ctx.pool.execute(sql, ctx.author.id, logger)
+        await ctx.redis.sadd(f"opted_out:{ctx.author.id}", logger)
+        await ctx.send(str(CHECK))

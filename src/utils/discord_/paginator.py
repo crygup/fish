@@ -254,9 +254,7 @@ class AvatarsPageSource(menus.ListPageSource):
     async def format_page(self, menu, entries: Tuple[str, datetime.datetime]):
         maximum = self.get_max_pages()
 
-        self.embed.set_footer(
-            text=f"Page {menu.current_page + 1}/{maximum} \nAvatar Changed"
-        )
+        self.embed.set_footer(text=f"Page {menu.current_page + 1}/{maximum} \nChanged")
         self.embed.timestamp = entries[1]
         self.embed.set_image(url=entries[0])
 

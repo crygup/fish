@@ -140,11 +140,11 @@ class Bot(commands.Bot):
         return True
 
     async def no_auto_commands(self, ctx: Context):
-        if ctx.command.name == 'download':
+        if ctx.command.name == "download":
             return str(ctx.channel.id) not in await self.redis.smembers(
                 "auto_download_channels"
             )
-        
+
         return True
 
     def __init__(
@@ -172,6 +172,7 @@ class Bot(commands.Bot):
         self.owner_only_mode: bool = True if testing else False
         self.avatar_webhooks: Dict[str, discord.Webhook] = {}
         self.image_webhooks: Dict[str, discord.Webhook] = {}
+        self.icon_webhooks: Dict[str, discord.Webhook] = {}
         self.webhooks: Dict[str, discord.Webhook] = {}
         self.owner_id = 766953372309127168
         self.owner_ids = {}

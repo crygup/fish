@@ -21,6 +21,9 @@ class UserEvents(commands.Cog, name="user_events"):
 
     @commands.Cog.listener("on_member_update")
     async def on_nickname_update(self, before: discord.Member, after: discord.Member):
+        if "nicknames" in await self.bot.redis.smembers(f"opted_out:{after.id}"):
+            return
+
         if before.nick != after.nick:
             if after.nick is None:
                 return
@@ -35,6 +38,9 @@ class UserEvents(commands.Cog, name="user_events"):
 
     @commands.Cog.listener("on_user_update")
     async def on_username_update(self, before: discord.User, after: discord.User):
+        if "usernames" in await self.bot.redis.smembers(f"opted_out:{after.id}"):
+            return
+
         if before.name != after.name:
             sql = """
             INSERT INTO username_logs(user_id, username, created_at)
@@ -46,6 +52,9 @@ class UserEvents(commands.Cog, name="user_events"):
 
     @commands.Cog.listener("on_user_update")
     async def on_discrim_update(self, before: discord.User, after: discord.User):
+        if "discrims" in await self.bot.redis.smembers(f"opted_out:{after.id}"):
+            return
+
         if before.discriminator != after.discriminator:
             sql = """
             INSERT INTO discrim_logs(user_id, discrim, created_at)
@@ -58,6 +67,8 @@ class UserEvents(commands.Cog, name="user_events"):
     @commands.Cog.listener("on_presence_update")
     async def on_status_update(self, before: discord.Member, after: discord.Member):
         if before.status != after.status:
+            if "uptime" in await self.bot.redis.smembers(f"opted_out:{after.id}"):
+                return
             results = await self.bot.pool.fetchrow(
                 "SELECT user_id FROM uptime_logs WHERE user_id = $1", after.id
             )

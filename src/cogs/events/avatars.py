@@ -68,49 +68,58 @@ class AvatarEvents(commands.Cog, name="user_events"):
 
     @commands.Cog.listener("on_user_update")
     async def on_avatar_update(self, before: discord.User, after: discord.User):
-        if before.avatar != after.avatar:
-            if after.display_avatar.key.isdigit():
-                return
+        if before.avatar == after.avatar:
+            return
+        if after.display_avatar.key.isdigit():
+            return
 
-            message = await self.do_avatar(user=after, asset=after.display_avatar)
+        if "avatars" in await self.bot.redis.smembers(f"opted_out:{after.id}"):
+            return
 
-            sql = """
-            INSERT INTO avatars(user_id, avatar_key, created_at, avatar)
-            VALUES($1, $2, $3, $4)"""
+        message = await self.do_avatar(user=after, asset=after.display_avatar)
 
-            now = discord.utils.utcnow()
-            try:
-                await self.bot.pool.execute(
-                    sql,
-                    after.id,
-                    after.display_avatar.key,
-                    now,
-                    message.attachments[0].url,
-                )
-            except asyncpg.UniqueViolationError:
-                pass
+        sql = """
+        INSERT INTO avatars(user_id, avatar_key, created_at, avatar)
+        VALUES($1, $2, $3, $4)"""
+
+        now = discord.utils.utcnow()
+        try:
+            await self.bot.pool.execute(
+                sql,
+                after.id,
+                after.display_avatar.key,
+                now,
+                message.attachments[0].url,
+            )
+        except asyncpg.UniqueViolationError:
+            pass
 
     @commands.Cog.listener("on_member_update")
     async def on_guild_avatar_update(
         self, before: discord.Member, after: discord.Member
     ):
-        if before.guild_avatar != after.guild_avatar:
-            if after.guild_avatar is None:
-                return
+        if "guild_avatars" in await self.bot.redis.smembers(f"opted_out:{after.id}"):
+            return
 
-            message = await self.do_avatar(user=after, asset=after.guild_avatar)
+        if before.guild_avatar == after.guild_avatar:
+            return
 
-            sql = """
-            INSERT INTO guild_avatars(member_id, guild_id, avatar_key, created_at, avatar)
-            VALUES($1, $2, $3, $4, $5)"""
+        if after.guild_avatar is None:
+            return
 
-            now = discord.utils.utcnow()
+        message = await self.do_avatar(user=after, asset=after.guild_avatar)
 
-            await self.bot.pool.execute(
-                sql,
-                after.id,
-                after.guild.id,
-                after.guild_avatar.key,
-                now,
-                message.attachments[0].url,
-            )
+        sql = """
+        INSERT INTO guild_avatars(member_id, guild_id, avatar_key, created_at, avatar)
+        VALUES($1, $2, $3, $4, $5)"""
+
+        now = discord.utils.utcnow()
+
+        await self.bot.pool.execute(
+            sql,
+            after.id,
+            after.guild.id,
+            after.guild_avatar.key,
+            now,
+            message.attachments[0].url,
+        )

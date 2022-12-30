@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import datetime
+import random
 import re
 import textwrap
 from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
+
+from utils.vars.errors import DoNothing
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -23,6 +26,9 @@ class GuildEvents(commands.Cog, name="guild_events"):
 
     @commands.Cog.listener("on_member_join")
     async def on_member_join(self, member: discord.Member):
+        if "joins" in await self.bot.redis.smembers(f"opted_out:{member.id}"):
+            return
+
         sql = """
         INSERT INTO member_join_logs(member_id, guild_id, time)
         VALUES ($1, $2, $3)
@@ -160,3 +166,80 @@ class GuildEvents(commands.Cog, name="guild_events"):
         )
 
         await self.guild_method(embed, guild)
+
+    @commands.Cog.listener("on_guild_update")
+    async def on_guild_update(self, before: discord.Guild, after: discord.Guild):
+        if before.name == after.name:
+            return
+
+        sql = """INSERT INTO guild_name_logs (guild_id, name, created_at) VALUES($1,$2,$3)"""
+
+        await self.bot.pool.execute(sql, after.id, after.name, discord.utils.utcnow())
+
+    async def post_file(
+        self,
+        file: discord.File,
+        webhook: discord.Webhook,
+        guild: discord.Guild,
+    ) -> discord.Message:
+        return await webhook.send(
+            f"{guild} | {guild.id} | {discord.utils.format_dt(discord.utils.utcnow())}",
+            file=file,
+            wait=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def do_icon(
+        self, guild: discord.Guild, asset: discord.Asset
+    ) -> discord.Message:
+        webhook = random.choice(
+            [webhook for _, webhook in self.bot.icon_webhooks.items()]
+        )
+
+        size = 4096
+        message = None
+        for _ in range(9):
+            try:
+                avatar = await asset.replace(size=size).to_file()
+            except (discord.NotFound, ValueError):
+                break
+
+            try:
+                message = await self.post_file(
+                    file=avatar, webhook=webhook, guild=guild
+                )
+                break
+            except discord.HTTPException:
+                size //= 2
+                continue
+
+        if message is None:
+            channel: discord.TextChannel = self.bot.get_channel(1058221675306569748)  # type: ignore
+            await channel.send(
+                f"<@766953372309127168> Failed to post {guild.id}'s icon."
+            )
+            raise DoNothing()
+
+        return message
+
+    @commands.Cog.listener("on_guild_update")
+    async def on_guild_icon_update(self, before: discord.Guild, after: discord.Guild):
+        if before.icon == after.icon:
+            return
+
+        if after.icon is None:
+            return
+
+        message = await self.do_icon(guild=after, asset=after.icon)
+
+        sql = """INSERT INTO guild_icons (guild_id, icon_key, created_at, icon) VALUES ($1, $2, $3, $4)"""
+
+        now = discord.utils.utcnow()
+
+        await self.bot.pool.execute(
+            sql,
+            after.id,
+            after.icon.key,
+            now,
+            message.attachments[0].url,
+        )
