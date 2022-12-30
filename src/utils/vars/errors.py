@@ -11,6 +11,10 @@ class BlankException(Exception):
         return self.message
 
 
+class DoNothing(Exception):
+    pass
+
+
 class BadTimeTransform(BlankException):
     pass
 
@@ -92,6 +96,7 @@ IGNORED = (
     commands.CommandNotFound,
     commands.NotOwner,
     commands.CheckFailure,
+    DoNothing,
 )
 SEND = (
     BlankException,

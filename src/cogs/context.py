@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-import asyncio
-import subprocess
 from copy import deepcopy
 from io import StringIO
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
     Dict,
     List,
     Optional,
-    ParamSpec,
-    TypeVar,
     Union,
 )
 
@@ -22,7 +16,7 @@ from aiohttp import ClientSession
 from asyncpg import Connection, Pool
 from discord.ext import commands
 
-from utils import VALID_EDIT_KWARGS
+from utils import VALID_EDIT_KWARGS, DoNothing
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -173,20 +167,6 @@ class Context(commands.Context):
         except (discord.Forbidden, discord.HTTPException, discord.NotFound):
             pass
 
-    async def run_process(self, command: str) -> list[str]:
-        try:
-            process = await asyncio.create_subprocess_shell(
-                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            result = await process.communicate()
-        except NotImplementedError:
-            process = subprocess.Popen(
-                command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            result = await self.bot.loop.run_in_executor(None, process.communicate)
-
-        return [output.decode() for output in result]
-
     @property
     def sus_guilds(self) -> List[discord.Guild]:
         return [
@@ -195,14 +175,6 @@ class Context(commands.Context):
             if sum(1 for m in guild.members if m.bot)
             > sum(1 for m in guild.members if not m.bot)
         ]
-
-    async def show_help(self, command: Optional[commands.Command] = None):
-        help = self.bot.get_command("help")
-
-        if help is None:
-            raise commands.CommandNotFound("Help command not found!")
-
-        await self.invoke(help, command=command)  # type: ignore
 
     async def send(
         self,
@@ -214,25 +186,25 @@ class Context(commands.Context):
 
         reference = reference or self.message.reference or None
 
-        if not self.channel.permissions_for(self.guild.me).send_messages:
+        if not self.channel.permissions_for(self.me).send_messages:
             try:
-                return await self.author.send(f"I do not have permissions to send messages in {self.channel.mention}.")  # type: ignore
+                return await self.author.send(
+                    f"I do not have permissions to send messages in {self.channel.mention}."
+                )
             except discord.Forbidden:
-                return  # type: ignore
+                raise DoNothing()
 
-        if check_ref:
+        if check_ref and not reference:
             async for message in self.channel.history(limit=1):
                 if message.id != self.message.id:
                     reference = self.message
 
-        embeds = kwargs.pop("embeds", []) or (
+        embeds: List[discord.Embed] = kwargs.pop("embeds", []) or (
             [kwargs.pop("embed")] if kwargs.get("embed", None) else []
         )
         if embeds:
             for embed in embeds:
-                embed.color = (
-                    self.bot.embedcolor if embed.color is None else embed.color
-                )
+                embed.color = embed.color or self.bot.embedcolor
 
         kwargs["embeds"] = embeds
 
@@ -254,7 +226,6 @@ class Context(commands.Context):
                 self._message_count += 1
                 return m
             except discord.HTTPException:
-                self._previous_message = None
                 self._previous_message = m = await super().send(content, **kwargs)
                 return m
 
@@ -275,7 +246,7 @@ class Context(commands.Context):
             raise RateLimitExceeded()
 
         headers = {"Authorization": self.bot.config["keys"]["dagpi"]}
-        async with self.bot.session.get(url, headers=headers) as r:
+        async with self.session.get(url, headers=headers) as r:
             if r.status == 429:
                 raise RateLimitExceeded()
 

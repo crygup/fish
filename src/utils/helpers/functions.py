@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import math
 import re
+import subprocess
 import sys
 import textwrap
 from io import BytesIO
@@ -642,3 +643,18 @@ def can_execute_action(
 
 def format_status(member: discord.Member) -> str:
     return f'{"on " if member.status is discord.Status.dnd else ""}{member.raw_status}'
+
+
+async def run_process(bot: Bot, command: str) -> list[str]:
+    try:
+        process = await asyncio.create_subprocess_shell(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        result = await process.communicate()
+    except NotImplementedError:
+        process = subprocess.Popen(
+            command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        result = await bot.loop.run_in_executor(None, process.communicate)
+
+    return [output.decode() for output in result]
