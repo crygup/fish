@@ -432,7 +432,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
 
         return matching_dicts[0]["app_id"]
 
-    @commands.command(name="game")
+    @steam.command(name="game")
     async def steam_game(
         self,
         ctx: Context,
