@@ -75,7 +75,7 @@ cogs = [
     "cogs.events.commands",
     "cogs.events.errors",
     "cogs.events.guilds",
-    "cogs.events.members",
+    "cogs.events.avatars",
     "cogs.events.messages",
     "cogs.events.users",
 ]
