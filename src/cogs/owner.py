@@ -28,6 +28,7 @@ from utils import (
     response_checker,
     to_bytesio,
     CHECK,
+    BlankException,
 )
 
 if TYPE_CHECKING:
@@ -313,8 +314,7 @@ class Owner(
         command = self.bot.get_command("jsk py")
 
         if command is None:
-            await ctx.send("Command not found")
-            return
+            raise BlankException("Command not found")
 
         await command(ctx, argument=codeblock_converter(content))
 
@@ -325,8 +325,7 @@ class Owner(
         command = self.bot.get_command("jsk sh")
 
         if command is None:
-            await ctx.send("Command not found")
-            return
+            raise BlankException("Command not found")
 
         await command(ctx, argument=codeblock_converter(content))
 
@@ -335,8 +334,7 @@ class Owner(
         command = self.bot.get_command("jsk git")
 
         if command is None:
-            await ctx.send("Command not found")
-            return
+            raise BlankException("Command not found")
 
         await command(ctx, argument=codeblock_converter("pull"))
 
