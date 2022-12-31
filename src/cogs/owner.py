@@ -307,7 +307,7 @@ class Owner(
 
     @commands.command(name="evaluate", aliases=["eval", "e"])
     async def evaluate_command(self, ctx: Context, *, content: str):
-        content = re.sub(r"ref", "message.reference.resolved", content)
+        content = re.sub(r"-ref", "message.reference.resolved", content)
         content = re.sub(r"self.bot", "bot", content)
 
         command = self.bot.get_command("jsk py")
