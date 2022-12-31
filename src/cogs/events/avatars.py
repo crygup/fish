@@ -18,7 +18,7 @@ async def setup(bot: Bot):
     await bot.add_cog(AvatarEvents(bot))
 
 
-class AvatarEvents(commands.Cog, name="user_events"):
+class AvatarEvents(commands.Cog, name="avatar_events"):
     def __init__(self, bot: Bot):
         self.bot = bot
 
