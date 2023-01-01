@@ -282,14 +282,18 @@ class LastfmConverter(commands.Converter):
 
     async def convert(self, ctx: Context, argument: str) -> str:
         if argument.lower().startswith("fm:"):
-            return argument[3:]
+            name = argument[3:]
 
-        try:
-            user = await commands.UserConverter().convert(ctx, argument)
-        except commands.UserNotFound:
-            return argument
+        else:
+            try:
+                user = await commands.UserConverter().convert(ctx, argument)
+            except commands.UserNotFound:
+                user = None
 
-        name = await get_lastfm(ctx.bot, user.id)
+            if user is None:
+                raise commands.UserNotFound(argument)
+
+            name = await get_lastfm(ctx.bot, user.id)
 
         return name
 

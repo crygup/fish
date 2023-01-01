@@ -113,6 +113,9 @@ async def get_steam_data(
 
 
 async def get_sp_cover(bot: Bot, query: str) -> Tuple[str, bool]:
+    if bot.spotify_key is None:
+        raise ValueError("Spotify key is not set yet, maybe spotify cog needs loaded?")
+
     url = "https://api.spotify.com/v1/search"
 
     headers = {

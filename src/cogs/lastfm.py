@@ -2,25 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import itertools
 import textwrap
-from typing import TYPE_CHECKING, Annotated, List, Optional
+from io import BytesIO
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import discord
 from discord.ext import commands
-from discord.utils import remove_markdown
+from PIL import Image, ImageDraw, ImageFont
 
 from utils import (
+    BlankException,
     LastfmConverter,
     LastfmTimeConverter,
     NoCover,
     SimplePages,
-    format_bytes,
     get_lastfm,
     get_lastfm_data,
     get_sp_cover,
     lastfm_period,
-    to_bytes,
-    BlankException,
+    to_bytesio,
+    to_thread,
 )
 
 if TYPE_CHECKING:
@@ -215,6 +217,38 @@ class LastFm(commands.Cog, name="lastfm"):
         pages.embed.color = self.bot.embedcolor
         await pages.start(ctx)
 
+    @to_thread
+    def make_chart(self, data: List[Tuple[BytesIO, str]], name: str):
+        # fmt: off
+        image_cords = itertools.chain(
+            [(100, 100), (400, 100), (700, 100), (100, 400), (400, 400), (700, 400), (100, 700), (400, 700), (700, 700),]
+        )
+        spacing = 20
+        # fmt: on
+        font = ImageFont.truetype("src/files/assets/fonts/wsr.otf", 25)
+        name_font = ImageFont.truetype("src/files/assets/fonts/wsr.otf", 50)
+        output_buffer = BytesIO()
+        with Image.open("src/files/assets/chart.png") as image:
+            draw = ImageDraw.Draw(image)
+
+            text_width, _ = draw.textsize(name, font=name_font)
+            text_x = 500 - text_width // 2
+            draw.text((text_x, 30), name, fill=(255, 255, 255), font=name_font)
+
+            for item in data:
+                with Image.open(item[0]) as cover:
+                    cover = cover.resize((200, 200))
+                    x, y = next(image_cords)
+                    image.paste(cover, (x, y))
+                    draw.text(
+                        (x, y + 200 + spacing), item[1], font=font, fill=(255, 255, 255)
+                    )
+
+            image.save(output_buffer, "png")
+            output_buffer.seek(0)
+
+        return output_buffer
+
     @commands.command(name="chart", aliases=("c",))
     async def chart(
         self,
@@ -222,50 +256,58 @@ class LastFm(commands.Cog, name="lastfm"):
         username: Optional[LastfmConverter] = commands.Author,
         period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
     ):
-        """Makes a 3x3 image of your top albums"""
+        """View your top albums"""
         name = (
             await get_lastfm(ctx.bot, ctx.author.id)
             if username == ctx.author
             else str(username)
         )
 
-        await ctx.trigger_typing()
-        results = await get_lastfm_data(
-            self.bot,
-            "2.0",
-            "user.gettopalbums",
-            "user",
-            name,
-            extras={"limit": 100, "period": period},
-        )
+        async with ctx.typing():
+            results = await get_lastfm_data(
+                self.bot,
+                "2.0",
+                "user.gettopalbums",
+                "user",
+                name,
+                extras={"limit": 100, "period": period},
+            )
 
-        data = results["topalbums"].get("album")
+            data: Dict[Any, Any] = results["topalbums"].get("album")
 
-        if data == [] or data is None:
-            raise TypeError("No tracks found for this user.")
+            if data == [] or data is None:
+                raise BlankException("No tracks found for this user.")
 
-        urls = []
-
-        total = 0
-        chart_nsfw = False
-        for track in data:
-            if total == 9:
-                break
-            try:
-                url, nsfw = await get_sp_cover(
-                    self.bot, f"{track['name']} artist:{track['artist']['name']}"
+            if len(data) < 9:
+                raise BlankException(
+                    "Not enough albums to make a chart, sorry. Maybe try a different time period?"
                 )
-                urls.append(url)
-                if nsfw:
-                    chart_nsfw = True
-                total += 1
-            except (IndexError, NoCover):
-                continue
 
-        images: List[bytes] = await asyncio.gather(
-            *[to_bytes(ctx.session, url) for url in urls]
-        )
-        fp = await format_bytes(ctx.guild.filesize_limit, images)
-        file = discord.File(fp, f"{name}_chart.png", spoiler=chart_nsfw)
+            image_data: List[Tuple[BytesIO, str]] = []
 
-        await ctx.send(file=file)
+            total = 0
+            chart_nsfw = False
+            for track in data:
+                if total == 9:
+                    break
+                try:
+                    url, nsfw = await get_sp_cover(
+                        self.bot, f"{track['name']} artist:{track['artist']['name']}"
+                    )
+
+                    cover = await to_bytesio(ctx.session, url)
+                    image_data.append((cover, track["name"]))
+
+                    if nsfw:
+                        chart_nsfw = True
+
+                    total += 1
+                except (IndexError, NoCover):
+                    continue
+
+            image = await self.make_chart(image_data, name)
+
+            await ctx.send(
+                f"Top {lastfm_period[period]} albums chart for {ctx.author}",
+                file=discord.File(image, filename="chart.png", spoiler=chart_nsfw),
+            )
