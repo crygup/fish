@@ -215,18 +215,43 @@ class LastfmTimeConverter(commands.Converter):
     async def convert(self, ctx: Context, argument: str) -> str:
         response = "7day"
 
-        if re.search("7d|weekly|week", argument, re.IGNORECASE):
+        if re.match("7d|weekly|week", argument, re.IGNORECASE):
             response = "7day"
-        elif re.search("1mon|1m|monthy|m", argument, re.IGNORECASE):
+        elif re.match("1mon|1m|monthy|m", argument, re.IGNORECASE):
             response = "1month"
-        elif re.search("3mon|3m|quartery|q", argument, re.IGNORECASE):
+        elif re.match("3mon|3m|quartery|q", argument, re.IGNORECASE):
             response = "3month"
-        elif re.search("6mon|6m|halfy|h", argument, re.IGNORECASE):
+        elif re.match("6mon|6m|halfy|h", argument, re.IGNORECASE):
             response = "6month"
-        elif re.search("12mon|12m|yeary|y", argument, re.IGNORECASE):
+        elif re.match("12mon|12m|yeary|y", argument, re.IGNORECASE):
             response = "12month"
+        elif re.match("alltime|overall|fulltime|total", argument, re.IGNORECASE):
+            response = "overall"
 
         return response
+
+
+class LastfmConverter(commands.Converter):
+    """
+    Converts last.fm usernames
+    """
+
+    async def convert(self, ctx: Context, argument: str) -> str:
+        if argument.lower().startswith("fm:"):
+            name = argument[3:]
+
+        else:
+            try:
+                user = await commands.UserConverter().convert(ctx, argument)
+            except commands.UserNotFound:
+                user = None
+
+            if user is None:
+                raise commands.UserNotFound(argument)
+
+            name = await get_lastfm(ctx.bot, user.id)
+
+        return name
 
 
 class BeatmapConverter(commands.Converter):
@@ -273,29 +298,6 @@ class BeatmapsetConverter(commands.Converter):
             return await self.get_beatmapset(ctx, int(id_check.group("id")))
 
         raise ValueError("Unknown beatmapset")
-
-
-class LastfmConverter(commands.Converter):
-    """
-    Converts last.fm usernames
-    """
-
-    async def convert(self, ctx: Context, argument: str) -> str:
-        if argument.lower().startswith("fm:"):
-            name = argument[3:]
-
-        else:
-            try:
-                user = await commands.UserConverter().convert(ctx, argument)
-            except commands.UserNotFound:
-                user = None
-
-            if user is None:
-                raise commands.UserNotFound(argument)
-
-            name = await get_lastfm(ctx.bot, user.id)
-
-        return name
 
 
 def SteamIDConverter(account: str) -> int:

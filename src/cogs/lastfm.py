@@ -23,6 +23,7 @@ from utils import (
     lastfm_period,
     to_bytesio,
     to_thread,
+    shorten,
 )
 
 if TYPE_CHECKING:
@@ -63,9 +64,9 @@ class LastFm(commands.Cog, name="lastfm"):
             raise BlankException(f"{name} has no recent tracks.")
 
         description = f"""
-        **Artist**: {track.artist.name}
-        **Track**: {track.name}
-        **Album**: {track.album.name}
+        **Artist**: {discord.utils.escape_markdown(track.artist.name)}
+        **Track**: {discord.utils.escape_markdown(track.name)}
+        **Album**: {discord.utils.escape_markdown(track.album.name)}
         """
 
         loved = f"\U00002764\U0000fe0f " if track.loved else ""
@@ -76,7 +77,7 @@ class LastFm(commands.Cog, name="lastfm"):
 
         embed = discord.Embed(
             color=self.bot.embedcolor,
-            description=textwrap.dedent(discord.utils.escape_markdown(description)),
+            description=textwrap.dedent(description),
             timestamp=track.played_at.replace(tzinfo=datetime.timezone.utc)
             if track.played_at
             else None,
@@ -108,7 +109,9 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
+        period: str = commands.parameter(
+            converter=LastfmTimeConverter, default="weekly"
+        ),
     ):
         """Gets top tracks"""
         name = (
@@ -144,7 +147,9 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
+        period: str = commands.parameter(
+            converter=LastfmTimeConverter, default="weekly"
+        ),
     ):
         """Gets top artists"""
         name = (
@@ -186,7 +191,9 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
+        period: str = commands.parameter(
+            converter=LastfmTimeConverter, default="weekly"
+        ),
     ):
         """Gets top albums"""
         name = (
@@ -254,7 +261,9 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
+        period: str = commands.parameter(
+            converter=LastfmTimeConverter, default="weekly"
+        ),
     ):
         """View your top albums"""
         name = (
@@ -291,12 +300,11 @@ class LastFm(commands.Cog, name="lastfm"):
                 if total == 9:
                     break
                 try:
-                    url, nsfw = await get_sp_cover(
-                        self.bot, f"{track['name']} artist:{track['artist']['name']}"
-                    )
+                    query = f"{track['name']} {track['artist']['name']}"
+                    url, nsfw = await get_sp_cover(self.bot, query)
 
                     cover = await to_bytesio(ctx.session, url)
-                    image_data.append((cover, track["name"]))
+                    image_data.append((cover, shorten(track["name"], 15)))
 
                     if nsfw:
                         chart_nsfw = True
@@ -308,6 +316,6 @@ class LastFm(commands.Cog, name="lastfm"):
             image = await self.make_chart(image_data, name)
 
             await ctx.send(
-                f"Top {lastfm_period[period]} albums chart for {ctx.author}",
+                f"Top {lastfm_period[period]} albums chart for {name}",
                 file=discord.File(image, filename="chart.png", spoiler=chart_nsfw),
             )

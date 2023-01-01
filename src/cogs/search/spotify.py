@@ -71,7 +71,7 @@ class SpotifyCommands(CogBase):
                 "album": track["album"]["#text"],
                 "artist": None,
             }
-            return f"{begin[mode]} artist:{track['artist']['#text']}"
+            return f"{begin[mode]} {track['artist']['#text']}"
         else:
             return query
 

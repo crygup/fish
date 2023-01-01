@@ -661,3 +661,11 @@ async def run_process(bot: Bot, command: str) -> list[str]:
         result = await bot.loop.run_in_executor(None, process.communicate)
 
     return [output.decode() for output in result]
+
+
+def shorten(text: str, width: int, ending: str = " [...]") -> str:
+    new = text
+    if len(text) >= width:
+        new = text[:width] + ending
+
+    return new
