@@ -109,9 +109,7 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(
-            converter=LastfmTimeConverter, default="weekly"
-        ),
+        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
     ):
         """Gets top tracks"""
         name = (
@@ -147,9 +145,7 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(
-            converter=LastfmTimeConverter, default="weekly"
-        ),
+        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
     ):
         """Gets top artists"""
         name = (
@@ -191,9 +187,7 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(
-            converter=LastfmTimeConverter, default="weekly"
-        ),
+        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
     ):
         """Gets top albums"""
         name = (
@@ -261,9 +255,7 @@ class LastFm(commands.Cog, name="lastfm"):
         self,
         ctx: Context,
         username: Optional[LastfmConverter] = commands.Author,
-        period: str = commands.parameter(
-            converter=LastfmTimeConverter, default="weekly"
-        ),
+        period: str = commands.parameter(converter=LastfmTimeConverter, default="7day"),
     ):
         """View your top albums"""
         name = (

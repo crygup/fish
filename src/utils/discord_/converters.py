@@ -215,7 +215,7 @@ class LastfmTimeConverter(commands.Converter):
     async def convert(self, ctx: Context, argument: str) -> str:
         response = "7day"
 
-        if re.match("7d|weekly|week", argument, re.IGNORECASE):
+        if re.match("7d|7day|weekly|week", argument, re.IGNORECASE):
             response = "7day"
         elif re.match("1mon|1m|monthy|m", argument, re.IGNORECASE):
             response = "1month"
