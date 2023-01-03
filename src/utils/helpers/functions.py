@@ -123,7 +123,7 @@ async def get_sp_cover(bot: Bot, query: str) -> Tuple[str, bool]:
         "Authorization": f"Bearer {bot.spotify_key}",
     }
 
-    data = {"q": query, "type": "album", "market": "ES", "limit": "1"}
+    data = {"q": query, "type": "album", "limit": "1"}
 
     async with bot.session.get(url, headers=headers, params=data) as r:
         results = await r.json()
