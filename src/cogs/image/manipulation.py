@@ -19,9 +19,9 @@ from .functions import (
     resize_method,
     text_to_image,
     blur_method,
-    kuwahara_method,
     sharpen_method,
     spread_method,
+    willslap_method,
 )
 
 if TYPE_CHECKING:
@@ -102,26 +102,6 @@ class Manipulation(CogBase):
 
         await ctx.send(file=file)
 
-    @to_thread
-    def willslap_method(self, image: BytesIO, image2: BytesIO) -> BytesIO:
-        with Image.open("src/files/assets/willslap.png") as output:
-            output_buffer = BytesIO()
-
-            new_im = Image.new("RGBA", (output.width, output.height))
-            new_im.paste(output)
-
-            with Image.open(image) as new_image:
-                resized = new_image.resize((110, 110))
-                new_im.paste(resized, (235, 100), mask=resized)
-
-            with Image.open(image2) as new_image:
-                resized = new_image.resize((135, 135))
-                new_im.paste(resized, (570, 130), mask=resized)
-
-            new_im.save(output_buffer, format="png")
-            output_buffer.seek(0)
-            return output_buffer
-
     @commands.command(name="willslap")
     async def willslap(
         self,
@@ -138,7 +118,7 @@ class Manipulation(CogBase):
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
         new_image2 = await ImageConverter().convert(ctx, image2)
-        output = await self.willslap_method(new_image, new_image2)
+        output = await willslap_method(new_image, new_image2)
         file = discord.File(output, filename="willslap.png")
 
         await ctx.send(file=file)

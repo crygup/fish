@@ -203,3 +203,24 @@ def spread_method(image: BytesIO) -> BytesIO:
         output.save(buffer)
         buffer.seek(0)
         return buffer
+
+
+@to_thread
+def willslap_method(image: BytesIO, image2: BytesIO) -> BytesIO:
+    with Image.open("src/files/assets/willslap.png") as output:
+        output_buffer = BytesIO()
+
+        new_im = Image.new("RGBA", (output.width, output.height))
+        new_im.paste(output)
+
+        with Image.open(image) as new_image:
+            resized = new_image.resize((110, 110))
+            new_im.paste(resized, (235, 100), mask=resized)
+
+        with Image.open(image2) as new_image:
+            resized = new_image.resize((135, 135))
+            new_im.paste(resized, (570, 130), mask=resized)
+
+        new_im.save(output_buffer, format="png")
+        output_buffer.seek(0)
+        return output_buffer

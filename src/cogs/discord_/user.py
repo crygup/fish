@@ -33,8 +33,8 @@ class UserCommands(CogBase):
     async def avatar(
         self,
         ctx: Context,
+        *,
         user: Optional[Union[discord.Member, discord.User]] = commands.Author,
-        number: int = 0,
     ):
         """Gets the avatar of a user"""
         user = user or ctx.author
@@ -45,25 +45,6 @@ class UserCommands(CogBase):
             else user.color
         )
         embed.set_author(name=str(user), icon_url=user.display_avatar.url)
-
-        if number != 0:
-            sql = (
-                """SELECT * FROM avatars WHERE user_id = $1 ORDER BY created_at DESC"""
-            )
-            results = await self.bot.pool.fetch(sql, user.id)
-            if results == []:
-                raise ValueError("User has no avatar history saved.")
-
-            try:
-                avatar = results[number + 1]["avatar"]
-            except IndexError:
-                raise ValueError(f"{user} has no avatar at that index.")
-
-            embed.set_image(url=avatar)
-            embed.timestamp = results[number + 1]["created_at"]
-            embed.set_footer(text=f"Showing avatar {number:,} \nAvatar changed")
-            await ctx.send(embed=embed)
-            return
 
         embed.set_image(url=user.display_avatar.url)
 

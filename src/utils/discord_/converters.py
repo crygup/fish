@@ -16,9 +16,9 @@ from typing import (
     TypeVar,
     Union,
 )
-from aiohttp.client_exceptions import InvalidURL
 
 import discord
+from aiohttp.client_exceptions import InvalidURL
 from braceexpand import UnbalancedBracesError, braceexpand  # type: ignore
 from bs4 import BeautifulSoup
 from discord.ext import commands
@@ -27,7 +27,6 @@ from ossapi.ossapiv2 import Beatmap, Beatmapset, User
 from steam.steamid import steam64_from_url
 from wand.color import Color
 
-from ..vars.errors import InvalidColor, NotTenorUrl, UnknownAccount
 from ..helpers import get_lastfm, get_roblox, get_twemoji, to_bytesio, to_thread
 from ..helpers.roblox import fetch_user_id_by_name
 from ..vars import (
@@ -35,9 +34,10 @@ from ..vars import (
     OSU_BEATMAPSET_RE,
     OSU_ID_RE,
     TENOR_PAGE_RE,
-    default_headers,
     BlankException,
+    default_headers,
 )
+from ..vars.errors import InvalidColor, NotTenorUrl, UnknownAccount
 
 if TYPE_CHECKING:
     from bot import Bot

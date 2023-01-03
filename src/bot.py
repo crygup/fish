@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime
 import logging
 import os
-import pathlib
 import re
 import sys
 import textwrap
@@ -25,7 +24,6 @@ from utils import (
     setup_accounts,
     setup_cache,
     setup_pokemon,
-    setup_twitter,
     setup_webhooks,
     create_pool,
 )
@@ -43,17 +41,8 @@ initial_extensions = [
     "utils.helpers",
     "utils.vars",
 ]
-cogs_path = pathlib.Path("./src/cogs")
 
-
-def fix_cog(results) -> str:
-    results = re.sub(r"[/]", ".", results)
-    results = re.sub(r"(src(/|.)|[.]py$)", "", results)
-
-    return results
-
-
-cogs = [
+extensions = [
     "cogs.discord_",
     "cogs.image",
     "cogs.search",
@@ -112,8 +101,6 @@ class Bot(commands.Bot):
     pool: asyncpg.Pool
     redis: aioredis.Redis
     exts: Set[str]
-    twitter: AsyncClient
-    live_twitter: AsyncStreamingClient
     lastfm: LastfmAsyncClient
 
     async def no_dms(self, ctx: Context):
@@ -269,14 +256,7 @@ class Bot(commands.Bot):
         await setup_accounts(self)
         print("Setup accounts")
 
-        # if not self.testing:
-        await setup_twitter(self)
-        print("Setup twitter")
-
-        # await setup_live_twitter(self) # removing live twitter for a bit
-        # print("Setup live twitter")
-
-        self.exts = set(initial_extensions + cogs)
+        self.exts = set(initial_extensions + extensions)
 
         for extension in self.exts if not self.testing else initial_extensions:
             try:

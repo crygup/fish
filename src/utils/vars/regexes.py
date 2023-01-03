@@ -1,7 +1,7 @@
 import re
 from re import Pattern
 
-
+DISCORD_ID_RE = re.compile(r"([0-9]{15,20})$")
 OSU_BEATMAPSET_RE: Pattern = re.compile(
     r"https://osu.ppy.sh/beatmapsets/(?P<set>[0-9]{1,})#(?P<mode>osu|taiko|fruits|mania)/(?P<map>[0-9]{1,})"
 )

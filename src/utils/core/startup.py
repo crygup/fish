@@ -107,17 +107,6 @@ async def setup_accounts(bot: Bot):
             )
 
 
-async def setup_twitter(bot: Bot):
-    config = bot.config["twitter"]
-    bot.twitter = AsyncClient(
-        bearer_token=config["bearer"],
-        consumer_key=config["key"],
-        consumer_secret=config["secret"],
-        access_token=config["access_token"],
-        access_token_secret=config["access_secret"],
-    )
-
-
 async def create_pool(bot: Bot, connection_url: str):
     def _encode_jsonb(value):
         return json.dumps(value)

@@ -9,6 +9,7 @@ from discord import gateway
 from bot import Bot
 from utils import mobile
 
+# monkey patching
 gateway.DiscordWebSocket.identify = mobile
 
 testing = False
