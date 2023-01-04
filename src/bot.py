@@ -188,16 +188,7 @@ class Bot(commands.Bot):
 
         await self.process_commands(after)
 
-    async def on_raw_message_delete(
-        self, payload: discord.RawMessageDeleteEvent
-    ) -> None:
-        """|coro|
-        Called every time a message is deleted.
-        Parameters
-        ----------
-        message: :class:`~discord.Message`
-            The message that was deleted.
-        """
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
         _repr_regex = rf"<utils\.Context bound to message \({payload.channel_id}-{payload.message_id}-[0-9]+\)>"
         pattern = re.compile(_repr_regex)
         messages = {r: m for r, m in self.messages.items() if pattern.fullmatch(r)}

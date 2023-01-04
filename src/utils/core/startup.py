@@ -47,6 +47,11 @@ async def setup_cache(bot: Bot):
         for item in row["items"]:
             await bot.redis.sadd(f"opted_out:{row['user_id']}", item)
 
+    user_settings = await bot.pool.fetch("SELECT * FROM user_settings")
+    for row in user_settings:
+        if row['fm_autoreact']:
+            await bot.redis.sadd("fm_autoreactions", row["user_id"])
+
 
 async def setup_webhooks(bot: Bot):
     for name, webhook in bot.config["webhooks"].items():

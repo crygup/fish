@@ -87,8 +87,8 @@ CREATE TABLE IF NOT EXISTS member_join_logs (
 CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id BIGINT,
     auto_download BIGINT,
-    poketwo BOOLEAN,
-    auto_reactions BOOLEAN,
+    poketwo BOOLEAN DEFAULT FALSE,
+    auto_reactions BOOLEAN DEFAULT FALSE,
     PRIMARY KEY (guild_id)
 );
 
@@ -164,21 +164,6 @@ CREATE TABLE IF NOT EXISTS afk (
     PRIMARY KEY (user_id)
 );
 
-/*
-CREATE TABLE IF NOT EXISTS mudae_resets (
-    guild_id BIGINT,
-    rolls_reset TIMESTAMP WITH TIME ZONE,
-    claim_reset TIMESTAMP WITH TIME ZONE,
-    PRIMARY KEY (guild_id)
-);
-
-CREATE TABLE IF NOT EXISTS mudae_users (
-    guild_id BIGINT,
-    user_id BIGINT,
-    PRIMARY KEY (guild_id, user_id)
-);
-*/
-
 CREATE TABLE IF NOT EXISTS nsfw_covers (
     album_id TEXT,
     PRIMARY KEY (album_id)
@@ -193,26 +178,6 @@ CREATE TABLE IF NOT EXISTS reminders (
     start TIMESTAMP WITH TIME ZONE,
     end_time TIMESTAMP WITH TIME ZONE
 );
-
-
-CREATE TABLE IF NOT EXISTS twitter_feed (
-    tweeter_id BIGINT,
-    guild_id BIGINT,
-    channel_id BIGINT,
-    webhook TEXT,
-    include_replies BOOLEAN,
-    created_at TIMESTAMP WITH TIME ZONE,
-    author_id BIGINT
-);
-
--- CREATE TABLE IF NOT EXISTS instagram_feed (
---     author_id BIGINT,
---     channel_id BIGINT,
---     include_replies BOOLEAN,
---     created_at TIMESTAMP WITH TIME ZONE,
---     feed_author_id BIGINT
--- );
-
 
 CREATE TABLE IF NOT EXISTS pokemon_guesses (
     pokemon_name TEXT,
@@ -236,4 +201,10 @@ CREATE TABLE IF NOT EXISTS steam_games (
     app_id BIGINT,
     name TEXT,
     PRIMARY KEY (app_id)
-)
+);
+
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id BIGINT,
+    fm_autoreact BOOLEAN DEFAULT FALSE,
+    PRIMARY KEY (user_id)
+);

@@ -1,7 +1,17 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, List, Literal, Optional, Set, TypeAlias, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Set,
+    TypeAlias,
+    Union,
+)
 
 import asyncpg
 import discord
@@ -354,44 +364,6 @@ class Settings(commands.Cog, name="settings"):
         await self.bot.pool.execute(sql, ctx.guild.id)
         await self.bot.redis.srem("auto_download_channels", result)
         await ctx.send(f"Removed auto-downloads for this server.")
-
-    @commands.group(name="auto-reactions", invoke_without_command=True, aliases=("ar",))
-    async def auto_reactions(self, ctx: Context):
-        """Shows whether auto reactions are enabled or not."""
-        sql = """SELECT auto_reactions FROM guild_settings WHERE guild_id = $1"""
-        auto_reactions: bool = await ctx.bot.pool.fetchval(sql, ctx.guild.id)
-
-        await ctx.send(
-            f"Auto reactions is {'enabled' if auto_reactions else 'disabled'} in this server."
-        )
-
-    @auto_reactions.command(name="toggle")
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.bot_has_guild_permissions(add_reactions=True)
-    async def toggle_auto_reactions(self, ctx: Context):
-        """Toggles auto reactions to media posts in this server."""
-
-        try:
-            value = True
-            sql = """
-            INSERT INTO guild_settings (guild_id, auto_reactions) VALUES ($1, $2)
-            """
-            await self.bot.pool.execute(sql, ctx.guild.id, value)
-            await self.bot.redis.sadd("auto_reactions", ctx.guild.id)
-
-        except asyncpg.UniqueViolationError:
-            sql = """
-            UPDATE guild_settings SET auto_reactions = not auto_reactions WHERE guild_id = $1 RETURNING auto_reactions
-            """
-            value: bool = await self.bot.pool.fetchval(sql, ctx.guild.id)
-            if not value:
-                await self.bot.redis.srem("auto_reactions", ctx.guild.id)
-            else:
-                await self.bot.redis.sadd("auto_reactions", ctx.guild.id)
-
-        await ctx.send(
-            f"{'Enabled' if value else 'Disabled'} auto-reactions in this server."
-        )
 
     @commands.group(name="data", invoke_without_command=True)
     async def data_group(self, ctx: Context):
@@ -752,3 +724,69 @@ class Settings(commands.Cog, name="settings"):
         await ctx.pool.execute(sql, ctx.author.id, logger)
         await ctx.redis.sadd(f"opted_out:{ctx.author.id}", logger)
         await ctx.send(str(CHECK))
+
+    @commands.group(
+        name="auto-reactions",
+        invoke_without_command=True,
+        aliases=("ar", "auto_reactions"),
+    )
+    async def auto_reactions(self, ctx: Context):
+        """Shows whether auto reactions are enabled or not."""
+        sql = """SELECT auto_reactions FROM guild_settings WHERE guild_id = $1"""
+        auto_reactions: bool = await ctx.bot.pool.fetchval(sql, ctx.guild.id)
+
+        await ctx.send(
+            f"Auto reactions are {'enabled' if auto_reactions else 'disabled'} in this server."
+        )
+
+    @commands.command(
+        name="fm-reactions",
+        invoke_without_command=True,
+        aliases=("fmr", "fm_reactions"),
+    )
+    async def fm_reactions(self, ctx: Context):
+        """Toggles auto reactions to fish fm commands for yourself."""
+
+        sql = """
+        INSERT INTO user_settings (user_id, fm_autoreact) VALUES ($1, $2)
+        ON CONFLICT (user_id) DO UPDATE
+        SET fm_autoreact = NOT user_settings.fm_autoreact
+        WHERE user_settings.user_id = $1
+        RETURNING *
+        """
+        results: Dict[Any, Any] = await self.bot.pool.fetchrow(sql, ctx.author.id, True)
+        value: bool = results["fm_autoreact"]
+
+        if value:
+            await self.bot.redis.sadd("fm_autoreactions", ctx.author.id)
+        else:
+            await self.bot.redis.srem("fm_autoreactions", ctx.author.id)
+
+        await ctx.send(
+            f"{'Enabled' if value else 'Disabled'} auto-reactions for the fm command for you."
+        )
+
+    @auto_reactions.command(name="toggle")
+    @commands.has_guild_permissions(manage_guild=True)
+    @commands.bot_has_guild_permissions(add_reactions=True)
+    async def toggle_auto_reactions(self, ctx: Context):
+        """Toggles auto reactions to media posts in this server."""
+
+        sql = """
+        INSERT INTO guild_settings (guild_id, auto_reactions) VALUES ($1, $2)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET auto_reactions = NOT guild_settings.auto_reactions
+        WHERE guild_settings.guild_id = $1
+        RETURNING *
+        """
+        results: Dict[Any, Any] = await self.bot.pool.fetchrow(sql, ctx.guild.id, True)
+        value: bool = results["auto_reactions"]
+
+        if value:
+            await self.bot.redis.sadd("auto_reactions", ctx.guild.id)
+        else:
+            await self.bot.redis.srem("auto_reactions", ctx.guild.id)
+
+        await ctx.send(
+            f"{'Enabled' if value else 'Disabled'} auto-reactions in this server."
+        )

@@ -24,6 +24,8 @@ from utils import (
     to_bytesio,
     to_thread,
     shorten,
+    UPVOTE,
+    DOWNVOTE,
 )
 
 if TYPE_CHECKING:
@@ -91,7 +93,14 @@ class LastFm(commands.Cog, name="lastfm"):
 
         embed.set_thumbnail(url=track.images.extra_large or track.images.large)
         embed.set_footer(text=footer_text)
-        await ctx.send(embed=embed, check_ref=True)
+        message = await ctx.send(embed=embed, check_ref=True)
+        if str(ctx.author.id) in await self.bot.redis.smembers("fm_autoreactions"):
+            emojis = [UPVOTE, DOWNVOTE]
+            for emoji in emojis:
+                try:
+                    await message.add_reaction(emoji)
+                except:
+                    continue
 
     @last_fm.command(name="set")
     async def lastfm_set(self, ctx: Context, username: str):
