@@ -16,7 +16,6 @@ import discord
 from cachetools import TTLCache
 from discord.ext import commands
 from ossapi import OssapiV2
-from tweepy.asynchronous import AsyncClient, AsyncStreamingClient
 from lastfm import AsyncClient as LastfmAsyncClient
 
 from cogs.context import Context
