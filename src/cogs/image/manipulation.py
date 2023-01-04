@@ -160,11 +160,8 @@ class Manipulation(CogBase):
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
         asset = await blur_method(new_image)
-        gif = imghdr.what(asset) == "gif"  # type: ignore
 
-        await ctx.send(
-            file=discord.File(asset, filename=f"blur.{'gif' if gif else 'png'}")
-        )
+        await ctx.send(file=discord.File(asset, filename=f"blur.png"))
 
     @commands.command(name="sharpen")
     async def sharpen(
@@ -178,11 +175,8 @@ class Manipulation(CogBase):
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
         asset = await sharpen_method(new_image)
-        gif = imghdr.what(asset) == "gif"  # type: ignore
 
-        await ctx.send(
-            file=discord.File(asset, filename=f"sharpen.{'gif' if gif else 'png'}")
-        )
+        await ctx.send(file=discord.File(asset, filename=f"sharpen.png"))
 
     @commands.command(name="spread")
     async def spread(
@@ -196,8 +190,5 @@ class Manipulation(CogBase):
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
         asset = await spread_method(new_image)
-        gif = imghdr.what(asset) == "gif"  # type: ignore
 
-        await ctx.send(
-            file=discord.File(asset, filename=f"spread.{'gif' if gif else 'png'}")
-        )
+        await ctx.send(file=discord.File(asset, filename=f"spread.png"))
