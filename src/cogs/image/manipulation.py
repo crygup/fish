@@ -49,40 +49,6 @@ class Manipulation(CogBase):
 
         await ctx.send(file=file)
 
-    @commands.command(name="debunked")
-    async def debunked(
-        self,
-        ctx: Context,
-        *,
-        image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
-        ),
-    ):
-        """Adds a debunked image on another"""
-        await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
-        output = await layer_image(new_image, "src/files/assets/debunked.png")
-        file = discord.File(output, filename="debunked.png")
-
-        await ctx.send(file=file)
-
-    @commands.command(name="gay")
-    async def gay(
-        self,
-        ctx: Context,
-        *,
-        image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
-        ),
-    ):
-        """Adds a gay flag image on another"""
-        await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
-        output = await layer_image(new_image, "src/files/assets/gay.png")
-        file = discord.File(output, filename="gay.png")
-
-        await ctx.send(file=file)
-
     @commands.command(name="invert")
     async def invert(
         self,
@@ -190,3 +156,147 @@ class Manipulation(CogBase):
         asset = await spread_method(new_image)
 
         await ctx.send(file=discord.File(asset, filename=f"spread.png"))
+
+    @commands.group(name="overlay", invoke_without_command=True)
+    async def overlay(self, ctx: Context):
+        await ctx.send_help(ctx.command)
+
+    async def do_overlay(self, ctx: Context, image: Argument, mode: str):
+        await ctx.trigger_typing()
+        mode_path = {
+            "debunked": "src/files/assets/debunked.png",
+            "gay": "src/files/assets/gay.png",
+            "trans": "src/files/assets/trans.png",
+            "smg": "src/files/assets/smg.png",
+            "uk": "src/files/assets/uk.png",
+            "usa": "src/files/assets/usa.png",
+            "ussr": "src/files/assets/ussr.png",
+            "shotgun": "src/files/assets/shotgun.png",
+            "pistol": "src/files/assets/pistol.png",
+            "russia": "src/files/assets/russia.png",
+        }
+        new_image = await ImageConverter().convert(ctx, image)
+        output = await layer_image(new_image, mode_path[mode])
+        file = discord.File(output, filename=f"{mode}.png")
+
+        await ctx.send(file=file)
+
+    @overlay.command(name="debunked")
+    async def debunked(
+        self,
+        ctx: Context,
+        *,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Overlays the debunked image on another"""
+        await self.do_overlay(ctx, image, "debunked")
+
+    @overlay.command(name="gay")
+    async def gay(
+        self,
+        ctx: Context,
+        *,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Overlays the gay flag on an image"""
+        await self.do_overlay(ctx, image, "gay")
+
+    @overlay.command(name="trans")
+    async def trans(
+        self,
+        ctx: Context,
+        *,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Overlays the trans flag on an image"""
+        await self.do_overlay(ctx, image, "trans")
+
+    @overlay.command(name="ussr")
+    async def ussr(
+        self,
+        ctx: Context,
+        *,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Overlays the USSR flag on an image"""
+        await self.do_overlay(ctx, image, "ussr")
+
+    @overlay.command(name="russia")
+    async def russia(
+        self,
+        ctx: Context,
+        *,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Overlays the Russia flag on an image"""
+        await self.do_overlay(ctx, image, "russia")
+
+    @overlay.command(name="usa")
+    async def usa(
+        self,
+        ctx: Context,
+        *,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Overlays the USA flag on an image"""
+        await self.do_overlay(ctx, image, "usa")
+
+    @overlay.command(name="uk")
+    async def uk(
+        self,
+        ctx: Context,
+        *,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Overlays the UK flag on an image"""
+        await self.do_overlay(ctx, image, "uk")
+
+    @overlay.command(name="pistol")
+    async def pistol(
+        self,
+        ctx: Context,
+        *,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Overlays a pistol on an image"""
+        await self.do_overlay(ctx, image, "pistol")
+
+    @overlay.command(name="shotgun")
+    async def shotgun(
+        self,
+        ctx: Context,
+        *,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Overlays a shotgun on an image"""
+        await self.do_overlay(ctx, image, "shotgun")
+
+    @overlay.command(name="smg")
+    async def smg(
+        self,
+        ctx: Context,
+        *,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Overlays an smg on an image"""
+        await self.do_overlay(ctx, image, "smg")
