@@ -349,20 +349,17 @@ class InfoCommands(CogBase):
         invoke_without_command=True,
     )
     async def server_info_command(
-        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
         """Get information about a server."""
-
-        guild = guild or ctx.guild
 
         await self.server_info(ctx, guild)
 
     @server_info_command.command(name="icons")
     async def server_info_icons(
-        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
         """Shows all of a guilds icons"""
-        guild = guild or ctx.guild
 
         sql = (
             """SELECT * FROM guild_icons WHERE guild_id = $1 ORDER BY created_at DESC"""
@@ -388,13 +385,12 @@ class InfoCommands(CogBase):
 
     @server_info_command.command("iconhistory", aliases=("iconh",))
     async def serverinfo_iconhistory(
-        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
         """Shows the icon history of a guild.
 
         This will only show the first 100, to view them all and in HD run the command `serverinfo icons`
         """
-        guild = guild or ctx.guild
 
         async with ctx.typing():
             sql = """
@@ -440,11 +436,9 @@ class InfoCommands(CogBase):
 
     @server_info_command.command(name="names")
     async def serverinfo_names(
-        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
         """Shows the past names for a guild"""
-        guild = guild or ctx.guild
-
         results = await self.bot.pool.fetch(
             "SELECT * FROM guild_name_logs WHERE guild_id = $1 ORDER BY created_at DESC",
             guild.id,
@@ -469,11 +463,9 @@ class InfoCommands(CogBase):
 
     @server_info_command.command(name="icon")
     async def serverinfo_icon(
-        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
         """Get the server icon."""
-        guild = guild or ctx.guild
-
         if not guild.icon:
             raise commands.GuildNotFound("Guild has no icon")
 
@@ -488,13 +480,9 @@ class InfoCommands(CogBase):
 
     @server_info_command.command(name="banner")
     async def serverinfo_banner(
-        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
         """Get the server banner."""
-        guild = guild or ctx.guild
-
-        if not guild:
-            raise commands.GuildNotFound("Unknown guild")
 
         if not guild.banner:
             raise commands.GuildNotFound("Guild has no banner")
@@ -510,14 +498,9 @@ class InfoCommands(CogBase):
 
     @server_info_command.command(name="splash")
     async def serverinfo_splash(
-        self, ctx: Context, *, guild: Optional[discord.Guild] = commands.CurrentGuild
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
         """Get the server splash."""
-        guild = guild or ctx.guild
-
-        if not guild:
-            raise commands.GuildNotFound("Unknown guild")
-
         if not guild.splash:
             raise commands.GuildNotFound("Guild has no splash")
 
