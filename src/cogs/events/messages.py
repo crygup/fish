@@ -1,9 +1,14 @@
 from __future__ import annotations
+import asyncio
 
-from typing import TYPE_CHECKING, List, Tuple
+
+import textwrap
+from typing import TYPE_CHECKING, List
 
 import discord
 from discord.ext import commands
+
+from utils import BOT_MENTION_RE
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -16,7 +21,7 @@ async def setup(bot: Bot):
 class MessageEvents(commands.Cog, name="message_event"):
     def __init__(self, bot: Bot):
         self.bot = bot
-        self._deleted_messages_attachments: List[Tuple[int, bytes, bool]] = []
+        self.counter: List[int] = []
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):
@@ -52,3 +57,37 @@ class MessageEvents(commands.Cog, name="message_event"):
     async def on_bulk_delete(self, messages: List[discord.Message]):
         for message in messages:
             await self.insert_message(message, True)
+
+    @commands.Cog.listener("on_message")
+    async def on_mention(self, message: discord.Message):
+        if message.guild is None:
+            return
+
+        if not BOT_MENTION_RE.match(message.content):
+            return
+
+        to_send = f"""
+        Hey there, im fishie, a somewhat multipurpose bot but I mainly am focused on logging stuff.
+
+        View your avatars with `fish pfps` or `fish avyh` for a grid of them
+        View your names with `fish names`
+        View your nicknames with `fish nicknames`
+
+        Wanting auto-reactions to media uploads? Check out `fish auto-reactions toggle`
+        Automatic downloads? `fish auto-download set [channel]`
+        Automatic Pokétwo hint solving? `fish auto-solve`        
+
+        Feel free to browse {len(self.bot.commands):,} more commands with `fish help`! :3c
+        """
+
+        await message.channel.send(textwrap.dedent(to_send))
+
+        # we don't want them spamming it
+        self.counter.append(message.channel.id)
+
+        await asyncio.sleep(60)
+
+        try:
+            self.counter.remove(message.channel.id)
+        except ValueError:
+            pass

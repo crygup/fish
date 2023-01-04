@@ -120,7 +120,7 @@ class Pokemon(commands.Cog, name="pokemon"):
         await pages.start(ctx)
 
     @commands.command(
-        name="auto_solve", aliases=("as",), extras={"UPerms": ["Manage Server"]}
+        name="auto-solve", aliases=("as", "auto_solve"), extras={"UPerms": ["Manage Server"]}
     )
     @commands.has_permissions(manage_guild=True)
     async def auto_solve(self, ctx: Context):
