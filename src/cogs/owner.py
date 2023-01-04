@@ -56,33 +56,6 @@ class Arguments(argparse.ArgumentParser):
         raise RuntimeError(message)
 
 
-class FakeUser:
-    def __init__(
-        self,
-        user: Union[discord.Member, discord.User],
-    ) -> None:
-        self.name = user.name
-        self.id = user.id
-        self.tag = user.discriminator
-        self.full = f"{user!r}"
-
-    def __str__(self) -> str:
-        return self.full
-
-    def __repr__(self) -> str:
-        return self.full
-
-
-class FakeGuild:
-    def __init__(self, guild: discord.Guild) -> None:
-        self.name = guild.name
-        self.id = guild.id
-        self.icon = guild.icon.url if guild.icon else None
-
-    def __str__(self) -> str:
-        return self.name
-
-
 class Owner(
     commands.Cog,
     name="owner",
@@ -103,15 +76,6 @@ class Owner(
             raise commands.NotOwner
 
         return True
-
-    @commands.command(name="test")
-    async def test(self, ctx: Context, *, message: str):
-        new_message = message.format_map({"user": ctx.author, "server": ctx.guild})
-
-        await ctx.send(
-            new_message,
-            allowed_mentions=discord.AllowedMentions(everyone=False, users=True),
-        )
 
     @commands.command(name="load", aliases=("reload",))
     async def load(self, ctx: Context, *extensions: ExtensionConverter):
@@ -206,62 +170,6 @@ class Owner(
             title="Reload" if ctx.invoked_with == "reload" else "Load",
             description=content,
         )
-        await ctx.send(embed=embed)
-
-    @commands.command(name="snipe")
-    @commands.is_owner()
-    async def snipe(
-        self,
-        ctx: Context,
-        index: Optional[int],
-        channel: Optional[discord.TextChannel] = commands.CurrentChannel,
-        *,
-        member: Optional[discord.Member],
-    ):
-        """Shows a deleted message"""
-        index = index or 1
-
-        if ctx.guild is None or channel is None:
-            return
-
-        if member:
-            sql = """
-            SELECT * FROM message_logs where channel_id = $1 AND author_id = $2 AND deleted IS TRUE ORDER BY created_at DESC
-            """
-            results = await self.bot.pool.fetch(sql, channel.id, member.id)
-        else:
-            sql = """
-            SELECT * FROM message_logs where channel_id = $1 AND deleted IS TRUE ORDER BY created_at DESC
-            """
-            results = await self.bot.pool.fetch(sql, channel.id)
-
-        if index - 1 >= len(results):
-            await ctx.send("Index out of range.")
-            return
-
-        if results == []:
-            await ctx.send("Nothing was deleted here...")
-            return
-
-        user = self.bot.get_user(results[index - 1]["author_id"]) or "Unknown"
-
-        embed = discord.Embed(
-            color=self.bot.embedcolor, timestamp=results[index - 1]["created_at"]
-        )
-        embed.description = (
-            textwrap.shorten(
-                results[index - 1]["message_content"], width=300, placeholder="..."
-            )
-            or "Message did not contain any content."
-        )
-        embed.set_author(
-            name=f"{str(user)}",
-            icon_url=user.display_avatar.url
-            if isinstance(user, discord.User)
-            else ctx.guild.me.display_avatar.url,
-        )
-        embed.set_footer(text=f"Index {index} of {len(results)}\nMessage deleted ")
-
         await ctx.send(embed=embed)
 
     @commands.command(name="sql")
@@ -364,6 +272,62 @@ class Owner(
     @commands.group(name="dev", invoke_without_command=True)
     async def dev(self, ctx: Context):
         """Developer commands"""
+
+    @dev.command(name="snipe")
+    @commands.is_owner()
+    async def snipe(
+        self,
+        ctx: Context,
+        index: Optional[int],
+        channel: Optional[discord.TextChannel] = commands.CurrentChannel,
+        *,
+        member: Optional[discord.Member],
+    ):
+        """Shows a deleted message"""
+        index = index or 1
+
+        if ctx.guild is None or channel is None:
+            return
+
+        if member:
+            sql = """
+            SELECT * FROM message_logs where channel_id = $1 AND author_id = $2 AND deleted IS TRUE ORDER BY created_at DESC
+            """
+            results = await self.bot.pool.fetch(sql, channel.id, member.id)
+        else:
+            sql = """
+            SELECT * FROM message_logs where channel_id = $1 AND deleted IS TRUE ORDER BY created_at DESC
+            """
+            results = await self.bot.pool.fetch(sql, channel.id)
+
+        if index - 1 >= len(results):
+            await ctx.send("Index out of range.")
+            return
+
+        if results == []:
+            await ctx.send("Nothing was deleted here...")
+            return
+
+        user = self.bot.get_user(results[index - 1]["author_id"]) or "Unknown"
+
+        embed = discord.Embed(
+            color=self.bot.embedcolor, timestamp=results[index - 1]["created_at"]
+        )
+        embed.description = (
+            textwrap.shorten(
+                results[index - 1]["message_content"], width=300, placeholder="..."
+            )
+            or "Message did not contain any content."
+        )
+        embed.set_author(
+            name=f"{str(user)}",
+            icon_url=user.display_avatar.url
+            if isinstance(user, discord.User)
+            else ctx.guild.me.display_avatar.url,
+        )
+        embed.set_footer(text=f"Index {index} of {len(results)}\nMessage deleted ")
+
+        await ctx.send(embed=embed)
 
     @dev.command(name="servers")
     async def dev_serers(self, ctx: Context):
