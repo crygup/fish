@@ -27,19 +27,22 @@ class AutoReactions(commands.Cog, name="auto_reactions"):
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):
-        if (
-            message.guild is None
-            or message.author.bot
-            or str(message.guild.id)
-            not in await self.bot.redis.smembers("auto_reactions")
-        ):
+        if message.guild is None:
+            return
+        if message.author.bot:
+            return
+        if str(message.guild.id) not in await self.bot.redis.smembers("auto_reactions"):
             return
 
         if message.attachments:
-            await self.add_reactions(message)
-            return
+            return await self.add_reactions(message)
 
-        for embed in message.embeds:
-            if not embed.type == "rich":
-                await self.add_reactions(message)
-                return
+        embeds = message.embeds
+
+        if not embeds:
+            message = await message.channel.fetch_message(message.id)
+            embeds = message.embeds
+
+        for embed in embeds:
+            if embed.type != "rich":
+                return await self.add_reactions(message)
