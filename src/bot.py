@@ -37,6 +37,7 @@ initial_extensions = [
     "cogs.context",
     "cogs.events.errors",
     "cogs.help",
+    "cogs.tasks",
     "utils.discord_",
     "utils.helpers",
     "utils.vars",

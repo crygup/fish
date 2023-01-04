@@ -6,7 +6,7 @@ import discord
 from discord.ext import commands
 from yt_dlp import DownloadError
 
-from utils import IGNORED, SEND, RateLimitExceeded
+from utils import IGNORED, SEND, RateLimitExceeded, DevError, get_or_fetch_user
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -78,6 +78,13 @@ class ErrorEvents(commands.Cog, name="error_events"):
 
         elif isinstance(error, DownloadError):
             await self.do_error(ctx, "Invalid video url.")
+
+        elif isinstance(error, DevError):
+            channel: discord.TextChannel = self.bot.get_channel(
+                989112775487922237
+            )  # type:ignore
+            liz = await get_or_fetch_user(self.bot, 766953372309127168)
+            return await ctx.send(f"{liz.mention} \n{error}")
 
         elif (
             isinstance(error, discord.HTTPException)

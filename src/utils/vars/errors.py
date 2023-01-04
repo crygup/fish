@@ -15,6 +15,10 @@ class DoNothing(Exception):
     pass
 
 
+class DevError(Exception):
+    pass
+
+
 class BadTimeTransform(BlankException):
     pass
 

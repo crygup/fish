@@ -16,44 +16,6 @@ if TYPE_CHECKING:
 
 
 class SpotifyCommands(CogBase):
-    async def cog_unload(self):
-        self.set_key_task.cancel()
-
-    async def cog_load(self) -> None:
-        self.set_key_task.start()
-
-    async def set_spotify_key(self):
-        url = "https://accounts.spotify.com/api/token"
-        sid = self.bot.config["keys"]["spotify-id"]
-        ss = self.bot.config["keys"]["spotify-secret"]
-        encoded_key = base64.b64encode(f"{sid}:{ss}".encode("ascii")).decode("ascii")
-
-        headers = {
-            "Authorization": f"Basic {encoded_key}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        }
-
-        data = {
-            "grant_type": "client_credentials",
-        }
-
-        async with self.bot.session.post(url, headers=headers, data=data) as r:
-            results: Dict[Any, Any] = await r.json()
-            if results.get("access_token"):
-                self.bot.spotify_key = results["access_token"]
-                return
-
-            raise ValueError("Unable to set spotify key.")
-
-    @tasks.loop(minutes=30.0)
-    async def set_key_task(self):
-        await self.set_spotify_key()
-
-    async def set_key(self, _):
-        key = self.bot.spotify_key
-        if key is None:
-            await self.set_spotify_key()
-
     async def get_query(self, ctx: Context, query: Optional[str], mode: str) -> str:
         if not query:
             name = await get_lastfm(self.bot, ctx.author.id)
