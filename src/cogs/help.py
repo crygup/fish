@@ -113,15 +113,8 @@ def make_command_embed(command: commands.Command | commands.Group) -> discord.Em
             inline=False,
         )
 
-    try:
-        bot_perms = command.extras["BPerms"]
-    except KeyError:
-        bot_perms = []
-
-    try:
-        user_perms = command.extras["UPerms"]
-    except KeyError:
-        user_perms = []
+    bot_perms = command.extras.get("BPerms", [])
+    user_perms = command.extras.get("UPerms", [])
 
     perms_text = ""
 
