@@ -12,7 +12,9 @@ if TYPE_CHECKING:
 
 
 class Mass(CogBase):
-    @commands.group(name="massban")
+    @commands.group(
+        name="massban", extras={"BPerms": ["Ban Members"], "UPerms": ["Ban Members"]}
+    )
     @commands.has_permissions(ban_members=True)
     @commands.bot_has_permissions(ban_members=True)
     async def massban(
@@ -21,7 +23,9 @@ class Mass(CogBase):
     ):
         await ctx.send(view=ActionView(ctx, "ban"))
 
-    @commands.group(name="masskick")
+    @commands.group(
+        name="masskick", extras={"BPerms": ["Kick Members"], "UPerms": ["Kick Members"]}
+    )
     @commands.has_permissions(kick_members=True)
     @commands.bot_has_permissions(kick_members=True)
     async def masskick(
@@ -30,7 +34,10 @@ class Mass(CogBase):
     ):
         await ctx.send(view=ActionView(ctx, "kick"))
 
-    @commands.group(name="massnick")
+    @commands.group(
+        name="massnick",
+        extras={"BPerms": ["Manage Nicknames"], "UPerms": ["Manage Nicknames"]},
+    )
     @commands.has_permissions(manage_nicknames=True)
     @commands.bot_has_permissions(manage_nicknames=True)
     async def massnick(

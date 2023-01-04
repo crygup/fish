@@ -80,7 +80,11 @@ class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
 
 
 class PurgeCog(CogBase):
-    @commands.group(name="purge", invoke_without_command=True)
+    @commands.group(
+        name="purge",
+        invoke_without_command=True,
+        extras={"BPerms": ["Manage Messages"], "UPerms": ["Manage Messages"]},
+    )
     @commands.bot_has_permissions(manage_messages=True)
     @commands.has_permissions(manage_messages=True)
     async def purge(

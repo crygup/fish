@@ -14,7 +14,9 @@ if TYPE_CHECKING:
 
 
 class Main(CogBase):
-    @commands.group(name="ban")
+    @commands.group(
+        name="ban", extras={"BPerms": ["Ban Members"], "UPerms": ["Ban Members"]}
+    )
     @commands.has_permissions(ban_members=True)
     @commands.bot_has_permissions(ban_members=True)
     async def ban(
@@ -29,7 +31,9 @@ class Main(CogBase):
         await ctx.guild.ban(user, reason=reason)
         await ctx.send(f"{CHECK} Successfully banned {user}.")
 
-    @commands.group(name="kick")
+    @commands.group(
+        name="kick", extras={"BPerms": ["Kick Members"], "UPerms": ["Kick Members"]}
+    )
     @commands.has_permissions(kick_members=True)
     @commands.bot_has_permissions(kick_members=True)
     async def kick(
@@ -44,7 +48,9 @@ class Main(CogBase):
         await ctx.guild.kick(member, reason=reason)
         await ctx.send(f"{CHECK} Successfully kicked {member}.")
 
-    @commands.command(name="multiban")
+    @commands.command(
+        name="multiban", extras={"BPerms": ["Ban Members"], "UPerms": ["Ban Members"]}
+    )
     @commands.has_permissions(ban_members=True)
     @commands.bot_has_permissions(ban_members=True)
     async def multiban(
@@ -81,7 +87,10 @@ class Main(CogBase):
 
         await ctx.send(f"Banned {total_members - failed}/{total_members} members.")
 
-    @commands.command(name="multikick")
+    @commands.command(
+        name="multikick",
+        extras={"BPerms": ["Kick Members"], "UPerms": ["Kick Members"]},
+    )
     @commands.has_permissions(ban_members=True)
     @commands.bot_has_permissions(ban_members=True)
     async def multikick(
@@ -118,8 +127,9 @@ class Main(CogBase):
 
         await ctx.send(f"Kicked {total_members - failed}/{total_members} members.")
 
-    @commands.command()
-    @commands.guild_only()
+    @commands.command(
+        name="unban", extras={"BPerms": ["Ban Members"], "UPerms": ["Ban Members"]}
+    )
     @commands.has_permissions(ban_members=True)
     @commands.bot_has_permissions(ban_members=True)
     async def unban(
