@@ -112,7 +112,7 @@ class RobloxAssetConverter(commands.Converter):
         return int(results.group("id"))
 
 
-class ImageConverter(commands.Converter):
+class ImageConverter:
     """
     Converts to a BytesIO image
     """
@@ -550,3 +550,23 @@ class BoolConverter(commands.Converter):
         compiled = re.compile(r"(yes|y|true)", re.IGNORECASE)
 
         return bool(compiled.match(message))
+
+
+class BannedMember(commands.Converter):
+    async def convert(self, ctx: Context, argument: str):
+        if argument.isdigit():
+            member_id = int(argument, base=10)
+            try:
+                return await ctx.guild.fetch_ban(discord.Object(id=member_id))
+            except discord.NotFound:
+                raise commands.BadArgument(
+                    "This member has not been banned before."
+                ) from None
+
+        entity = await discord.utils.find(
+            lambda u: str(u.user) == argument, ctx.guild.bans(limit=None)
+        )
+
+        if entity is None:
+            raise commands.BadArgument("This member has not been banned before.")
+        return entity

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Annotated, List, Optional, Union
 import discord
 from discord.ext import commands
 
-from utils import CHECK, ActionReason, MemberID, action_test, plural
+from utils import CHECK, ActionReason, MemberID, action_test, plural, BannedMember
 
 from ._base import CogBase
 
@@ -117,3 +117,30 @@ class Main(CogBase):
                 failed += 1
 
         await ctx.send(f"Kicked {total_members - failed}/{total_members} members.")
+
+    @commands.command()
+    @commands.guild_only()
+    @commands.has_permissions(ban_members=True)
+    @commands.bot_has_permissions(ban_members=True)
+    async def unban(
+        self,
+        ctx: Context,
+        member: Annotated[discord.BanEntry, BannedMember],
+        *,
+        reason: Annotated[Optional[str], ActionReason] = None,
+    ):
+        """Unbans a member from the server.
+
+        You can pass either the ID of the banned member or the Name#Discrim
+        """
+
+        if reason is None:
+            reason = f"Action done by {ctx.author} (ID: {ctx.author.id})"
+
+        await ctx.guild.unban(member.user, reason=reason)
+        if member.reason:
+            return await ctx.send(
+                f"Unbanned {member.user} (ID: {member.user.id}), previously banned for {member.reason}."
+            )
+
+        await ctx.send(f"Unbanned {member.user} (ID: {member.user.id}).")

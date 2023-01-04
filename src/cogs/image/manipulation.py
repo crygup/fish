@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import imghdr
-from io import BytesIO
 from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
-from PIL import Image
 
-from utils import Argument, ImageConverter, to_thread
+from utils import Argument, ImageConverter
 
 from ._base import CogBase
 from .functions import (
