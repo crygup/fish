@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import imghdr
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import discord
 from discord.ext import commands
@@ -9,18 +9,7 @@ from discord.ext import commands
 from utils import Argument, ImageConverter
 
 from ._base import CogBase
-from .functions import (
-    add_images,
-    gif_maker,
-    invert_method,
-    layer_image,
-    resize_method,
-    text_to_image,
-    blur_method,
-    sharpen_method,
-    spread_method,
-    willslap_method,
-)
+from .functions import *  # it's bad practice to do this but it's just a timer saver innit
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -45,7 +34,9 @@ class Manipulation(CogBase):
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
         output = await resize_method(new_image, width, height)
-        file = discord.File(output, filename="resize.png")
+        gif: bool = imghdr.what(output) == "gif"  # type: ignore
+
+        file = discord.File(output, filename=f"resize.{'gif' if gif else 'png'}")
 
         await ctx.send(file=file)
 
@@ -300,3 +291,25 @@ class Manipulation(CogBase):
     ):
         """Overlays an smg on an image"""
         await self.do_overlay(ctx, image, "smg")
+
+    @commands.command(name="rotate")
+    async def rotate(
+        self,
+        ctx: Context,
+        degree: Optional[int] = 90,
+        image: Argument = commands.parameter(
+            default=None, displayed_default="[image=None]"
+        ),
+    ):
+        """Rotates an image.
+
+        Defaults to 90 degrees"""
+
+        degree = degree or 90
+
+        await ctx.trigger_typing()
+        new_image = await ImageConverter().convert(ctx, image)
+        output = await rotate_method(new_image, degree)
+        file = discord.File(output, filename=f"rotated.png")
+
+        await ctx.send(file=file)

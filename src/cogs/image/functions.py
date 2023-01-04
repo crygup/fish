@@ -1,5 +1,6 @@
 # these are mainly just here so i can access for feedback command lol
 
+import imghdr
 import textwrap
 from io import BytesIO
 
@@ -151,21 +152,15 @@ def layer_image(image: BytesIO, cover_file: str) -> BytesIO:
 
 @to_thread
 def resize_method(image: BytesIO, height: int, width: int) -> BytesIO:
-    with Image.open(image) as output:
-        output_buffer = BytesIO()
-
-        resized = output.resize((height, width))
-        resized.save(output_buffer, "png")
-        output_buffer.seek(0)
-
-        return output_buffer
-
-
-@to_thread
-def blur_method(image: BytesIO, scale: int = 3) -> BytesIO:
     with wImage(file=image) as output:
         buffer = BytesIO()
-        output.blur(radius=0, sigma=scale)
+        if imghdr.what(image) == "gif":  # type: ignore
+            with output.clone() as frames:
+                frames.reset_coords()
+                for frame in frames:
+                    frame.resize(height=height, width=width)  # type: ignore
+        else:
+            output.resize(height=height, width=width)
 
         output.save(buffer)
         buffer.seek(0)
@@ -173,10 +168,10 @@ def blur_method(image: BytesIO, scale: int = 3) -> BytesIO:
 
 
 @to_thread
-def kuwahara_method(image: BytesIO, scale: float = 1.5) -> BytesIO:
+def blur_method(image: BytesIO, scale: int = 3) -> BytesIO:
     with wImage(file=image) as output:
         buffer = BytesIO()
-        output.kuwahara(radius=2, sigma=scale)
+        output.blur(radius=0, sigma=scale)
 
         output.save(buffer)
         buffer.seek(0)
@@ -224,3 +219,14 @@ def willslap_method(image: BytesIO, image2: BytesIO) -> BytesIO:
         new_im.save(output_buffer, format="png")
         output_buffer.seek(0)
         return output_buffer
+
+
+@to_thread
+def rotate_method(image: BytesIO, degree: int = 90) -> BytesIO:
+    with wImage(file=image) as output:
+        buffer = BytesIO()
+        output.rotate(degree=degree)
+
+        output.save(buffer)
+        buffer.seek(0)
+        return buffer
