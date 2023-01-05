@@ -39,10 +39,24 @@ class AutoReactions(commands.Cog, name="auto_reactions"):
 
         embeds = message.embeds
 
-        if not embeds:
-            message = await message.channel.fetch_message(message.id)
-            embeds = message.embeds
-
         for embed in embeds:
             if embed.type != "rich":
                 return await self.add_reactions(message)
+
+    @commands.Cog.listener("on_message_edit")
+    async def on_message_edit(self, before: discord.Message, after: discord.Message):
+        if before.guild is None:
+            return
+        if before.author.bot:
+            return
+        if str(before.guild.id) not in await self.bot.redis.smembers("auto_reactions"):
+            return
+
+        if after.attachments:
+            return await self.add_reactions(after)
+
+        embeds = after.embeds
+
+        for embed in embeds:
+            if embed.type != "rich":
+                return await self.add_reactions(after)
