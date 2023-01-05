@@ -127,7 +127,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
     @commands.command(name="hello", hidden=True)
     async def hello(self, ctx: Context):
         """Displays my hello message"""
-        msg = "Hello! I'm a robot! cr#0333 made me."
+        msg = "Hello! I'm a robot! lіz#0333 made me."
 
         if ctx.bot.testing:
             msg += "\nThis is the testing version of the bot."
