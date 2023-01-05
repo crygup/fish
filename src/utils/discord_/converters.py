@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import imghdr
 import pathlib
 import random
 import re
@@ -27,8 +26,15 @@ from ossapi.ossapiv2 import Beatmap, Beatmapset, User
 from steam.steamid import steam64_from_url
 from wand.color import Color
 
-from ..helpers import get_lastfm, get_roblox, get_twemoji, to_bytesio, to_thread
-from ..helpers.roblox import fetch_user_id_by_name
+from ..helpers import (
+    get_lastfm,
+    get_roblox,
+    get_twemoji,
+    to_bytesio,
+    to_thread,
+    what,
+    fetch_user_id_by_name,
+)
 from ..vars import (
     OSU_BEATMAP_RE,
     OSU_BEATMAPSET_RE,
@@ -141,15 +147,16 @@ class ImageConverter:
                 if resp.ok:
                     accepted_types = ["gif", "png", "jpeg", "webp"]
                     image = BytesIO(await resp.read())
-                    what = imghdr.what(image)  # type: ignore
-                    if what in accepted_types:
+                    if what(image) in accepted_types:
                         return image
         except InvalidURL:
             pass
 
         raise BlankException("Couldn't convert image")
 
-    async def from_message(self, ctx: Context, message: discord.Message, skip_author: bool = False) -> BytesIO:  # type: ignore
+    async def from_message(
+        self, ctx: Context, message: discord.Message, skip_author: bool = False
+    ) -> BytesIO:
         if message.attachments:
             return BytesIO(await message.attachments[0].read())
 
@@ -198,7 +205,10 @@ class ImageConverter:
             except BlankException:
                 pass
 
-        async for msg in ctx.channel.history(limit=10, before=message):
+        cached_msgs = [
+            msg for msg in ctx.bot.cached_messages if msg.channel.id == ctx.channel.id
+        ][:10]
+        for msg in cached_msgs:
             try:
                 return await self.from_message(ctx, msg, True)
             except BlankException:
