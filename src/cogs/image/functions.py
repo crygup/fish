@@ -1,13 +1,28 @@
 # these are mainly just here so i can access for feedback command lol
 
 import imghdr
+import sys
 import textwrap
 from io import BytesIO
+from typing import Tuple
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageSequence
 from wand.image import Image as wImage
 
-from utils import to_thread
+from utils import to_thread, natural_size
+
+
+@to_thread
+def get_wh(image: BytesIO) -> Tuple[int, int]:
+    new_image = BytesIO(image.getvalue())
+    with wImage(file=new_image) as output:
+        return output.size
+
+
+@to_thread
+def get_size(image: BytesIO) -> str:
+    size = sys.getsizeof(image)
+    return natural_size(size)
 
 
 @to_thread
@@ -151,7 +166,11 @@ def layer_image(image: BytesIO, cover_file: str) -> BytesIO:
 
 
 @to_thread
-def resize_method(image: BytesIO, height: int, width: int) -> BytesIO:
+def resize_method(
+    image: BytesIO,
+    width: int,
+    height: int,
+) -> BytesIO:
     with wImage(file=image) as output:
         buffer = BytesIO()
         if imghdr.what(image) == "gif":  # type: ignore

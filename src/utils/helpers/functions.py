@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import imghdr
 import math
 import re
 import subprocess
@@ -669,3 +670,11 @@ def shorten(text: str, width: int, ending: str = " [...]") -> str:
         new = text[:width] + ending
 
     return new
+
+def what(image: BytesIO) -> str:
+    w = imghdr.what(image) # type: ignore
+    
+    if w is None:
+        raise BlankException("Idk what filetype this is, sorry.")
+    
+    return w

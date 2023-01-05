@@ -1,12 +1,12 @@
 from __future__ import annotations
+import time
 
-import imghdr
 from typing import TYPE_CHECKING, Optional
 
 import discord
 from discord.ext import commands
 
-from utils import Argument, ImageConverter
+from utils import Argument, ImageConverter, Timer, what
 
 from ._base import CogBase
 from .functions import *  # it's bad practice to do this but it's just a timer saver innit
@@ -16,6 +16,22 @@ if TYPE_CHECKING:
 
 
 class Manipulation(CogBase):
+    async def do_image(self, ctx: Context, image: BytesIO, time_taken: float):
+        filename = f"{ctx.command.name}.{what(image)}"
+        file = discord.File(image, filename=filename)
+
+        embed = discord.Embed(color=self.bot.embedcolor)
+        embed.set_image(url=f"attachment://{filename}")
+
+        width, height = await get_wh(image)
+        size = await get_size(image)
+
+        embed.set_footer(
+            text=f"{width}x{height}, {size}, took {round(time_taken, 2)} seconds."
+        )
+
+        await ctx.send(file=file, embed=embed, check_ref=True)
+
     @commands.command(name="resize")
     async def resize(
         self,
@@ -24,7 +40,7 @@ class Manipulation(CogBase):
         width: int,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Resizes an image"""
@@ -33,12 +49,12 @@ class Manipulation(CogBase):
 
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
+
+        start = time.perf_counter()
         output = await resize_method(new_image, width, height)
-        gif: bool = imghdr.what(output) == "gif"  # type: ignore
+        end = time.perf_counter()
 
-        file = discord.File(output, filename=f"resize.{'gif' if gif else 'png'}")
-
-        await ctx.send(file=file)
+        await self.do_image(ctx=ctx, image=output, time_taken=end - start)
 
     @commands.command(name="invert")
     async def invert(
@@ -46,23 +62,25 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Inverts the colors of an image"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-        output = await invert_method(new_image)
-        file = discord.File(output, filename="inverted.png")
 
-        await ctx.send(file=file)
+        start = time.perf_counter()
+        output = await invert_method(new_image)
+        end = time.perf_counter()
+
+        await self.do_image(ctx=ctx, image=output, time_taken=end - start)
 
     @commands.command(name="willslap")
     async def willslap(
         self,
         ctx: Context,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
         *,
         image2: Argument = commands.parameter(
@@ -73,17 +91,19 @@ class Manipulation(CogBase):
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
         new_image2 = await ImageConverter().convert(ctx, image2)
-        output = await willslap_method(new_image, new_image2)
-        file = discord.File(output, filename="willslap.png")
 
-        await ctx.send(file=file)
+        start = time.perf_counter()
+        output = await willslap_method(new_image, new_image2)
+        end = time.perf_counter()
+
+        await self.do_image(ctx=ctx, image=output, time_taken=end - start)
 
     @commands.command(name="caption")
     async def caption(
         self,
         ctx: Context,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
         *,
         text: str = commands.parameter(displayed_default="<text>"),
@@ -91,69 +111,79 @@ class Manipulation(CogBase):
         """Captions an image"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
+
+        start = time.perf_counter()
         boxed = await text_to_image(text)
-        gif = imghdr.what(new_image) == "gif"  # type: ignore
-        asset = (
+        gif = what(new_image) == "gif"
+        output = (
             await gif_maker(new_image, boxed)
             if gif
             else await add_images(new_image, boxed)
         )
+        end = time.perf_counter()
 
-        await ctx.send(
-            file=discord.File(asset, filename=f"caption.{'gif' if gif else 'png'}")
-        )
+        await self.do_image(ctx=ctx, image=output, time_taken=end - start)
 
     @commands.command(name="blur")
     async def blur(
         self,
         ctx: Context,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Blurs an image"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-        asset = await blur_method(new_image)
 
-        await ctx.send(file=discord.File(asset, filename=f"blur.png"))
+        start = time.perf_counter()
+        output = await blur_method(new_image)
+        end = time.perf_counter()
+
+        await self.do_image(ctx=ctx, image=output, time_taken=end - start)
 
     @commands.command(name="sharpen")
     async def sharpen(
         self,
         ctx: Context,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Sharpens an image"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-        asset = await sharpen_method(new_image)
 
-        await ctx.send(file=discord.File(asset, filename=f"sharpen.png"))
+        start = time.perf_counter()
+        output = await sharpen_method(new_image)
+        end = time.perf_counter()
+
+        await self.do_image(ctx=ctx, image=output, time_taken=end - start)
 
     @commands.command(name="spread")
     async def spread(
         self,
         ctx: Context,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Spreads an image"""
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-        asset = await spread_method(new_image)
 
-        await ctx.send(file=discord.File(asset, filename=f"spread.png"))
+        start = time.perf_counter()
+        output = await spread_method(new_image)
+        end = time.perf_counter()
 
-    @commands.group(name="overlay", invoke_without_command=True)
+        await self.do_image(ctx=ctx, image=output, time_taken=end - start)
+
+    @commands.group(name="overlay", aliases=("o",), invoke_without_command=True)
     async def overlay(self, ctx: Context):
+        """Overlay some images"""
         await ctx.send_help(ctx.command)
 
     async def do_overlay(self, ctx: Context, image: Argument, mode: str):
-        await ctx.trigger_typing()
         mode_path = {
             "debunked": "src/files/assets/debunked.png",
             "gay": "src/files/assets/gay.png",
@@ -166,11 +196,15 @@ class Manipulation(CogBase):
             "pistol": "src/files/assets/pistol.png",
             "russia": "src/files/assets/russia.png",
         }
-        new_image = await ImageConverter().convert(ctx, image)
-        output = await layer_image(new_image, mode_path[mode])
-        file = discord.File(output, filename=f"{mode}.png")
 
-        await ctx.send(file=file)
+        await ctx.trigger_typing()
+        new_image = await ImageConverter().convert(ctx, image)
+
+        start = time.perf_counter()
+        output = await layer_image(new_image, mode_path[mode])
+        end = time.perf_counter()
+
+        await self.do_image(ctx=ctx, image=output, time_taken=end - start)
 
     @overlay.command(name="debunked")
     async def debunked(
@@ -178,7 +212,7 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Overlays the debunked image on another"""
@@ -190,7 +224,7 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Overlays the gay flag on an image"""
@@ -202,7 +236,7 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Overlays the trans flag on an image"""
@@ -214,7 +248,7 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Overlays the USSR flag on an image"""
@@ -226,7 +260,7 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Overlays the Russia flag on an image"""
@@ -238,7 +272,7 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Overlays the USA flag on an image"""
@@ -250,7 +284,7 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Overlays the UK flag on an image"""
@@ -262,7 +296,7 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Overlays a pistol on an image"""
@@ -274,7 +308,7 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Overlays a shotgun on an image"""
@@ -286,7 +320,7 @@ class Manipulation(CogBase):
         ctx: Context,
         *,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Overlays an smg on an image"""
@@ -298,7 +332,7 @@ class Manipulation(CogBase):
         ctx: Context,
         degree: Optional[int] = 90,
         image: Argument = commands.parameter(
-            default=None, displayed_default="[image=None]"
+            default=None, displayed_default="recent-media"
         ),
     ):
         """Rotates an image.
@@ -309,7 +343,9 @@ class Manipulation(CogBase):
 
         await ctx.trigger_typing()
         new_image = await ImageConverter().convert(ctx, image)
-        output = await rotate_method(new_image, degree)
-        file = discord.File(output, filename=f"rotated.png")
 
-        await ctx.send(file=file)
+        start = time.perf_counter()
+        output = await rotate_method(new_image, degree)
+        end = time.perf_counter()
+
+        await self.do_image(ctx=ctx, image=output, time_taken=end - start)
