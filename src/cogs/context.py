@@ -141,8 +141,8 @@ class Context(commands.Context):
         *,
         timeout: float = 60.0,
         delete_after: bool = True,
-        files: Optional[List[discord.File]] = None,
         author_id: Optional[int] = None,
+        **kwargs,
     ) -> Optional[bool]:
 
         author_id = author_id or self.author.id
@@ -152,7 +152,7 @@ class Context(commands.Context):
             ctx=self,
             author_id=author_id,
         )
-        view.message = await self.send(message, files=files, view=view)
+        view.message = await self.send(message, view=view, **kwargs)
         await view.wait()
         return view.value
 
