@@ -49,8 +49,11 @@ async def setup_cache(bot: Bot):
 
     user_settings = await bot.pool.fetch("SELECT * FROM user_settings")
     for row in user_settings:
-        if row['fm_autoreact']:
+        if row["fm_autoreact"]:
             await bot.redis.sadd("fm_autoreactions", row["user_id"])
+
+        if row["mudae_pokemon"]:
+            await bot.redis.sadd("mudae_pokemon_reminders", row["user_id"])
 
 
 async def setup_webhooks(bot: Bot):

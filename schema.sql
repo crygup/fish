@@ -206,5 +206,6 @@ CREATE TABLE IF NOT EXISTS steam_games (
 CREATE TABLE IF NOT EXISTS user_settings (
     user_id BIGINT,
     fm_autoreact BOOLEAN DEFAULT FALSE,
+    mudae_pokemon BOOLEAN DEFAULT FALSE,
     PRIMARY KEY (user_id)
 );
