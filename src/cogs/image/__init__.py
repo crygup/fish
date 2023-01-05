@@ -5,13 +5,12 @@ from typing import TYPE_CHECKING
 import discord
 
 from .manipulation import Manipulation
-from .waifu import Waifus
 
 if TYPE_CHECKING:
     from bot import Bot
 
 
-class Image(Waifus, Manipulation, name="image"):
+class Image(Manipulation, name="image"):
     """Image related stuff"""
 
     @property
