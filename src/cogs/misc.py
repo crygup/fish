@@ -136,7 +136,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
 
     @commands.command(name="character")
     async def character(self, ctx: Context, *, character: str):
-        """Gets the information about a character."""
+        """Gets the information about a genshin character."""
 
         pattern = re.compile(r'"(?P<name>[a-zA-Z-]{1,})"')
         async with self.bot.session.get("https://api.genshin.dev/characters") as r:
