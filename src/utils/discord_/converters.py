@@ -126,7 +126,7 @@ class ImageConverter:
                     continue
 
         try:
-            await self.from_string(message.content)
+            return await self.from_string(message.content)
         except NoImageFound:
             pass
 
