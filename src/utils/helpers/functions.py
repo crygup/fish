@@ -114,6 +114,11 @@ async def get_steam_data(
 
 
 async def get_sp_cover(bot: Bot, query: str) -> Tuple[str, bool]:
+    results = bot.cached_covers.get(query)
+
+    if results:
+        return results
+
     if bot.spotify_key is None:
         raise ValueError("Spotify key is not set yet, maybe spotify cog needs loaded?")
 
@@ -130,9 +135,17 @@ async def get_sp_cover(bot: Bot, query: str) -> Tuple[str, bool]:
         results = await r.json()
 
     try:
-        return results["albums"]["items"][0]["images"][0]["url"], results["albums"][
-            "items"
-        ][0]["id"] in await bot.redis.smembers("nsfw_covers")
+        cover = results["albums"]["items"][0]["images"][0]["url"]
+        nsfw = results["albums"]["items"][0]["id"] in await bot.redis.smembers(
+            "nsfw_covers"
+        )
+
+        try:
+            bot.cached_covers[query] = (cover, nsfw)
+        except KeyError:
+            pass
+
+        return cover, nsfw
     except (IndexError, KeyError):
         raise NoCover("No cover found for this album, sorry.")
 
@@ -671,10 +684,11 @@ def shorten(text: str, width: int, ending: str = " [...]") -> str:
 
     return new
 
+
 def what(image: BytesIO) -> str:
-    w = imghdr.what(image) # type: ignore
-    
+    w = imghdr.what(image)  # type: ignore
+
     if w is None:
         raise BlankException("Idk what filetype this is, sorry.")
-    
+
     return w

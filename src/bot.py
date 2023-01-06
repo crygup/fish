@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import datetime
+from io import BytesIO
 import logging
 import os
 import re
 import sys
 import textwrap
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Set, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Set, Optional, Tuple
 
 import aiohttp
 import aioredis
@@ -173,6 +174,7 @@ class Bot(commands.Bot):
         self.prefixes: Dict[int, List[str]] = {}
         self._context = Context
         self.spotify_key: Optional[str] = None
+        self.cached_covers: Dict[str, Tuple[str, bool]] = {}
 
         self.add_check(self.no_dms)
         self.add_check(self.block_list)
