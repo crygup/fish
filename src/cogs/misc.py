@@ -313,8 +313,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         await ctx.trigger_typing()
         boxed = await text_to_image(text)
         asset = await gif_maker(
-            await ImageConverter().convert(
-                ctx,
+            await ImageConverter(ctx).convert(
                 "https://cdn.discordapp.com/attachments/1055712784458989598/1055712870857461811/feedback.gif",
             ),
             boxed,

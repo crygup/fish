@@ -157,19 +157,18 @@ def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
     return wrapper
 
 
-async def get_twemoji(session: aiohttp.ClientSession, emoji: str) -> Optional[bytes]:
+async def get_twemoji(session: aiohttp.ClientSession, emoji: str) -> BytesIO:
     try:
         formatted = "-".join([f"{ord(char):x}" for char in emoji])
         url = f"https://twemoji.maxcdn.com/v/latest/svg/{formatted}.svg"
-
+    except Exception:
+        raise NoTwemojiFound("Couldn't find emoji.")
+    else:
         async with session.get(url) as r:
             if r.ok:
-                return await svgbytes_to_btyes(await r.read())
+                return BytesIO(await svgbytes_to_btyes(await r.read()))
 
-            raise NoTwemojiFound("Couldn't find emoji.")
-
-    except Exception:
-        return None
+        raise NoTwemojiFound("Couldn't find emoji.")
 
 
 @to_thread

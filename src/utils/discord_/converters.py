@@ -33,6 +33,7 @@ from ..helpers import (
     to_bytesio,
     to_thread,
     what,
+    NoTwemojiFound,
     fetch_user_id_by_name,
 )
 from ..vars import (
@@ -41,6 +42,7 @@ from ..vars import (
     OSU_ID_RE,
     TENOR_PAGE_RE,
     BlankException,
+    NoImageFound,
     default_headers,
 )
 from ..vars.errors import InvalidColor, NotTenorUrl, UnknownAccount
@@ -52,13 +54,136 @@ if TYPE_CHECKING:
 FCT = TypeVar("FCT", bound="FlagConverter")
 
 Argument: TypeAlias = Optional[
-    discord.User
+    discord.Member
+    | discord.User
     | discord.Emoji
     | discord.PartialEmoji
     | discord.Role
     | discord.Message
     | str
 ]
+
+
+class ImageConverter:
+    def __init__(self, ctx: Context):
+        self.accepted_file_types: List[str] = ["png", "gif", "jpg", "jpeg", "webp"]
+        self.ctx = ctx
+
+    """
+    Converts to a BytesIO image
+    """
+
+    async def from_embed(self, embed: discord.Embed):
+        ctx = self.ctx
+
+        if embed.thumbnail.url:
+            return to_bytesio(ctx.session, embed.thumbnail.url)
+
+        if embed.image.url:
+            return to_bytesio(ctx.session, embed.image.url)
+
+        raise NoImageFound("Couldn't find image in embed.")
+
+    async def from_string(self, string: str) -> BytesIO:
+        ctx = self.ctx
+        try:
+            return await get_twemoji(ctx.session, string)
+        except NoTwemojiFound:
+            pass
+
+        try:
+            url = await TenorUrlConverter().convert(ctx, string)
+            return await to_bytesio(ctx.session, url)
+        except NotTenorUrl:
+            pass
+
+        try:
+            async with ctx.session.get(string, headers=default_headers) as resp:
+                if resp.ok:
+                    data = BytesIO(await resp.read())
+                    if what(data) in self.accepted_file_types:
+                        return data
+        except:
+            pass
+
+        raise NoImageFound("Couldn't find image in string.")
+
+    async def from_message(
+        self, message: discord.Message, skip_author: bool = True
+    ) -> BytesIO:
+        ctx = self.ctx
+
+        if message.attachments:
+            asset = BytesIO(await message.attachments[0].read())
+            if what(asset) in self.accepted_file_types:
+                return asset
+
+        if message.embeds:
+            for embed in message.embeds:
+                try:
+                    await self.from_embed(embed)
+                except NoImageFound:
+                    continue
+
+        try:
+            await self.from_string(message.content)
+        except NoImageFound:
+            pass
+
+        if not skip_author:
+            return BytesIO(await message.author.display_avatar.read())
+
+        raise NoImageFound("Couldn't find image in string.")
+
+    async def convert(self, argument: Argument) -> BytesIO:
+        ctx = self.ctx
+        message = ctx.message
+
+        if message.reference:
+            if message.reference.resolved and not isinstance(
+                message.reference.resolved, discord.DeletedReferencedMessage
+            ):
+                try:
+                    return await self.from_message(message.reference.resolved, False)
+                except NoImageFound:
+                    pass
+
+        if message.attachments:
+            return BytesIO(await message.attachments[0].read())
+
+        if isinstance(argument, (discord.User, discord.Member)):
+            return BytesIO(await argument.display_avatar.read())
+
+        if isinstance(argument, discord.Emoji):
+            return BytesIO(await argument.read())
+
+        if isinstance(argument, discord.PartialEmoji):
+            if argument.is_custom_emoji():
+                return BytesIO(await argument.read())
+
+        if isinstance(argument, discord.Role):
+            if argument.icon:
+                return BytesIO(await argument.icon.read())
+
+        if isinstance(argument, discord.Message):
+            try:
+                return await self.from_message(argument, False)
+            except NoImageFound:
+                pass
+
+        if isinstance(argument, str):
+            try:
+                return await self.from_string(argument)
+            except NoImageFound:
+                pass
+
+        async for message in ctx.channel.history(limit=10):
+            try:
+                await self.from_message(message)
+            except NoImageFound:
+                continue
+
+        return BytesIO(await ctx.author.display_avatar.read())
 
 
 class OsuAccountConverter(commands.Converter):
@@ -116,105 +241,6 @@ class RobloxAssetConverter(commands.Converter):
             raise commands.BadArgument(f"`{argument}` is not a valid asset ID")
 
         return int(results.group("id"))
-
-
-class ImageConverter:
-    """
-    Converts to a BytesIO image
-    """
-
-    async def from_embed(self, ctx: Context, embed: discord.Embed) -> BytesIO:
-        if embed.image and embed.image.url:
-            return await to_bytesio(ctx.session, embed.image.url)
-
-        if embed.thumbnail and embed.thumbnail.url:
-            return await to_bytesio(ctx.session, embed.thumbnail.url)
-
-        raise BlankException("No image found in embed")
-
-    async def from_str(self, ctx: Context, content: str) -> BytesIO:
-        emoji = await get_twemoji(ctx.session, content)
-        if emoji:
-            return BytesIO(emoji)
-
-        try:
-            url = await TenorUrlConverter().convert(ctx, content)
-        except NotTenorUrl:
-            url = content
-
-        try:
-            async with ctx.session.get(url) as resp:
-                if resp.ok:
-                    accepted_types = ["gif", "png", "jpeg", "webp"]
-                    image = BytesIO(await resp.read())
-                    if what(image) in accepted_types:
-                        return image
-        except InvalidURL:
-            pass
-
-        raise BlankException("Couldn't convert image")
-
-    async def from_message(
-        self, ctx: Context, message: discord.Message, skip_author: bool = False
-    ) -> BytesIO:
-        if message.attachments:
-            return BytesIO(await message.attachments[0].read())
-
-        if message.embeds:
-            for embed in message.embeds:
-                try:
-                    image = await self.from_embed(ctx, embed)
-                except BlankException:
-                    pass
-                else:
-                    return image
-
-        if message.content:
-            try:
-                await self.from_str(ctx, message.content)
-            except BlankException:
-                pass
-
-        if not skip_author:
-            return BytesIO(await message.author.display_avatar.replace(size=512).read())
-
-        raise BlankException("Could not get image from message")
-
-    async def convert(self, ctx: Context, argument: Argument) -> BytesIO:
-        message = ctx.message
-
-        if message.attachments:
-            return BytesIO(await message.attachments[0].read())
-
-        if isinstance(argument, discord.User):
-            return BytesIO(await argument.display_avatar.replace(size=512).read())
-
-        if isinstance(argument, (discord.Emoji, discord.PartialEmoji)):
-            try:
-                return BytesIO(await argument.read())
-            except ValueError:
-                pass
-
-        if isinstance(argument, discord.Role):
-            if argument.display_icon and not isinstance(argument.display_icon, str):
-                return BytesIO(await argument.display_icon.read())
-
-        if isinstance(argument, str):
-            try:
-                await self.from_str(ctx, argument)
-            except BlankException:
-                pass
-
-        cached_msgs = [
-            msg for msg in ctx.bot.cached_messages if msg.channel.id == ctx.channel.id
-        ][:10]
-        for msg in cached_msgs:
-            try:
-                return await self.from_message(ctx, msg, True)
-            except BlankException:
-                continue
-
-        return BytesIO(await message.author.display_avatar.replace(size=512).read())
 
 
 class LastfmTimeConverter(commands.Converter):
@@ -537,7 +563,7 @@ class TenorUrlConverter(commands.Converter):
 
         return element["src"]  # type: ignore
 
-    async def convert(self, ctx: commands.Context[Bot], url: str) -> str:
+    async def convert(self, ctx: Context, url: str) -> str:
         real_url = TENOR_PAGE_RE.search(url)
 
         if not real_url:

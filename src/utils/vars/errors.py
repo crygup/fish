@@ -11,11 +11,15 @@ class BlankException(Exception):
         return self.message
 
 
-class DoNothing(Exception):
+class DoNothing(BlankException):
     pass
 
 
-class DevError(Exception):
+class NoImageFound(BlankException):
+    pass
+
+
+class DevError(BlankException):
     pass
 
 
@@ -103,6 +107,7 @@ IGNORED = (
     DoNothing,
 )
 SEND = (
+    NoImageFound,
     BlankException,
     VideoIsLive,
     NotTenorUrl,

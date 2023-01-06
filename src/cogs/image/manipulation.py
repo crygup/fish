@@ -48,7 +48,7 @@ class Manipulation(CogBase):
             raise ValueError("Width or height is too big, keep it under 2000px please.")
 
         await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
+        new_image = await ImageConverter(ctx).convert(image)
 
         start = time.perf_counter()
         output = await resize_method(new_image, width, height)
@@ -67,7 +67,7 @@ class Manipulation(CogBase):
     ):
         """Inverts the colors of an image"""
         await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
+        new_image = await ImageConverter(ctx).convert(image)
 
         start = time.perf_counter()
         output = await invert_method(new_image)
@@ -89,8 +89,8 @@ class Manipulation(CogBase):
     ):
         """Slap someone will smith style"""
         await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
-        new_image2 = await ImageConverter().convert(ctx, image2)
+        new_image = await ImageConverter(ctx).convert(image)
+        new_image2 = await ImageConverter(ctx).convert(image2)
 
         start = time.perf_counter()
         output = await willslap_method(new_image, new_image2)
@@ -110,7 +110,7 @@ class Manipulation(CogBase):
     ):
         """Captions an image"""
         await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
+        new_image = await ImageConverter(ctx).convert(image)
 
         start = time.perf_counter()
         boxed = await text_to_image(text)
@@ -134,7 +134,7 @@ class Manipulation(CogBase):
     ):
         """Blurs an image"""
         await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
+        new_image = await ImageConverter(ctx).convert(image)
 
         start = time.perf_counter()
         output = await blur_method(new_image)
@@ -152,7 +152,7 @@ class Manipulation(CogBase):
     ):
         """Sharpens an image"""
         await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
+        new_image = await ImageConverter(ctx).convert(image)
 
         start = time.perf_counter()
         output = await sharpen_method(new_image)
@@ -170,7 +170,7 @@ class Manipulation(CogBase):
     ):
         """Spreads an image"""
         await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
+        new_image = await ImageConverter(ctx).convert(image)
 
         start = time.perf_counter()
         output = await spread_method(new_image)
@@ -198,7 +198,7 @@ class Manipulation(CogBase):
         }
 
         await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
+        new_image = await ImageConverter(ctx).convert(image)
 
         start = time.perf_counter()
         output = await layer_image(new_image, mode_path[mode])
@@ -342,7 +342,7 @@ class Manipulation(CogBase):
         degree = degree or 90
 
         await ctx.trigger_typing()
-        new_image = await ImageConverter().convert(ctx, image)
+        new_image = await ImageConverter(ctx).convert(image)
 
         start = time.perf_counter()
         output = await rotate_method(new_image, degree)
