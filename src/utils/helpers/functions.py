@@ -365,21 +365,6 @@ def natural_size(size_in_bytes: int) -> str:
     return f"{size_in_bytes / (1024 ** power):.2f} {units[power]}"
 
 
-async def run(cmd: str) -> Optional[str]:
-
-    proc = await asyncio.create_subprocess_shell(
-        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-
-    stdout, stderr = await proc.communicate()
-
-    if stdout:
-        return f"[stdout]\n{stdout.decode()}"
-
-    if stderr:
-        raise TypeError(f"[stderr]\n{stderr.decode()}")
-
-
 def cleanup_code(content: str) -> str:
     """Automatically removes code blocks from the code."""
 
