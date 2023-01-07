@@ -36,8 +36,8 @@ class Manipulation(CogBase):
     async def resize(
         self,
         ctx: Context,
-        height: int,
         width: int,
+        height: int,
         *,
         image: Argument = commands.parameter(
             default=None, displayed_default="recent-media"
@@ -51,7 +51,7 @@ class Manipulation(CogBase):
         new_image = await ImageConverter(ctx).convert(image)
 
         start = time.perf_counter()
-        output = await resize_method(new_image, width, height)
+        output = await resize_method(new_image, width=width, height=height)
         end = time.perf_counter()
 
         await self.do_image(ctx=ctx, image=output, time_taken=end - start)
