@@ -9,7 +9,7 @@ from typing import Tuple
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageSequence
 from wand.image import Image as wImage
 
-from utils import to_thread, natural_size
+from utils import natural_size, to_thread, what
 
 
 @to_thread
@@ -173,7 +173,7 @@ def resize_method(
 ) -> BytesIO:
     with wImage(file=image) as output:
         buffer = BytesIO()
-        if imghdr.what(image) == "gif":  # type: ignore
+        if what(image) == "gif":
             with output.clone() as frames:
                 frames.reset_coords()
                 for frame in frames:

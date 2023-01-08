@@ -54,7 +54,8 @@ if TYPE_CHECKING:
 FCT = TypeVar("FCT", bound="FlagConverter")
 
 Argument: TypeAlias = Optional[
-    discord.Member
+    discord.Attachment
+    | discord.Member
     | discord.User
     | discord.Emoji
     | discord.PartialEmoji
@@ -150,6 +151,9 @@ class ImageConverter:
 
         if message.attachments:
             return BytesIO(await message.attachments[0].read())
+
+        if isinstance(argument, discord.Attachment):
+            return BytesIO(await argument.read())
 
         if isinstance(argument, (discord.User, discord.Member)):
             return BytesIO(await argument.display_avatar.read())
