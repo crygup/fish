@@ -10,8 +10,8 @@ from dateutil.parser import parse
 from discord.ext import commands, menus
 from discord.ext.commands import Paginator as CommandPaginator
 
-from ..helpers import human_join
-from ..vars import CHECK, TRASH, PREVIOUS, GO_TO_PAGE, NEXT
+from ..helpers import GoogleImageData, human_join
+from ..vars import CHECK, GO_TO_PAGE, NEXT, PREVIOUS, TRASH
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -257,6 +257,29 @@ class AvatarsPageSource(menus.ListPageSource):
         self.embed.set_footer(text=f"Page {menu.current_page + 1}/{maximum} \nChanged")
         self.embed.timestamp = entries[1]
         self.embed.set_image(url=entries[0])
+
+        return self.embed
+
+
+class GoogleImagePageSource(menus.ListPageSource):
+    def __init__(self, entries: List[GoogleImageData], *, per_page=1):
+        super().__init__(entries, per_page=per_page)
+        self.embed = discord.Embed(colour=0x2F3136)
+
+    async def format_page(self, menu, entry: GoogleImageData):
+        self.embed.clear_fields()
+
+        self.embed.set_image(url=entry.image_url)
+        self.embed.set_author(
+            name=str(entry.author), icon_url=entry.author.display_avatar.url
+        )
+        self.embed.title = entry.snippet
+        self.embed.url = entry.url
+
+        self.embed.set_footer(
+            text=f"Page {menu.current_page + 1}/{self.get_max_pages()} of Google Image search - {entry.query}",
+            icon_url="https://cdn.discordapp.com/attachments/1055712784458989598/1061514627093110795/google-go.png",
+        )
 
         return self.embed
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
-from dataclasses import dataclass
 
 import datetime
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, TypeAlias, Union
 
 import asyncpg
@@ -189,3 +189,12 @@ class Timer:
             raise ValueError("Timer has not been starter.")
 
         return self._end - self._start
+
+
+@dataclass()
+class GoogleImageData:
+    image_url: str
+    url: str
+    snippet: str
+    query: str
+    author: discord.User | discord.Member

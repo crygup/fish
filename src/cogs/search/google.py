@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import response_checker
+from utils import GoogleImageData, GoogleImagePageSource, Pager, response_checker
 
 from ._base import CogBase
 
@@ -54,3 +54,35 @@ class GoogleCommands(CogBase):
             embed.description = text
 
         await ctx.send(embed=embed)
+
+    @commands.command(name="image", aliases=("img",))
+    async def google_image(self, ctx: Context, *, query: str):
+        url = f"https://customsearch.googleapis.com/customsearch/v1"
+        params = {
+            "cx": self.bot.config["keys"]["google-id"],
+            "q": query,
+            "key": self.bot.config["keys"]["google-search"],
+            "searchType": "image",
+            "safe": "off"
+            if not isinstance(ctx.channel, discord.Thread) and ctx.channel.nsfw
+            else "high",
+        }
+
+        await ctx.trigger_typing()
+        async with self.bot.session.get(url, params=params) as r:
+            response_checker(r)
+            results = await r.json()
+
+            entries = [
+                GoogleImageData(
+                    image_url=data["link"],
+                    url=data["image"]["contextLink"],
+                    snippet=data["snippet"],
+                    query=query,
+                    author=ctx.author,
+                )
+                for data in results["items"]
+            ]
+
+        pager = Pager(GoogleImagePageSource(entries), ctx=ctx)
+        await pager.start(ctx)
