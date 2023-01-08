@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
+from typing import TYPE_CHECKING, Dict, Literal, Optional, Union
 
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import commands
 
 from utils import get_lastfm, get_lastfm_data, get_sp_cover, to_bytesio
 
@@ -61,7 +61,7 @@ class SpotifyCommands(CogBase):
 
     @commands.hybrid_group(
         name="spotify",
-        aliases=("sp", "s"),
+        aliases=("sp", "s", "song", "track"),
         invoke_without_command=True,
         fallback="track",
     )
