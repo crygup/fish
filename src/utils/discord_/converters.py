@@ -6,8 +6,11 @@ import re
 from io import BytesIO
 from typing import (
     TYPE_CHECKING,
+    Any,
+    Dict,
     Generic,
     List,
+    Literal,
     Optional,
     Tuple,
     Type,
@@ -27,14 +30,17 @@ from steam.steamid import steam64_from_url
 from wand.color import Color
 
 from ..helpers import (
+    NoTwemojiFound,
+    SpotifySearchData,
+    fetch_user_id_by_name,
     get_lastfm,
+    get_recent_track,
     get_roblox,
     get_twemoji,
+    response_checker,
     to_bytesio,
     to_thread,
     what,
-    NoTwemojiFound,
-    fetch_user_id_by_name,
 )
 from ..vars import (
     OSU_BEATMAP_RE,
@@ -610,3 +616,133 @@ class BannedMember(commands.Converter):
         if entity is None:
             raise commands.BadArgument("This member has not been banned before.")
         return entity
+
+
+class SpotifyConverter:
+    format_mode = {
+        "track": "tracks",
+        "album": "albums",
+        "artist": "artists",
+        "track,album,artist": "albums",
+    }
+
+    def __init__(
+        self,
+        ctx: Context,
+        mode: Union[
+            Literal["track"], Literal["album"], Literal["artist"], Literal["all"]
+        ],
+    ):
+        super().__init__()
+        self.mode = mode if mode != "all" else "track,album,artist"
+        self.ctx = ctx
+
+    async def search_raw(self, query: str) -> Dict[Any, Any]:
+        ctx = self.ctx
+        url = "https://api.spotify.com/v1/search"
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {ctx.bot.spotify_key}",
+        }
+
+        api_data = {"q": query, "type": self.mode, "limit": "10", "market": "US"}
+
+        async with ctx.session.get(url, headers=headers, params=api_data) as resp:
+            response_checker(resp)
+            data: Optional[Dict[Any, Any]] = (
+                (await resp.json()).get(self.format_mode[self.mode]).get(f"items")
+            )
+
+        if data == [] or data is None:
+            raise BlankException("No info found for this query")
+
+        return data
+
+    async def search_album(
+        self, query: str, spotify_data: Optional[SpotifySearchData] = None
+    ) -> str:
+        data = await self.search_raw(query)
+
+        if spotify_data is None:
+            return data[0]["external_urls"]["spotify"]
+
+        for item in data:
+            if item["name"] != spotify_data.album:
+                continue
+
+            if spotify_data.artist not in [
+                artist["name"] for artist in item["artists"]
+            ]:
+                continue
+
+            return item["external_urls"]["spotify"]
+
+        raise BlankException("Couldn't find that album.")
+
+    async def search_artist(
+        self, query: str, spotify_data: Optional[SpotifySearchData] = None
+    ) -> str:
+        data = await self.search_raw(query)
+
+        if spotify_data is None:
+            return data[0]["external_urls"]["spotify"]
+
+        for item in data:
+            if item["name"] != spotify_data.artist:
+                continue
+
+            return item["external_urls"]["spotify"]
+
+        raise BlankException("Couldn't find that album.")
+
+    async def search_track(
+        self, query: str, spotify_data: Optional[SpotifySearchData] = None
+    ) -> str:
+        data = await self.search_raw(query)
+
+        if spotify_data is None:
+            return data[0]["external_urls"]["spotify"]
+
+        for item in data:
+            if item["name"] != spotify_data.track:
+                continue
+
+            if item["album"]["name"] != spotify_data.album:
+                continue
+
+            if spotify_data.artist not in [
+                artist["name"] for artist in item["artists"]
+            ]:
+                continue
+
+            return item["external_urls"]["spotify"]
+
+        raise BlankException("Couldn't find that album.")
+
+    async def get_query(
+        self, query: Optional[str]
+    ) -> Tuple[str, Optional[SpotifySearchData]]:
+
+        ctx = self.ctx
+        if query is None:
+            name = await get_lastfm(ctx.bot, ctx.author.id)
+            track = await get_recent_track(ctx.bot, name)
+
+            query = ""
+            if self.mode == "track":
+                query = f"{track.name} {track.album.name} {track.artist.name}"
+
+            elif self.mode == "album" or self.mode == "all":
+                query = f"{track.album.name} {track.artist.name}"
+
+            elif self.mode == "artist":
+                query = track.artist.name
+
+            return query, SpotifySearchData(
+                track=track.name,
+                album=track.album.name,
+                artist=track.artist.name,
+            )
+
+        return query, None

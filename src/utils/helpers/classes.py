@@ -198,3 +198,10 @@ class GoogleImageData:
     snippet: str
     query: str
     author: discord.User | discord.Member
+
+
+@dataclass()
+class SpotifySearchData:
+    track: str
+    album: str
+    artist: str

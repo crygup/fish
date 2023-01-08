@@ -676,3 +676,12 @@ def what(image: BytesIO) -> str:
         raise BlankException("Idk what filetype this is, sorry.")
 
     return w
+
+
+async def get_recent_track(bot: Bot, name: str):
+    try:
+        return (
+            await bot.lastfm.fetch_user_recent_tracks(user=name, extended=True, limit=1)
+        )[0]
+    except IndexError:
+        raise BlankException(f"{name} has no recent tracks.")
