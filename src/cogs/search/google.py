@@ -6,7 +6,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import GoogleImageData, GoogleImagePageSource, Pager, response_checker
+from utils import (
+    GoogleImageData,
+    GoogleImagePageSource,
+    Pager,
+    response_checker,
+    BlankException,
+)
 
 from ._base import CogBase
 
@@ -72,6 +78,11 @@ class GoogleCommands(CogBase):
         async with self.bot.session.get(url, params=params) as r:
             response_checker(r)
             results = await r.json()
+
+            items = results.get("items")
+
+            if items is None:
+                raise BlankException("No search results.")
 
             entries = [
                 GoogleImageData(
