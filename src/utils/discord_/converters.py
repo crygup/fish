@@ -668,11 +668,11 @@ class SpotifyConverter:
             return data[0]["external_urls"]["spotify"]
 
         for item in data:
-            if item["name"] != spotify_data.album:
+            if str(item["name"]).lower() != spotify_data.album.lower():
                 continue
 
-            if spotify_data.artist not in [
-                artist["name"] for artist in item["artists"]
+            if spotify_data.artist.lower() not in [
+                str(artist["name"]).lower() for artist in item["artists"]
             ]:
                 continue
 
@@ -689,7 +689,7 @@ class SpotifyConverter:
             return data[0]["external_urls"]["spotify"]
 
         for item in data:
-            if item["name"] != spotify_data.artist:
+            if str(item["name"]).lower() != spotify_data.artist.lower():
                 continue
 
             return item["external_urls"]["spotify"]
@@ -705,20 +705,20 @@ class SpotifyConverter:
             return data[0]["external_urls"]["spotify"]
 
         for item in data:
-            if item["name"] != spotify_data.track:
+            if str(item["name"]).lower() != spotify_data.track.lower():
                 continue
 
-            if item["album"]["name"] != spotify_data.album:
+            if str(item["album"]["name"]).lower() != spotify_data.album.lower():
                 continue
 
-            if spotify_data.artist not in [
-                artist["name"] for artist in item["artists"]
+            if spotify_data.artist.lower() not in [
+                str(artist["name"]).lower() for artist in item["artists"]
             ]:
                 continue
 
             return item["external_urls"]["spotify"]
 
-        raise BlankException("Couldn't find that album.")
+        raise BlankException("Couldn't find that track.")
 
     async def get_query(
         self, query: Optional[str]
