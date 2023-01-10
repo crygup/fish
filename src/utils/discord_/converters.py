@@ -36,11 +36,11 @@ from ..helpers import (
     get_lastfm,
     get_recent_track,
     get_roblox,
-    get_twemoji,
     response_checker,
     to_bytesio,
     to_thread,
     what,
+    svgbytes_to_btyes,
 )
 from ..vars import (
     OSU_BEATMAP_RE,
@@ -59,141 +59,22 @@ if TYPE_CHECKING:
 
 FCT = TypeVar("FCT", bound="FlagConverter")
 
-Argument: TypeAlias = Optional[
-    discord.Attachment
-    | discord.Member
-    | discord.User
-    | discord.Emoji
-    | discord.PartialEmoji
-    | discord.Role
-    | discord.Message
-    | str
-]
 
+class TwemojiConverter(commands.Converter):
+    """Converts str to twemoji bytesio"""
 
-class ImageConverter:
-    def __init__(self, ctx: Context):
-        self.accepted_file_types: List[str] = ["png", "gif", "jpg", "jpeg", "webp"]
-        self.ctx = ctx
-
-    """
-    Converts to a BytesIO image
-    """
-
-    async def from_embed(self, embed: discord.Embed):
-        ctx = self.ctx
-
-        if embed.thumbnail.url:
-            return to_bytesio(ctx.session, embed.thumbnail.url)
-
-        if embed.image.url:
-            return to_bytesio(ctx.session, embed.image.url)
-
-        raise NoImageFound("Couldn't find image in embed.")
-
-    async def from_string(self, string: str) -> BytesIO:
-        ctx = self.ctx
+    async def convert(self, ctx: Context, argument: str) -> BytesIO:
         try:
-            return await get_twemoji(ctx.session, string)
-        except NoTwemojiFound:
-            pass
+            formatted = "-".join([f"{ord(char):x}" for char in argument])
+            url = f"https://twemoji.maxcdn.com/v/latest/svg/{formatted}.svg"
+        except Exception:
+            raise NoTwemojiFound("Couldn't find emoji.")
+        else:
+            async with ctx.session.get(url) as r:
+                if r.ok:
+                    return BytesIO(await svgbytes_to_btyes(await r.read()))
 
-        try:
-            url = await TenorUrlConverter().convert(ctx, string)
-            return await to_bytesio(ctx.session, url)
-        except NotTenorUrl:
-            pass
-
-        try:
-            async with ctx.session.get(string, headers=default_headers) as resp:
-                if resp.ok:
-                    data = BytesIO(await resp.read())
-                    if what(data) in self.accepted_file_types:
-                        return data
-        except:
-            pass
-
-        raise NoImageFound("Couldn't find image in string.")
-
-    async def from_message(
-        self, message: discord.Message, skip_author: bool = True
-    ) -> BytesIO:
-        ctx = self.ctx
-
-        if message.attachments:
-            asset = BytesIO(await message.attachments[0].read())
-            if what(asset) in self.accepted_file_types:
-                return asset
-
-        if message.embeds:
-            for embed in message.embeds:
-                try:
-                    await self.from_embed(embed)
-                except NoImageFound:
-                    continue
-
-        try:
-            return await self.from_string(message.content)
-        except NoImageFound:
-            pass
-
-        if not skip_author:
-            return BytesIO(await message.author.display_avatar.read())
-
-        raise NoImageFound("Couldn't find image in string.")
-
-    async def convert(self, argument: Argument) -> BytesIO:
-        ctx = self.ctx
-        message = ctx.message
-
-        if message.reference:
-            if message.reference.resolved and not isinstance(
-                message.reference.resolved, discord.DeletedReferencedMessage
-            ):
-                try:
-                    return await self.from_message(message.reference.resolved, False)
-                except NoImageFound:
-                    pass
-
-        if message.attachments:
-            return BytesIO(await message.attachments[0].read())
-
-        if isinstance(argument, discord.Attachment):
-            return BytesIO(await argument.read())
-
-        if isinstance(argument, (discord.User, discord.Member)):
-            return BytesIO(await argument.display_avatar.read())
-
-        if isinstance(argument, discord.Emoji):
-            return BytesIO(await argument.read())
-
-        if isinstance(argument, discord.PartialEmoji):
-            if argument.is_custom_emoji():
-                return BytesIO(await argument.read())
-
-        if isinstance(argument, discord.Role):
-            if argument.icon:
-                return BytesIO(await argument.icon.read())
-
-        if isinstance(argument, discord.Message):
-            try:
-                return await self.from_message(argument, False)
-            except NoImageFound:
-                pass
-
-        if isinstance(argument, str):
-            try:
-                return await self.from_string(argument)
-            except NoImageFound:
-                pass
-
-        async for message in ctx.channel.history(limit=10):
-            try:
-                await self.from_message(message)
-            except NoImageFound:
-                continue
-
-        return BytesIO(await ctx.author.display_avatar.read())
+            raise NoTwemojiFound("Couldn't find emoji.")
 
 
 class OsuAccountConverter(commands.Converter):

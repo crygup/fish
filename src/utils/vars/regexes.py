@@ -1,5 +1,6 @@
 from re import Pattern, compile as comp, VERBOSE
 
+IMAGE_URL_RE = comp(r"^(https?://)(\S)*((?P<filename>png|jpe?g|gif|webp)$)")
 BOT_MENTION_RE = comp(r"<@!?876391494485950504>")
 DISCORD_ID_RE = comp(r"([0-9]{15,20})$")
 OSU_BEATMAPSET_RE: Pattern = comp(
