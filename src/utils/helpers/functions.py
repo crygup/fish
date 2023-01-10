@@ -685,3 +685,16 @@ async def get_recent_track(bot: Bot, name: str):
         )[0]
     except IndexError:
         raise BlankException(f"{name} has no recent tracks.")
+
+
+@to_thread
+def get_wh(image: BytesIO) -> Tuple[int, int]:
+    new_image = BytesIO(image.getvalue())
+    with wImage(file=new_image) as output:
+        return output.size
+
+
+@to_thread
+def get_size(image: BytesIO) -> str:
+    size = sys.getsizeof(image)
+    return natural_size(size)

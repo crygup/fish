@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import difflib
 import itertools
 import re
@@ -18,6 +17,8 @@ from jishaku.paginators import WrappedPaginator
 from tabulate import tabulate
 
 from utils import (
+    CHECK,
+    BlankException,
     CoverView,
     ExtensionConverter,
     NoCover,
@@ -27,8 +28,6 @@ from utils import (
     plural,
     response_checker,
     to_bytesio,
-    CHECK,
-    BlankException,
 )
 
 if TYPE_CHECKING:
@@ -49,11 +48,6 @@ class SqlCommandFlags(
     commands.FlagConverter, prefix="-", delimiter=" ", case_insensitive=True
 ):
     args: List[str] = commands.Flag(name="argument", aliases=["a", "arg"], annotation=List[EvaluatedArg], default=[])  # type: ignore
-
-
-class Arguments(argparse.ArgumentParser):
-    def error(self, message):
-        raise RuntimeError(message)
 
 
 class Owner(

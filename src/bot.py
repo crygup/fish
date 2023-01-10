@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import datetime
-from io import BytesIO
 import logging
 import os
 import re
 import sys
 import textwrap
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Set, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 import aiohttp
 import aioredis
@@ -16,16 +15,16 @@ import asyncpg
 import discord
 from cachetools import TTLCache
 from discord.ext import commands
-from ossapi import OssapiV2
 from lastfm import AsyncClient as LastfmAsyncClient
+from ossapi import OssapiV2
 
 from cogs.context import Context
 from utils import (
+    create_pool,
     setup_accounts,
     setup_cache,
     setup_pokemon,
     setup_webhooks,
-    create_pool,
 )
 
 if TYPE_CHECKING:
