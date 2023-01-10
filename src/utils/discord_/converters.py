@@ -64,9 +64,11 @@ class TwemojiConverter(commands.Converter):
     """Converts str to twemoji bytesio"""
 
     async def convert(self, ctx: Context, argument: str) -> BytesIO:
+        if len(argument) >= 8:
+            raise NoTwemojiFound("Too long to be an emoji, nice try kiddo")
         try:
             formatted = "-".join([f"{ord(char):x}" for char in argument])
-            url = f"https://twemoji.maxcdn.com/v/latest/svg/{formatted}.svg"
+            url = f"https://raw.githubusercontent.com/twitter/twemoji/abb5a1add2b706520d0d9d6f023297761e64e1c7/assets/svg/{formatted}.svg"
         except Exception:
             raise NoTwemojiFound("Couldn't find emoji.")
         else:

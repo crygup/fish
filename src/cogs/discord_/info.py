@@ -32,6 +32,7 @@ from utils import (
     Pager,
     AvatarsPageSource,
     FieldPageSource,
+    TwemojiConverter,
 )
 
 from ._base import CogBase
@@ -676,21 +677,15 @@ class InfoCommands(CogBase):
     async def emoji(
         self,
         ctx: Context,
-        emoji: Optional[Union[discord.Emoji, discord.PartialEmoji, str]],
+        emoji: Optional[Union[discord.Emoji, discord.PartialEmoji, TwemojiConverter]],
     ):
         """Gets information about an emoji."""
 
         if ctx.message.reference is None and emoji is None:
             raise commands.BadArgument("No emoji provided.")
 
-        if isinstance(emoji, str):
-            _emoji = await get_twemoji(ctx.session, str(emoji))
-
-            if _emoji is None:
-                raise commands.BadArgument("No emoji found.")
-
-            await ctx.send(file=discord.File(BytesIO(_emoji), filename=f"emoji.png"))
-            return
+        if isinstance(emoji, BytesIO):
+            return await ctx.send(file=discord.File(emoji, filename=f"emoji.png"))
 
         if emoji:
             emoji = emoji
@@ -709,8 +704,10 @@ class InfoCommands(CogBase):
 
             emoji = (await EmojiConverter().from_message(ctx, reference.content))[0]
 
-        if emoji is None:
-            raise TypeError("No emoji found.")
+        if emoji is None or isinstance(
+            emoji, TwemojiConverter
+        ):  # having TwemojiConverter check here for typing reasons, will always be str
+            raise BlankException("No emoji found.")
 
         embed = discord.Embed(timestamp=emoji.created_at, title=emoji.name)
 
