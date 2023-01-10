@@ -95,9 +95,8 @@ class OtherCommands(CogBase):
         return element["src"]  # type: ignore
 
     @commands.command(name="tenor")
-    async def tenor(self, ctx: commands.Context, url: str):
+    async def tenor(self, ctx: commands.Context, url: TenorUrlConverter):
         """Gets the actual gif URL from a tenor link"""
-        url = await TenorUrlConverter().convert(ctx, url)
 
         await ctx.send(f"Here is the real URL: {url}")
 
