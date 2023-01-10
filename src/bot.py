@@ -45,7 +45,7 @@ initial_extensions = [
 
 extensions = [
     "cogs.discord_",
-    "cogs.image",
+    # "cogs.image",
     "cogs.search",
     "cogs.tools",
     "cogs.lastfm",

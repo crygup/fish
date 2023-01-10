@@ -13,7 +13,6 @@ from discord.ext import commands
 
 from utils import (
     BlankException,
-    ImageConverter,
     RPSView,
     SteamConverter,
     Unauthorized,
@@ -26,8 +25,6 @@ from utils import (
     to_bytesio,
     response_checker,
 )
-
-from .image.functions import gif_maker, text_to_image
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -300,26 +297,6 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
             re.sub(" ", " \U0001f1fa\U0001f1f8 ", text)[:2000],
             allowed_mentions=discord.AllowedMentions.none(),
         )
-
-    @commands.command(name="feedback")
-    @commands.is_owner()
-    async def feedback(
-        self,
-        ctx: Context,
-        *,
-        text: str = commands.parameter(displayed_default="<text>"),
-    ):
-        """We appreciate your love and feedback!"""
-        await ctx.trigger_typing()
-        boxed = await text_to_image(text)
-        asset = await gif_maker(
-            await ImageConverter(ctx).convert(
-                "https://cdn.discordapp.com/attachments/1055712784458989598/1055712870857461811/feedback.gif",
-            ),
-            boxed,
-        )
-
-        await ctx.send(file=discord.File(asset, filename=f"feedback.gif"))
 
     @commands.command(name="rock-paper-scissors", aliases=("rockpaperscissors", "rps"))
     async def RPSCommand(self, ctx: Context):
