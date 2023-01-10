@@ -84,14 +84,9 @@ def make_command_embed(command: commands.Command | commands.Group) -> discord.Em
     except KeyError:
         pass
 
-    try:
-        nsfw = command.extras["nsfw"]
-    except KeyError:
-        nsfw = False
-
     metadata = {
         "Category": str(command.cog.qualified_name).title(),
-        "NSFW": nsfw,
+        "NSFW": command.extras.get("nsfw", False),
     }
 
     embed.add_field(
