@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import imghdr
 import math
+import os
 import re
 import subprocess
 import sys
@@ -23,12 +24,14 @@ from typing import (
     Union,
 )
 
+import aiofiles
 import aiohttp
 import discord
 from aiohttp import ClientResponse
 from dateutil.relativedelta import relativedelta
 from discord.ext import commands
-from PIL import Image as PImage, ImageSequence
+from PIL import Image as PImage
+from PIL import ImageSequence
 from wand.image import Image as wImage
 
 from ..vars import (
@@ -66,6 +69,51 @@ class plural:
         if abs(v) != 1:
             return f"{v} {plural}"
         return f"{v} {singular}"
+
+
+async def count_lines(
+    path: str,
+    filetype: str = ".py",
+    skip_venv: bool = True,
+):
+    lines = 0
+    for i in os.scandir(path):
+        if i.is_file():
+            if i.path.endswith(filetype):
+                if skip_venv and re.search(r"\\venv\\", i.path):
+                    continue
+                lines += len(
+                    (await (await aiofiles.open(i.path, "r")).read()).split("\n")
+                )
+        elif i.is_dir():
+            lines += await count_lines(i.path, filetype)
+    return lines
+
+
+async def count_others(
+    path: str,
+    filetype: str = ".py",
+    file_contains: str = "def",
+    skip_venv: bool = True,
+):
+    line_count = 0
+    for i in os.scandir(path):
+        if i.is_file():
+            if i.path.endswith(filetype):
+                if skip_venv and re.search(r"\\venv\\", i.path):
+                    continue
+                line_count += len(
+                    [
+                        line
+                        for line in (
+                            await (await aiofiles.open(i.path, "r")).read()
+                        ).split("\n")
+                        if file_contains in line
+                    ]
+                )
+        elif i.is_dir():
+            line_count += await count_others(i.path, filetype, file_contains)
+    return line_count
 
 
 async def get_lastfm_data(
