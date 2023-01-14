@@ -71,19 +71,16 @@ class Settings(commands.Cog, name="settings"):
 
     async def link_method(self, ctx: Context, user_id: int, option: str, username: str):
         username = username.lower()
-
-        try:
-            await ctx.bot.pool.execute(
-                f"INSERT INTO accounts (user_id, {option}) VALUES($1, $2)",
-                ctx.author.id,
-                username,
-            )
-        except asyncpg.UniqueViolationError:
-            await ctx.bot.pool.execute(
-                f"UPDATE accounts SET {option} = $1 WHERE user_id = $2",
-                username,
-                ctx.author.id,
-            )
+        sql = f"""
+        INSERT INTO accounts (user_id, {option}) VALUES ($1, $2)
+        ON CONFLICT (user_id) DO UPDATE
+        SET {option} = $2 WHERE accounts.user_id = $1
+        """
+        await ctx.bot.pool.execute(
+            sql,
+            ctx.author.id,
+            username,
+        )
         await ctx.bot.redis.hset(f"accounts:{user_id}", option, username)
 
         await ctx.send(f"Your {option} account has been linked.", ephemeral=True)
@@ -170,8 +167,6 @@ class Settings(commands.Cog, name="settings"):
         embed.add_field(name="osu!", value=accounts["osu"] or "Not set")
         embed.add_field(name="Steam", value=accounts["steam"] or "Not set")
         embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
-        embed.add_field(name="Genshin UID", value=accounts["genshin"] or "Not set")
-        embed.add_field(name="\u200b", value="\u200b")
 
         await ctx.send(embed=embed, check_ref=True)
 
