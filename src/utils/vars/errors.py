@@ -11,7 +11,7 @@ class BlankException(Exception):
         return self.message
 
 
-class DoNothing(BlankException):
+class DoNothing(Exception):
     pass
 
 
