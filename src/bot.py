@@ -62,7 +62,6 @@ extensions = [
     "cogs.events.errors",
     "cogs.events.guilds",
     "cogs.events.avatars",
-    "cogs.events.messages",
     "cogs.events.users",
 ]
 

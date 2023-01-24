@@ -1,11 +1,7 @@
-CREATE TABLE IF NOT EXISTS message_logs (
-    author_id BIGINT,
-    guild_id BIGINT,
-    channel_id BIGINT,
-    message_id BIGINT,
-    message_content TEXT,
-    created_at TIMESTAMP WITH TIME ZONE,
-    deleted BOOLEAN
+CREATE TABLE IF NOT EXISTS opted_out (
+    user_id BIGINT,
+    items TEXT[],
+    PRIMARY KEY (user_id)
 );
 
 CREATE TABLE IF NOT EXISTS avatars (

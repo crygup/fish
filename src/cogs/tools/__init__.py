@@ -12,15 +12,12 @@ from .other import OtherCommands
 from .reminder import ReminderCommands
 from .tags import TagCommands
 
-# from .video import Video
-
 if TYPE_CHECKING:
     from bot import Bot
     from utils import PGTimer
 
 
 class Tools(
-    # Video,
     TagCommands,
     DownloadCommands,
     OtherCommands,

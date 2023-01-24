@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import asyncio
-import datetime
 import textwrap
-from typing import TYPE_CHECKING, Annotated, Any, Optional
+from typing import TYPE_CHECKING, Annotated
 
 import asyncpg
 import discord
@@ -18,6 +16,7 @@ if TYPE_CHECKING:
 
 
 class ReminderCommands(CogBase):
+    # https://github.com/Rapptz/RoboDanny/blob/rewrite/cogs/reminder.py#L301-L331
     @commands.group(
         name="remind",
         aliases=("timer", "remindme", "reminder"),
