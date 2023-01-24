@@ -1,15 +1,16 @@
 from re import Pattern, compile as comp, VERBOSE
 
-IMAGE_URL_RE = comp(r"^(https?://)(\S)*((?P<filename>png|jpe?g|gif|webp)$)")
-BOT_MENTION_RE = comp(r"<@!?876391494485950504>")
-DISCORD_ID_RE = comp(r"([0-9]{15,20})$")
+IMGUR_PAGE_RE: Pattern = comp(r"https?://(www\.)?imgur.com/(\S+)/?")
+IMAGE_URL_RE: Pattern = comp(r"^(https?://)(\S)*((?P<filename>png|jpe?g|gif|webp)$)")
+BOT_MENTION_RE: Pattern = comp(r"<@!?876391494485950504>")
+DISCORD_ID_RE: Pattern = comp(r"([0-9]{15,20})$")
 OSU_BEATMAPSET_RE: Pattern = comp(
     r"https://osu.ppy.sh/beatmapsets/(?P<set>[0-9]{1,})#(?P<mode>osu|taiko|fruits|mania)/(?P<map>[0-9]{1,})"
 )
 OSU_BEATMAP_RE: Pattern = comp(r"https://osu.ppy.sh/beatmaps/(?P<id>[0-9]{1,})")
 OSU_ID_RE: Pattern = comp(r"(?P<id>[0-9]{1,})")
-TENOR_PAGE_RE: Pattern = comp(r"https?://(www\.)?tenor\.com/view/\S+")
-TENOR_GIF_RE: Pattern = comp(r"https?://(www\.)?c\.tenor\.com/\S+/\S+\.gif")
+TENOR_PAGE_RE: Pattern = comp(r"https?://(www\.)?tenor\.com/view/\S+/?")
+TENOR_GIF_RE: Pattern = comp(r"https?://(www\.)?c\.tenor\.com/\S+/\S+\.gif/?")
 CUSTOM_EMOJI_RE: Pattern = comp(r"<(a)?:([a-zA-Z0-9_]{2,32}):([0-9]{18,22})>")
 TIKTOK_RE: Pattern = comp(
     r"https://(www|vt|vm|m).tiktok.com/(@)?[a-zA-Z0-9_-]{3,}(/video/[0-9]{1,})?"

@@ -11,6 +11,17 @@ class BlankException(Exception):
         return self.message
 
 
+# https://github.com/Tom-the-Bomb/BombBot/blob/master/bot/utils/imaging/exceptions.py#L34-L42
+class ImageTooLarge(BlankException):
+    def __init__(self, size: int, max_size: int = 15_000_000) -> None:
+        MIL = 1_000_000
+        self.message = (
+            f"The size of the provided image (`{size / MIL:.2f} MB`) "
+            f"exceeds the limit of `{max_size / MIL} MB`"
+        )
+        super().__init__(self.message)
+
+
 class DoNothing(Exception):
     pass
 
@@ -80,10 +91,6 @@ class Forbidden(ClientErrorResponse):
     pass
 
 
-class ImageTooLarge(commands.BadArgument):
-    pass
-
-
 class InvalidColor(commands.BadArgument):
     pass
 
@@ -107,22 +114,23 @@ IGNORED = (
     DoNothing,
 )
 SEND = (
-    NoImageFound,
-    BlankException,
-    VideoIsLive,
-    NotTenorUrl,
-    discord.HTTPException,
     TypeError,
     ValueError,
+    discord.HTTPException,
     commands.GuildNotFound,
     commands.UserNotFound,
     commands.BadArgument,
     commands.MissingRequiredArgument,
     commands.TooManyArguments,
     commands.UserInputError,
-    UnknownAccount,
     commands.BotMissingPermissions,
     commands.MissingPermissions,
+    ResponseError,
+    NoImageFound,
+    BlankException,
+    VideoIsLive,
+    NotTenorUrl,
+    UnknownAccount,
     ServerErrorResponse,
     BadGateway,
     ClientErrorResponse,

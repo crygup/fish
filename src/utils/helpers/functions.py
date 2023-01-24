@@ -220,9 +220,19 @@ async def get_twemoji(session: aiohttp.ClientSession, emoji: str) -> BytesIO:
 
 
 @to_thread
-def svgbytes_to_btyes(svg: bytes) -> bytes:
+def svgbytes_to_btyes(
+    svg: bytes,
+    *,
+    width: int = 500,
+    height: int = 500,
+    background="none",
+) -> bytes:
     with wImage(
-        blob=svg, format="svg", width=500, height=500, background="none"
+        blob=svg,
+        format="svg",
+        width=width,
+        height=height,
+        background=background,
     ) as asset:
         img = asset.make_blob("png")
 
