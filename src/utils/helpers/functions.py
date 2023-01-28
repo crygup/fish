@@ -30,8 +30,7 @@ import discord
 from aiohttp import ClientResponse
 from dateutil.relativedelta import relativedelta
 from discord.ext import commands
-from PIL import Image as PImage
-from PIL import ImageSequence
+from PIL import Image as PImage, ImageSequence
 from wand.image import Image as wImage
 
 from ..vars import (
@@ -58,18 +57,18 @@ if TYPE_CHECKING:
     from cogs.context import Context
 
 
-async def no_dms(ctx: Context):
+async def no_dms(ctx: Context) -> bool:
     return ctx.guild is not None
 
 
-async def owner_only(ctx: Context):
+async def owner_only(ctx: Context) -> bool:
     if ctx.author.id == ctx.bot.owner_id:
         return True
 
     return not ctx.bot.owner_only_mode
 
 
-async def block_list(ctx: Context):
+async def block_list(ctx: Context) -> bool:
     blocked = await ctx.bot.redis.smembers("block_list")
 
     if str(ctx.author.id) in blocked:
@@ -84,10 +83,33 @@ async def block_list(ctx: Context):
     return True
 
 
-async def no_auto_commands(ctx: Context):
+async def no_auto_commands(ctx: Context) -> bool:
     if ctx.command.name == "download":
         return str(ctx.channel.id) not in await ctx.bot.redis.smembers(
             "auto_download_channels"
+        )
+
+    return True
+
+
+async def google_cooldown_check(ctx: Context) -> bool:
+    if not ctx.command.extras.get("google-command", None):
+        return True
+
+    bot = ctx.bot
+    message = ctx.message
+    bucket = bot.google_cooldown.get_bucket(message)
+
+    if bucket is None:
+        return True
+
+    retry_after = bucket.update_rate_limit()
+
+    if retry_after:
+        raise commands.CommandOnCooldown(
+            cooldown=bot.google_cooldown,  # type: ignore
+            retry_after=retry_after,
+            type=commands.BucketType.default,
         )
 
     return True

@@ -29,6 +29,7 @@ from utils import (
     block_list,
     no_auto_commands,
     owner_only,
+    google_cooldown_check,
 )
 
 if TYPE_CHECKING:
@@ -121,6 +122,13 @@ class Bot(commands.Bot):
             maxsize=1000, ttl=300.0
         )
         self.owner_only_mode: bool = True if testing else False
+        self.google_cooldown = commands.CooldownMapping.from_cooldown(
+            100, 86400, commands.BucketType.default
+        )
+
+        self.global_cooldown = commands.CooldownMapping.from_cooldown(
+            60, 30, commands.BucketType.user
+        )
 
         # webhooks
         self.avatar_webhooks: Dict[str, discord.Webhook] = {}
@@ -149,6 +157,7 @@ class Bot(commands.Bot):
         self.add_check(block_list)
         self.add_check(no_auto_commands)
         self.add_check(owner_only)
+        self.add_check(google_cooldown_check)
 
     async def on_message_edit(
         self, before: discord.Message, after: discord.Message
@@ -247,7 +256,7 @@ class Bot(commands.Bot):
         print(f"Logged in as {self.user}")
 
     async def send_error(self, ctx: Context, error: commands.CommandError | Exception):
-        await ctx.send(f"An unhandled error occured, this error has been reported.")
+        await ctx.send("An unhandled error occured, this error has been reported.")
         embed = discord.Embed(title="Command Error", colour=self.embedcolor)
         embed.add_field(name="Name", value=ctx.command.qualified_name)
         embed.add_field(name="Author", value=f"{ctx.author} (ID: {ctx.author.id})")
@@ -276,11 +285,7 @@ class Bot(commands.Bot):
         return
 
     async def close(self):
-        for extension in initial_extensions:
-            try:
-                await self.unload_extension(extension)
-            except Exception:
-                pass
+        await self.unload_extensions()
 
         await self.session.close()
         await self.pool.close()

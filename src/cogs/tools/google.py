@@ -26,7 +26,10 @@ if TYPE_CHECKING:
 
 class GoogleCommands(CogBase):
     @commands.hybrid_command(
-        name="google", aliases=("g",), description="Search something on the web"
+        name="google",
+        aliases=("g",),
+        description="Search something on the web",
+        extras={"google-command": True},
     )
     @app_commands.describe(query="What are you searching for?")
     async def google(self, ctx: Context, *, query: str):
@@ -65,7 +68,11 @@ class GoogleCommands(CogBase):
 
         await ctx.send(embed=embed)
 
-    @commands.command(name="image", aliases=("img", "i"))
+    @commands.command(
+        name="image",
+        aliases=("img", "i"),
+        extras={"google-command": True},
+    )
     async def google_image(self, ctx: Context, *, query: str):
         url = f"https://customsearch.googleapis.com/customsearch/v1"
         params = {
@@ -136,6 +143,7 @@ class GoogleCommands(CogBase):
         invoke_without_command=True,
         fallback="video",
         description="Search for a video",
+        extras={"google-command": True},
     )
     @app_commands.describe(query="Video to search for")
     async def youtube(self, ctx: Context, *, query: str):

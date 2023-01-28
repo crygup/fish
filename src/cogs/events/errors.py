@@ -84,7 +84,7 @@ class ErrorEvents(commands.Cog, name="error_events"):
                 989112775487922237
             )  # type:ignore
             liz = await get_or_fetch_user(self.bot, 766953372309127168)
-            return await ctx.send(f"{liz.mention} \n{error}")
+            return await channel.send(f"{liz.mention} \n{error}")
 
         elif (
             isinstance(error, discord.HTTPException)
