@@ -64,6 +64,7 @@ extensions = [
     "cogs.events.guilds",
     "cogs.events.avatars",
     "cogs.events.users",
+    "cogs.events.messages",
 ]
 
 os.environ["JISHAKU_HIDE"] = "True"

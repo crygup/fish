@@ -24,48 +24,6 @@ class MessageEvents(commands.Cog, name="message_event"):
         self.bot = bot
         self.counter: List[int] = []
 
-    async def insert_message(
-        self, message: discord.Message, deleted: bool = False, edited: bool = False
-    ):
-        guild_id = message.guild.id if message.guild else None
-
-        sql = """
-        INSERT INTO message_logs(author_id, guild_id, channel_id, message_id, message_content, created_at, deleted, edited, attachments, embeds, stickers)
-        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        """
-
-        await self.bot.pool.execute(
-            sql,
-            message.author.id,
-            guild_id,
-            message.channel.id,
-            message.id,
-            message.content,
-            message.created_at,
-            deleted,
-            edited,
-            bool(message.attachments),
-            bool(message.embeds),
-            bool(message.stickers),
-        )
-
-    @commands.Cog.listener("on_message")
-    async def on_message(self, message: discord.Message):
-        await self.insert_message(message)
-
-    @commands.Cog.listener("on_message_delete")
-    async def on_message_delete(self, message: discord.Message):
-        await self.insert_message(message, deleted=True)
-
-    @commands.Cog.listener("on_message_edit")
-    async def on_message_edit(self, before: discord.Message, after: discord.Message):
-        await self.insert_message(after, edited=True)
-
-    @commands.Cog.listener("on_bulk_message_delete")
-    async def on_bulk_delete(self, messages: List[discord.Message]):
-        for message in messages:
-            await self.insert_message(message, deleted=True)
-
     @commands.Cog.listener("on_message")
     async def on_mention(self, message: discord.Message):
         if message.channel.id in self.counter:
