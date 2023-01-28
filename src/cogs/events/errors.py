@@ -28,7 +28,7 @@ class ErrorEvents(commands.Cog, name="error_events"):
         if ctx.interaction:
             try:
                 await ctx.interaction.response.send_message(
-                    error, allowed_mentions=self.mentions
+                    error, allowed_mentions=self.mentions, ephemeral=True
                 )
             except (discord.HTTPException, discord.InteractionResponded):
                 await ctx.interaction.edit_original_response(
