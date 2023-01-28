@@ -51,7 +51,6 @@ extensions = [
     "cogs.misc",
     "cogs.osu",
     "cogs.pokemon",
-    "cogs.roblox",
     "cogs.settings",
     "cogs.moderation",
     # servers
