@@ -6,10 +6,13 @@ from typing import TYPE_CHECKING, Optional
 import discord
 
 from .afk import AfkCommands
+from .anime import AnimeCommands
 from .downloads import DownloadCommands
+from .google import GoogleCommands
 from .money import MoneyCommands
 from .other import OtherCommands
 from .reminder import ReminderCommands
+from .spotify import SpotifyCommands
 from .tags import TagCommands
 
 if TYPE_CHECKING:
@@ -24,6 +27,9 @@ class Tools(
     AfkCommands,
     MoneyCommands,
     ReminderCommands,
+    GoogleCommands,
+    SpotifyCommands,
+    AnimeCommands,
     name="tools",
 ):
     """Useful tools"""
