@@ -50,7 +50,6 @@ extensions = [
     "cogs.lastfm",
     "cogs.misc",
     "cogs.osu",
-    "cogs.pokemon",
     "cogs.settings",
     "cogs.moderation",
     # servers

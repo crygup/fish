@@ -23,6 +23,7 @@ from utils import (
     BlankException,
     get_size,
     get_wh,
+    get_pokemon,
 )
 
 from ._base import CogBase
@@ -62,6 +63,31 @@ class UrlConverter(commands.Converter):
 
 
 class OtherCommands(CogBase):
+    @commands.command(name="hint")
+    async def hint(self, ctx: Context):
+        """Auto solve a pokétwo hint message."""
+        if ctx.message.reference is None:
+            await ctx.send("Please reply to a message contain a pokétwo hint.")
+            return
+
+        to_search = re.match(
+            r'the pokémon is (?P<pokemon>[^"]+).', ctx.message.reference.resolved.content.lower()  # type: ignore
+        )
+
+        if to_search is None:
+            return
+
+        to_search = re.sub(r"\\", "", to_search.groups()[0])
+
+        found = get_pokemon(self.bot, to_search)
+
+        if found == []:
+            await ctx.send("Couldn't find anything matching that, sorry.")
+            return
+
+        joined = "\n".join(found)
+        await ctx.send(joined)
+
     @commands.command(name="screenshot", aliases=("ss",), extras={"nsfw": True})
     async def screenshot(
         self,

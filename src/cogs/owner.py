@@ -28,6 +28,7 @@ from utils import (
     plural,
     response_checker,
     to_bytesio,
+    setup_pokemon,
 )
 
 if TYPE_CHECKING:
@@ -70,6 +71,12 @@ class Owner(
             raise commands.NotOwner
 
         return True
+
+    @commands.command(name="update_pokemon", extras={"UPerms": ["Bot Owner"]})
+    async def update_pokemon(self, ctx: Context):
+        await setup_pokemon(self.bot)
+
+        await ctx.send("updated olk")
 
     @commands.command(name="load", aliases=("reload",))
     async def load(self, ctx: Context, *extensions: ExtensionConverter):

@@ -24,6 +24,7 @@ from utils import (
     status_state,
     to_bytesio,
     response_checker,
+    AuthorView,
 )
 
 if TYPE_CHECKING:
@@ -481,3 +482,99 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
 
         embed.set_footer(text=footer_text)
         await ctx.send(embed=embed)
+
+    @commands.command(name="wtp", hidden=True)
+    async def wtp(self, ctx: Context):
+        await ctx.trigger_typing()
+        data = await ctx.dagpi("https://api.dagpi.xyz/data/wtp")
+        embed = discord.Embed(color=self.bot.embedcolor)
+        embed.set_author(name="Who's that pokemon?")
+        image = await to_bytesio(ctx.session, data["question"])
+        file = discord.File(fp=image, filename="pokemon.png")
+        embed.set_image(url="attachment://pokemon.png")
+        await ctx.send(embed=embed, file=file, view=WTPView(ctx, data))
+
+
+class WTPModal(discord.ui.Modal, title="Who's that Pokémon?"):
+    def __init__(self, ctx: Context, data: Dict[Any, Any]):
+        super().__init__()
+        self.ctx = ctx
+        self.data = data
+
+    pokemon = discord.ui.TextInput(
+        label="Who's that Pokémon?",
+        style=discord.TextStyle.short,
+        required=True,
+    )
+
+    def do_we_add_s(self, number: int) -> str:
+        return "s" if number > 1 or number == 0 else ""
+
+    async def update_data(self) -> discord.Embed:
+        correct_name = str(self.data["Data"]["name"]).lower()
+        given_name = self.pokemon.value.lower()
+        correct: bool = correct_name == given_name
+        embed = discord.Embed(color=0x008341 if correct else 0xFF0000)
+        embed.set_author(name="Correct!" if correct else "Incorrect!")
+
+        data = await self.ctx.bot.pool.fetchrow(
+            "SELECT * FROM pokemon_guesses WHERE pokemon_name = $1 AND author_id = $2",
+            correct_name,
+            self.ctx.author.id,
+        )
+
+        if data:
+            sql = f"""
+            UPDATE pokemon_guesses SET {'correct' if correct else 'incorrect'} = {'correct' if correct else 'incorrect'} + 1 WHERE pokemon_name = $1 AND author_id = $2 RETURNING *
+            """
+
+            new_data = await self.ctx.bot.pool.fetchrow(
+                sql, correct_name, self.ctx.author.id
+            )
+        else:
+            sql = f"""
+            INSERT INTO pokemon_guesses (pokemon_name, author_id, {'correct' if correct else 'incorrect'}) VALUES($1, $2, $3) RETURNING *
+            """
+            new_data = await self.ctx.bot.pool.fetchrow(
+                sql, correct_name, self.ctx.author.id, 1
+            )
+
+        embed.set_footer(
+            text=f"You've got {correct_name.title()} correct {new_data['correct']:,} time{self.do_we_add_s(new_data['correct'])} and incorrect {new_data['incorrect']:,} time{self.do_we_add_s(new_data['incorrect'])}"  # type: ignore # i think pyright is just broken or something
+        )
+
+        return embed
+
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = await self.update_data()
+
+        file = discord.File(
+            await to_bytesio(self.ctx.session, self.data["answer"]),
+            filename="pokemon.png",
+        )
+
+        embed.set_image(url="attachment://pokemon.png")
+
+        if interaction.message:
+            await interaction.message.edit(attachments=[file], embed=embed, view=None)
+            await interaction.response.defer()
+            return
+
+        await interaction.response.send_message("Something went wrong!", ephemeral=True)
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception
+    ) -> None:
+
+        await self.ctx.bot.send_error(self.ctx, error)
+
+
+class WTPView(AuthorView):
+    def __init__(self, ctx: Context, data: dict[str, str]):
+        super().__init__(ctx)
+        self.ctx = ctx
+        self.data = data
+
+    @discord.ui.button(label="click me")
+    async def modal(self, interaction: discord.Interaction, __):
+        await interaction.response.send_modal(WTPModal(self.ctx, self.data))

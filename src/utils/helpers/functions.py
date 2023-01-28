@@ -57,6 +57,26 @@ if TYPE_CHECKING:
     from cogs.context import Context
 
 
+def get_pokemon(bot: Bot, guess: str) -> List:
+    found = []
+    guess = re.sub("[\U00002640\U0000fe0f|\U00002642\U0000fe0f]", "", guess)
+    guess = re.sub("[\U000000e9]", "e", guess)
+
+    sorted_guesses = [p for p in bot.pokemon if len(p) == len(guess)]
+    for p in sorted_guesses:
+        new_pattern = re.compile(guess.replace(r"_", r"[a-z]{1}"))
+        results = new_pattern.match(p)
+
+        if results is None:
+            continue
+
+        answer = results.group()
+
+        found.append(answer)
+
+    return found
+
+
 async def no_dms(ctx: Context) -> bool:
     return ctx.guild is not None
 

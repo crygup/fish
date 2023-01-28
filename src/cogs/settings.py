@@ -85,6 +85,32 @@ class Settings(commands.Cog, name="settings"):
 
         await ctx.send(f"Your {option} account has been linked.", ephemeral=True)
 
+    @commands.command(
+        name="auto-solve",
+        aliases=("as", "auto_solve"),
+        extras={"UPerms": ["Manage Server"]},
+    )
+    @commands.has_permissions(manage_guild=True)
+    async def auto_solve(self, ctx: Context):
+        """Toggles automatic solving of pokétwo's pokémon hints"""
+
+        try:
+            sql = "INSERT INTO guild_settings(guild_id, poketwo) VALUES($1, $2)"
+            await self.bot.pool.execute(sql, ctx.guild.id, True)
+        except asyncpg.UniqueViolationError:
+            if str(ctx.guild.id) in await self.bot.redis.smembers("poketwo_guilds"):
+                sql = "UPDATE guild_settings SET poketwo = NULL WHERE guild_id = $1"
+                await self.bot.pool.execute(sql, ctx.guild.id)
+                await self.bot.redis.srem("poketwo_guilds", ctx.guild.id)
+                await ctx.send("Disabled auto solving for this server.")
+                return
+
+            sql = "UPDATE guild_settings SET poketwo = $1 WHERE guild_id = $2"
+            await self.bot.pool.execute(sql, True, ctx.guild.id)
+
+        await self.bot.redis.sadd("poketwo_guilds", ctx.guild.id)
+        await ctx.send("Enabled auto solving for this server.")
+
     @commands.group(name="prefix", invoke_without_command=True)
     async def prefix(self, ctx: Context):
         """Set the prefix for the bot"""
