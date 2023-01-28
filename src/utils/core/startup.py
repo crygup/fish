@@ -132,6 +132,7 @@ async def create_pool(bot: Bot, connection_url: str):
         )
 
     connection = await asyncpg.create_pool(connection_url, init=init)
+
     if connection is None:
         raise Exception("Failed to connect to database")
 

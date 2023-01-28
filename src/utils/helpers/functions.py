@@ -58,6 +58,41 @@ if TYPE_CHECKING:
     from cogs.context import Context
 
 
+async def no_dms(ctx: Context):
+    return ctx.guild is not None
+
+
+async def owner_only(ctx: Context):
+    if ctx.author.id == ctx.bot.owner_id:
+        return True
+
+    return not ctx.bot.owner_only_mode
+
+
+async def block_list(ctx: Context):
+    blocked = await ctx.bot.redis.smembers("block_list")
+
+    if str(ctx.author.id) in blocked:
+        return False
+
+    if str(ctx.guild.id) in blocked:
+        return False
+
+    if str(ctx.guild.owner_id) in blocked:
+        return False
+
+    return True
+
+
+async def no_auto_commands(ctx: Context):
+    if ctx.command.name == "download":
+        return str(ctx.channel.id) not in await ctx.bot.redis.smembers(
+            "auto_download_channels"
+        )
+
+    return True
+
+
 class plural:
     def __init__(self, value: int):
         self.value: int = value

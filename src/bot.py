@@ -25,6 +25,10 @@ from utils import (
     setup_cache,
     setup_pokemon,
     setup_webhooks,
+    no_dms,
+    block_list,
+    no_auto_commands,
+    owner_only,
 )
 
 if TYPE_CHECKING:
@@ -41,8 +45,6 @@ initial_extensions = [
 
 extensions = [
     "cogs.discord_",
-    # "cogs.image",
-    "cogs.search",
     "cogs.tools",
     "cogs.lastfm",
     "cogs.misc",
@@ -99,37 +101,6 @@ class Bot(commands.Bot):
     exts: Set[str]
     lastfm: LastfmAsyncClient
 
-    async def no_dms(self, ctx: Context):
-        return ctx.guild is not None
-
-    async def owner_only(self, ctx: Context):
-        if ctx.author.id == self.owner_id:
-            return True
-
-        return not self.owner_only_mode
-
-    async def block_list(self, ctx: Context):
-        blocked = await self.redis.smembers("block_list")
-
-        if str(ctx.author.id) in blocked:
-            return False
-
-        if str(ctx.guild.id) in blocked:
-            return False
-
-        if str(ctx.guild.owner_id) in blocked:
-            return False
-
-        return True
-
-    async def no_auto_commands(self, ctx: Context):
-        if ctx.command.name == "download":
-            return str(ctx.channel.id) not in await self.redis.smembers(
-                "auto_download_channels"
-            )
-
-        return True
-
     def __init__(
         self,
         intents: discord.Intents,
@@ -146,35 +117,38 @@ class Bot(commands.Bot):
                 everyone=False, roles=False, users=True, replied_user=False
             ),
         )
-        self._global_cooldown = commands.CooldownMapping.from_cooldown(
-            20.0, 30.0, commands.BucketType.user
-        )
         self.messages: TTLCache[str, discord.Message] = TTLCache(
             maxsize=1000, ttl=300.0
         )
         self.owner_only_mode: bool = True if testing else False
+
+        # webhooks
         self.avatar_webhooks: Dict[str, discord.Webhook] = {}
         self.image_webhooks: Dict[str, discord.Webhook] = {}
         self.icon_webhooks: Dict[str, discord.Webhook] = {}
         self.webhooks: Dict[str, discord.Webhook] = {}
+
+        # ids
         self.owner_id = 766953372309127168
         self.owner_ids = {}
 
+        # config
         self.config: Dict[str, Any] = config
+        self.testing = testing
         self.logger = logger
         self.uptime: datetime.datetime
         self.embedcolor = 0xFAA0C1
-        self.testing = testing
         self.pokemon: List[str] = []
         self.prefixes: Dict[int, List[str]] = {}
-        self._context = Context
         self.spotify_key: Optional[str] = None
         self.cached_covers: Dict[str, Tuple[str, bool]] = {}
+        self._context = Context
+        self.exts = set(initial_extensions + extensions)
 
-        self.add_check(self.no_dms)
-        self.add_check(self.block_list)
-        self.add_check(self.no_auto_commands)
-        self.add_check(self.owner_only)
+        self.add_check(no_dms)
+        self.add_check(block_list)
+        self.add_check(no_auto_commands)
+        self.add_check(owner_only)
 
     async def on_message_edit(
         self, before: discord.Message, after: discord.Message
@@ -199,6 +173,30 @@ class Bot(commands.Bot):
             except KeyError:
                 pass
 
+    async def load_extensions(self):
+        for extension in self.exts if not self.testing else initial_extensions:
+            try:
+                await self.load_extension(extension)
+                print(f"Loaded extension {extension}")
+            except Exception as e:
+                print(f"Failed to load {extension}: {e}")
+
+    async def unload_extensions(self):
+        for extension in self.exts if not self.testing else initial_extensions:
+            try:
+                await self.unload_extension(extension)
+                print(f"Unloaded extension {extension}")
+            except Exception as e:
+                print(f"Failed to unload {extension}: {e}")
+
+    async def reload_extensions(self):
+        for extension in self.exts if not self.testing else initial_extensions:
+            try:
+                await self.reload_extension(extension)
+                print(f"Reoaded extension {extension}")
+            except Exception as e:
+                print(f"Failed to reload {extension}: {e}")
+
     async def setup_hook(self):
         self.session = aiohttp.ClientSession()
 
@@ -208,7 +206,6 @@ class Bot(commands.Bot):
             if self.testing
             else self.config["databases"]["psql"],
         )
-        print("Connected to postgre database")
 
         with open("schema.sql", "r") as f:
             await self.pool.execute(f.read())
@@ -220,38 +217,24 @@ class Bot(commands.Bot):
             encoding="utf-8",
             decode_responses=True,
         )
-        print("Connected to redis database")
 
         self.lastfm = LastfmAsyncClient(
             self.config["keys"]["lastfm-key"], session=self.session
         )
-        print("Connected to lastfm client")
 
         self.osu = OssapiV2(
             self.config["keys"]["osu-id"], self.config["keys"]["osu-secret"]
         )
-        print("Connected to osu! account")
 
         await setup_cache(self)
-        print("Setup cache")
 
         await setup_webhooks(self)
-        print("Setup webhooks")
 
         await setup_pokemon(self)
-        print("Loaded pokemon")
 
         await setup_accounts(self)
-        print("Setup accounts")
 
-        self.exts = set(initial_extensions + extensions)
-
-        for extension in self.exts if not self.testing else initial_extensions:
-            try:
-                await self.load_extension(extension)
-                print(f"Loaded extension {extension}")
-            except Exception as e:
-                print(f"Failed to load {extension}: {e}")
+        await self.load_extensions()
 
     async def get_context(self, message: discord.Message, *, cls=None):
         new_cls = cls or self._context
