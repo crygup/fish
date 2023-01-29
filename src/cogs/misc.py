@@ -44,18 +44,7 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         self.aliases = ["misc"]
         self.process = psutil.Process()
 
-        perms = discord.Permissions.none()
-        perms.read_messages = True
-        perms.send_messages = True
-        perms.read_message_history = True
-        perms.embed_links = True
-        perms.attach_files = True
-        perms.add_reactions = True
-        perms.manage_messages = True
-        perms.external_emojis = True
-        perms.external_stickers = True
-        perms.manage_emojis_and_stickers = True
-
+        perms = discord.Permissions(1074055232)
         self.invite_url = discord.utils.oauth_url(bot.user.id, permissions=perms, scopes=("bot",))  # type: ignore
 
     @property
