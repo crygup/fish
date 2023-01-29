@@ -59,24 +59,19 @@ class AvatarEvents(commands.Cog, name="avatar_events"):
 
         if message is None:
             channel: discord.TextChannel = self.bot.get_channel(1058221675306569748)  # type: ignore
-            await channel.send(
-                f"<@766953372309127168> Failed to post {user.id}'s avatar."
-            )
+            await channel.send(f"Failed to post {user.id}'s avatar. \n{asset.url}")
             raise DoNothing()
 
         return message
 
-    @commands.Cog.listener("on_user_update")
-    async def on_avatar_update(self, before: discord.User, after: discord.User):
-        if before.avatar == after.avatar:
-            return
-        if after.display_avatar.key.isdigit():
+    async def add_avatar(self, user: discord.User | discord.Member):
+        if user.display_avatar.key.isdigit():
             return
 
-        if "avatars" in await self.bot.redis.smembers(f"opted_out:{after.id}"):
+        if "avatars" in await self.bot.redis.smembers(f"opted_out:{user.id}"):
             return
 
-        message = await self.do_avatar(user=after, asset=after.display_avatar)
+        message = await self.do_avatar(user=user, asset=user.display_avatar)
 
         sql = """
         INSERT INTO avatars(user_id, avatar_key, created_at, avatar)
@@ -86,28 +81,22 @@ class AvatarEvents(commands.Cog, name="avatar_events"):
         try:
             await self.bot.pool.execute(
                 sql,
-                after.id,
-                after.display_avatar.key,
+                user.id,
+                user.display_avatar.key,
                 now,
                 message.attachments[0].url,
             )
         except asyncpg.UniqueViolationError:
             pass
 
-    @commands.Cog.listener("on_member_update")
-    async def on_guild_avatar_update(
-        self, before: discord.Member, after: discord.Member
-    ):
-        if "guild_avatars" in await self.bot.redis.smembers(f"opted_out:{after.id}"):
+    async def add_guild_avatar(self, member: discord.Member):
+        if member.guild_avatar is None:
             return
 
-        if before.guild_avatar == after.guild_avatar:
+        if "guild_avatars" in await self.bot.redis.smembers(f"opted_out:{member.id}"):
             return
 
-        if after.guild_avatar is None:
-            return
-
-        message = await self.do_avatar(user=after, asset=after.guild_avatar)
+        message = await self.do_avatar(user=member, asset=member.guild_avatar)
 
         sql = """
         INSERT INTO guild_avatars(member_id, guild_id, avatar_key, created_at, avatar)
@@ -117,9 +106,40 @@ class AvatarEvents(commands.Cog, name="avatar_events"):
 
         await self.bot.pool.execute(
             sql,
-            after.id,
-            after.guild.id,
-            after.guild_avatar.key,
+            member.id,
+            member.guild.id,
+            member.guild_avatar.key,
             now,
             message.attachments[0].url,
         )
+
+    @commands.Cog.listener("on_user_update")
+    async def on_avatar_update(self, before: discord.User, after: discord.User):
+        if before.avatar == after.avatar:
+            return
+
+        await self.add_avatar(after)
+
+    @commands.Cog.listener("on_member_update")
+    async def on_guild_avatar_update(
+        self, before: discord.Member, after: discord.Member
+    ):
+        if before.guild_avatar == after.guild_avatar:
+            return
+
+        await self.add_guild_avatar(after)
+
+    @commands.Cog.listener("on_member_join")
+    async def member_join(self, member: discord.Member):
+        if member.display_avatar.key.isdigit():
+            return
+
+        await self.add_avatar(member)
+
+    @commands.Cog.listener("on_guild_join")
+    async def joined_guild(self, guild: discord.Guild):
+        members = await guild.chunk()
+
+        for member in members:
+            await self.add_avatar(member)
+            await self.add_guild_avatar(member)

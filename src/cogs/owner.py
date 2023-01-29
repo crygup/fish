@@ -27,8 +27,8 @@ from utils import (
     cleanup_code,
     plural,
     response_checker,
-    to_bytesio,
     setup_pokemon,
+    to_bytesio,
 )
 
 if TYPE_CHECKING:
