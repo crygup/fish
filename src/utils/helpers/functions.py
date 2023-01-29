@@ -5,6 +5,7 @@ import datetime
 import imghdr
 import math
 import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -50,11 +51,70 @@ from ..vars import (
     Unauthorized,
     UnknownAccount,
     video_regexes,
+    initial_extensions,
+    module_extensions,
 )
 
 if TYPE_CHECKING:
     from bot import Bot
     from cogs.context import Context
+
+
+module_extensions = [
+    "cogs.discord_",
+    "cogs.moderation",
+    "cogs.tools",
+    "cogs.lastfm",
+]
+
+async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
+    default = ["fish "] if not bot.testing else ["fish. "]
+
+    if message.guild is None:
+        return commands.when_mentioned_or(*default)(bot, message)
+
+    try:
+        prefixes = bot.prefixes[message.guild.id]
+    except KeyError:
+        prefixes = []
+
+    packed = default + prefixes
+
+    comp = re.compile("^(" + "|".join(map(re.escape, packed)) + ").*", flags=re.I)  # type: ignore
+    match = comp.match(message.content)
+
+    if match is not None:
+        return commands.when_mentioned_or(*[match.group(1)])(bot, message)
+
+    return commands.when_mentioned_or(*packed)(bot, message)
+
+def get_extensions(*, _path: str = "src/cogs") -> List[str]:
+    def format_cog(cog: str) -> str:
+        first = (
+            cog.replace("\\", ".")[:-3]
+            if cog.endswith(".py")
+            else cog.replace("\\", ".")
+        )
+        return first.replace("src.", "")
+
+    path = pathlib.Path(_path)
+    exts = []
+
+    for item in path.glob("**/*.py"):
+        parent = format_cog(str(item.parent))
+
+        if parent in module_extensions:
+            if parent not in exts:
+                exts.append(parent)
+
+            continue
+
+        if format_cog(str(item)) in initial_extensions:
+            continue
+
+        exts.append(format_cog(str(item)))
+
+    return list(set(exts))
 
 
 def get_pokemon(bot: Bot, guess: str) -> List:

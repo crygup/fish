@@ -34,6 +34,22 @@ BURPLE = discord.ButtonStyle.blurple
 GREEN = discord.ButtonStyle.green
 RED = discord.ButtonStyle.red
 
+initial_extensions = [
+    "jishaku",
+    "cogs.owner",
+    "cogs.context",
+    "cogs.events.errors",
+    "cogs.help",
+    "cogs.tasks",
+]
+
+module_extensions = [
+    "cogs.discord_",
+    "cogs.moderation",
+    "cogs.tools",
+    "cogs.lastfm",
+]
+
 default_headers = {"User-Agent": f"aiohttp/{aiohttp.__version__}; fish_bot"}
 
 emoji_extras = {"BPerms": ["Manage Emojis"], "UPerms": ["Manage Emojis"]}

@@ -30,68 +30,17 @@ from utils import (
     no_auto_commands,
     owner_only,
     google_cooldown_check,
+    get_extensions,
+    initial_extensions,
+    get_prefix,
 )
 
 if TYPE_CHECKING:
     from utils import Context
 
-initial_extensions = [
-    "jishaku",
-    "cogs.owner",
-    "cogs.context",
-    "cogs.events.errors",
-    "cogs.help",
-    "cogs.tasks",
-]
-
-extensions = [
-    "cogs.discord_",
-    "cogs.tools",
-    "cogs.lastfm",
-    "cogs.misc",
-    "cogs.osu",
-    "cogs.settings",
-    "cogs.moderation",
-    # servers
-    "cogs.servers.egg",
-    "cogs.servers.jawntards",
-    "cogs.servers.table",
-    # events
-    "cogs.events.auto_downloads",
-    "cogs.events.auto_reactions",
-    "cogs.events.commands",
-    "cogs.events.errors",
-    "cogs.events.guilds",
-    "cogs.events.avatars",
-    "cogs.events.users",
-    "cogs.events.messages",
-]
-
 os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
 os.environ["JISHAKU_NO_DM_TRACEBACK"] = "True"
-
-
-async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
-    default = ["fish "] if not bot.testing else ["fish. "]
-
-    if message.guild is None:
-        return commands.when_mentioned_or(*default)(bot, message)
-
-    try:
-        prefixes = bot.prefixes[message.guild.id]
-    except KeyError:
-        prefixes = []
-
-    packed = default + prefixes
-
-    comp = re.compile("^(" + "|".join(map(re.escape, packed)) + ").*", flags=re.I)  # type: ignore
-    match = comp.match(message.content)
-
-    if match is not None:
-        return commands.when_mentioned_or(*[match.group(1)])(bot, message)
-
-    return commands.when_mentioned_or(*packed)(bot, message)
 
 
 class Bot(commands.Bot):
@@ -150,7 +99,7 @@ class Bot(commands.Bot):
         self.spotify_key: Optional[str] = None
         self.cached_covers: Dict[str, Tuple[str, bool]] = {}
         self._context = Context
-        self.exts = set(initial_extensions + extensions)
+        self.exts = set(initial_extensions + get_extensions())
 
         self.add_check(no_dms)
         self.add_check(block_list)
