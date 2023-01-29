@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import os
-import re
-import secrets
-import time
-from typing import TYPE_CHECKING, Dict, Any
+from typing import TYPE_CHECKING
 
 import discord
-from discord.ext import commands, tasks
-import yt_dlp
+from discord.ext import commands
 
-from utils import get_video, natural_size, VideoIsLive
+from utils import DoNothing, download_video
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -24,18 +19,9 @@ async def setup(bot: Bot):
 class AutoDownloads(commands.Cog, name="auto_downloads"):
     def __init__(self, bot: Bot):
         self.bot = bot
-        self.current_downloads = []
         self.cd_mapping = commands.CooldownMapping.from_cooldown(
-            10, 10, commands.BucketType.member
+            1, 5, commands.BucketType.member
         )
-
-    async def download_video(self, video: str, options: Dict):
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.download(video)
-
-    def match_filter(self, info: Dict[Any, Any], incomplete):
-        if info.get("live_status", None) == "is_live":
-            raise VideoIsLive("Can not download live videos.")
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):
@@ -54,79 +40,23 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
         ):
             return
 
+        bucket = self.cd_mapping.get_bucket(message)
+
+        if bucket is None:
+            raise DoNothing()
+
+        retry_after = bucket.update_rate_limit()
+
+        if retry_after:
+            raise commands.CommandOnCooldown(
+                cooldown=self.cd_mapping,  # type: ignore
+                retry_after=retry_after,
+                type=commands.BucketType.member,
+            )
+
         ctx: Context = await self.bot.get_context(message)
 
         if ctx is None or not isinstance(ctx.author, discord.Member):
             return
 
-        name = secrets.token_urlsafe(8)
-
-        try:
-            video = await get_video(ctx, ctx.message.content, True)
-        except commands.BadArgument as e:
-            await ctx.send(str(e))
-            return
-
-        if video is None:
-            return
-
-        pattern = re.compile(
-            r"https://(www|vt|vm|m).tiktok.com/(@)?[a-zA-Z0-9_-]{3,}(/video/[0-9]{1,})?"
-        )
-
-        ydl_opts = {
-            "format": f"bestvideo+bestaudio[ext=mp4]/best",
-            "outtmpl": f"src/files/videos/{name}.%(ext)s",
-            "quiet": True,
-            "max_filesize": ctx.guild.filesize_limit,
-            "match_filter": self.match_filter,
-        }
-
-        if pattern.search(video):
-            ydl_opts["format_sort"] = ["vcodec:h264"]
-
-        msg = await ctx.reply("Downloading video")
-        self.current_downloads.append(f"{name}.mp4")
-
-        start = time.perf_counter()
-        try:
-            await self.download_video(video, ydl_opts)
-        except commands.BadArgument as e:
-            return await msg.edit(content=str(e))
-        stop = time.perf_counter()
-
-        dl_time = f"Took `{round(stop - start, 2)}` seconds to download, {message.author.mention}"
-
-        try:
-            _file = discord.File(f"src/files/videos/{name}.mp4")
-            await msg.edit(content=dl_time, attachments=[_file])
-
-        except (ValueError, discord.Forbidden):
-            await msg.edit(content="Failed to download, try again later?")
-
-        except (FileNotFoundError, discord.HTTPException):
-            await msg.edit(
-                content=f"Video file size is too big, try a shorter video. This server's file size limit is **`{natural_size(ctx.guild.filesize_limit)}`**."
-            )
-
-        try:
-            os.remove(f"src/files/videos/{name}.mp4")
-        except (FileNotFoundError, PermissionError):
-            pass
-
-        self.current_downloads.remove(f"{name}.mp4")
-
-    @tasks.loop(minutes=10.0)
-    async def delete_videos(self):
-        valid_formats = (
-            "mp4",
-            "webm",
-            "mov",
-            "mp3",
-            "ogg",
-            "wav",
-        )
-        for file in os.listdir("src/files/videos"):
-            if file.endswith(valid_formats):
-                if file not in self.current_downloads:
-                    os.remove(f"src/files/videos/{file}")
+        await download_video(ctx.message.content, "mp4", ctx)

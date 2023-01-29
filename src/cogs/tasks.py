@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import os
+import re
 from typing import TYPE_CHECKING, Any, Dict
 
 from discord.ext import commands, tasks
@@ -52,7 +54,19 @@ class Tasks(commands.Cog, name="tasks"):
     async def set_key_task(self):
         await self.set_spotify_key()
 
-    async def set_key(self, _):
-        key = self.bot.spotify_key
-        if key is None:
-            await self.set_spotify_key()
+    @tasks.loop(minutes=10.0)
+    async def delete_videos(self):
+        valid_formats = (
+            "mp4",
+            "webm",
+            "mov",
+            "mp3",
+            "ogg",
+            "wav",
+            "part",
+            "ytdl",
+        )
+        for file in os.listdir("src/files/videos"):
+            if file.endswith(valid_formats):
+                if re.sub("(ytdl|part)", "", file) not in self.bot.current_downloads:
+                    os.remove(f"src/files/videos/{file}")

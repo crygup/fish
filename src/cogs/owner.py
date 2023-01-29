@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import difflib
 import itertools
+import os
 import re
+import secrets
 import textwrap
 import time
 import traceback
 from io import BytesIO
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import asyncpg
 import discord
+import yt_dlp
+from discord import app_commands
 from discord.ext import commands
 from jishaku.codeblocks import codeblock_converter
 from jishaku.paginators import WrappedPaginator
@@ -29,6 +33,10 @@ from utils import (
     response_checker,
     setup_pokemon,
     to_bytesio,
+    to_thread,
+    VideoIsLive,
+    VIDEOS_RE,
+    TIKTOK_RE,
 )
 
 if TYPE_CHECKING:

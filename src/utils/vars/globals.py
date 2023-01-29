@@ -81,41 +81,6 @@ USER_FLAGS = {
     "active_developer": f"{ACTIVE_DEVELOPER} Active Developer",
 }
 
-video_regexes = {
-    "tiktok": {
-        "regex": TIKTOK_RE,
-        "nsfw": False,
-    },
-    "instagram": {
-        "regex": INSTAGRAM_RE,
-        "nsfw": False,
-    },
-    "twitch": {
-        "regex": TWITCH_RE,
-        "nsfw": False,
-    },
-    "twitter": {
-        "regex": TWITTER_RE,
-        "nsfw": True,
-    },
-    "reddit": {
-        "regex": REDDIT_RE,
-        "nsfw": True,
-    },
-    "youtube_clip": {
-        "regex": YT_CLIP_RE,
-        "nsfw": False,
-    },
-    "youtube_short": {
-        "regex": YT_SHORT_RE,
-        "nsfw": False,
-    },
-    "youtube": {
-        "regex": YOUTUBE_RE,
-        "nsfw": False,
-    },
-}
-
 OsuMods = {
     "DT": "<:doubletime:1047996368528089118>",
     "NM": "",

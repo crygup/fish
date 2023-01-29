@@ -100,7 +100,8 @@ class Bot(commands.Bot):
         self.cached_covers: Dict[str, Tuple[str, bool]] = {}
         self._context = Context
         self.exts = set(initial_extensions + get_extensions())
-
+        self.current_downloads: List[str] = []
+        # checks
         self.add_check(no_dms)
         self.add_check(block_list)
         self.add_check(no_auto_commands)

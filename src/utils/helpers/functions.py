@@ -7,9 +7,11 @@ import math
 import os
 import pathlib
 import re
+import secrets
 import subprocess
 import sys
 import textwrap
+import time
 from io import BytesIO
 from typing import (
     TYPE_CHECKING,
@@ -28,13 +30,16 @@ from typing import (
 import aiofiles
 import aiohttp
 import discord
+import yt_dlp
 from aiohttp import ClientResponse
 from dateutil.relativedelta import relativedelta
 from discord.ext import commands
-from PIL import Image as PImage, ImageSequence
+from PIL import Image as PImage
+from PIL import ImageSequence
 from wand.image import Image as wImage
 
 from ..vars import (
+    TIKTOK_RE,
     USER_FLAGS,
     VIDEOS_RE,
     BadGateway,
@@ -50,7 +55,7 @@ from ..vars import (
     T,
     Unauthorized,
     UnknownAccount,
-    video_regexes,
+    VideoIsLive,
     initial_extensions,
     module_extensions,
 )
@@ -66,6 +71,90 @@ module_extensions = [
     "cogs.tools",
     "cogs.lastfm",
 ]
+
+
+def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    return wrapper
+
+
+@to_thread
+def download_fucntion(video: str, options: Dict):
+    with yt_dlp.YoutubeDL(options) as ydl:
+        ydl.download(video)
+
+
+def match_filter(info: Dict[Any, Any]):
+    if info.get("live_status", None) == "is_live":
+        raise VideoIsLive("Can not download live videos.")
+
+
+async def download_video(
+    video: str,
+    fmt: str,
+    ctx: Context,
+    *,
+    audio: bool = False,
+    skip_check: bool = False,
+):
+    name = secrets.token_urlsafe(8)
+
+    async with ctx.typing(ephemeral=True):
+        if skip_check is False:
+            video_match = VIDEOS_RE.search(video)
+
+            if not video_match:
+                raise BlankException("Invalid video URL.")
+
+            video = video_match.group(0)
+
+            ydl_opts = {
+                "format": f"bestvideo+bestaudio[ext={fmt}]/best"
+                if not audio
+                else f"bestaudio/best",
+                "outtmpl": f"src/files/videos/{name}.%(ext)s",
+                "quiet": True,
+                "max_filesize": ctx.guild.filesize_limit,
+                "match_filter": match_filter,
+            }
+
+            if TIKTOK_RE.search(video):
+                ydl_opts["format_sort"] = ["vcodec:h264"]
+
+            if audio:
+                ydl_opts["postprocessors"] = [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": fmt,
+                        "preferredquality": "192",
+                    }
+                ]
+
+            ctx.bot.current_downloads.append(f"{name}.{fmt}")
+
+            start = time.perf_counter()
+            await download_fucntion(video, ydl_opts)
+            stop = time.perf_counter()
+
+            try:
+                await ctx.send(
+                    f"{ctx.author.mention}",
+                    file=discord.File(f"src/files/videos/{name}.{fmt}"),
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                    ephemeral=True,
+                )
+
+            except (ValueError, discord.Forbidden):
+                raise BlankException("Failed to download, try again later?")
+
+            try:
+                os.remove(f"src/files/videos/{name}.{fmt}")
+            except (FileNotFoundError, PermissionError):
+                pass
+
+            ctx.bot.current_downloads.remove(f"{name}.{fmt}")
 
 
 async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
@@ -333,13 +422,6 @@ async def get_sp_cover(bot: Bot, query: str) -> Tuple[str, bool]:
         raise NoCover("No cover found for this album, sorry.")
 
 
-def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
-    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-        return await asyncio.to_thread(func, *args, **kwargs)
-
-    return wrapper
-
-
 async def get_twemoji(session: aiohttp.ClientSession, emoji: str) -> BytesIO:
     try:
         formatted = "-".join([f"{ord(char):x}" for char in emoji])
@@ -524,24 +606,6 @@ async def get_user_badges(
             continue
 
     return user_flags
-
-
-async def get_video(ctx: Context, url: str, auto: bool = False) -> Optional[str]:
-    if not VIDEOS_RE.search(url):
-        return None
-
-    for _, data in video_regexes.items():
-        results = data["regex"].search(url)
-        if results:
-            if data["nsfw"] and not ctx.channel.is_nsfw():
-                msg = "The site given has been marked as NSFW, please switch to a NSFW channel."
-                if auto:
-                    await ctx.send(msg)
-                    return
-
-                raise commands.BadArgument(msg)
-
-            return results.group()
 
 
 def natural_size(size_in_bytes: int) -> str:

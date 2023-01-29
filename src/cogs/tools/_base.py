@@ -37,7 +37,6 @@ class MaybeAcquire:
 class CogBase(Cog):
     def __init__(self, bot: Bot):
         self.bot: Bot = bot
-        self.currently_downloading: list[str] = []
         self._have_data = asyncio.Event()
         self._current_timer: Optional[PGTimer] = None
         self._task = bot.loop.create_task(self.dispatch_timers())
