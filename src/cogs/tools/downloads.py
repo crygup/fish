@@ -41,7 +41,4 @@ class DownloadCommands(CogBase):
         skip_check = False
         audio = dl_format == "mp3"
 
-        if flags.dev:
-            skip_check = await self.bot.is_owner(ctx.author)
-
         await download_video(video, dl_format, ctx, audio=audio, skip_check=skip_check)
