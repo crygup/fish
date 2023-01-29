@@ -88,7 +88,7 @@ async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
 
     return commands.when_mentioned_or(*packed)(bot, message)
 
-def get_extensions(*, _path: str = "src/cogs") -> List[str]:
+def get_extensions(*, _path: str = "/src/cogs") -> List[str]:
     def format_cog(cog: str) -> str:
         first = (
             cog.replace("\\", ".")[:-3]
