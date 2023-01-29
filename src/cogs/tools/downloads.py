@@ -23,7 +23,6 @@ class Arguments(argparse.ArgumentParser):
 
 
 class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
-    dev: bool = commands.flag(description="you can't use this lol", default=False)
     format: Literal["mp4", "mp3", "webm"] = commands.flag(
         description="What format the video should download as.", default="mp4"
     )
