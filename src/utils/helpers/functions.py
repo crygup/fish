@@ -90,14 +90,13 @@ async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
     return commands.when_mentioned_or(*packed)(bot, message)
 
 
-def get_extensions(*, _path: str = "src/cogs") -> List[str]:
+def get_extensions(*, _path: str = "./src/cogs") -> List[str]:
     def format_cog(cog: str) -> str:
         first = re.sub(r"(/|\\)", ".", cog)
         return re.sub(r"(src.|.py)", "", first)
 
     path = pathlib.Path(_path)
     exts = []
-
     for item in path.glob("**/*.py"):
         parent = format_cog(str(item.parent))
 
@@ -107,12 +106,13 @@ def get_extensions(*, _path: str = "src/cogs") -> List[str]:
 
             continue
 
-        if format_cog(str(item)) in initial_extensions:
+        cog = format_cog(str(item))
+        if cog in initial_extensions:
             continue
 
-        exts.append(format_cog(str(item)))
+        exts.append(cog)
 
-    return list(set(exts))
+    return exts
 
 
 def get_pokemon(bot: Bot, guess: str) -> List:
