@@ -67,6 +67,7 @@ module_extensions = [
     "cogs.lastfm",
 ]
 
+
 async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
     default = ["fish "] if not bot.testing else ["fish. "]
 
@@ -88,14 +89,11 @@ async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:
 
     return commands.when_mentioned_or(*packed)(bot, message)
 
-def get_extensions(*, _path: str = "/src/cogs") -> List[str]:
+
+def get_extensions(*, _path: str = "src/cogs") -> List[str]:
     def format_cog(cog: str) -> str:
-        first = (
-            cog.replace("\\", ".")[:-3]
-            if cog.endswith(".py")
-            else cog.replace("\\", ".")
-        )
-        return first.replace("src.", "")
+        first = re.sub(r"(/|\\)", ".", cog)
+        return re.sub(r"(src.|.py)", "", first)
 
     path = pathlib.Path(_path)
     exts = []
