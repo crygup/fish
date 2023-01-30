@@ -623,7 +623,7 @@ def natural_size(size_in_bytes: int) -> str:
 
 def cleanup_code(content: str) -> str:
     """Automatically removes code blocks from the code."""
-
+    content = content.strip()
     if content.startswith("```") and content.endswith("```"):
         return "\n".join(content.split("\n")[1:-1])
 

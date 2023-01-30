@@ -2,19 +2,15 @@ from __future__ import annotations
 
 import difflib
 import itertools
-import os
 import re
-import secrets
 import textwrap
 import time
 import traceback
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import asyncpg
 import discord
-import yt_dlp
-from discord import app_commands
 from discord.ext import commands
 from jishaku.codeblocks import codeblock_converter
 from jishaku.paginators import WrappedPaginator
@@ -33,10 +29,6 @@ from utils import (
     response_checker,
     setup_pokemon,
     to_bytesio,
-    to_thread,
-    VideoIsLive,
-    VIDEOS_RE,
-    TIKTOK_RE,
 )
 
 if TYPE_CHECKING:
@@ -281,62 +273,6 @@ class Owner(
     @commands.group(name="dev", invoke_without_command=True)
     async def dev(self, ctx: Context):
         """Developer commands"""
-
-    @dev.command(name="snipe")
-    @commands.is_owner()
-    async def snipe(
-        self,
-        ctx: Context,
-        index: Optional[int],
-        channel: Optional[discord.TextChannel] = commands.CurrentChannel,
-        *,
-        member: Optional[discord.Member],
-    ):
-        """Shows a deleted message"""
-        index = index or 1
-
-        if ctx.guild is None or channel is None:
-            return
-
-        if member:
-            sql = """
-            SELECT * FROM message_logs where channel_id = $1 AND author_id = $2 AND deleted IS TRUE ORDER BY created_at DESC
-            """
-            results = await self.bot.pool.fetch(sql, channel.id, member.id)
-        else:
-            sql = """
-            SELECT * FROM message_logs where channel_id = $1 AND deleted IS TRUE ORDER BY created_at DESC
-            """
-            results = await self.bot.pool.fetch(sql, channel.id)
-
-        if index - 1 >= len(results):
-            await ctx.send("Index out of range.")
-            return
-
-        if results == []:
-            await ctx.send("Nothing was deleted here...")
-            return
-
-        user = self.bot.get_user(results[index - 1]["author_id"]) or "Unknown"
-
-        embed = discord.Embed(
-            color=self.bot.embedcolor, timestamp=results[index - 1]["created_at"]
-        )
-        embed.description = (
-            textwrap.shorten(
-                results[index - 1]["message_content"], width=300, placeholder="..."
-            )
-            or "Message did not contain any content."
-        )
-        embed.set_author(
-            name=f"{str(user)}",
-            icon_url=user.display_avatar.url
-            if isinstance(user, discord.User)
-            else ctx.guild.me.display_avatar.url,
-        )
-        embed.set_footer(text=f"Index {index} of {len(results)}\nMessage deleted ")
-
-        await ctx.send(embed=embed)
 
     @dev.command(name="servers")
     async def dev_serers(self, ctx: Context):
