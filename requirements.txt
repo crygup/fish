@@ -23,3 +23,4 @@ PyNaCl
 parsedatetime
 playwright
 aiofiles
+asyncpg-stubs
