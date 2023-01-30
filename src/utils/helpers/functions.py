@@ -70,6 +70,7 @@ module_extensions = [
     "cogs.moderation",
     "cogs.tools",
     "cogs.lastfm",
+    "cogs.settings",
 ]
 
 
@@ -81,7 +82,7 @@ def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
 
 
 @to_thread
-def download_fucntion(video: str, options: Dict):
+def download_function(video: str, options: Dict):
     with yt_dlp.YoutubeDL(options) as ydl:
         ydl.download(video)
 
@@ -106,7 +107,7 @@ async def download_video(
             video_match = VIDEOS_RE.search(video)
 
             if not video_match:
-                raise BlankException("Invalid video URL.")
+                return
 
             video = video_match.group(0)
 
@@ -134,23 +135,21 @@ async def download_video(
 
             ctx.bot.current_downloads.append(f"{name}.{fmt}")
 
-            start = time.perf_counter()
-            await download_fucntion(video, ydl_opts)
-            stop = time.perf_counter()
+            await download_function(video, ydl_opts)
 
             try:
                 await ctx.send(
                     f"{ctx.author.mention}",
-                    file=discord.File(f"src/files/videos/{name}.{fmt}"),
+                    file=discord.File(f"./src/files/videos/{name}.{fmt}"),
                     allowed_mentions=discord.AllowedMentions(users=True),
                     ephemeral=True,
                 )
 
             except (ValueError, discord.Forbidden):
-                raise BlankException("Failed to download, try again later?")
+                await ctx.send("Failed to download, try again later?")
 
             try:
-                os.remove(f"src/files/videos/{name}.{fmt}")
+                os.remove(f"./src/files/videos/{name}.{fmt}")
             except (FileNotFoundError, PermissionError):
                 pass
 
