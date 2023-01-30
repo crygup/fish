@@ -5,11 +5,20 @@ import discord
 T = TypeVar("T")
 P = ParamSpec("P")
 
-GuildChannel = Union[
+GuildChannel: TypeAlias = Union[
     discord.TextChannel,
     discord.VoiceChannel,
     discord.CategoryChannel,
     discord.StageChannel,
+    discord.Thread,
+]
+
+Channel: TypeAlias = Union[
+    discord.TextChannel,
+    discord.VoiceChannel,
+    discord.CategoryChannel,
+    discord.StageChannel,
+    discord.ForumChannel,
     discord.Thread,
 ]
 
