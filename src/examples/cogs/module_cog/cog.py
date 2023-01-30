@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class Example(CogBase):
+class ExampleCog(CogBase):
     @commands.command(name="example")
     async def example_command(self, ctx: Context):
         await ctx.send("Example!")
