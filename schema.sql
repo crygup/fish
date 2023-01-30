@@ -168,16 +168,6 @@ CREATE TABLE IF NOT EXISTS nsfw_covers (
     PRIMARY KEY (album_id)
 );
 
-CREATE TABLE IF NOT EXISTS reminders (
-    id SERIAL,
-    member_id BIGINT,
-    guild_id BIGINT,
-    message_url TEXT,
-    remind_text TEXT,
-    start TIMESTAMP WITH TIME ZONE,
-    end_time TIMESTAMP WITH TIME ZONE
-);
-
 CREATE TABLE IF NOT EXISTS pokemon_guesses (
     pokemon_name TEXT,
     author_id BIGINT,
