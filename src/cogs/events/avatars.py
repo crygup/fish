@@ -65,13 +65,13 @@ class AvatarEvents(commands.Cog, name="avatar_events"):
         return message
 
     async def add_avatar(self, user: discord.User | discord.Member):
-        if user.display_avatar.key.isdigit():
+        if user.avatar is None:
             return
 
         if "avatars" in await self.bot.redis.smembers(f"opted_out:{user.id}"):
             return
 
-        message = await self.do_avatar(user=user, asset=user.display_avatar)
+        message = await self.do_avatar(user=user, asset=user.avatar)
 
         sql = """
         INSERT INTO avatars(user_id, avatar_key, created_at, avatar)
