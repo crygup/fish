@@ -49,12 +49,14 @@ class LinkCog(CogBase):
         embed.add_field(
             name="Last.fm",
             value=f"[{accounts['lastfm']}](https://www.last.fm/user/{accounts['lastfm']})"
-            or "Not set",
+            if accounts["lastfm"]
+            else "Not set",
         )
         embed.add_field(
             name="osu!",
             value=f"[{accounts['osu']}](osu.ppy.sh/users/{accounts['osu']})"
-            or "Not set",
+            if accounts["osu"]
+            else "Not set",
         )
         embed.add_field(name="Steam", value=steam or "Not set")
         embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
@@ -176,12 +178,14 @@ class Dropdown(discord.ui.Select):
                 embed.add_field(
                     name="Last.fm",
                     value=f"[{accounts['lastfm']}](https://www.last.fm/user/{accounts['lastfm']})"
-                    or "Not set",
+                    if accounts["lastfm"]
+                    else "Not set",
                 )
                 embed.add_field(
                     name="osu!",
                     value=f"[{accounts['osu']}](osu.ppy.sh/users/{accounts['osu']})"
-                    or "Not set",
+                    if accounts["osu"]
+                    else "Not set",
                 )
                 embed.add_field(name="Steam", value=steam or "Not set")
                 embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
