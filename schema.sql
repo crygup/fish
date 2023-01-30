@@ -1,9 +1,3 @@
-CREATE TABLE IF NOT EXISTS opted_out (
-    user_id BIGINT,
-    items TEXT[],
-    PRIMARY KEY (user_id)
-);
-
 CREATE TABLE IF NOT EXISTS avatars (
     user_id BIGINT,
     avatar_key TEXT,
