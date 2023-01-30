@@ -120,7 +120,7 @@ class Dropdown(discord.ui.Select):
                             "Invalid username.", ephemeral=True
                         )
                 elif value == "steam":
-                    username = SteamIDConverter(username)
+                    username = str(SteamIDConverter(username))
 
                 if username == "":
                     sql = f"""UPDATE accounts SET {value} = $1 WHERE user_id = $2 RETURNING *"""
