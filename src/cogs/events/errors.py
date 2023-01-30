@@ -87,7 +87,7 @@ class ErrorEvents(commands.Cog, name="error_events"):
             return await channel.send(f"{liz.mention} \n{error}")
 
         elif (
-            isinstance(error, discord.HTTPException)
+            isinstance(error, (discord.HTTPException, FileNotFoundError))
             and ctx.command
             and ctx.command.name == "download"
         ):
