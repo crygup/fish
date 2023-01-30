@@ -33,3 +33,7 @@ ACTIVE_DEVELOPER: PartialEmoji = PartialEmoji(
 )
 UPVOTE: PartialEmoji = PartialEmoji(name="cr_upvote", id=1060024489280278528)
 DOWNVOTE: PartialEmoji = PartialEmoji(name="cr_downvote", id=1060024487711617055)
+STEAM: PartialEmoji = PartialEmoji(name="steam", id=1069495975166615562)
+ROBLOX: PartialEmoji = PartialEmoji(name="roblox", id=1006847143400706078)
+LASTFM: PartialEmoji = PartialEmoji(name="lastfm", id=1006848047923351612)
+OSU: PartialEmoji = PartialEmoji(name="osu", id=1006847555616919642)

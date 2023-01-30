@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import discord
 from discord.ext import commands
 
-from utils import UnknownAccount, SteamIDConverter
+from utils import (
+    UnknownAccount,
+    SteamIDConverter,
+    STEAM,
+    ROBLOX,
+    LASTFM,
+    OSU,
+    BlankException,
+)
 
 from ._base import CogBase
 
@@ -23,8 +31,7 @@ class LinkCog(CogBase):
         )
 
         if not accounts:
-            await ctx.send(f"{str(user)} has no linked accounts.")
-            return
+            raise BlankException(f"{str(user)} has no linked accounts.")
 
         embed = discord.Embed()
         embed.set_author(
@@ -37,77 +44,124 @@ class LinkCog(CogBase):
         embed.add_field(name="Steam", value=accounts["steam"] or "Not set")
         embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
 
-        await ctx.send(embed=embed, check_ref=True)
-
-    @commands.group(name="link", aliases=("set",), invoke_without_command=True)
-    async def set(self, ctx: Context):
-        """Sets your profile for a site"""
-        await ctx.send_help(ctx.command)
-
-    @set.command(name="lastfm", aliases=["fm"])
-    async def set_lastfm(self, ctx: Context, username: str):
-        """Sets your last.fm account"""
-        if not re.fullmatch(r"[a-zA-Z0-9_-]{2,15}", username):
-            raise UnknownAccount("Invalid username.")
-
-        await self.link_method(ctx, ctx.author.id, "lastfm", username)
-
-    @set.command(name="osu")
-    async def set_osu(self, ctx: Context, *, username: str):
-        """Sets your osu! account"""
-        if not re.fullmatch(r"[a-zA-Z0-9_\s-]{2,16}", username):
-            raise UnknownAccount("Invalid username.")
-
-        await self.link_method(ctx, ctx.author.id, "osu", username)
-
-    @set.command(name="steam")
-    async def set_steam(self, ctx: Context, username: str):
-        """Sets your steam account"""
-
-        await self.link_method(
-            ctx, ctx.author.id, "steam", str(SteamIDConverter(username))
+        await ctx.send(
+            embed=embed, view=DropdownView(ctx) if user.id == ctx.author.id else None
         )
 
-    @set.command(name="roblox")
-    async def set_roblox(self, ctx: Context, *, username: str):
-        """Sets your roblox account"""
 
-        await self.link_method(ctx, ctx.author.id, "roblox", username)
+class Dropdown(discord.ui.Select):
+    def __init__(self, ctx: Context):
+        self.ctx = ctx
 
-    @set.command(name="genshin")
-    async def set_genshin(self, ctx: Context, *, user_id: str):
-        """Sets your genshin account"""
-        if not re.match(r"[0-9]{4,15}", user_id):
-            raise UnknownAccount("Invalid UID.")
+        # Set the options that will be presented inside the dropdown
+        options = [
+            discord.SelectOption(
+                label="Last.fm",
+                description="Add or remove your last.fm account",
+                emoji=LASTFM,
+                value="lastfm",
+            ),
+            discord.SelectOption(
+                label="osu!",
+                description="Add or remove your osu account",
+                emoji=OSU,
+                value="osu",
+            ),
+            discord.SelectOption(
+                label="Steam",
+                description="Add or remove your steam account",
+                emoji=STEAM,
+                value="steam",
+            ),
+            discord.SelectOption(
+                label="Roblox",
+                description="Add or remove your roblox account",
+                emoji=ROBLOX,
+                value="roblox",
+            ),
+        ]
 
-        await self.link_method(ctx, ctx.author.id, "genshin", user_id)
+        super().__init__(
+            placeholder="Add or remove one your accounts",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
 
-    @commands.group(name="unlink", invoke_without_command=True)
-    async def unlink(self, ctx: Context):
-        """Unlinks your account"""
-        await ctx.send_help(ctx.command)
+    async def callback(self, interaction: discord.Interaction):
+        value = self.values[0]
+        dropdown = self
+        account: Optional[str] = await self.ctx.bot.pool.fetchval(
+            f"SELECT {value} FROM accounts WHERE user_id = $1", self.ctx.author.id
+        )
 
-    @unlink.command(name="lastfm")
-    async def unlink_lastfm(self, ctx: Context):
-        """Unlinks your last.fm account"""
-        await self.unlink_method(ctx, ctx.author.id, "lastfm")
+        class Feedback(
+            discord.ui.Modal, title=f"Add or remove your {value.capitalize()} account."
+        ):
+            name = discord.ui.TextInput(
+                label=f"{value.capitalize()} username",
+                placeholder=account if account else "Input your username",
+                style=discord.TextStyle.short,
+                required=False,
+            )
 
-    @unlink.command(name="osu")
-    async def unlink_osu(self, ctx: Context):
-        """Unlinks your osu account"""
-        await self.unlink_method(ctx, ctx.author.id, "osu")
+            async def on_submit(self, modal_interaction: discord.Interaction):
+                username = self.name.value
+                user = dropdown.ctx.author
+                if username == "":
+                    pass
+                elif value == "lastfm":
+                    if not re.fullmatch(r"[a-zA-Z0-9_-]{2,15}", username):
+                        return await modal_interaction.response.send_message(
+                            "Invalid username.", ephemeral=True
+                        )
+                elif value == "osu":
+                    if not re.fullmatch(r"[a-zA-Z0-9_\s-]{2,16}", username):
+                        return await modal_interaction.response.send_message(
+                            "Invalid username.", ephemeral=True
+                        )
+                elif value == "steam":
+                    username = SteamIDConverter(username)
 
-    @unlink.command(name="steam")
-    async def unlink_steam(self, ctx: Context):
-        """Unlinks your steam account"""
-        await self.unlink_method(ctx, ctx.author.id, "steam")
+                if username == "":
+                    sql = f"""UPDATE accounts SET {value} = $1 WHERE user_id = $2 RETURNING *"""
+                else:
+                    sql = f"""
+                   INSERT INTO accounts ({value}, user_id) VALUES ($1, $2)
+                   ON CONFLICT (user_id) DO UPDATE
+                   SET {value} = $1 WHERE accounts.user_id = $2
+                   RETURNING *
+                   """
 
-    @unlink.command(name="roblox")
-    async def unlink_roblox(self, ctx: Context):
-        """Unlinks your roblox account"""
-        await self.unlink_method(ctx, ctx.author.id, "roblox")
+                results = await dropdown.ctx.bot.pool.fetchrow(
+                    sql,
+                    None if username == "" else username,
+                    dropdown.ctx.author.id,
+                )
 
-    @unlink.command(name="genshin")
-    async def unlink_genshin(self, ctx: Context):
-        """Unlinks your genshin account"""
-        await self.unlink_method(ctx, ctx.author.id, "genshin")
+                await modal_interaction.response.defer()
+
+                if modal_interaction.message is None or results is None:
+                    return
+
+                embed = discord.Embed(color=dropdown.ctx.bot.embedcolor)
+                embed.set_author(
+                    name=f"{user.display_name} - Connected accounts",
+                    icon_url=user.display_avatar.url,
+                )
+
+                embed.add_field(name="Last.fm", value=results["lastfm"] or "Not set")
+                embed.add_field(name="osu!", value=results["osu"] or "Not set")
+                embed.add_field(name="Steam", value=results["steam"] or "Not set")
+                embed.add_field(name="Roblox", value=results["roblox"] or "Not set")
+
+                await modal_interaction.message.edit(embed=embed)
+
+        await interaction.response.send_modal(Feedback())
+
+
+class DropdownView(discord.ui.View):
+    def __init__(self, ctx: Context):
+        super().__init__()
+
+        self.add_item(Dropdown(ctx))

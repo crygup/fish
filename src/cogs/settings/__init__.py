@@ -4,15 +4,16 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from .server_settings import ServerSettings
-from .opt import OptCog
+from .data import DataCog
 from .link import LinkCog
+from .opt import OptCog
+from .server_settings import ServerSettings
 
 if TYPE_CHECKING:
     from bot import Bot
 
 
-class Settings(ServerSettings, OptCog, LinkCog, name="settings"):
+class Settings(ServerSettings, OptCog, LinkCog, DataCog, name="settings"):
     """Settings for the bot"""
 
     @property
