@@ -746,20 +746,6 @@ class Settings(commands.Cog, name="settings"):
         await ctx.redis.sadd(f"opted_out:{ctx.author.id}", logger)
         await ctx.send(str(CHECK))
 
-    @commands.group(
-        name="auto-reactions",
-        invoke_without_command=True,
-        aliases=("ar", "auto_reactions"),
-    )
-    async def auto_reactions(self, ctx: Context):
-        """Shows whether auto reactions are enabled or not."""
-        sql = """SELECT auto_reactions FROM guild_settings WHERE guild_id = $1"""
-        auto_reactions: bool = await ctx.bot.pool.fetchval(sql, ctx.guild.id)
-
-        await ctx.send(
-            f"Auto reactions are {'enabled' if auto_reactions else 'disabled'} in this server."
-        )
-
     @commands.command(
         name="fm-reactions",
         invoke_without_command=True,
@@ -787,10 +773,14 @@ class Settings(commands.Cog, name="settings"):
             f"{'Enabled' if value else 'Disabled'} auto-reactions for the fm command for you."
         )
 
-    @auto_reactions.command(name="toggle")
+    @commands.group(
+        name="auto-reactions",
+        invoke_without_command=True,
+        aliases=("ar", "auto_reactions"),
+    )
     @commands.has_guild_permissions(manage_guild=True)
     @commands.bot_has_guild_permissions(add_reactions=True)
-    async def toggle_auto_reactions(self, ctx: Context):
+    async def auto_reactions(self, ctx: Context):
         """Toggles auto reactions to media posts in this server."""
 
         sql = """
