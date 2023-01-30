@@ -1,4 +1,5 @@
 CREATE TABLE IF NOT EXISTS avatars (
+    id SERIAL,
     user_id BIGINT,
     avatar_key TEXT,
     created_at TIMESTAMP WITH TIME ZONE,
@@ -13,6 +14,7 @@ CREATE TABLE IF NOT EXISTS opted_out (
 );
 
 CREATE TABLE IF NOT EXISTS guild_avatars (
+    id SERIAL,
     member_id BIGINT,
     guild_id BIGINT,
     avatar_key TEXT,
@@ -22,6 +24,7 @@ CREATE TABLE IF NOT EXISTS guild_avatars (
 );
 
 CREATE TABLE IF NOT EXISTS guild_icons (
+    id SERIAL,
     guild_id BIGINT,
     icon_key TEXT,
     created_at TIMESTAMP WITH TIME ZONE,
@@ -30,18 +33,21 @@ CREATE TABLE IF NOT EXISTS guild_icons (
 );
 
 CREATE TABLE IF NOT EXISTS username_logs (
+    id SERIAL,
     user_id BIGINT,
     username TEXT,
     created_at TIMESTAMP WITH TIME ZONE
 );
 
 CREATE TABLE IF NOT EXISTS discrim_logs (
+    id SERIAL,
     user_id BIGINT,
     discrim TEXT,
     created_at TIMESTAMP WITH TIME ZONE
 );
 
 CREATE TABLE IF NOT EXISTS nickname_logs (
+    id SERIAL,
     user_id BIGINT,
     guild_id BIGINT,
     nickname TEXT,
@@ -49,6 +55,7 @@ CREATE TABLE IF NOT EXISTS nickname_logs (
 );
 
 CREATE TABLE IF NOT EXISTS guild_name_logs (
+    id SERIAL,
     guild_id BIGINT,
     name TEXT,
     created_at TIMESTAMP WITH TIME ZONE
@@ -69,6 +76,7 @@ CREATE TABLE IF NOT EXISTS uptime_logs (
 );
 
 CREATE TABLE IF NOT EXISTS member_join_logs (
+    id SERIAL,
     member_id BIGINT,
     guild_id BIGINT,
     time TIMESTAMP WITH TIME ZONE
@@ -122,6 +130,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 
 CREATE TABLE IF NOT EXISTS tags (
+    id SERIAL,
     guild_id BIGINT,
     author_id BIGINT,
     name TEXT,
