@@ -26,12 +26,13 @@ class LinkCog(CogBase):
     @commands.command(name="accounts")
     async def accounts(self, ctx: Context, *, user: discord.User = commands.Author):
         """Shows your linked accounts"""
+        view = DropdownView(ctx) if user.id == ctx.author.id else None
         accounts = await ctx.bot.pool.fetchrow(
             "SELECT * FROM accounts WHERE user_id = $1", user.id
         )
 
         if not accounts:
-            raise BlankException(f"{str(user)} has no linked accounts.")
+            return await ctx.send(f"{str(user)} has no linked accounts.", view=view)
 
         embed = discord.Embed()
         embed.set_author(
@@ -44,9 +45,7 @@ class LinkCog(CogBase):
         embed.add_field(name="Steam", value=accounts["steam"] or "Not set")
         embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
 
-        await ctx.send(
-            embed=embed, view=DropdownView(ctx) if user.id == ctx.author.id else None
-        )
+        await ctx.send(embed=embed, view=view)
 
 
 class Dropdown(discord.ui.Select):
