@@ -40,9 +40,23 @@ class LinkCog(CogBase):
             icon_url=user.display_avatar.url,
         )
 
-        embed.add_field(name="Last.fm", value=accounts["lastfm"] or "Not set")
-        embed.add_field(name="osu!", value=accounts["osu"] or "Not set")
-        embed.add_field(name="Steam", value=accounts["steam"] or "Not set")
+        steam = (
+            f"[{accounts['steam']}](https://steamcommunity.com/profiles/{SteamIDConverter(accounts['steam'])})"
+            if accounts["steam"]
+            else None
+        )
+
+        embed.add_field(
+            name="Last.fm",
+            value=f"[{accounts['lastfm']}](https://www.last.fm/user/{accounts['lastfm']})"
+            or "Not set",
+        )
+        embed.add_field(
+            name="osu!",
+            value=f"[{accounts['osu']}](osu.ppy.sh/users/{accounts['osu']})"
+            or "Not set",
+        )
+        embed.add_field(name="Steam", value=steam or "Not set")
         embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
 
         await ctx.send(embed=embed, view=view)
@@ -120,7 +134,12 @@ class Dropdown(discord.ui.Select):
                             "Invalid username.", ephemeral=True
                         )
                 elif value == "steam":
-                    username = str(SteamIDConverter(username))
+                    try:
+                        SteamIDConverter(username)
+                    except UnknownAccount:
+                        return await modal_interaction.response.send_message(
+                            "Invalid username.", ephemeral=True
+                        )
 
                 if username == "":
                     sql = f"""UPDATE accounts SET {value} = $1 WHERE user_id = $2 RETURNING *"""
@@ -132,7 +151,7 @@ class Dropdown(discord.ui.Select):
                    RETURNING *
                    """
 
-                results = await dropdown.ctx.bot.pool.fetchrow(
+                accounts = await dropdown.ctx.bot.pool.fetchrow(
                     sql,
                     None if username == "" else username,
                     dropdown.ctx.author.id,
@@ -140,7 +159,7 @@ class Dropdown(discord.ui.Select):
 
                 await modal_interaction.response.defer()
 
-                if modal_interaction.message is None or results is None:
+                if modal_interaction.message is None or accounts is None:
                     return
 
                 embed = discord.Embed(color=dropdown.ctx.bot.embedcolor)
@@ -149,10 +168,23 @@ class Dropdown(discord.ui.Select):
                     icon_url=user.display_avatar.url,
                 )
 
-                embed.add_field(name="Last.fm", value=results["lastfm"] or "Not set")
-                embed.add_field(name="osu!", value=results["osu"] or "Not set")
-                embed.add_field(name="Steam", value=results["steam"] or "Not set")
-                embed.add_field(name="Roblox", value=results["roblox"] or "Not set")
+                steam = (
+                    f"[{accounts['steam']}](https://steamcommunity.com/profiles/{SteamIDConverter(accounts['steam'])})"
+                    if accounts["steam"]
+                    else None
+                )
+                embed.add_field(
+                    name="Last.fm",
+                    value=f"[{accounts['lastfm']}](https://www.last.fm/user/{accounts['lastfm']})"
+                    or "Not set",
+                )
+                embed.add_field(
+                    name="osu!",
+                    value=f"[{accounts['osu']}](osu.ppy.sh/users/{accounts['osu']})"
+                    or "Not set",
+                )
+                embed.add_field(name="Steam", value=steam or "Not set")
+                embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
 
                 await modal_interaction.message.edit(embed=embed)
 
