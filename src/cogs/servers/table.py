@@ -3,6 +3,7 @@ from __future__ import annotations
 import textwrap
 from typing import TYPE_CHECKING, Dict, Optional
 
+import emoji
 import discord
 from discord.ext import commands
 
@@ -122,13 +123,18 @@ class Table(commands.Cog, name="table", command_attrs=dict(hidden=True)):
             await ctx.send("User already has a booster role.")
             return
 
-        icon_bytes: bytes | str = await to_bytes(ctx.session, icon) if icon else ""
+        parsed_icon = ""
+        if icon and emoji.is_emoji(icon):
+            parsed_icon = icon
+        elif icon:
+            parsed_icon = await to_bytes(ctx.session, icon)
+        
         color_value = color.value if color else 0
 
         role = await ctx.guild.create_role(
             name=name,
             color=color_value,
-            display_icon=icon_bytes,
+            display_icon=parsed_icon,
         )
 
         sql = """

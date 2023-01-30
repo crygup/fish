@@ -24,3 +24,4 @@ parsedatetime
 playwright
 aiofiles
 asyncpg-stubs
+emoji
