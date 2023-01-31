@@ -3,11 +3,10 @@ from __future__ import annotations
 import difflib
 import itertools
 import re
-import textwrap
 import time
 import traceback
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Tuple
 
 import asyncpg
 import discord

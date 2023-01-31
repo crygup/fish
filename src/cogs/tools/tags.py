@@ -227,7 +227,7 @@ class TagCommands(CogBase):
         SELECT * FROM tags WHERE LOWER(name) = $1 AND guild_id = $2
         """
 
-        tag: asyncpg.Record = await self.bot.pool.fetchrow(sql, name, ctx.guild.id)
+        tag = await self.bot.pool.fetchrow(sql, name, ctx.guild.id)
 
         if tag is None:
             await ctx.send("Tag not found.")

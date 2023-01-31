@@ -72,10 +72,11 @@ class UserCommands(CogBase):
         if results == []:
             raise ValueError("User has no avatar history saved.")
 
-        entries: List[Tuple[str, datetime.datetime]] = [
+        entries: List[Tuple[str, datetime.datetime, int]] = [
             (
                 r["avatar"],
                 r["created_at"],
+                r["id"],
             )
             for r in results
         ]
@@ -105,64 +106,6 @@ class UserCommands(CogBase):
             url=f'attachment://banner.{"gif" if user.banner.is_animated() else "png"}'
         )
         await ctx.send(file=file, embed=embed)
-
-    async def failed_to_find(
-        self, ctx: Context, guild_id: int, channel_id: int, message_id: int
-    ) -> None:
-        url = f"https://discordapp.com/channels/{guild_id}/{channel_id}/{message_id}"
-        await ctx.send(
-            f"I was unable to find and verify the message, here is a link, it might not work though. \b{url}"
-        )
-
-    @commands.command(name="first_message", aliases=("fmsg", "oldest"))
-    async def first_message(
-        self,
-        ctx: Context,
-        channel: Optional[
-            Union[discord.TextChannel, discord.Thread, discord.VoiceChannel]
-        ],
-        *,
-        user: Optional[discord.User],
-    ):
-        """Sends a url to the first message from a member in a channel.
-
-        This is based on when fishie was added to the server."""
-
-        if ctx.guild is None:
-            return
-
-        channel = channel or ctx.channel
-
-        if user:
-            sql = f"""SELECT * FROM message_logs WHERE author_id = $1 AND guild_id = $2 AND channel_id = $3 ORDER BY created_at ASC LIMIT 1"""
-            args = [user.id, ctx.guild.id, channel.id]
-        else:
-            sql = f"""SELECT * FROM message_logs WHERE guild_id = $1 AND channel_id = $2 ORDER BY created_at ASC LIMIT 1"""
-            args = [ctx.guild.id, channel.id]
-
-        record = await self.bot.pool.fetchrow(sql, *args)
-        if record is None:
-            await ctx.send(f"It seems I have no records in this channel")
-            return
-
-        _channel = self.bot.get_channel(channel.id)
-        if _channel is None or not isinstance(
-            _channel, (discord.TextChannel, discord.Thread, discord.VoiceChannel)
-        ):
-            await self.failed_to_find(
-                ctx, ctx.guild.id, channel.id, record["message_id"]
-            )
-            return
-
-        try:
-            _message = await _channel.fetch_message(record["message_id"])
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            await self.failed_to_find(
-                ctx, ctx.guild.id, channel.id, record["message_id"]
-            )
-            return
-
-        await ctx.send(_message.jump_url)
 
     async def _index_member(
         self, guild: discord.Guild, user: discord.Member | discord.User
@@ -215,8 +158,9 @@ class UserCommands(CogBase):
                 results = 1
 
             else:
-                await ctx.send(f"I have no join records for {user!s} in {guild!s}")
-                return
+                return await ctx.send(
+                    f"I have no join records for {user!s} in {guild!s}"
+                )
 
         await ctx.send(
             f"{user} has joined {guild} {results:,} time{'s' if results > 1 else ''}."
@@ -232,10 +176,9 @@ class UserCommands(CogBase):
             return
 
         if member is None or member and member.id == me.id:
-            await ctx.send(
+            return await ctx.send(
                 f"Hello, I have been awake for {human_timedelta(bot.uptime, suffix=False)}."
             )
-            return
 
         if "uptime" in await self.bot.redis.smembers(f"opted_out:{member.id}"):
             raise BlankException(f"Sorry, {member} has opted out from uptime logging.")
@@ -267,7 +210,7 @@ class UserCommands(CogBase):
         entries = [
             (
                 r["username"],
-                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")}',
+                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")} | `ID: {r["id"]}`',
             )
             for r in results
         ]
@@ -296,7 +239,7 @@ class UserCommands(CogBase):
         entries = [
             (
                 f'#{r["discrim"]}',
-                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")}',
+                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")} | `ID: {r["id"]}`',
             )
             for r in results
         ]
@@ -331,7 +274,7 @@ class UserCommands(CogBase):
         entries = [
             (
                 r["nickname"],
-                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")}',
+                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")} | `ID: {r["id"]}`',
             )
             for r in results
         ]
