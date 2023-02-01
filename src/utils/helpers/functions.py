@@ -58,6 +58,7 @@ from ..vars import (
     VideoIsLive,
     initial_extensions,
     module_extensions,
+    SOUNDCLOUD_RE,
 )
 
 if TYPE_CHECKING:
@@ -92,6 +93,42 @@ def match_filter(info: Dict[Any, Any]):
         raise VideoIsLive("Can not download live videos.")
 
 
+def get_options(
+    video: str,
+    fmt: str,
+    audio: bool,
+    name: str,
+    ctx: Context,
+) -> Tuple[Dict[Any, Any], str]:
+    ydl_opts = {
+        "outtmpl": f"src/files/videos/{name}.%(ext)s",
+        "quiet": True,
+        "max_filesize": ctx.guild.filesize_limit,
+        "match_filter": match_filter,
+    }
+
+    if TIKTOK_RE.search(video):
+        ydl_opts["format_sort"] = ["vcodec:h264"]
+
+    if SOUNDCLOUD_RE.search(video) and not audio:
+        fmt = "mp3"
+
+    if audio:
+        ydl_opts["postprocessors"] = [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": fmt,
+                "preferredquality": "192",
+            }
+        ]
+        ydl_opts["format"] = "bestaudio/best"
+
+    else:
+        ydl_opts["format"] = f"bestvideo+bestaudio[ext={fmt}]/best"
+
+    return ydl_opts, fmt
+
+
 async def download_video(
     video: str,
     fmt: str,
@@ -99,61 +136,48 @@ async def download_video(
     *,
     audio: bool = False,
     skip_check: bool = False,
+    event: bool = False,
 ):
     name = secrets.token_urlsafe(8)
 
-    async with ctx.typing(ephemeral=True):
-        if skip_check is False:
-            video_match = VIDEOS_RE.search(video)
+    if skip_check is False:
+        video_match = VIDEOS_RE.search(video)
 
-            if not video_match:
+        if video_match is None or video_match and video_match.group(0) == "":
+            if event:
                 return
 
-            video = video_match.group(0)
+            return await ctx.send("Invalid video URL", ephemeral=True)
 
-            ydl_opts = {
-                "format": f"bestvideo+bestaudio[ext={fmt}]/best"
-                if not audio
-                else f"bestaudio/best",
-                "outtmpl": f"src/files/videos/{name}.%(ext)s",
-                "quiet": True,
-                "max_filesize": ctx.guild.filesize_limit,
-                "match_filter": match_filter,
-            }
+        video = video_match.group(0)
 
-            if TIKTOK_RE.search(video):
-                ydl_opts["format_sort"] = ["vcodec:h264"]
+    async with ctx.typing(ephemeral=True):
+        ydl_opts, fmt = get_options(video, fmt, audio, name, ctx)
 
-            if audio:
-                ydl_opts["postprocessors"] = [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": fmt,
-                        "preferredquality": "192",
-                    }
-                ]
+        ctx.bot.current_downloads.append(f"{name}.{fmt}")
 
-            ctx.bot.current_downloads.append(f"{name}.{fmt}")
+        await download_function(video, ydl_opts)
 
-            await download_function(video, ydl_opts)
+        try:
+            await ctx.send(
+                f"{ctx.author.mention}",
+                file=discord.File(f"./src/files/videos/{name}.{fmt}"),
+                allowed_mentions=discord.AllowedMentions(users=True),
+                ephemeral=True,
+            )
 
-            try:
-                await ctx.send(
-                    f"{ctx.author.mention}",
-                    file=discord.File(f"./src/files/videos/{name}.{fmt}"),
-                    allowed_mentions=discord.AllowedMentions(users=True),
-                    ephemeral=True,
-                )
+        except (ValueError, discord.Forbidden):
+            await ctx.send("Failed to download, try again later?")
 
-            except (ValueError, discord.Forbidden):
-                await ctx.send("Failed to download, try again later?")
+        except (discord.HTTPException, FileNotFoundError):
+            await ctx.send("Video too large, try a shorter video.")
 
-            try:
-                os.remove(f"./src/files/videos/{name}.{fmt}")
-            except (FileNotFoundError, PermissionError):
-                pass
+        try:
+            os.remove(f"./src/files/videos/{name}.{fmt}")
+        except (FileNotFoundError, PermissionError):
+            pass
 
-            ctx.bot.current_downloads.remove(f"{name}.{fmt}")
+        ctx.bot.current_downloads.remove(f"{name}.{fmt}")
 
 
 async def get_prefix(bot: Bot, message: discord.Message) -> List[str]:

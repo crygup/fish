@@ -551,12 +551,6 @@ class WTPModal(discord.ui.Modal, title="Who's that Pokémon?"):
 
         await interaction.response.send_message("Something went wrong!", ephemeral=True)
 
-    async def on_error(
-        self, interaction: discord.Interaction, error: Exception
-    ) -> None:
-
-        await self.ctx.bot.send_error(self.ctx, error)
-
 
 class WTPView(AuthorView):
     def __init__(self, ctx: Context, data: dict[str, str]):

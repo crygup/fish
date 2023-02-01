@@ -4,9 +4,7 @@ import datetime
 import logging
 import os
 import re
-import sys
 import textwrap
-import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 import aiohttp
@@ -20,19 +18,19 @@ from ossapi import OssapiV2
 
 from cogs.context import Context
 from utils import (
+    block_list,
     create_pool,
+    get_extensions,
+    get_prefix,
+    google_cooldown_check,
+    initial_extensions,
+    no_auto_commands,
+    no_dms,
+    owner_only,
     setup_accounts,
     setup_cache,
     setup_pokemon,
     setup_webhooks,
-    no_dms,
-    block_list,
-    no_auto_commands,
-    owner_only,
-    google_cooldown_check,
-    get_extensions,
-    initial_extensions,
-    get_prefix,
 )
 
 if TYPE_CHECKING:
@@ -70,13 +68,6 @@ class Bot(commands.Bot):
             maxsize=1000, ttl=300.0
         )
         self.owner_only_mode: bool = True if testing else False
-        self.google_cooldown = commands.CooldownMapping.from_cooldown(
-            100, 86400, commands.BucketType.default
-        )
-
-        self.global_cooldown = commands.CooldownMapping.from_cooldown(
-            60, 30, commands.BucketType.user
-        )
 
         # webhooks
         self.avatar_webhooks: Dict[str, discord.Webhook] = {}
@@ -101,12 +92,39 @@ class Bot(commands.Bot):
         self._context = Context
         self.exts = set(initial_extensions + get_extensions())
         self.current_downloads: List[str] = []
+
         # checks
         self.add_check(no_dms)
         self.add_check(block_list)
         self.add_check(no_auto_commands)
         self.add_check(owner_only)
         self.add_check(google_cooldown_check)
+
+        # cooldowns
+        # fmt: off
+        self.google_cooldown = commands.CooldownMapping.from_cooldown(100, 86400, commands.BucketType.default)
+        self.global_cooldown = commands.CooldownMapping.from_cooldown(60, 30, commands.BucketType.user)
+        self.error_message_cooldown = commands.CooldownMapping.from_cooldown(3, 15, commands.BucketType.user)
+        # fmt: on
+
+    async def post_error(self, ctx: Context, excinfo: str):
+        embed = discord.Embed(title="Command Error", colour=self.embedcolor)
+        embed.add_field(name="Name", value=ctx.command.qualified_name)
+        embed.add_field(name="Author", value=f"{ctx.author} (ID: {ctx.author.id})")
+
+        fmt = f"Channel: {ctx.channel} (ID: {ctx.channel.id})"
+
+        if ctx.guild:
+            fmt = f"{fmt}\nGuild: {ctx.guild} (ID: {ctx.guild.id})"
+
+        embed.add_field(name="Location", value=fmt, inline=False)
+        embed.add_field(
+            name="Content", value=textwrap.shorten(ctx.message.content, 512)
+        )
+
+        embed.description = f"```py\n{excinfo}\n```"
+        embed.timestamp = discord.utils.utcnow()
+        await self.webhooks["error_logs"].send(embed=embed)
 
     async def on_message_edit(
         self, before: discord.Message, after: discord.Message
@@ -203,35 +221,6 @@ class Bot(commands.Bot):
             self.uptime = discord.utils.utcnow()
 
         print(f"Logged in as {self.user}")
-
-    async def send_error(self, ctx: Context, error: commands.CommandError | Exception):
-        await ctx.send("An unhandled error occured, this error has been reported.")
-        embed = discord.Embed(title="Command Error", colour=self.embedcolor)
-        embed.add_field(name="Name", value=ctx.command.qualified_name)
-        embed.add_field(name="Author", value=f"{ctx.author} (ID: {ctx.author.id})")
-
-        fmt = f"Channel: {ctx.channel} (ID: {ctx.channel.id})"
-
-        if ctx.guild:
-            fmt = f"{fmt}\nGuild: {ctx.guild} (ID: {ctx.guild.id})"
-
-        embed.add_field(name="Location", value=fmt, inline=False)
-        embed.add_field(
-            name="Content", value=textwrap.shorten(ctx.message.content, 512)
-        )
-
-        exc = "".join(
-            traceback.format_exception(
-                type(error), error, error.__traceback__, chain=False
-            )
-        )
-        traceback.print_exception(
-            type(error), error, error.__traceback__, file=sys.stderr
-        )
-        embed.description = f"```py\n{exc}\n```"
-        embed.timestamp = discord.utils.utcnow()
-        await self.webhooks["error_logs"].send(embed=embed)
-        return
 
     async def close(self):
         await self.unload_extensions()

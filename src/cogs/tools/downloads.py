@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import argparse
-import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Literal
 
-import yt_dlp
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import commands
 
-from utils import VideoIsLive, to_thread, download_video
+from utils import download_video
 
 from ._base import CogBase
 
 if TYPE_CHECKING:
-    from bot import Bot
     from cogs.context import Context
 
 
@@ -26,6 +23,7 @@ class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     format: Literal["mp4", "mp3", "webm"] = commands.flag(
         description="What format the video should download as.", default="mp4"
     )
+    dev: bool = commands.flag(description="you cant use this lol", default=False)
 
 
 class DownloadCommands(CogBase):
@@ -40,5 +38,8 @@ class DownloadCommands(CogBase):
         dl_format = flags.format
         skip_check = False
         audio = dl_format == "mp3"
+
+        if flags.dev:
+            skip_check = await ctx.bot.is_owner(ctx.author)
 
         await download_video(video, dl_format, ctx, audio=audio, skip_check=skip_check)

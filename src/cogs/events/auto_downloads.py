@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from utils import DoNothing, download_video
+from utils import DoNothing, download_video, BlankException
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -59,4 +59,9 @@ class AutoDownloads(commands.Cog, name="auto_downloads"):
         if ctx is None or not isinstance(ctx.author, discord.Member):
             return
 
-        await download_video(ctx.message.content, "mp4", ctx)
+        try:
+            await download_video(ctx.message.content, "mp4", ctx, event=True)
+        except BlankException as e:
+            await ctx.send(str(e))
+        except Exception as e:
+            self.bot.dispatch("command_error", ctx, e)
