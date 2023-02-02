@@ -3,16 +3,6 @@ from typing import Any, Dict
 import aiohttp
 import discord
 
-from .regexes import (
-    INSTAGRAM_RE,
-    REDDIT_RE,
-    TIKTOK_RE,
-    TWITCH_RE,
-    TWITTER_RE,
-    YOUTUBE_RE,
-    YT_CLIP_RE,
-    YT_SHORT_RE,
-)
 from .emojis import (
     STAFF,
     PARTNER,
@@ -180,3 +170,8 @@ status_state = {
     5: "Looking to trade",
     6: "Looking to play",
 }
+
+TATSU_ID: int = 172002275412279296
+OWNER_ID: int = 766953372309127168
+TABLE_BOOSTER_ID: int = 848529361362747422
+TABLE_ID: int = 848507662437449750

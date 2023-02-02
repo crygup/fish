@@ -198,3 +198,11 @@ CREATE TABLE IF NOT EXISTS user_settings (
     mudae_pokemon BOOLEAN DEFAULT FALSE,
     PRIMARY KEY (user_id)
 );
+
+CREATE TABLE IF NOT EXISTS tatsu_rep_logs (
+    id SERIAL,
+    user_id BIGINT,
+    target_id BIGINT,
+    guild_id BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE
+)
