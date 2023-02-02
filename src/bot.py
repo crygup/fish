@@ -55,18 +55,15 @@ class Bot(commands.Bot):
         testing: bool,
         logger: logging.Logger,
     ):
+        # fmt: off
         super().__init__(
             command_prefix=get_prefix,
             intents=intents,
             case_insensitive=True,
             strip_after_prefix=True,
-            allowed_mentions=discord.AllowedMentions(
-                everyone=False, roles=False, users=True, replied_user=False
-            ),
+            allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=False),
         )
-        self.messages: TTLCache[str, discord.Message] = TTLCache(
-            maxsize=1000, ttl=300.0
-        )
+        self.messages: TTLCache[str, discord.Message] = TTLCache(maxsize=1000, ttl=300.0)
         self.owner_only_mode: bool = True if testing else False
 
         # webhooks
@@ -80,18 +77,18 @@ class Bot(commands.Bot):
         self.owner_ids = {}
 
         # config
+        self.exts = set(initial_extensions + get_extensions())
+        self.cached_covers: Dict[str, Tuple[str, bool]] = {}
+        self.prefixes: Dict[int, List[str]] = {}
+        self.current_downloads: List[str] = []
+        self.spotify_key: Optional[str] = None
         self.config: Dict[str, Any] = config
+        self.uptime: datetime.datetime
+        self.pokemon: List[str] = []
+        self.embedcolor = 0xFAA0C1
+        self._context = Context
         self.testing = testing
         self.logger = logger
-        self.uptime: datetime.datetime
-        self.embedcolor = 0xFAA0C1
-        self.pokemon: List[str] = []
-        self.prefixes: Dict[int, List[str]] = {}
-        self.spotify_key: Optional[str] = None
-        self.cached_covers: Dict[str, Tuple[str, bool]] = {}
-        self._context = Context
-        self.exts = set(initial_extensions + get_extensions())
-        self.current_downloads: List[str] = []
 
         # checks
         self.add_check(no_dms)
@@ -101,7 +98,6 @@ class Bot(commands.Bot):
         self.add_check(google_cooldown_check)
 
         # cooldowns
-        # fmt: off
         self.google_cooldown = commands.CooldownMapping.from_cooldown(100, 86400, commands.BucketType.default)
         self.global_cooldown = commands.CooldownMapping.from_cooldown(60, 30, commands.BucketType.user)
         self.error_message_cooldown = commands.CooldownMapping.from_cooldown(3, 15, commands.BucketType.user)
@@ -194,23 +190,15 @@ class Bot(commands.Bot):
             decode_responses=True,
         )
 
-        self.lastfm = LastfmAsyncClient(
-            self.config["keys"]["lastfm-key"], session=self.session
-        )
-
-        self.osu = OssapiV2(
-            self.config["keys"]["osu-id"], self.config["keys"]["osu-secret"]
-        )
-
+        # fmt:off
+        self.lastfm = LastfmAsyncClient(self.config["keys"]["lastfm-key"], session=self.session)
+        self.osu = OssapiV2(self.config["keys"]["osu-id"], self.config["keys"]["osu-secret"])
         await setup_cache(self)
-
         await setup_webhooks(self)
-
         await setup_pokemon(self)
-
         await setup_accounts(self)
-
         await self.load_extensions()
+        # fmt:on
 
     async def get_context(self, message: discord.Message, *, cls=None):
         new_cls = cls or self._context

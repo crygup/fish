@@ -17,8 +17,8 @@ testing = False
 
 async def main():
     logger = logging.getLogger("discord")
-    logger.setLevel(logging.ERROR)
-    logging.getLogger("discord.http").setLevel(logging.ERROR)
+    logger.setLevel(logging.DEBUG)
+    logging.getLogger("discord.http").setLevel(logging.INFO)
 
     handler = logging.handlers.RotatingFileHandler(
         filename="discord.log",

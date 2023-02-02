@@ -524,18 +524,6 @@ class UserInfoView(AuthorView):
         self.usernames_check: bool = False
         self.nicknames_check: bool = False
 
-    async def on_error(
-        self, interaction: discord.Interaction, error: Exception, __
-    ) -> None:
-        if isinstance(error, commands.BadArgument):
-            await interaction.response.send_message(content=str(error), ephemeral=True)
-        else:
-            await interaction.response.send_message(
-                "Oops! Something went wrong.", ephemeral=True
-            )
-
-        self.ctx.bot.logger.error(error)
-
     @discord.ui.button(label="Avatar History", row=2, style=BURPLE)
     async def avyh(self, interaction: discord.Interaction, __):
         command = self.ctx.bot.get_command("avyh")
