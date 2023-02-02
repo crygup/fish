@@ -5,9 +5,17 @@ from typing import TYPE_CHECKING, Dict, Optional
 
 import emoji
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
-from utils import FieldPageSource, Pager, has_mod, is_table, to_bytes, get_or_fetch_user
+from utils import (
+    FieldPageSource,
+    Pager,
+    has_mod,
+    is_table,
+    to_bytes,
+    get_or_fetch_user,
+    TABLE_ID,
+)
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -30,6 +38,21 @@ class Table(commands.Cog, name="table", command_attrs=dict(hidden=True)):
             raise commands.CheckFailure
 
         return True
+
+    @tasks.loop(minutes=5.0)
+    async def set_key_task(self):
+        guild = self.bot.get_guild(TABLE_ID)
+        if guild is None:
+            return
+
+        try:
+            await guild.edit(vanity_code="amogus")
+            channel: discord.TextChannel = self.bot.get_channel(
+                884188416835723285
+            )  # type:ignore
+            await channel.send("sniped amogus url lol <@766953372309127168>")
+        except:
+            pass
 
     @commands.group(name="booster", aliases=("boost",), invoke_without_command=True)
     async def booster(self, ctx: Context):
@@ -128,7 +151,7 @@ class Table(commands.Cog, name="table", command_attrs=dict(hidden=True)):
             parsed_icon = icon
         elif icon:
             parsed_icon = await to_bytes(ctx.session, icon)
-        
+
         color_value = color.value if color else 0
 
         role = await ctx.guild.create_role(

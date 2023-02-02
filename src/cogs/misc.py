@@ -177,36 +177,25 @@ class Miscellaneous(commands.Cog, name="miscellaneous"):
         Can be hard to read for mobile users, sorry."""
         bot = self.bot
         await ctx.typing(ephemeral=True)
-        members_count = sum(g.member_count for g in bot.guilds)  # type: ignore
-        start = discord.utils.utcnow().replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        # fmt: off
+        members_count: int = sum(g.member_count for g in bot.guilds)  # type: ignore
+        start = discord.utils.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
         avatars = await bot.pool.fetch("""SELECT * FROM avatars""")
-        avatars_today = len(
-            [result for result in avatars if result["created_at"] >= start]
-        )
+        avatars_today = len([result for result in avatars if result["created_at"] >= start])
 
         commands = await bot.pool.fetch("""SELECT * FROM command_logs""")
-        commands_today = len(
-            [result for result in commands if result["created_at"] >= start]
-        )
+        commands_today = len([result for result in commands if result["created_at"] >= start])
 
         usernames = await bot.pool.fetch("""SELECT * FROM username_logs""")
-        usernames_today = len(
-            [result for result in usernames if result["created_at"] >= start]
-        )
+        usernames_today = len([result for result in usernames if result["created_at"] >= start])
 
         nicknames = await bot.pool.fetch("""SELECT * FROM nickname_logs""")
-        nicknames_today = len(
-            [result for result in nicknames if result["created_at"] >= start]
-        )
+        nicknames_today = len([result for result in nicknames if result["created_at"] >= start])
 
         discrims = await bot.pool.fetch("""SELECT * FROM discrim_logs""")
-        discrims_today = len(
-            [result for result in discrims if result["created_at"] >= start]
-        )
-
+        discrims_today = len([result for result in discrims if result["created_at"] >= start])
+        # fmt: on
         psql_start = perf_counter()
         await bot.pool.execute("SELECT 1")
         psql_end = perf_counter()
