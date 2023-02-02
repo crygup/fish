@@ -205,12 +205,12 @@ CREATE TABLE IF NOT EXISTS tatsu_rep_logs (
     target_id BIGINT,
     guild_id BIGINT,
     created_at TIMESTAMP WITH TIME ZONE
-)
+);
 
 CREATE TABLE IF NOT EXISTS guild_blocks (
-    id SERIAL
+    id SERIAL,
     author_id BIGINT,
     guild_id BIGINT,
     entitiy_id BIGINT,
     created_at TIMESTAMP WITH TIME ZONE
-)
+);

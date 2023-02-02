@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 
 from utils import DoNothing
+from ..discord_.user import UserCommands
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -139,7 +140,9 @@ class AvatarEvents(commands.Cog, name="avatar_events"):
     @commands.Cog.listener("on_guild_join")
     async def joined_guild(self, guild: discord.Guild):
         members = await guild.chunk()
+        uc = UserCommands(self.bot)
 
         for member in members:
             await self.add_avatar(member)
             await self.add_guild_avatar(member)
+            await uc._index_member(guild, member)

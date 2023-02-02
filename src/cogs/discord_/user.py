@@ -107,24 +107,21 @@ class UserCommands(CogBase):
         )
         await ctx.send(file=file, embed=embed)
 
-    async def _index_member(
-        self, guild: discord.Guild, user: discord.Member | discord.User
-    ) -> bool:
-        member = guild.get_member(user.id)
-
-        if member is None:
-            return False
-
-        joined = member.joined_at
-
-        if joined is None:
-            return False
-
+    async def _index_member(self, guild: discord.Guild, member: discord.Member) -> bool:
+        sql = """
+        INSERT INTO member_join_logs (member_id, guild_id, time)
+        SELECT $1, $2, $3
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM member_join_logs
+            WHERE member_id = $1 AND guild_id = $2 AND time = $3
+        ); 
+        """
         await self.bot.pool.execute(
-            "INSERT INTO member_join_logs (member_id, guild_id, time) VALUES ($1, $2, $3)",
-            user.id,
+            sql,
+            member.id,
             guild.id,
-            joined,
+            member.joined_at,
         )
 
         return True
@@ -133,18 +130,14 @@ class UserCommands(CogBase):
     async def joins(
         self,
         ctx: Context,
-        guild: Optional[discord.Guild] = commands.CurrentGuild,
         *,
-        user: discord.User = commands.Author,
+        user: Union[discord.Member, discord.User] = commands.Author,
     ):
         """Shows how many times a user joined a server
 
         Note: If they joined before I was added then I will not have any data for them."""
 
-        guild = guild or ctx.guild
-
-        if guild is None:
-            return
+        guild = ctx.guild
 
         results: Optional[int] = await self.bot.pool.fetchval(
             "SELECT COUNT(member_id) FROM member_join_logs WHERE member_id = $1 AND guild_id = $2",
@@ -152,15 +145,15 @@ class UserCommands(CogBase):
             guild.id,
         )
 
-        if results == 0 or results is None:
-            results = await self._index_member(guild, user)
+        if not results:
+            if isinstance(user, discord.Member):
+                results = await self._index_member(guild, user)
+
             if results:
                 results = 1
 
             else:
-                return await ctx.send(
-                    f"I have no join records for {user!s} in {guild!s}"
-                )
+                return await ctx.send(f"I have no join records for {user} in {guild}")
 
         await ctx.send(
             f"{user} has joined {guild} {results:,} time{'s' if results > 1 else ''}."
