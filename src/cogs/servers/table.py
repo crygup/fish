@@ -39,8 +39,14 @@ class Table(commands.Cog, name="table", command_attrs=dict(hidden=True)):
 
         return True
 
+    async def cog_unload(self):
+        self.snipe_url.cancel()
+
+    async def cog_load(self) -> None:
+        self.snipe_url.start()
+
     @tasks.loop(minutes=5.0)
-    async def set_key_task(self):
+    async def snipe_url(self):
         guild = self.bot.get_guild(TABLE_ID)
         if guild is None:
             return
@@ -51,6 +57,7 @@ class Table(commands.Cog, name="table", command_attrs=dict(hidden=True)):
                 884188416835723285
             )  # type:ignore
             await channel.send("sniped amogus url lol <@766953372309127168>")
+            await self.snipe_url.cancel()
         except:
             pass
 
