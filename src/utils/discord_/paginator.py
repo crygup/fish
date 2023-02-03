@@ -322,7 +322,6 @@ class ImagePageSource(menus.ListPageSource):
 
     async def format_page(self, menu, entries):
         self.embed.clear_fields()
-        print(entries)
         self.embed.set_image(url=entries)
 
         maximum = self.get_max_pages()

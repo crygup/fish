@@ -40,6 +40,11 @@ os.environ["JISHAKU_HIDE"] = "True"
 os.environ["JISHAKU_NO_UNDERSCORE"] = "True"
 os.environ["JISHAKU_NO_DM_TRACEBACK"] = "True"
 
+intents = discord.Intents.default()
+intents.message_content = True
+intents.presences = True
+intents.members = True
+
 
 class Bot(commands.Bot):
     session: aiohttp.ClientSession
@@ -50,7 +55,6 @@ class Bot(commands.Bot):
 
     def __init__(
         self,
-        intents: discord.Intents,
         config: Dict,
         testing: bool,
         logger: logging.Logger,
@@ -149,25 +153,25 @@ class Bot(commands.Bot):
         for extension in self.exts if not self.testing else initial_extensions:
             try:
                 await self.load_extension(extension)
-                print(f"Loaded extension {extension}")
+                self.logger.info(f"Loaded extension {extension}")
             except Exception as e:
-                print(f"Failed to load {extension}: {e}")
+                self.logger.warn(f"Failed to load {extension}: {e}")
 
     async def unload_extensions(self):
         for extension in self.exts if not self.testing else initial_extensions:
             try:
                 await self.unload_extension(extension)
-                print(f"Unloaded extension {extension}")
+                self.logger.info(f"Unloaded extension {extension}")
             except Exception as e:
-                print(f"Failed to unload {extension}: {e}")
+                self.logger.warn(f"Failed to unload {extension}: {e}")
 
     async def reload_extensions(self):
         for extension in self.exts if not self.testing else initial_extensions:
             try:
                 await self.reload_extension(extension)
-                print(f"Reoaded extension {extension}")
+                self.logger.info(f"Reoaded extension {extension}")
             except Exception as e:
-                print(f"Failed to reload {extension}: {e}")
+                self.logger.warn(f"Failed to reload {extension}: {e}")
 
     async def setup_hook(self):
         self.session = aiohttp.ClientSession()
@@ -208,7 +212,7 @@ class Bot(commands.Bot):
         if not hasattr(self, "uptime"):
             self.uptime = discord.utils.utcnow()
 
-        print(f"Logged in as {self.user}")
+        self.logger.info(f"Logged in as {self.user}")
 
     async def close(self):
         await self.unload_extensions()

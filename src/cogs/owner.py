@@ -335,7 +335,6 @@ class Owner(
                     )
 
             sql = """INSERT INTO steam_games (app_id, name) VALUES($1, $2) ON CONFLICT DO NOTHING"""
-            print(to_insert[0])
             await self.bot.pool.executemany(sql, to_insert)
 
         await ctx.send(str(CHECK))
