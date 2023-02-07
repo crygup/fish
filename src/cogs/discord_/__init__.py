@@ -8,12 +8,20 @@ from .info import InfoCommands
 from .other import OtherCommands
 from .search import SearchCommand
 from .user import UserCommands
+from .emojis import Emojis
 
 if TYPE_CHECKING:
     from bot import Bot
 
 
-class Discord(SearchCommand, InfoCommands, UserCommands, OtherCommands, name="discord"):
+class Discord(
+    SearchCommand,
+    InfoCommands,
+    UserCommands,
+    OtherCommands,
+    Emojis,
+    name="discord",
+):
     """Commands for discord itself"""
 
     @property

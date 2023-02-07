@@ -15,24 +15,17 @@ from discord.ext import commands
 from utils import (
     REPLIES,
     REPLY,
-    EmojiConverter,
     GuildChannel,
     InfoArgument,
-    NotTenorUrl,
-    TenorUrlConverter,
     UserInfoView,
-    emoji_extras,
     format_status,
-    get_twemoji,
     get_user_badges,
-    human_join,
     to_bytes,
     format_bytes,
     BlankException,
     Pager,
     AvatarsPageSource,
     FieldPageSource,
-    TwemojiConverter,
 )
 
 from ._base import CogBase
@@ -370,10 +363,11 @@ class InfoCommands(CogBase):
         if results == []:
             raise BlankException(f"{guild} has no icon history on record.")
 
-        entries: List[Tuple[str, datetime.datetime]] = [
+        entries: List[Tuple[str, datetime.datetime, int]] = [
             (
                 r["icon"],
                 r["created_at"],
+                r["id"],
             )
             for r in results
         ]
@@ -651,7 +645,7 @@ class InfoCommands(CogBase):
         await self.role_info(ctx, role)
 
     @commands.command(name="info")
-    async def info(self, ctx: Context, object: InfoArgument = commands.Author):
+    async def info(self, ctx: Context, *, object: InfoArgument = commands.Author):
         if isinstance(object, (discord.Member, discord.User)):
             await self.user_info(ctx, object)
         elif isinstance(object, discord.Role):
@@ -672,153 +666,3 @@ class InfoCommands(CogBase):
             await ctx.send(embed=embed)
         else:
             await ctx.send("Invalid argument")
-
-    @commands.group(name="emoji", invoke_without_command=True)
-    async def emoji(
-        self,
-        ctx: Context,
-        emoji: Optional[Union[discord.Emoji, discord.PartialEmoji, TwemojiConverter]],
-    ):
-        """Gets information about an emoji."""
-
-        if ctx.message.reference is None and emoji is None:
-            raise commands.BadArgument("No emoji provided.")
-
-        if isinstance(emoji, BytesIO):
-            return await ctx.send(file=discord.File(emoji, filename=f"emoji.png"))
-
-        if emoji:
-            emoji = emoji
-
-        else:
-            if not ctx.message.reference:
-                raise commands.BadArgument("No emoji provided.")
-
-            reference = ctx.message.reference.resolved
-
-            if (
-                isinstance(reference, discord.DeletedReferencedMessage)
-                or reference is None
-            ):
-                raise commands.BadArgument("No emoji found.")
-
-            emoji = (await EmojiConverter().from_message(ctx, reference.content))[0]
-
-        if emoji is None or isinstance(
-            emoji, TwemojiConverter
-        ):  # having TwemojiConverter check here for typing reasons, will always be str
-            raise BlankException("No emoji found.")
-
-        embed = discord.Embed(timestamp=emoji.created_at, title=emoji.name)
-
-        if isinstance(emoji, discord.Emoji) and emoji.guild:
-            if not emoji.available:
-                embed.title = f"~~{emoji.name}~~"
-
-            embed.add_field(
-                name="Guild",
-                value=f"{REPLIES}{str(emoji.guild)}\n" f"{REPLY}{emoji.guild.id}",
-            )
-
-            femoji = await emoji.guild.fetch_emoji(emoji.id)
-            if femoji.user:
-                embed.add_field(
-                    name="Created by",
-                    value=f"{REPLIES}{str(femoji.user)}\n" f"{REPLY}{femoji.user.id}",
-                )
-
-        embed.add_field(
-            name="Raw text", value=f"`<:{emoji.name}\u200b:{emoji.id}>`", inline=False
-        )
-
-        embed.set_footer(text=f"ID: {emoji.id} \nCreated at")
-        embed.set_image(url=f'attachment://emoji.{"gif" if emoji.animated else "png"}')
-        file = await emoji.to_file(
-            filename=f'emoji.{"gif" if emoji.animated else "png"}'
-        )
-        await ctx.send(embed=embed, file=file)
-
-    @emoji.command(name="create", extras=emoji_extras)
-    @commands.has_guild_permissions(manage_emojis=True)
-    @commands.bot_has_guild_permissions(manage_emojis=True)
-    async def emoji_create(
-        self,
-        ctx: Context,
-        name,
-        *,
-        image: Union[discord.Emoji, discord.PartialEmoji, discord.Attachment, str],
-    ):
-        if isinstance(image, (discord.Emoji, discord.PartialEmoji)):
-            try:
-                to_upload = await image.read()
-            except ValueError:
-                raise TypeError("Image is not a custom emoji.")
-        elif isinstance(image, discord.Attachment):
-            to_upload = await image.read()
-        else:
-            try:
-                url = await TenorUrlConverter().convert(ctx, image)
-
-            except NotTenorUrl:
-                url = image
-
-            async with ctx.bot.session.get(url) as resp:
-                file = await resp.read()
-                if imghdr.what(BytesIO(file)):  # type: ignore # tested and works shut up
-                    to_upload = file
-                else:
-                    raise ValueError("Invalid image supplied.")
-
-        try:
-            emoji = await ctx.guild.create_custom_emoji(
-                name=name,
-                image=to_upload,
-                reason=f"Created by {ctx.author} ({ctx.author.id})",
-            )
-        except discord.HTTPException as e:
-            await ctx.send(str(e))
-            return
-
-        await ctx.send(f"Successfully created {emoji}")
-
-    @emoji.command(name="rename", extras=emoji_extras)
-    @commands.has_guild_permissions(manage_emojis=True)
-    @commands.bot_has_guild_permissions(manage_emojis=True)
-    async def emoji_rename(self, ctx: Context, emoji: discord.Emoji, *, name: str):
-        pattern = re.compile(r"[a-zA-Z0-9_ ]")
-        if not pattern.match(name):
-            raise commands.BadArgument(
-                "Name can only contain letters, numbers, and underscores."
-            )
-
-        await emoji.edit(name=name)
-        await ctx.send(f"Renamed {emoji} to **`{name}`**.")
-
-    @emoji.command(name="delete", extras=emoji_extras)
-    @commands.has_guild_permissions(manage_emojis=True)
-    @commands.bot_has_guild_permissions(manage_emojis=True)
-    async def emoji_delete(self, ctx: Context, *emojis: discord.Emoji):
-        value = await ctx.prompt(
-            f"Are you sure you want to delete {len(emojis):,} emoji{'s' if len(emojis) > 1 else ''}?"
-        )
-        if not value:
-            await ctx.send(
-                f"Well I didn't want to delete {'them' if len(emojis) > 1 else 'it'} anyway."
-            )
-            return
-
-        message = await ctx.send(
-            f"Deleting {len(emojis):,} emoji{'s' if len(emojis) > 1 else ''}..."
-        )
-
-        if message is None:
-            return
-
-        deleted_emojis = []
-
-        for emoji in emojis:
-            deleted_emojis.append(f"`{emoji}`")
-            await emoji.delete()
-            await message.edit(
-                content=f"Successfully deleted {human_join(deleted_emojis, final='and')} *({len(deleted_emojis)}/{len(emojis)})*."
-            )
