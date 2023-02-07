@@ -31,52 +31,22 @@ channel: TypeAlias = Union[
 
 
 class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
-    user: Optional[discord.User] = commands.flag(
-        description="Remove messages from this user", default=None
-    )
-    channel: Optional[
-        Union[discord.TextChannel, discord.VoiceChannel, discord.Thread]
-    ] = commands.flag(description="Remove messages from this user", default=None)
-    contains: Optional[str] = commands.flag(
-        description="Remove messages that contains this string (case sensitive)",
-        default=None,
-    )
-    starts: Optional[str] = commands.flag(
-        description="Remove messages that start with this string (case sensitive)",
-        default=None,
-    )
-    ends: Optional[str] = commands.flag(
-        description="Remove messages that end with this string (case sensitive)",
-        default=None,
-    )
-    after: int = commands.flag(
-        description="Search for messages that come after this message ID", default=None
-    )
-    before: int = commands.flag(
-        description="Search for messages that come before this message ID", default=None
-    )
-    bot: bool = commands.flag(
-        description="Remove messages from bots (not webhooks!)", default=False
-    )
-    webhooks: bool = commands.flag(
-        description="Remove messages from webhooks", default=False
-    )
-    embeds: bool = commands.flag(
-        description="Remove messages that have embeds", default=False
-    )
-    files: bool = commands.flag(
-        description="Remove messages that have attachments", default=False
-    )
-    emoji: bool = commands.flag(
-        description="Remove messages that have custom emoji", default=False
-    )
-    reactions: bool = commands.flag(
-        description="Remove messages that have reactions", default=False
-    )
-    require: Literal["any", "all"] = commands.flag(
-        description='Whether any or all of the flags should be met before deleting messages. Defaults to "all"',
-        default="all",
-    )
+    # fmt: off
+    user: Optional[discord.User] = commands.flag(description="Remove messages from this user", default=None)
+    channel: Optional[Union[discord.TextChannel, discord.VoiceChannel, discord.Thread]] = commands.flag(description="Remove messages from this user", default=None)
+    contains: Optional[str] = commands.flag(description="Remove messages that contains this string (case sensitive)",default=None,)
+    starts: Optional[str] = commands.flag(description="Remove messages that start with this string (case sensitive)",default=None,)
+    ends: Optional[str] = commands.flag(description="Remove messages that end with this string (case sensitive)",default=None,)
+    after: int = commands.flag(description="Search for messages that come after this message ID", default=None)
+    before: int = commands.flag(description="Search for messages that come before this message ID", default=None)
+    bot: bool = commands.flag(description="Remove messages from bots (not webhooks!)", default=False)
+    webhooks: bool = commands.flag(description="Remove messages from webhooks", default=False)
+    embeds: bool = commands.flag(description="Remove messages that have embeds", default=False)
+    files: bool = commands.flag(description="Remove messages that have attachments", default=False)
+    emoji: bool = commands.flag(description="Remove messages that have custom emoji", default=False)
+    reactions: bool = commands.flag(description="Remove messages that have reactions", default=False)
+    require: Literal["any", "all"] = commands.flag(description='Whether any or all of the flags should be met before deleting messages. Defaults to "all"',default="all",)
+    # fmt: on
 
 
 class PurgeCog(CogBase):

@@ -5,13 +5,10 @@ import os
 import re
 from typing import (
     TYPE_CHECKING,
-    List,
     Literal,
-    Optional,
     Set,
     TypeAlias,
     Union,
-    TypeVar,
 )
 
 import discord
