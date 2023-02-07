@@ -72,6 +72,7 @@ module_extensions = [
     "cogs.tools",
     "cogs.lastfm",
     "cogs.settings",
+    "cogs.misc",
 ]
 
 

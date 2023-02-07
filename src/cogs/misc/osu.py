@@ -10,31 +10,20 @@ from discord.ext import commands
 from ossapi.ossapiv2 import Beatmap, Beatmapset
 
 from utils import (
-    BeatmapConverter,
     OsuAccountConverter,
     OsuProfileView,
     human_join,
+    BeatmapConverter,
     to_thread,
 )
 
+from ._base import CogBase
+
 if TYPE_CHECKING:
-    from bot import Bot, Context
+    from cogs.context import Context
 
 
-async def setup(bot: Bot):
-    await bot.add_cog(Osu(bot))
-
-
-class Osu(commands.Cog, name="osu"):
-    """osu.ppy.sh commands"""
-
-    def __init__(self, bot: Bot):
-        self.bot = bot
-
-    @property
-    def display_emoji(self) -> discord.PartialEmoji:
-        return discord.PartialEmoji(name="osu", id=1006847555616919642)
-
+class Osu(CogBase):
     @commands.command(name="osu")
     async def osu_command(
         self, ctx: Context, *, user: Union[discord.User, str] = commands.Author
@@ -86,10 +75,6 @@ class Osu(commands.Cog, name="osu"):
         embed.set_footer(text=footer_text)
         await ctx.send(embed=embed, view=OsuProfileView(ctx, account, embed))
 
-    @to_thread
-    def to_bms(self, beatmap: Beatmap) -> Beatmapset:
-        return beatmap.beatmapset()
-
     @commands.command(name="beatmap", aliases=("bm",))
     async def beatmap_command(
         self,
@@ -122,9 +107,7 @@ class Osu(commands.Cog, name="osu"):
             value="00:00"
             if beatmap.total_length == 0
             else re.sub(
-                r"0:(0{1,})?",
-                "",
-                str(datetime.timedelta(seconds=beatmap.total_length)),
+                r"0:(0{1,})?", "", str(datetime.timedelta(seconds=beatmap.total_length))
             ),
             inline=False,
         )
