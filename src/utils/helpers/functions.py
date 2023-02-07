@@ -48,7 +48,6 @@ from ..vars import (
     Forbidden,
     NoCover,
     NotFound,
-    NoTwemojiFound,
     P,
     ResponseError,
     ServerErrorResponse,
@@ -59,6 +58,7 @@ from ..vars import (
     initial_extensions,
     module_extensions,
     SOUNDCLOUD_RE,
+    RateLimitExceeded,
 )
 
 if TYPE_CHECKING:
@@ -296,11 +296,7 @@ async def google_cooldown_check(ctx: Context) -> bool:
     retry_after = bucket.update_rate_limit()
 
     if retry_after:
-        raise commands.CommandOnCooldown(
-            cooldown=bot.google_cooldown,  # type: ignore
-            retry_after=retry_after,
-            type=commands.BucketType.default,
-        )
+        raise RateLimitExceeded()
 
     return True
 
@@ -443,20 +439,6 @@ async def get_sp_cover(bot: Bot, query: str) -> Tuple[str, bool]:
         return cover, nsfw
     except (IndexError, KeyError):
         raise NoCover("No cover found for this album, sorry.")
-
-
-async def get_twemoji(session: aiohttp.ClientSession, emoji: str) -> BytesIO:
-    try:
-        formatted = "-".join([f"{ord(char):x}" for char in emoji])
-        url = f"https://twemoji.maxcdn.com/v/latest/svg/{formatted}.svg"
-    except Exception:
-        raise NoTwemojiFound("Couldn't find emoji.")
-    else:
-        async with session.get(url) as r:
-            if r.ok:
-                return BytesIO(await svgbytes_to_btyes(await r.read()))
-
-        raise NoTwemojiFound("Couldn't find emoji.")
 
 
 @to_thread

@@ -32,7 +32,6 @@ from steam.steamid import steam64_from_url
 from wand.color import Color
 
 from ..helpers import (
-    NoTwemojiFound,
     SpotifySearchData,
     fetch_user_id_by_name,
     get_lastfm,
@@ -73,18 +72,18 @@ class TwemojiConverter(commands.Converter):
 
     async def convert(self, ctx: Context, argument: str) -> BytesIO:
         if len(argument) >= 8:
-            raise NoTwemojiFound("Too long to be an emoji, nice try kiddo")
+            raise commands.BadArgument("Too long to be an emoji")
         try:
             formatted = "-".join([f"{ord(char):x}" for char in argument])
             url = f"https://raw.githubusercontent.com/twitter/twemoji/abb5a1add2b706520d0d9d6f023297761e64e1c7/assets/svg/{formatted}.svg"
         except Exception:
-            raise NoTwemojiFound("Couldn't find emoji.")
+            raise commands.BadArgument("Couldn't find emoji.")
         else:
             async with ctx.session.get(url) as r:
                 if r.ok:
                     return BytesIO(await svgbytes_to_btyes(await r.read()))
 
-            raise NoTwemojiFound("Couldn't find emoji.")
+            raise commands.BadArgument("Couldn't find emoji.")
 
 
 class UrlConverter(commands.Converter):

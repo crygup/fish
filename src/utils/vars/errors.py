@@ -42,10 +42,6 @@ class UnknownAccount(BlankException):
     pass
 
 
-class NoTwemojiFound(BlankException):
-    pass
-
-
 class VideoIsLive(BlankException):
     pass
 
