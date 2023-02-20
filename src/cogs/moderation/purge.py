@@ -56,7 +56,7 @@ class PurgeCog(CogBase):
         extras={"BPerms": ["Manage Messages"], "UPerms": ["Manage Messages"]},
     )
     @commands.bot_has_permissions(manage_messages=True)
-    @commands.has_permissions(manage_messages=True)
+    @commands.has_guild_permissions(manage_messages=True)
     async def purge(
         self,
         ctx: Context,
