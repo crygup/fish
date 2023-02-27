@@ -121,8 +121,7 @@ class About(CogBase):
             await self.bot.redis.ping()
             redis_end = perf_counter()
 
-            members: List[discord.Member] = []
-            [members.extend(await g.chunk()) for g in bot.guilds]
+            members: List[discord.Member] = list(bot.get_all_members())
             activities = [m for m in members if m.activities]
             mem = self.process.memory_full_info()
             memory_usage = mem.uss / 1024**2
