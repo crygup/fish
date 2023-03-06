@@ -14,6 +14,7 @@ from utils import (
     LASTFM,
     OSU,
     BlankException,
+    AuthorView
 )
 
 from ._base import CogBase
@@ -195,7 +196,7 @@ class Dropdown(discord.ui.Select):
         await interaction.response.send_modal(Feedback())
 
 
-class DropdownView(discord.ui.View):
+class DropdownView(AuthorView):
     def __init__(self, ctx: Context):
         super().__init__()
 
