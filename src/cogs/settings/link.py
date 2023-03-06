@@ -198,6 +198,6 @@ class Dropdown(discord.ui.Select):
 
 class DropdownView(AuthorView):
     def __init__(self, ctx: Context):
-        super().__init__()
+        super().__init__(ctx)
 
         self.add_item(Dropdown(ctx))
