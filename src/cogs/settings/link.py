@@ -6,7 +6,16 @@ from typing import TYPE_CHECKING, Optional
 import discord
 from discord.ext import commands
 
-from utils import UnknownAccount, SteamIDConverter, STEAM, ROBLOX, LASTFM, OSU, BaseCog
+from utils import (
+    UnknownAccount,
+    SteamIDConverter,
+    STEAM,
+    ROBLOX,
+    LASTFM,
+    OSU,
+    BaseCog,
+    AuthorView,
+)
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -185,8 +194,8 @@ class Dropdown(discord.ui.Select):
         await interaction.response.send_modal(Feedback())
 
 
-class DropdownView(discord.ui.View):
+class DropdownView(AuthorView):
     def __init__(self, ctx: Context):
-        super().__init__()
+        super().__init__(ctx)
 
         self.add_item(Dropdown(ctx))
