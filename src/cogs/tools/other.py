@@ -24,9 +24,8 @@ from utils import (
     get_size,
     get_wh,
     get_pokemon,
+    BaseCog,
 )
-
-from ._base import CogBase
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -62,7 +61,7 @@ class UrlConverter(commands.Converter):
         return argument
 
 
-class OtherCommands(CogBase):
+class OtherCommands(BaseCog):
     @commands.command(name="hint")
     async def hint(self, ctx: Context):
         """Auto solve a pokétwo hint message."""

@@ -3,7 +3,6 @@ import logging
 import logging.handlers
 import sys
 
-import discord
 import toml
 from discord import gateway
 

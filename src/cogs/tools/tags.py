@@ -6,9 +6,7 @@ import asyncpg
 import discord
 from discord.ext import commands
 
-from utils import FieldPageSource, Pager, get_or_fetch_user
-
-from ._base import CogBase
+from utils import FieldPageSource, Pager, get_or_fetch_user, BaseCog
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -40,7 +38,7 @@ class TagName(commands.clean_content):
         return converted if not self.lower else lower
 
 
-class TagCommands(CogBase):
+class TagCommands(BaseCog):
     def __init__(self, bot: Bot):
         self.bot = bot
 

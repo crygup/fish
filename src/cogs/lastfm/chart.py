@@ -1,33 +1,33 @@
 from __future__ import annotations
+
 import asyncio
 import random
-
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import discord
 from discord.ext import commands
 
-from ._base import CogBase
-from .functions import *
 from utils import (
+    BaseCog,
     LastfmConverter,
     LastfmTimeConverter,
+    NoCover,
+    format_bytes,
     get_lastfm,
     get_sp_cover,
-    to_bytes,
-    to_bytesio,
-    NoCover,
     lastfm_period,
     shorten,
-    format_bytes,
+    to_bytes,
+    to_bytesio,
 )
-from typing import Dict, Any
+
+from .functions import *
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class Chart(CogBase):
+class Chart(BaseCog):
     @commands.group(name="chart", aliases=("c",), invoke_without_command=True)
     async def chart(
         self,

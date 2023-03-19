@@ -16,15 +16,14 @@ from utils import (
     GoogleImageData,
     Pager,
     GoogleImagePageSource,
+    BaseCog,
 )
-
-from ._base import CogBase
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class GoogleCommands(CogBase):
+class GoogleCommands(BaseCog):
     @commands.hybrid_command(
         name="google",
         aliases=("g",),

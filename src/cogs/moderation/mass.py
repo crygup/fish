@@ -4,14 +4,16 @@ from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
+
+from utils import BaseCog
+
 from .view import ActionView
-from ._base import CogBase
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class Mass(CogBase):
+class Mass(BaseCog):
     @commands.group(name="mass", invoke_without_command=True)
     async def mass(self, ctx: Context):
         await ctx.send_help(ctx.command)

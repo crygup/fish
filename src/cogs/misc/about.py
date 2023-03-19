@@ -1,6 +1,6 @@
 from __future__ import annotations
-import textwrap
 
+import textwrap
 from time import perf_counter
 from typing import TYPE_CHECKING, List
 
@@ -8,15 +8,21 @@ import discord
 import psutil
 from discord.ext import commands
 
-from utils import get_or_fetch_user, human_timedelta, natural_size
-
-from ._base import CogBase
+from utils import get_or_fetch_user, human_timedelta, natural_size, BaseCog
 
 if TYPE_CHECKING:
+    from bot import Bot
     from cogs.context import Context
 
 
-class About(CogBase):
+class About(BaseCog):
+    def __init__(self, bot: Bot):
+        self.bot = bot
+        self.process = psutil.Process()
+
+        perms = discord.Permissions(1074055232)
+        self.invite_url = discord.utils.oauth_url(bot.user.id, permissions=perms, scopes=("bot",))  # type: ignore
+
     @commands.command(name="invite", aliases=("join",))
     async def invite(self, ctx: commands.Context):
         """Sends an invite link to the bot"""

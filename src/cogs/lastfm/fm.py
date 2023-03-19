@@ -7,15 +7,14 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from ._base import CogBase
 from .functions import *
-from utils import LastfmConverter, get_lastfm, BlankException, UPVOTE, DOWNVOTE
+from utils import LastfmConverter, get_lastfm, BlankException, UPVOTE, DOWNVOTE, BaseCog
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class FmCommand(CogBase):
+class FmCommand(BaseCog):
     @commands.group(
         name="fm", aliases=("nowplaying", "np"), invoke_without_command=True
     )

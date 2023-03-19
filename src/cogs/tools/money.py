@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from discord.ext import commands
 
-from ._base import CogBase
+from utils import BaseCog
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -22,7 +22,7 @@ class MoneyConveter(commands.Converter):
         raise ValueError(f"Converting to integer failed. \n`{money}`")
 
 
-class MoneyCommands(CogBase):
+class MoneyCommands(BaseCog):
     @commands.command(name="money", hidden=True)
     async def money(
         self,

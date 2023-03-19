@@ -15,15 +15,18 @@ from utils import (
     human_join,
     BeatmapConverter,
     to_thread,
+    BaseCog,
 )
-
-from ._base import CogBase
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class Osu(CogBase):
+class Osu(BaseCog):
+    @to_thread
+    def to_bms(self, beatmap: Beatmap) -> Beatmapset:
+        return beatmap.beatmapset()
+
     @commands.command(name="osu")
     async def osu_command(
         self, ctx: Context, *, user: Union[discord.User, str] = commands.Author

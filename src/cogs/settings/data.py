@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Literal, Optional, Union
 
-import asyncpg
 import discord
 from discord.ext import commands
 
-from utils import BlankException, plural, to_bytesio
-
-from ._base import CogBase
+from utils import BlankException, BaseCog
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class DataCog(CogBase):
+class DataCog(BaseCog):
     async def user_remove(
         self,
         ctx: Context,

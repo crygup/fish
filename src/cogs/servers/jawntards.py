@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
+from utils import BaseCog
+
 if TYPE_CHECKING:
     from bot import Bot
 
@@ -13,10 +15,7 @@ async def setup(bot: Bot):
     await bot.add_cog(JawnServer(bot))
 
 
-class JawnServer(commands.Cog, name="jawn_server"):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-
+class JawnServer(BaseCog, name="jawn_server"):
     @commands.Cog.listener("on_message")
     async def fat_react(self, message: discord.Message):
         if (

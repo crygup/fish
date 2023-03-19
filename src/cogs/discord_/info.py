@@ -26,16 +26,15 @@ from utils import (
     Pager,
     AvatarsPageSource,
     FieldPageSource,
+    BaseCog,
 )
-
-from ._base import CogBase
 
 if TYPE_CHECKING:
     from bot import Bot
     from cogs.context import Context
 
 
-class InfoCommands(CogBase):
+class InfoCommands(BaseCog):
     def __init__(self, bot: Bot):
         self.bot = bot
 

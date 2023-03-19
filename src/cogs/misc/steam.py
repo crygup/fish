@@ -2,29 +2,51 @@ from __future__ import annotations
 
 import datetime
 import difflib
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import discord
 from discord.ext import commands
 
 from utils import (
+    BaseCog,
     BlankException,
     SteamConverter,
     Unauthorized,
+    get_steam_data,
     human_join,
     response_checker,
     status_state,
     to_bytesio,
-    get_steam_data,
 )
-
-from ._base import CogBase
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class Steam(CogBase):
+class Steam(BaseCog):
+    async def get_app_id_from_name(self, ctx: Context, name: str) -> int:
+        records: List[Dict] = await ctx.bot.pool.fetch("SELECT * FROM steam_games")
+
+        matching_dicts = [
+            record for record in records if str(record["name"]).lower() == name.lower()
+        ]
+
+        if matching_dicts:
+            return matching_dicts[0]["app_id"]
+
+        match = difflib.get_close_matches(name, [record["name"] for record in records])
+
+        prompt = await ctx.prompt(f"Did you mean **{match[0]}**?")
+
+        if not prompt:
+            raise BlankException(
+                f"Well you can run `fish steam search game {name}` and browse for the correct one."
+            )
+
+        matching_dicts = [record for record in records if record["name"] == match[0]]
+
+        return matching_dicts[0]["app_id"]
+
     @commands.group(name="steam", invoke_without_command=True)
     async def steam(
         self,

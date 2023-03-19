@@ -19,16 +19,15 @@ from utils import (
     to_bytes,
     format_status,
     BlankException,
+    BaseCog,
 )
-
-from ._base import CogBase
 
 if TYPE_CHECKING:
     from bot import Bot
     from cogs.context import Context
 
 
-class UserCommands(CogBase):
+class UserCommands(BaseCog):
     @commands.command(name="avatar", aliases=("pfp", "avy", "av"))
     async def avatar(
         self,

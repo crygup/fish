@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Optional
 import discord
 from discord.ext import commands
 
+from utils import BaseCog
+
 if TYPE_CHECKING:
     from bot import Bot
     from cogs.context import Context
@@ -14,10 +16,7 @@ async def setup(bot: Bot):
     await bot.add_cog(Egg(bot))
 
 
-class Egg(commands.Cog, name="egg"):
-    def __init__(self, bot: Bot):
-        self.bot = bot
-
+class Egg(BaseCog, name="egg"):
     @commands.command(hidden=True, aliases=("ei",))
     @commands.is_owner()
     async def egg_invite(

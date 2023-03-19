@@ -15,6 +15,7 @@ from utils import (
     to_bytes,
     get_or_fetch_user,
     TABLE_ID,
+    BaseCog,
 )
 
 if TYPE_CHECKING:
@@ -26,7 +27,7 @@ async def setup(bot: Bot):
     await bot.add_cog(Table(bot))
 
 
-class Table(commands.Cog, name="table", command_attrs=dict(hidden=True)):
+class Table(BaseCog, name="table", command_attrs=dict(hidden=True)):
     def __init__(self, bot: Bot):
         self.bot = bot
 

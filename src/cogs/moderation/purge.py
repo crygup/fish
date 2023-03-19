@@ -1,6 +1,6 @@
 from __future__ import annotations
-import re
 
+import re
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -15,9 +15,7 @@ from typing import (
 import discord
 from discord.ext import commands
 
-from utils import CHECK, plural, GuildChannel
-
-from ._base import CogBase
+from utils import CHECK, BaseCog, plural
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -49,7 +47,7 @@ class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     # fmt: on
 
 
-class PurgeCog(CogBase):
+class PurgeCog(BaseCog):
     @commands.group(
         name="purge",
         invoke_without_command=True,

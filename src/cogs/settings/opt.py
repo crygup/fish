@@ -4,9 +4,7 @@ from typing import TYPE_CHECKING, Set
 
 from discord.ext import commands
 
-from utils import CHECK, BlankException, human_join
-
-from ._base import CogBase
+from utils import CHECK, BlankException, human_join, BaseCog
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -22,7 +20,7 @@ Logger = [
 ]
 
 
-class OptCog(CogBase):
+class OptCog(BaseCog):
     @commands.group(name="opt", invoke_without_command=True)
     async def opt_group(self, ctx: Context):
         """Opt in or out of a logger

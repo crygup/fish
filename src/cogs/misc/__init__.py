@@ -17,13 +17,6 @@ if TYPE_CHECKING:
 class Miscellaneous(About, Fun, Osu, Steam, name="miscellaneous"):
     """Miscellaneous commands."""
 
-    def __init__(self, bot: Bot):
-        super().__init__(bot)
-        self.process = psutil.Process()
-
-        perms = discord.Permissions(1074055232)
-        self.invite_url = discord.utils.oauth_url(bot.user.id, permissions=perms, scopes=("bot",))  # type: ignore
-
     @property
     def display_emoji(self) -> discord.PartialEmoji:
         return discord.PartialEmoji(name="\U0001f4a0")

@@ -13,15 +13,15 @@ from utils import (
     get_or_fetch_user,
     BlankException,
     DoNothing,
+    BaseCog,
 )
 
-from ._base import CogBase
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class ServerSettings(CogBase):
+class ServerSettings(BaseCog):
     @commands.command(
         name="fm-reactions",
         invoke_without_command=True,

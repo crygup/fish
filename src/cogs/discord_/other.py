@@ -1,22 +1,12 @@
 from __future__ import annotations
 
 import json
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    Optional,
-    Type,
-    TypeAlias,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Dict, Optional, Type, TypeAlias, Union
 
 import discord
 from discord.ext import commands
 
-from utils import FieldPageSource, Pager, SimplePages, Channel, BlankException
-
-from ._base import CogBase
+from utils import BaseCog, BlankException, Channel, FieldPageSource, Pager, SimplePages
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -33,7 +23,7 @@ Everything: TypeAlias = Optional[
 ]
 
 
-class OtherCommands(CogBase):
+class OtherCommands(BaseCog):
     def __init__(self, bot: Bot):
         self.bot = bot
 

@@ -10,24 +10,23 @@ from discord.ext import commands
 from utils import (
     REPLIES,
     REPLY,
+    BaseCog,
     BlankException,
     EmojiConverter,
+    ImageConverter,
     NotTenorUrl,
     TenorUrlConverter,
     TwemojiConverter,
     emoji_extras,
     human_join,
     plural,
-    ImageConverter,
 )
-
-from ._base import CogBase
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class Emojis(CogBase):
+class Emojis(BaseCog):
     @commands.group(name="emoji", invoke_without_command=True)
     async def emoji(
         self,

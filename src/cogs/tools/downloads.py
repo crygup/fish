@@ -6,9 +6,7 @@ from typing import TYPE_CHECKING, Literal
 from discord import app_commands
 from discord.ext import commands
 
-from utils import download_video
-
-from ._base import CogBase
+from utils import download_video, BaseCog
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -26,7 +24,7 @@ class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     dev: bool = commands.flag(description="you cant use this lol", default=False)
 
 
-class DownloadCommands(CogBase):
+class DownloadCommands(BaseCog):
     @commands.hybrid_command(name="download", aliases=("dl",))
     @commands.cooldown(1, 5, commands.BucketType.user)
     @app_commands.describe(

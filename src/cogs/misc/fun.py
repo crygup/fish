@@ -7,15 +7,13 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from utils import human_join, to_bytesio, RPSView, WTPView
-
-from ._base import CogBase
+from utils import human_join, to_bytesio, RPSView, WTPView, BaseCog
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class Fun(CogBase):
+class Fun(BaseCog):
     @commands.command(name="character")
     async def character(self, ctx: Context, *, character: str):
         """Gets the information about a genshin character."""

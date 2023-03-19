@@ -7,15 +7,13 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Union
 import discord
 from discord.ext import commands
 
-from utils import anime_query_data, human_join, response_checker
-
-from ._base import CogBase
+from utils import anime_query_data, human_join, response_checker, BaseCog
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class AnimeCommands(CogBase):
+class AnimeCommands(BaseCog):
     async def make_request(
         self, query: str, mode: Union[Literal["anime"], Literal["manga"]]
     ) -> Dict[Any, Any]:

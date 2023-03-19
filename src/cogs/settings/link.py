@@ -6,23 +6,13 @@ from typing import TYPE_CHECKING, Optional
 import discord
 from discord.ext import commands
 
-from utils import (
-    UnknownAccount,
-    SteamIDConverter,
-    STEAM,
-    ROBLOX,
-    LASTFM,
-    OSU,
-    BlankException,
-)
-
-from ._base import CogBase
+from utils import UnknownAccount, SteamIDConverter, STEAM, ROBLOX, LASTFM, OSU, BaseCog
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class LinkCog(CogBase):
+class LinkCog(BaseCog):
     @commands.command(name="accounts")
     async def accounts(self, ctx: Context, *, user: discord.User = commands.Author):
         """Shows your linked accounts"""

@@ -6,15 +6,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import SpotifyConverter, get_sp_cover, to_bytesio
-
-from ._base import CogBase
+from utils import SpotifyConverter, get_sp_cover, to_bytesio, BaseCog
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class SpotifyCommands(CogBase):
+class SpotifyCommands(BaseCog):
     async def album_command(self, ctx: Context, query: Optional[str]):
         await ctx.trigger_typing()
         Spotify = SpotifyConverter(ctx, "album")

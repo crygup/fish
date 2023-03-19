@@ -6,16 +6,14 @@ import discord
 from discord.ext import commands
 from discord.utils import escape_markdown
 
-from utils import human_timedelta
-
-from ._base import CogBase
+from utils import human_timedelta, BaseCog
 
 if TYPE_CHECKING:
     from bot import Bot
     from cogs.context import Context
 
 
-class AfkCommands(CogBase):
+class AfkCommands(BaseCog):
     def __init__(self, bot: Bot):
         self.bot = bot
 
@@ -38,6 +36,7 @@ class AfkCommands(CogBase):
     async def afk_check(self, message: discord.Message):
         if message.guild is None:
             return
+
         afk_users = await self.bot.redis.smembers("afk_users")
 
         if str(message.author.id) in afk_users:
@@ -53,6 +52,9 @@ class AfkCommands(CogBase):
         for user in mentions:
             sql = """SELECT * FROM afk WHERE user_id = $1"""
             results = await self.bot.pool.fetchrow(sql, user.id)
+
+            if results is None:
+                continue
 
             to_send.append(
                 f"{user.mention} was last online {human_timedelta(results['time'])}, **{escape_markdown(results['reason'])}**"

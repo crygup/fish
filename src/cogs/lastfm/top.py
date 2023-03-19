@@ -12,16 +12,15 @@ from utils import (
     get_lastfm,
     get_lastfm_data,
     lastfm_period,
+    BaseCog,
 )
-
-from ._base import CogBase
 from .functions import *
 
 if TYPE_CHECKING:
     from cogs.context import Context
 
 
-class TopCommands(CogBase):
+class TopCommands(BaseCog):
     @commands.command(name="toptracks", aliases=("tt",))
     async def top_tracks(
         self,

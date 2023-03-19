@@ -7,9 +7,7 @@ from typing import TYPE_CHECKING, Optional
 import discord
 from discord.ext import commands
 
-from utils import FieldPageSource, Pager, RoleConverter
-
-from ._base import CogBase
+from utils import FieldPageSource, Pager, RoleConverter, BaseCog
 
 if TYPE_CHECKING:
     from bot import Bot
@@ -21,7 +19,7 @@ class Arguments(argparse.ArgumentParser):
         raise RuntimeError(message)
 
 
-class SearchCommand(CogBase):
+class SearchCommand(BaseCog):
     def __init__(self, bot: Bot):
         self.bot = bot
 
