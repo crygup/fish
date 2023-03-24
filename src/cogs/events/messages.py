@@ -1,10 +1,13 @@
 from __future__ import annotations
 import asyncio
+from io import BytesIO
+import random
 import re
 
 
 import textwrap
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Dict, List
+import asyncpg
 
 import discord
 from discord.ext import commands
@@ -23,6 +26,21 @@ class MessageEvents(commands.Cog, name="message_event"):
     def __init__(self, bot: Bot):
         self.bot = bot
         self.counter: List[int] = []
+        self.message_sql = """
+        INSERT INTO messages (  message_id, user_id,
+                                channel_id, webhook_id,
+                                pinned, edited, deleted,
+                                stickers, embeds, attachments,
+                                content, created_at,
+                                edited_at, deleted_at,
+                                guild_id, guild_owner_id)
+
+        VALUES( $1, $2, $3, $4, $5, 
+                $6, $7, $8, $9, $10, 
+                $11, $12, $13, $14, 
+                $15, $16)
+        RETURNING *
+        """
 
     @commands.Cog.listener("on_message")
     async def on_mention(self, message: discord.Message):
@@ -91,3 +109,184 @@ class MessageEvents(commands.Cog, name="message_event"):
 
         joined = "\n".join(found)
         await message.channel.send(joined)
+
+    async def add_stickers(
+        self,
+        message: discord.Message,
+        data,
+    ):
+        sql = """
+        INSERT INTO stickers (  description, format, url, 
+                                sticker_id, message_id, 
+                                created_at)
+        VALUES($1, $2, $3, $4, $5, $6)
+        """
+
+        for sticker in message.stickers:
+            sticker = await sticker.fetch()
+
+            if sticker.format.value == 3:
+                continue
+
+            webhook = random.choice(
+                [webhook for _, webhook in self.bot.image_webhooks.items()]
+            )
+
+            new_message = await webhook.send(
+                wait=True,
+                files=[
+                    discord.File(
+                        BytesIO(await sticker.read()),
+                        f"{sticker.name}.{sticker.format.name}",
+                    )
+                ],
+            )
+
+            await self.bot.pool.execute(
+                sql,
+                sticker.description,
+                sticker.format.name,
+                new_message.attachments[0].url,
+                sticker.id,
+                data["id"],
+                discord.utils.utcnow(),
+            )
+
+    async def add_attachments(
+        self,
+        message: discord.Message,
+        data,
+    ):
+        sql = """
+        INSERT INTO attachments (   description, filename, url,
+                                    proxy_url, size, height,
+                                    width, attachment_id, 
+                                    message_id, created_at)
+        VALUES( $1, $2, $3, $4, $5,
+                $6, $7, $8, $9, $10)
+        """
+
+        for attachment in message.attachments:
+            webhook = random.choice(
+                [webhook for _, webhook in self.bot.image_webhooks.items()]
+            )
+
+            new_message = await webhook.send(
+                wait=True,
+                files=[
+                    discord.File(
+                        BytesIO(await attachment.read()),
+                        f"{attachment.filename}",
+                    )
+                ],
+            )
+
+            await self.bot.pool.execute(
+                sql,
+                attachment.description,
+                attachment.filename,
+                new_message.attachments[0].url,
+                attachment.proxy_url,
+                attachment.size,
+                attachment.height,
+                attachment.width,
+                attachment.id,
+                data["id"],
+                discord.utils.utcnow(),
+            )
+
+    @commands.Cog.listener("on_message")
+    async def on_message(self, message: discord.Message):
+        if message.guild and message.guild.id == 1014829673311637554:
+            return
+            # this is the place where we actually
+            # are storing the data so we dont want dupes
+        data = await self.bot.pool.fetchrow(
+            self.message_sql,
+            message.id,
+            message.author.id,
+            message.channel.id,
+            message.webhook_id,
+            message.pinned,
+            False,
+            False,
+            bool(message.stickers),
+            bool(message.embeds),
+            bool(message.attachments),
+            message.content,
+            message.created_at,
+            None,
+            None,
+            message.guild.id if message.guild else None,
+            message.guild.owner_id if message.guild else None,
+        )
+
+        if message.stickers:
+            await self.add_stickers(message, data)
+
+        if message.attachments:
+            await self.add_attachments(message, data)
+
+    @commands.Cog.listener("on_message_edit")
+    async def on_message_edit(self, before: discord.Message, message: discord.Message):
+        if message.guild and message.guild.id == 1014829673311637554:
+            return
+            # this is the place where we actually
+            # are storing the data so we dont want dupes
+        data = await self.bot.pool.fetchrow(
+            self.message_sql,
+            message.id,
+            message.author.id,
+            message.channel.id,
+            message.webhook_id,
+            message.pinned,
+            True,
+            False,
+            bool(message.embeds),
+            bool(message.stickers),
+            bool(message.attachments),
+            message.content,
+            message.created_at,
+            discord.utils.utcnow(),
+            None,
+            message.guild.id if message.guild else None,
+            message.guild.owner_id if message.guild else None,
+        )
+
+        if message.stickers:
+            await self.add_stickers(message, data)
+
+        if message.attachments:
+            await self.add_attachments(message, data)
+
+    @commands.Cog.listener("on_message_delete")
+    async def on_message_delete(self, message: discord.Message):
+        if message.guild and message.guild.id == 1014829673311637554:
+            return
+            # this is the place where we actually
+            # are storing the data so we dont want dupes
+        data = await self.bot.pool.fetchrow(
+            self.message_sql,
+            message.id,
+            message.author.id,
+            message.channel.id,
+            message.webhook_id,
+            message.pinned,
+            False,
+            True,
+            bool(message.stickers),
+            bool(message.embeds),
+            bool(message.attachments),
+            message.content,
+            message.created_at,
+            None,
+            discord.utils.utcnow(),
+            message.guild.id if message.guild else None,
+            message.guild.owner_id if message.guild else None,
+        )
+
+        if message.stickers:
+            await self.add_stickers(message, data)
+
+        if message.attachments:
+            await self.add_attachments(message, data)

@@ -666,7 +666,7 @@ class BoolConverter(commands.Converter):
     """Converts discord.Message to List[discord.PartialEmoji]"""
 
     async def convert(self, ctx: Context, message: str) -> bool:
-        compiled = re.compile(r"(yes|y|true)", re.IGNORECASE)
+        compiled = re.compile(r"(yes|y|true|1)", re.IGNORECASE)
 
         return bool(compiled.match(message))
 

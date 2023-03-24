@@ -133,6 +133,10 @@ class DataCog(BaseCog):
     async def discrims(self, ctx: Context, index: Optional[int] = None):
         await self.user_remove(ctx, "discrim_logs", ctx.author.id, index=index)
 
+    @remove_group.command(name="discrims", aliases=("discriminators",))
+    async def messages(self, ctx: Context, index: Optional[int] = None):
+        await self.user_remove(ctx, "messages", ctx.author.id, index=index)
+
     @remove_group.command(name="nicknames", aliases=("nicks",))
     async def nicknames(
         self,

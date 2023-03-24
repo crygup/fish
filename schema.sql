@@ -214,3 +214,47 @@ CREATE TABLE IF NOT EXISTS guild_blocks (
     entitiy_id BIGINT,
     created_at TIMESTAMP WITH TIME ZONE
 );
+
+CREATE TABLE IF NOT EXISTS messages (
+    ID SERIAL,
+    message_id BIGINT,
+    user_id BIGINT,
+    channel_id BIGINT,
+    webhook_id BIGINT,
+    pinned BOOLEAN,
+    edited BOOLEAN,
+    deleted BOOLEAN,
+    stickers BOOLEAN,
+    embeds BOOLEAN,
+    attachments BOOLEAN,
+    content TEXT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    edited_at TIMESTAMP WITH TIME ZONE,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    guild_id BIGINT,
+    guild_owner_id BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS attachments (
+    ID SERIAL,
+    description TEXT,
+    filename TEXT,
+    url TEXT,
+    proxy_url TEXT,
+    size INT,
+    height INT,
+    width INT,
+    attachment_id BIGINT,
+    message_id BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS stickers (
+    ID SERIAL,
+    description TEXT,
+    format TEXT,
+    url TEXT,
+    sticker_id BIGINT,
+    message_id BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE
+);

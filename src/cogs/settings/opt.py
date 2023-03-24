@@ -17,6 +17,7 @@ Logger = [
     "usernames",
     "joins",
     "uptime",
+    "messages",
 ]
 
 
