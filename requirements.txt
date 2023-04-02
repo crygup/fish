@@ -1,7 +1,6 @@
 git+https://github.com/Rapptz/discord-ext-menus
 git+https://github.com/Gorialis/jishaku
 git+https://github.com/curiositIy/lastfm
-tweepy[async]
 discord.py==2.1.0
 asyncpg
 toml
@@ -15,10 +14,8 @@ cachetools
 pilmoji
 steam
 ossapi
-Pillow
 Wand
 beautifulsoup4
-pre-commit
 PyNaCl
 parsedatetime
 playwright
