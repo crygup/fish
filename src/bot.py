@@ -13,7 +13,6 @@ import discord
 from cachetools import TTLCache
 from discord.ext import commands
 from lastfm import AsyncClient as LastfmAsyncClient
-from ossapi import OssapiV2
 from redis import asyncio as aioredis
 
 from cogs.context import Context
@@ -196,7 +195,6 @@ class Bot(commands.Bot):
 
         # fmt:off
         self.lastfm = LastfmAsyncClient(self.config["keys"]["lastfm-key"], session=self.session)
-        self.osu = OssapiV2(self.config["keys"]["osu-id"], self.config["keys"]["osu-secret"])
         await setup_cache(self)
         await setup_webhooks(self)
         await setup_pokemon(self)

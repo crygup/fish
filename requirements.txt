@@ -13,7 +13,6 @@ redis>=4.2.0rc1
 cachetools
 pilmoji
 steam
-ossapi
 Wand
 beautifulsoup4
 PyNaCl

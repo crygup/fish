@@ -27,7 +27,6 @@ from braceexpand import UnbalancedBracesError, braceexpand  # type: ignore
 from bs4 import BeautifulSoup
 from discord.ext import commands
 from discord.ext.commands import FlagConverter
-from ossapi.ossapiv2 import Beatmap, Beatmapset, User
 from steam.steamid import steam64_from_url
 from wand.color import Color
 
@@ -45,9 +44,6 @@ from ..helpers import (
 )
 from ..vars import (
     IMGUR_PAGE_RE,
-    OSU_BEATMAP_RE,
-    OSU_BEATMAPSET_RE,
-    OSU_ID_RE,
     TENOR_GIF_RE,
     TENOR_PAGE_RE,
     BlankException,
@@ -269,28 +265,6 @@ class ImageConverter(commands.Converter):
         return BytesIO(source)
 
 
-class OsuAccountConverter(commands.Converter):
-    """Converts text to an osu accounts"""
-
-    @to_thread
-    def get_user(self, ctx: Context, account) -> User:
-        return ctx.bot.osu.user(account)
-
-    async def convert(self, ctx: Context, argument: Union[discord.User, str]) -> User:
-        bot = ctx.bot
-
-        if not isinstance(argument, str):
-            account = await bot.redis.hget(f"accounts:{argument.id}", "osu")
-            if not account:
-                raise UnknownAccount(f"{argument} has not set an osu! accuont yet.")
-
-            argument = account
-        else:
-            argument = re.sub(r"https://osu.ppy.sh/users/", "", argument)
-
-        return await self.get_user(ctx, argument)
-
-
 class ColorConverter(commands.Converter):
     async def convert(self, ctx: Context, argument: str) -> Color:
         try:
@@ -371,52 +345,6 @@ class LastfmConverter(commands.Converter):
             name = await get_lastfm(ctx.bot, user.id)
 
         return name
-
-
-class BeatmapConverter(commands.Converter):
-    """
-    Converts beatmaps
-    """
-
-    @to_thread
-    def get_beatmap(self, ctx: Context, beatmapid: int) -> Beatmap:
-        return ctx.bot.osu.beatmap(beatmapid)
-
-    async def convert(self, ctx: Context, argument: str) -> Beatmap:
-        beatmapset_check = OSU_BEATMAPSET_RE.search(argument)
-        if beatmapset_check:
-            return await self.get_beatmap(ctx, int(beatmapset_check.group("map")))
-
-        beatmap_check = OSU_BEATMAP_RE.search(argument)
-        if beatmap_check:
-            return await self.get_beatmap(ctx, int(beatmap_check.group("id")))
-
-        id_check = OSU_ID_RE.search(argument)
-        if id_check:
-            return await self.get_beatmap(ctx, int(id_check.group("id")))
-
-        raise ValueError("Unknown beatmap")
-
-
-class BeatmapsetConverter(commands.Converter):
-    """
-    Converts beatmapsets
-    """
-
-    @to_thread
-    def get_beatmapset(self, ctx: Context, beatmapsetid: int) -> Beatmapset:
-        return ctx.bot.osu.beatmapset(beatmapsetid)
-
-    async def convert(self, ctx: Context, argument: str) -> Beatmapset:
-        beatmapset_check = OSU_BEATMAPSET_RE.search(argument)
-        if beatmapset_check:
-            return await self.get_beatmapset(ctx, int(beatmapset_check.group("map")))
-
-        id_check = OSU_ID_RE.search(argument)
-        if id_check:
-            return await self.get_beatmapset(ctx, int(id_check.group("id")))
-
-        raise ValueError("Unknown beatmapset")
 
 
 def SteamIDConverter(account: str) -> int:

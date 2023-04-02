@@ -3,18 +3,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, List
 
 import discord
-import psutil
 
 from .about import About
 from .fun import Fun
-from .osu import Osu
 from .steam import Steam
 
 if TYPE_CHECKING:
     from bot import Bot
 
 
-class Miscellaneous(About, Fun, Osu, Steam, name="miscellaneous"):
+class Miscellaneous(About, Fun, Steam, name="miscellaneous"):
     """Miscellaneous commands."""
 
     @property

@@ -71,25 +71,6 @@ USER_FLAGS = {
     "active_developer": f"{ACTIVE_DEVELOPER} Active Developer",
 }
 
-OsuMods = {
-    "DT": "<:doubletime:1047996368528089118>",
-    "NM": "",
-    "NF": "<:nofail:1047996491731574834>",
-    "EZ": "<:easy:1047996366628065301>",
-    "TD": "<:target:1047996484563509299>",
-    "HD": "<:hidden:1047996494373998602>",
-    "HR": "<:hardrock:1047996495519039529>",
-    "SD": "<:suddendeath:1047996485960208535>",
-    "RX": "<:relax:1047996489131106325>",
-    "HT": "<:halftime:1047996364207947847>",
-    "NC": "<:nightcore:1047996493107318866>",
-    "FL": "<:flashlight:1047996365155872829>",
-    "AT": "<:at:1047996488044773396>",
-    "SO": "<:spunout:1047996487151398942>",
-    "AP": "<:autoplay:1047996370881101947>",
-    "PF": "<:perfect:1047996490435543040>",
-}
-
 anime_query_data = """
 query ($search: String) {
   Media(search: $search, type: ANIME) {
