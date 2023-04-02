@@ -8,13 +8,13 @@ import textwrap
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 import aiohttp
-import aioredis
 import asyncpg
 import discord
 from cachetools import TTLCache
 from discord.ext import commands
 from lastfm import AsyncClient as LastfmAsyncClient
 from ossapi import OssapiV2
+from redis import asyncio as aioredis
 
 from cogs.context import Context
 from utils import (

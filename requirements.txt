@@ -9,7 +9,7 @@ python-dateutil
 pandas
 yt-dlp
 psutil
-aioredis
+redis>=4.2.0rc1
 cachetools
 pilmoji
 steam
