@@ -10,11 +10,12 @@ from utils import Config
 
 
 class Fishie(commands.Bot):
+    session: aiohttp.ClientSession
+
     def __init__(self, config: Config, logger: Logger):
         self.config: Config = config
         self.logger: Logger = logger
         self.start_time: datetime.datetime
-        self.session: aiohttp.ClientSession
         self._extensions = [
             m.name for m in pkgutil.iter_modules(["./extensions"], prefix="extensions.")
         ]

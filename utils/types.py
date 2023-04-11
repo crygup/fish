@@ -4,12 +4,17 @@ T = TypeVar("T")
 P = ParamSpec("P")
 
 
+class Character(TypedDict):
+    username: str
+    password: str
+
+
 class Databases(TypedDict):
-    postgre_user: str
-    postgre_ip: str
-    postgre_pw: str
-    postgre_db: str
-    testing_postgre_db: str
+    postgre_dsn: str
+    testing_postgre_dsn: str
+
+    redis_dsn: str
+    testing_redis_dsn: str
 
 
 class Keys(TypedDict):
@@ -26,3 +31,5 @@ class ConfigTokens(TypedDict):
 class Config(TypedDict):
     tokens: ConfigTokens
     keys: Keys
+    databases: Databases
+    character: Character

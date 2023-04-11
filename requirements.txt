@@ -6,4 +6,5 @@ asyncpg
 redis>=4.2.0rc1
 asyncpg-stubs
 yt-dlp
-dateutilpython-dateutil
+python-dateutil
+playwright

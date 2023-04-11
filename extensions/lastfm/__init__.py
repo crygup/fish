@@ -48,16 +48,11 @@ class LastFM(Cog):
 
                 embed = discord.Embed(color=0xFAA0C1)
 
-                reformed_url = re.sub(
-                    r"https://www.last.fm/",
-                    f"https://www.last.fm/{username}/library/",
-                    track["url"],
-                )
                 np = bool(track.get("@attr", False))
                 embed.set_author(
                     name=f"{'Now playing' if np else 'Last track for'} - {username}",
                     icon_url=ctx.author.display_avatar.url,
-                    url=f"https://last.fm/{username}",
+                    url=f"https://last.fm/user/{username}",
                 )
 
                 try:
@@ -74,8 +69,14 @@ class LastFM(Cog):
 
                 emoji = "\U00002764\U0000fe0f"
 
+                reformed_url = re.sub(
+                    r"https://www.last.fm/",
+                    f"https://www.last.fm/user/{username}/library/",
+                    track["url"],
+                )
+
                 description = f"""
-                [{track['name']}]({reformed_url}) {emoji if track['loved'] else ''}
+                [{track['name']}]({reformed_url}) {emoji if track['loved'] == '1' else ''}
                 By **{track['artist']['name']}** on *{album_text}*
                 """
 
