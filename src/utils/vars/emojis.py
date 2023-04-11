@@ -25,11 +25,11 @@ EARLY_SUPPORTER: PartialEmoji = PartialEmoji(
 VERIFIED_BOT_DEV: PartialEmoji = PartialEmoji(name="bot_dev", id=949147434204946472)
 VERIFIED_BOT: PartialEmoji = PartialEmoji(name="bot", id=949147432598515723)
 CERTIFIED_MODERATOR: PartialEmoji = PartialEmoji(
-    name="moderator_programs_alumni", id=1056970636754440223
+    name="moderator_programs_alumni", id=1095204621397524571
 )
 SYSTEM: PartialEmoji = PartialEmoji(name="system", id=949147469357387817)
 ACTIVE_DEVELOPER: PartialEmoji = PartialEmoji(
-    name="active_developer", id=1056970635580018778
+    name="active_developer", id=1095204617752686605
 )
 UPVOTE: PartialEmoji = PartialEmoji(name="cr_upvote", id=1060024489280278528)
 DOWNVOTE: PartialEmoji = PartialEmoji(name="cr_downvote", id=1060024487711617055)
