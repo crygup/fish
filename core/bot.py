@@ -1,12 +1,14 @@
 import datetime
 import pkgutil
 from logging import Logger
+from typing import Optional, Union
 
 import aiohttp
 import discord
+from discord.abc import Messageable
 from discord.ext import commands
 
-from utils import Config
+from utils import MESSAGE_RE, Config
 
 
 class Fishie(commands.Bot):
@@ -67,3 +69,27 @@ class Fishie(commands.Bot):
         if not hasattr(self, "start_time"):
             self.uptime = discord.utils.utcnow()
             self.logger.info(f"Logged into {str(self.user)}")
+
+    async def fetch_message(
+        self, *, message: Union[str, int], channel: Optional[Messageable] = None
+    ) -> discord.Message:
+        if isinstance(message, int):
+            if channel is None:
+                raise TypeError("Channel is required when providing message ID")
+
+            return await channel.fetch_message(message)
+
+        msg_match = MESSAGE_RE.match(message)
+
+        if msg_match:
+            _channel = self.get_channel(int(msg_match.group(2)))
+
+            if _channel is None:
+                raise commands.ChannelNotFound(msg_match.group(2))
+
+            if not isinstance(_channel, Messageable):
+                raise TypeError("Channel is not messageable")
+
+            return await _channel.fetch_message(int(msg_match.group(3)))
+
+        raise ValueError("Could not find channel with provided arguments, try again.")

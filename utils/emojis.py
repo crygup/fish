@@ -24,9 +24,13 @@ bravery: PartialEmoji = PartialEmoji(id=949147435333218305, name="bravery")
 brillance: PartialEmoji = PartialEmoji(id=949147436880912405, name="brillance")
 bughunterlv1: PartialEmoji = PartialEmoji(id=949147440219553873, name="bughunterlv1")
 bughunterlv2: PartialEmoji = PartialEmoji(id=949147441935024178, name="bughunterlv2")
-certified_moderator: PartialEmoji = PartialEmoji(id=949147443264622643, name="certified_moderator")
+certified_moderator: PartialEmoji = PartialEmoji(
+    id=949147443264622643, name="certified_moderator"
+)
 dpy: PartialEmoji = PartialEmoji(id=949147446397763594, name="dpy")
-earlysupporter: PartialEmoji = PartialEmoji(id=949147447756726342, name="earlysupporter")
+earlysupporter: PartialEmoji = PartialEmoji(
+    id=949147447756726342, name="earlysupporter"
+)
 greenTick: PartialEmoji = PartialEmoji(id=949147449077944341, name="greenTick")
 greyTick: PartialEmoji = PartialEmoji(id=949147450386575400, name="greyTick")
 hypesquad: PartialEmoji = PartialEmoji(id=949147451942649916, name="hypesquad")
@@ -47,5 +51,9 @@ loading: PartialEmoji = PartialEmoji(id=974280851762327563, name="loading")
 pokeball: PartialEmoji = PartialEmoji(id=1006847357381521428, name="pokeball")
 lastfm: PartialEmoji = PartialEmoji(id=1006848047923351612, name="lastfm")
 discord: PartialEmoji = PartialEmoji(id=1006848754944593921, name="discord")
-active_developer: PartialEmoji = PartialEmoji(id=1095204617752686605, name="active_developer")
-moderator_programs_alumni: PartialEmoji = PartialEmoji(id=1095204621397524571, name="moderator_programs_alumni")
+active_developer: PartialEmoji = PartialEmoji(
+    id=1095204617752686605, name="active_developer"
+)
+moderator_programs_alumni: PartialEmoji = PartialEmoji(
+    id=1095204621397524571, name="moderator_programs_alumni"
+)
