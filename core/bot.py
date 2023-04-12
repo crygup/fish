@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import pkgutil
 from logging import Logger
-from typing import TYPE_CHECKING, Any, List, Optional, Type, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Optional, Type, TypeVar, Union
 
 import aiohttp
 import asyncpg
@@ -23,7 +23,7 @@ FCT = TypeVar("FCT", bound="Context")
 
 class Fishie(commands.Bot):
     redis: aioredis.Redis[Any]
-    custom_emojis: List[discord.PartialEmoji] = emojis
+    custom_emojis = emojis
 
     def __init__(
         self,
