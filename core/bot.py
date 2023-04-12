@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import datetime
 import pkgutil
 from logging import Logger
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Type, TypeVar, Union
 
 import aiohttp
 # import asyncpg
@@ -10,6 +12,11 @@ from discord.abc import Messageable
 from discord.ext import commands
 
 from utils import MESSAGE_RE, Config
+
+if TYPE_CHECKING:
+    from extensions.context import Context
+
+FCT = TypeVar("FCT", bound="Context")
 
 
 class Fishie(commands.Bot):
@@ -20,6 +27,7 @@ class Fishie(commands.Bot):
         self.config: Config = config
         self.logger: Logger = logger
         self.start_time: datetime.datetime
+        self.context_cls: Type[commands.Context[Fishie]] = commands.Context
         self._extensions = [
             m.name for m in pkgutil.iter_modules(["./extensions"], prefix="extensions.")
         ]
@@ -95,3 +103,12 @@ class Fishie(commands.Bot):
             return await _channel.fetch_message(int(msg_match.group(3)))
 
         raise ValueError("Could not find channel with provided arguments, try again.")
+
+    async def get_context(
+        self,
+        message: discord.Message | discord.Interaction[Fishie],
+        *,
+        cls: Type[FCT] = None,
+    ) -> Context | commands.Context[Fishie]:
+        new_cls = cls or self.context_cls
+        return await super().get_context(message, cls=new_cls)
