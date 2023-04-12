@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import pkgutil
 from logging import Logger
-from typing import TYPE_CHECKING, Any, Optional, Type, TypeVar, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Type, TypeVar, Union
 
 import aiohttp
 import asyncpg
@@ -13,7 +13,7 @@ from discord.ext import commands
 from lastfm import Client as LastfmClient
 from redis import asyncio as aioredis
 
-from utils import MESSAGE_RE, Config
+from utils import MESSAGE_RE, Config, emojis
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -23,7 +23,8 @@ FCT = TypeVar("FCT", bound="Context")
 
 class Fishie(commands.Bot):
     redis: aioredis.Redis[Any]
-
+    custom_emojis: List[discord.PartialEmoji] = emojis
+    
     def __init__(
         self,
         config: Config,
