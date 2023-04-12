@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from core import Fishie
 
 
-class Owner(Cog):
+class Settings(Cog):
     emoji = discord.PartialEmoji(name="\U00002699\U0000fe0f")
 
     @commands.command(name="accounts")
@@ -22,4 +22,4 @@ class Owner(Cog):
 
 
 async def setup(bot: Fishie):
-    await bot.add_cog(Owner())
+    await bot.add_cog(Settings())

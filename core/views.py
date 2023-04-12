@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
 
 import discord
 
 if TYPE_CHECKING:
     from extensions.context import Context
+
+
+@runtime_checkable
+class Disableable(Protocol):
+    disabled: bool
 
 
 class AuthorView(discord.ui.View):
@@ -17,9 +22,7 @@ class AuthorView(discord.ui.View):
 
     def disable_all(self) -> None:
         for button in self.children:
-            if isinstance(button, discord.ui.Button):
-                button.disabled = True
-            if isinstance(button, discord.ui.Select):
+            if isinstance(button, Disableable):
                 button.disabled = True
 
     async def on_timeout(self) -> None:

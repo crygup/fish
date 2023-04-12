@@ -32,7 +32,7 @@ class LastFM(Cog):
     async def fm(self, ctx: Context, username: str = "crygup"):
         async with ctx.typing():
             user = await ctx.bot.fm.get_user_info(username)
-            track: Track = (await user.get_recent_tracks(extended="1"))[0]
+            track: Track = (await user.get_recent_tracks(extended=True))[0]
 
             embed = discord.Embed(color=0xFAA0C1)
 

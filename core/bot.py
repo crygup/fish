@@ -22,14 +22,21 @@ FCT = TypeVar("FCT", bound="Context")
 
 
 class Fishie(commands.Bot):
-    session: aiohttp.ClientSession
-    fm: LastfmClient
-    pool: "asyncpg.Pool[asyncpg.Record]"
     redis: aioredis.Redis[Any]
 
-    def __init__(self, config: Config, logger: Logger):
+    def __init__(
+        self,
+        config: Config,
+        logger: Logger,
+        pool: "asyncpg.Pool[asyncpg.Record]",
+        fm: LastfmClient,
+        session: aiohttp.ClientSession,
+    ):
         self.config: Config = config
         self.logger: Logger = logger
+        self.pool = pool
+        self.fm = fm
+        self.session = session
         self.start_time: datetime.datetime
         self.context_cls: Type[commands.Context[Fishie]] = commands.Context
         self._extensions = [
@@ -76,9 +83,6 @@ class Fishie(commands.Bot):
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
             }
         )
-
-        async with LastfmClient(self.config["keys"]["lastfm"]) as client:
-            self.fm = client
 
         await self.load_extensions()
 

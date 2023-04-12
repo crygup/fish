@@ -5,10 +5,12 @@ import os
 import sys
 import tomllib
 
+import aiohttp
+from lastfm import Client as LastfmClient
 from redis import asyncio as aioredis
 
 from core import Fishie, create_pool
-from utils import Config
+from utils import Config, base_header
 
 
 async def start(testing: bool):
@@ -35,7 +37,7 @@ async def start(testing: bool):
         logger.addHandler(handler)
 
     with open("config.toml", "rb") as fileObj:
-        config: Config = tomllib.load(fileObj)  # type: ignore # using my own TypedDict instead of Dict[str, Any]
+        config: Config = Config(**tomllib.load(fileObj))
 
     jsk_envs = [
         "JISHAKU_RETAIN",
@@ -56,11 +58,15 @@ async def start(testing: bool):
     redis = await aioredis.from_url(config["databases"]["testing_redis_dsn"] if testing else "redis_dsn")  # type: ignore
     logger.info("Connected to Redis")
 
-    async with Fishie(config=config, logger=logger) as fishie:
-        token = fishie.config["tokens"]["bot"]
-        fishie.pool = pool
-        fishie.redis = redis
-        await fishie.start(token)
+    async with (
+        aiohttp.ClientSession(headers=base_header) as session,
+        LastfmClient(config["keys"]["lastfm"]) as fmclient,
+        Fishie(
+            config=config, logger=logger, pool=pool, session=session, fm=fmclient
+        ) as bot,
+    ):
+        bot.redis = redis
+        await bot.start(config["tokens"]["bot"])
 
 
 if __name__ == "__main__":
