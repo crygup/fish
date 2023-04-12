@@ -5,14 +5,14 @@ import os
 import sys
 import tomllib
 
-from core import Fishie
-from utils import Config
+from redis import asyncio as aioredis
 
-# from core import create_pool
+from core import Fishie, create_pool
+from utils import Config
 
 
 async def start(testing: bool):
-    logger = logging.getLogger("discord")
+    logger = logging.getLogger("fishie")
     logger.setLevel(logging.INFO)
     logging.getLogger("discord.http").setLevel(logging.INFO)
 
@@ -48,15 +48,18 @@ async def start(testing: bool):
     for env in jsk_envs:
         os.environ[env] = "True"
 
-    # pool = await create_pool(config["databases"]["postgre_dsn"])
+    pool = await create_pool(
+        config["databases"]["testing_postgre_dsn" if testing else "postgre_dsn"]
+    )
+    logger.info("Connected to Postgres")
+
+    redis = await aioredis.from_url(config["databases"]["testing_redis_dsn"] if testing else "redis_dsn")  # type: ignore
+    logger.info("Connected to Redis")
 
     async with Fishie(config=config, logger=logger) as fishie:
-        token = (
-            fishie.config["tokens"]["evi"]
-            if testing
-            else fishie.config["tokens"]["bot"]
-        )
-        # fishie.pool = pool
+        token = fishie.config["tokens"]["bot"]
+        fishie.pool = pool
+        fishie.redis = redis
         await fishie.start(token)
 
 

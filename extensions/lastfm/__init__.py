@@ -47,7 +47,6 @@ class LastFM(Cog):
                 embed.set_thumbnail(url=track._data["image"][-1]["#text"])
             except (KeyError, IndexError):
                 pass
-                
 
             emoji = "\U00002764\U0000fe0f"
 

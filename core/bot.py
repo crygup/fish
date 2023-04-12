@@ -3,14 +3,15 @@ from __future__ import annotations
 import datetime
 import pkgutil
 from logging import Logger
-from typing import TYPE_CHECKING, Optional, Type, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Optional, Type, TypeVar, Union
 
 import aiohttp
-# import asyncpg
+import asyncpg
 import discord
 from discord.abc import Messageable
 from discord.ext import commands
 from lastfm import Client as LastfmClient
+from redis import asyncio as aioredis
 
 from utils import MESSAGE_RE, Config
 
@@ -23,7 +24,8 @@ FCT = TypeVar("FCT", bound="Context")
 class Fishie(commands.Bot):
     session: aiohttp.ClientSession
     fm: LastfmClient
-    # pool: "asyncpg.Pool[asyncpg.Record]"
+    pool: "asyncpg.Pool[asyncpg.Record]"
+    redis: aioredis.Redis[Any]
 
     def __init__(self, config: Config, logger: Logger):
         self.config: Config = config
