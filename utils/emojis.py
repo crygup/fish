@@ -1,5 +1,8 @@
 from discord import PartialEmoji
 
+# fmt: off
+
+# fishie emojis
 fish_check: PartialEmoji = PartialEmoji(id=1095204109201707049, name="fish_check")
 fish_downvote: PartialEmoji = PartialEmoji(id=1095204111663771678, name="fish_downvote")
 fish_gopage: PartialEmoji = PartialEmoji(id=1095204114113241100, name="fish_gopage")
@@ -16,31 +19,9 @@ fish_x: PartialEmoji = PartialEmoji(id=1095204162121248778, name="fish_x")
 replies: PartialEmoji = PartialEmoji(id=1095204164985958530, name="replies")
 reply: PartialEmoji = PartialEmoji(id=1095204167666106390, name="reply")
 user: PartialEmoji = PartialEmoji(id=1095204170748936212, name="user")
-balance: PartialEmoji = PartialEmoji(id=949147429733793832, name="balance")
-booster: PartialEmoji = PartialEmoji(id=949147430786596896, name="booster")
-bot: PartialEmoji = PartialEmoji(id=949147432598515723, name="bot")
-bot_dev: PartialEmoji = PartialEmoji(id=949147434204946472, name="bot_dev")
-bravery: PartialEmoji = PartialEmoji(id=949147435333218305, name="bravery")
-brillance: PartialEmoji = PartialEmoji(id=949147436880912405, name="brillance")
-bughunterlv1: PartialEmoji = PartialEmoji(id=949147440219553873, name="bughunterlv1")
-bughunterlv2: PartialEmoji = PartialEmoji(id=949147441935024178, name="bughunterlv2")
-certified_moderator: PartialEmoji = PartialEmoji(
-    id=949147443264622643, name="certified_moderator"
-)
-dpy: PartialEmoji = PartialEmoji(id=949147446397763594, name="dpy")
-earlysupporter: PartialEmoji = PartialEmoji(
-    id=949147447756726342, name="earlysupporter"
-)
 greenTick: PartialEmoji = PartialEmoji(id=949147449077944341, name="greenTick")
 greyTick: PartialEmoji = PartialEmoji(id=949147450386575400, name="greyTick")
-hypesquad: PartialEmoji = PartialEmoji(id=949147451942649916, name="hypesquad")
-nitro: PartialEmoji = PartialEmoji(id=949147454991896616, name="nitro")
-owner: PartialEmoji = PartialEmoji(id=949147456376033340, name="owner")
-partner: PartialEmoji = PartialEmoji(id=949147457839829043, name="partner")
 python: PartialEmoji = PartialEmoji(id=949147461849604176, name="python")
-staff: PartialEmoji = PartialEmoji(id=949147468124262420, name="staff")
-system: PartialEmoji = PartialEmoji(id=949147469357387817, name="system")
-cube: PartialEmoji = PartialEmoji(id=949553528312045578, name="cube")
 text_channel: PartialEmoji = PartialEmoji(id=954520168275521537, name="text_channel")
 voice_channel: PartialEmoji = PartialEmoji(id=954520189918142505, name="voice_channel")
 info: PartialEmoji = PartialEmoji(id=971923502422708224, name="info")
@@ -51,9 +32,24 @@ loading: PartialEmoji = PartialEmoji(id=974280851762327563, name="loading")
 pokeball: PartialEmoji = PartialEmoji(id=1006847357381521428, name="pokeball")
 lastfm: PartialEmoji = PartialEmoji(id=1006848047923351612, name="lastfm")
 discord: PartialEmoji = PartialEmoji(id=1006848754944593921, name="discord")
-active_developer: PartialEmoji = PartialEmoji(
-    id=1095204617752686605, name="active_developer"
-)
-moderator_programs_alumni: PartialEmoji = PartialEmoji(
-    id=1095204621397524571, name="moderator_programs_alumni"
-)
+
+# discord
+balance: PartialEmoji = PartialEmoji(id=949147429733793832, name="balance")
+booster: PartialEmoji = PartialEmoji(id=949147430786596896, name="booster")
+bot: PartialEmoji = PartialEmoji(id=949147432598515723, name="bot")
+bot_dev: PartialEmoji = PartialEmoji(id=949147434204946472, name="bot_dev")
+bravery: PartialEmoji = PartialEmoji(id=949147435333218305, name="bravery")
+brillance: PartialEmoji = PartialEmoji(id=949147436880912405, name="brillance")
+bughunterlv1: PartialEmoji = PartialEmoji(id=949147440219553873, name="bughunterlv1")
+bughunterlv2: PartialEmoji = PartialEmoji(id=949147441935024178, name="bughunterlv2")
+certified_moderator: PartialEmoji = PartialEmoji(id=949147443264622643, name="certified_moderator")
+dpy: PartialEmoji = PartialEmoji(id=949147446397763594, name="dpy")
+earlysupporter: PartialEmoji = PartialEmoji(id=949147447756726342, name="earlysupporter")
+hypesquad: PartialEmoji = PartialEmoji(id=949147451942649916, name="hypesquad")
+nitro: PartialEmoji = PartialEmoji(id=949147454991896616, name="nitro")
+owner: PartialEmoji = PartialEmoji(id=949147456376033340, name="owner")
+partner: PartialEmoji = PartialEmoji(id=949147457839829043, name="partner")
+staff: PartialEmoji = PartialEmoji(id=949147468124262420, name="staff")
+system: PartialEmoji = PartialEmoji(id=949147469357387817, name="system")
+active_developer: PartialEmoji = PartialEmoji(id=1095204617752686605, name="active_developer")
+moderator_programs_alumni: PartialEmoji = PartialEmoji(id=1095204621397524571, name="moderator_programs_alumni")
