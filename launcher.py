@@ -8,6 +8,8 @@ import tomllib
 from core import Fishie
 from utils import Config
 
+# from core import create_pool
+
 
 async def start(testing: bool):
     logger = logging.getLogger("discord")
@@ -46,12 +48,15 @@ async def start(testing: bool):
     for env in jsk_envs:
         os.environ[env] = "True"
 
+    # pool = await create_pool(config["databases"]["postgre_dsn"])
+
     async with Fishie(config=config, logger=logger) as fishie:
         token = (
             fishie.config["tokens"]["evi"]
             if testing
             else fishie.config["tokens"]["bot"]
         )
+        # fishie.pool = pool
         await fishie.start(token)
 
 

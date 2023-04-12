@@ -4,6 +4,7 @@ from logging import Logger
 from typing import Optional, Union
 
 import aiohttp
+# import asyncpg
 import discord
 from discord.abc import Messageable
 from discord.ext import commands
@@ -13,6 +14,7 @@ from utils import MESSAGE_RE, Config
 
 class Fishie(commands.Bot):
     session: aiohttp.ClientSession
+    # pool: "asyncpg.Pool[asyncpg.Record]"
 
     def __init__(self, config: Config, logger: Logger):
         self.config: Config = config
