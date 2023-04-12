@@ -1,0 +1,16 @@
+owner_id=1
+
+[tokens]
+bot = ''
+
+[keys]
+fishie_api=''
+lastfm=''
+lastfm_secret=''
+
+[databases]
+postgre_dsn=""
+testing_postgre_dsn=""
+
+redis_dsn=""
+testing_redis_dsn=""
