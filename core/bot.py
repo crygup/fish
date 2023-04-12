@@ -10,6 +10,7 @@ import aiohttp
 import discord
 from discord.abc import Messageable
 from discord.ext import commands
+from lastfm import Client as LastfmClient
 
 from utils import MESSAGE_RE, Config
 
@@ -21,6 +22,7 @@ FCT = TypeVar("FCT", bound="Context")
 
 class Fishie(commands.Bot):
     session: aiohttp.ClientSession
+    fm: LastfmClient
     # pool: "asyncpg.Pool[asyncpg.Record]"
 
     def __init__(self, config: Config, logger: Logger):
@@ -72,6 +74,9 @@ class Fishie(commands.Bot):
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
             }
         )
+
+        async with LastfmClient(self.config["keys"]["lastfm"]) as client:
+            self.fm = client
 
         await self.load_extensions()
 

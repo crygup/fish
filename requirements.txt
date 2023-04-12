@@ -1,4 +1,5 @@
 git+https://github.com/gorialis/jishaku
+git+https://github.com/blanketsucks/lastfm.git
 discord==2.2.2
 isort
 black
