@@ -24,6 +24,7 @@ class ConfigTokens(TypedDict):
 
 
 class Config(TypedDict):
+    owner_id: int
     tokens: ConfigTokens
     keys: Keys
     databases: Databases
