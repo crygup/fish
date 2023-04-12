@@ -24,7 +24,7 @@ FCT = TypeVar("FCT", bound="Context")
 class Fishie(commands.Bot):
     redis: aioredis.Redis[Any]
     custom_emojis: List[discord.PartialEmoji] = emojis
-    
+
     def __init__(
         self,
         config: Config,
@@ -79,12 +79,6 @@ class Fishie(commands.Bot):
                 continue
 
     async def setup_hook(self) -> None:
-        self.session = aiohttp.ClientSession(
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
-            }
-        )
-
         await self.load_extensions()
 
     async def on_ready(self):
@@ -124,3 +118,11 @@ class Fishie(commands.Bot):
     ) -> Context | commands.Context[Fishie]:
         new_cls = cls or self.context_cls
         return await super().get_context(message, cls=new_cls)
+
+    async def close(self) -> None:
+        self.logger.info("Logging out")
+        await self.unload_extensions()
+        await self.pool.close()
+        await self.redis.close()
+        await self.fm.close()
+        await super().close()
