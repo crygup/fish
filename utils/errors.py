@@ -25,3 +25,6 @@ class InvalidWebsite(DownloadError):
     ) -> None:
         self.message: str = message
         super().__init__(message, *args)
+
+ignored_errors = (commands.NotOwner)
+valid_errors = (commands.BadArgument, InvalidWebsite, VideoIsLive, DownloadError, commands.CommandError)

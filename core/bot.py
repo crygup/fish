@@ -39,6 +39,7 @@ class Fishie(commands.Bot):
         self.fm = fm
         self.session = session
         self.start_time: datetime.datetime
+        self.embed_color = 0x2B2D31
         self.context_cls: Type[commands.Context[Fishie]] = commands.Context
         self._extensions = [
             m.name for m in pkgutil.iter_modules(["./extensions"], prefix="extensions.")
@@ -79,7 +80,11 @@ class Fishie(commands.Bot):
                 continue
 
     async def setup_hook(self) -> None:
+        with open("schema.sql") as fp:
+            await self.pool.execute(fp.read())
+
         await self.load_extensions()
+        await self.populate_cache()
 
     async def on_ready(self):
         if not hasattr(self, "start_time"):
@@ -122,7 +127,29 @@ class Fishie(commands.Bot):
     async def close(self) -> None:
         self.logger.info("Logging out")
         await self.unload_extensions()
-        await self.pool.close()
-        await self.redis.close()
-        await self.fm.close()
+        await self.close_sessions()
         await super().close()
+
+    async def close_sessions(self):
+        await self.pool.close()
+        self.logger.info("Closed Postgres session")
+        await self.redis.close()
+        self.logger.info("Closed Redis session")
+        await self.fm.close()
+        self.logger.info("Closed Lastfm client session")
+        await self.session.close()
+        self.logger.info("Closed aiohttp session")
+
+    async def populate_cache(self):
+        sql = """SELECT * FROM accounts"""
+        results = await self.pool.fetch(sql)
+
+        for record in results:
+            user_id = record["user_id"]
+            fm = record["last_fm"]
+
+            if fm:
+                await self.redis.set(f"fm:{user_id}", fm)
+                self.logger.info(
+                    f'Added user "{user_id}"\'s last.fm account "{fm}"'
+                )
