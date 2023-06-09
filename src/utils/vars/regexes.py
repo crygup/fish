@@ -42,6 +42,7 @@ VIDEOS_RE = comp(
     (https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11})?
     (https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11}))?
     (https?://(on.)?soundcloud.com/[a-zA-Z0-9_-]{3,25}/?([a-z0-9_-]{3,255})?)?
+    (https?://(www\.pinterest\.com/pin/[0-9]{1,}/)?(pin\.it/[a-zA-Z0-9]{1,})?)?
     """,
     X,
 )
