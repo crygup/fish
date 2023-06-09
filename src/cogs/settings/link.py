@@ -9,10 +9,7 @@ from discord.ext import commands
 from utils import (
     UnknownAccount,
     SteamIDConverter,
-    STEAM,
-    ROBLOX,
     LASTFM,
-    OSU,
     BaseCog,
     AuthorView,
 )
@@ -39,26 +36,12 @@ class LinkCog(BaseCog):
             icon_url=user.display_avatar.url,
         )
 
-        steam = (
-            f"[{accounts['steam']}](https://steamcommunity.com/profiles/{SteamIDConverter(accounts['steam'])})"
-            if accounts["steam"]
-            else None
-        )
-
         embed.add_field(
             name="Last.fm",
             value=f"[{accounts['lastfm']}](https://www.last.fm/user/{accounts['lastfm']})"
             if accounts["lastfm"]
             else "Not set",
         )
-        embed.add_field(
-            name="osu!",
-            value=f"[{accounts['osu']}](osu.ppy.sh/users/{accounts['osu']})"
-            if accounts["osu"]
-            else "Not set",
-        )
-        embed.add_field(name="Steam", value=steam or "Not set")
-        embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
 
         await ctx.send(embed=embed, view=view)
 
@@ -74,24 +57,6 @@ class Dropdown(discord.ui.Select):
                 description="Add or remove your last.fm account",
                 emoji=LASTFM,
                 value="lastfm",
-            ),
-            discord.SelectOption(
-                label="osu!",
-                description="Add or remove your osu account",
-                emoji=OSU,
-                value="osu",
-            ),
-            discord.SelectOption(
-                label="Steam",
-                description="Add or remove your steam account",
-                emoji=STEAM,
-                value="steam",
-            ),
-            discord.SelectOption(
-                label="Roblox",
-                description="Add or remove your roblox account",
-                emoji=ROBLOX,
-                value="roblox",
             ),
         ]
 
@@ -129,18 +94,6 @@ class Dropdown(discord.ui.Select):
                         return await modal_interaction.response.send_message(
                             "Invalid username.", ephemeral=True
                         )
-                elif value == "osu":
-                    if not re.fullmatch(r"[a-zA-Z0-9_\s-]{2,16}", username):
-                        return await modal_interaction.response.send_message(
-                            "Invalid username.", ephemeral=True
-                        )
-                elif value == "steam":
-                    try:
-                        SteamIDConverter(username)
-                    except UnknownAccount:
-                        return await modal_interaction.response.send_message(
-                            "Invalid username.", ephemeral=True
-                        )
 
                 if username == "":
                     sql = f"""UPDATE accounts SET {value} = $1 WHERE user_id = $2 RETURNING *"""
@@ -169,25 +122,12 @@ class Dropdown(discord.ui.Select):
                     icon_url=user.display_avatar.url,
                 )
 
-                steam = (
-                    f"[{accounts['steam']}](https://steamcommunity.com/profiles/{SteamIDConverter(accounts['steam'])})"
-                    if accounts["steam"]
-                    else None
-                )
                 embed.add_field(
                     name="Last.fm",
                     value=f"[{accounts['lastfm']}](https://www.last.fm/user/{accounts['lastfm']})"
                     if accounts["lastfm"]
                     else "Not set",
                 )
-                embed.add_field(
-                    name="osu!",
-                    value=f"[{accounts['osu']}](osu.ppy.sh/users/{accounts['osu']})"
-                    if accounts["osu"]
-                    else "Not set",
-                )
-                embed.add_field(name="Steam", value=steam or "Not set")
-                embed.add_field(name="Roblox", value=accounts["roblox"] or "Not set")
 
                 await modal_interaction.message.edit(embed=embed)
 

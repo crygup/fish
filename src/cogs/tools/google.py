@@ -175,7 +175,7 @@ class YoutubeDropdown(discord.ui.Select):
                 discord.SelectOption(
                     label=textwrap.shorten(vid["snippet"]["title"], width=100),
                     value=str(start),
-                    emoji="<:yt:1016728285905965056>",
+                    emoji="<:yt:1097399470842466334>",
                 )
             )
             start += 1
