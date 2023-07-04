@@ -21,7 +21,7 @@ async def setup(bot: Bot):
 class Tasks(commands.Cog, name="tasks"):
     def __init__(self, bot: Bot):
         self.bot = bot
-        self.tatsu_reps = [663851322591936514, 121738169900204034, 757872553799843852]
+        self.tatsu_reps = [663851322591936514, 121738169900204034, 757872553799843852, 766953372309127168]
 
     async def cog_unload(self):
         self.set_key_task.cancel()
