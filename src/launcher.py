@@ -3,7 +3,7 @@ import logging
 import logging.handlers
 import sys
 
-import toml
+import tomllib
 from discord import gateway
 
 from bot import Bot
@@ -12,7 +12,7 @@ from utils import mobile
 # monkey patching
 gateway.DiscordWebSocket.identify = mobile
 
-testing = False
+testing = True
 
 
 async def main():
@@ -37,8 +37,9 @@ async def main():
     for handler in handlers:
         handler.setFormatter(formatter)
         logger.addHandler(handler)
-
-    config = toml.load("config.toml")
+    with open("config.toml", "rb") as fileObj:
+        config = dict(**tomllib.load(fileObj))
+    
 
     bot = Bot(config, testing, logger)
 

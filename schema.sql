@@ -258,3 +258,8 @@ CREATE TABLE IF NOT EXISTS stickers (
     message_id BIGINT,
     created_at TIMESTAMP WITH TIME ZONE
 );
+
+CREATE TABLE IF NOT EXISTS tatsu_reminders (
+    user_id BIGINT,
+    PRIMARY KEY (user_id)
+);

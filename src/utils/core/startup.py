@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 import asyncpg
 import discord
 import pandas as pd
-from tweepy.asynchronous import AsyncClient
 
 from ..helpers import add_prefix
 

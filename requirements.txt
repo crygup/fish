@@ -3,7 +3,6 @@ git+https://github.com/Gorialis/jishaku
 git+https://github.com/curiositIy/lastfm
 discord.py
 asyncpg
-toml
 tabulate
 python-dateutil
 pandas

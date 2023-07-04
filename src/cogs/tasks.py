@@ -4,6 +4,7 @@ import base64
 import os
 import re
 from typing import TYPE_CHECKING, Any, Dict
+import discord
 
 from discord.ext import commands, tasks
 
@@ -70,3 +71,15 @@ class Tasks(commands.Cog, name="tasks"):
             if file.endswith(valid_formats):
                 if re.sub("(ytdl|part)", "", file) not in self.bot.current_downloads:
                     os.remove(f"src/files/videos/{file}")
+
+    @tasks.loop(minutes=1)
+    async def tatsu_reminders(self):
+        now = discord.utils.utcnow()
+        replacement = discord.utils.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        next_rep = replacement.replace(day=now.day)
+        
+        if now > next_rep:
+            return
+        
+        await self.bot.get_user(766953372309127168).send("test") #type:ignore
+
