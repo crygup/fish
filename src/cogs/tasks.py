@@ -21,12 +21,15 @@ async def setup(bot: Bot):
 class Tasks(commands.Cog, name="tasks"):
     def __init__(self, bot: Bot):
         self.bot = bot
+        self.tatsu_reps = [663851322591936514, 121738169900204034, 757872553799843852]
 
     async def cog_unload(self):
         self.set_key_task.cancel()
+        self.tatsu_reminders.cancel()
 
     async def cog_load(self) -> None:
         self.set_key_task.start()
+        self.tatsu_reminders.start()
 
     async def set_spotify_key(self):
         url = "https://accounts.spotify.com/api/token"
@@ -74,12 +77,26 @@ class Tasks(commands.Cog, name="tasks"):
 
     @tasks.loop(minutes=1)
     async def tatsu_reminders(self):
+        await self.bot.wait_until_ready()
         now = discord.utils.utcnow()
-        replacement = discord.utils.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        replacement = now.replace(hour=0, minute=0, second=0, microsecond=0)
         next_rep = replacement.replace(day=now.day)
-        
-        if now > next_rep:
-            return
-        
-        await self.bot.get_user(766953372309127168).send("test") #type:ignore
 
+        if now >= next_rep:
+            return
+
+        for user_id in self.tatsu_reps:
+            user = self.bot.get_user(user_id)
+
+            if user is None:
+                continue
+
+            try:
+                await user.send("you can rep liz again\n t!rep 766953372309127168")
+            except:
+                ch: discord.TextChannel = self.bot.get_channel(909210055579152404)  # type: ignore
+                if ch is None:
+                    continue
+                await ch.send(
+                    f"you can rep liz again {user.mention}\n t!rep 766953372309127168"
+                )

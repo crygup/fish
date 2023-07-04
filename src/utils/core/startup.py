@@ -94,8 +94,6 @@ async def setup_pokemon(bot: Bot):
 async def setup_accounts(bot: Bot):
     accounts = await bot.pool.fetch("SELECT * FROM accounts")
     for record in accounts:
-        if record["osu"]:
-            await bot.redis.hset(f"accounts:{record['user_id']}", "osu", record["osu"])
         if record["lastfm"]:
             await bot.redis.hset(
                 f"accounts:{record['user_id']}", "lastfm", record["lastfm"]

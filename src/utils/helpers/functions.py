@@ -368,7 +368,6 @@ async def get_lastfm_data(
     query: str,
     extras: Optional[Dict] = None,
 ) -> Dict[Any, Any]:
-
     url = f"http://ws.audioscrobbler.com/{version}/"
 
     params: Dict[Any, Any] = {
@@ -842,7 +841,6 @@ def action_test(
     target: Union[discord.Member, discord.User],
     action: Union[Literal["ban"], Literal["kick"]],
 ) -> bool:
-
     if isinstance(target, discord.User):
         return True
 

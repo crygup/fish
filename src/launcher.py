@@ -12,7 +12,7 @@ from utils import mobile
 # monkey patching
 gateway.DiscordWebSocket.identify = mobile
 
-testing = True
+testing = False
 
 
 async def main():
@@ -37,9 +37,9 @@ async def main():
     for handler in handlers:
         handler.setFormatter(formatter)
         logger.addHandler(handler)
+
     with open("config.toml", "rb") as fileObj:
         config = dict(**tomllib.load(fileObj))
-    
 
     bot = Bot(config, testing, logger)
 

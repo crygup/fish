@@ -37,7 +37,6 @@ class CogView(AuthorView):
 
 
 def make_command_embed(command: commands.Command | commands.Group) -> discord.Embed:
-
     embed = discord.Embed(color=0xFAA0C1)
     embed.set_author(
         name=f"{command.name.capitalize()} help",

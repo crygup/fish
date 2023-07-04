@@ -128,7 +128,6 @@ class Bot(commands.Bot):
     async def on_message_edit(
         self, before: discord.Message, after: discord.Message
     ) -> None:
-
         if before.content == after.content:
             return
 

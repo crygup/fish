@@ -26,7 +26,8 @@ class OptCog(BaseCog):
     async def opt_group(self, ctx: Context):
         """Opt in or out of a logger
 
-        Due to technical reasons, opting out from `guild names`, `guild bans` and `guild icons` is not possible yet, but you can still delete the data at any time."""
+        Due to technical reasons, opting out from `guild names`, `guild bans` and `guild icons` is not possible yet, but you can still delete the data at any time.
+        """
         items: Set[str] = await ctx.redis.smembers(f"opted_out:{ctx.author.id}")
 
         if items == set():

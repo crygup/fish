@@ -144,7 +144,6 @@ class Context(commands.Context):
         author_id: Optional[int] = None,
         **kwargs,
     ) -> Optional[bool]:
-
         author_id = author_id or self.author.id
         view = ConfirmationView(
             timeout=timeout,
@@ -184,7 +183,6 @@ class Context(commands.Context):
         check_ref: Optional[bool] = False,
         **kwargs: Any,
     ) -> discord.Message:
-
         reference = reference or self.message.reference or None
 
         if not self.channel.permissions_for(self.me).send_messages:

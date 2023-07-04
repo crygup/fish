@@ -113,7 +113,6 @@ class UrlConverter(commands.Converter):
             raise bad_arg
 
     async def convert(self, ctx: Context, argument: str) -> bytes:
-
         bad_arg = commands.BadArgument("Invalid image URL")
         argument = argument.strip("<>")
         try:
@@ -221,7 +220,6 @@ class ImageConverter(commands.Converter):
     async def convert(
         self, ctx: Context, argument: str, *, raise_on_failure: bool = True
     ) -> Optional[bytes]:
-
         for converter in self._converters:
             try:
                 source = await converter().convert(ctx, argument)
@@ -240,7 +238,6 @@ class ImageConverter(commands.Converter):
     async def get_image(
         self, ctx: Context, source: Optional[str | bytes], *, max_size: int = 15_000_000
     ) -> BytesIO:
-
         if isinstance(source, str):
             source = await self.convert(ctx, source, raise_on_failure=False)
 
@@ -724,7 +721,6 @@ class SpotifyConverter:
     async def get_query(
         self, query: Optional[str]
     ) -> Tuple[str, Optional[SpotifySearchData]]:
-
         ctx = self.ctx
         if query is None:
             name = await get_lastfm(ctx.bot, ctx.author.id)

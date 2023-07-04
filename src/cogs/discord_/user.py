@@ -134,7 +134,8 @@ class UserCommands(BaseCog):
     ):
         """Shows how many times a user joined a server
 
-        Note: If they joined before I was added then I will not have any data for them."""
+        Note: If they joined before I was added then I will not have any data for them.
+        """
 
         guild = ctx.guild
 
@@ -189,7 +190,6 @@ class UserCommands(BaseCog):
 
     @commands.command(name="usernames", aliases=("names",))
     async def usernames(self, ctx: Context, user: discord.User = commands.Author):
-
         results = await self.bot.pool.fetch(
             "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC",
             user.id,
@@ -287,7 +287,8 @@ class UserCommands(BaseCog):
     ):
         """Shows the avatar history of a user.
 
-        This will only show the first 100, to view them all and in HD run the command `avatars`"""
+        This will only show the first 100, to view them all and in HD run the command `avatars`
+        """
 
         async with ctx.typing():
             sql = """

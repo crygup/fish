@@ -70,7 +70,6 @@ async def get_top_albums(bot: Bot, period: str, name: str) -> Dict[Any, Any]:
 
 @to_thread
 def make_advanced_chart(data: List[Tuple[BytesIO, str]]):
-
     image_cords = itertools.chain(
         [
             # top

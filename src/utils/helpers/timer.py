@@ -57,7 +57,7 @@ class ShortTime:
 
         data = {k: int(v) for k, v in match.groupdict(default=0).items()}
         now = now or datetime.datetime.now(datetime.timezone.utc)
-        self.dt = now + relativedelta(**data)
+        self.dt = now + relativedelta(**data)  # type: ignore
 
     @classmethod
     async def convert(cls, ctx: Context, argument: str) -> Self:
@@ -185,7 +185,7 @@ class UserFriendlyTime(commands.Converter):
         if match is not None and match.group(0):
             data = {k: int(v) for k, v in match.groupdict(default=0).items()}
             remaining = argument[match.end() :].strip()
-            result = FriendlyTimeResult(now + relativedelta(**data))
+            result = FriendlyTimeResult(now + relativedelta(**data))  # type: ignore
             await result.ensure_constraints(ctx, self, now, remaining)
             return result
 

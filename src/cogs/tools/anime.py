@@ -17,7 +17,6 @@ class AnimeCommands(BaseCog):
     async def make_request(
         self, query: str, mode: Union[Literal["anime"], Literal["manga"]]
     ) -> Dict[Any, Any]:
-
         search_query = (
             anime_query_data
             if mode == "anime"

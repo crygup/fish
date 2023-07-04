@@ -87,7 +87,6 @@ class Owner(
             raise commands.BadArgument("No extensions provided")
 
         for extension in itertools.chain(*extensions):  # type: ignore
-
             results = difflib.get_close_matches(extension, self.bot.exts, cutoff=0.5)
             extension = results[0] if results else extension
 

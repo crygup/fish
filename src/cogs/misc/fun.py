@@ -25,7 +25,6 @@ class Fun(BaseCog):
         characters = pattern.findall(results)
 
         if not character.lower() in [c for c in characters]:
-
             message = "Character not found.\n\n"
             maybe = difflib.get_close_matches(character.lower(), characters)
             if maybe:

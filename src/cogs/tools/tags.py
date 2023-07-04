@@ -94,7 +94,6 @@ class TagCommands(BaseCog):
     async def tag_delete(
         self, ctx: Context, *, name: Annotated[str, TagName(lower=True)]
     ):
-
         bypass_owner_check = (
             ctx.author.id == self.bot.owner_id
             or ctx.author.guild_permissions.manage_messages
