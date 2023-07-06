@@ -18,6 +18,7 @@ from utils import (
     BaseCog,
     CHECK,
 )
+# from ..events.rep import Rep
 
 if TYPE_CHECKING:
     from cogs.context import Context
@@ -311,31 +312,6 @@ class ReminderCommands(BaseCog):
 
         await ctx.send(f"Successfully deleted {plural(total):reminder}.")
 
-    @commands.Cog.listener()
-    async def on_reminder_timer_complete(self, timer: PGTimer):
-        author_id, channel_id, message = timer.args
-
-        try:
-            channel: discord.VoiceChannel | discord.TextChannel | discord.Thread = (
-                self.bot.get_channel(channel_id)
-                or (await self.bot.fetch_channel(channel_id))
-            )  # type: ignore
-        except discord.HTTPException:
-            return
-
-        message_id = timer.kwargs.get("message_id")
-        msg = f"<@{author_id}>, reminder from {timer.human_delta}: {message}"
-
-        try:
-            reference = await channel.fetch_message(message_id) if message_id else None
-        except:
-            reference = None
-
-        try:
-            await channel.send(msg, reference=reference)  # type:ignore
-        except discord.HTTPException:
-            return
-
     @commands.command(name="reminders", ignore_extra=False)
     async def reminders(self, ctx: Context):
         """Shows the 10 latest currently running reminders.
@@ -364,3 +340,68 @@ class ReminderCommands(BaseCog):
         p.embed.title = f"Reminders for {ctx.author}"
         menu = Pager(p, ctx=ctx)
         await menu.start(ctx)
+
+    @commands.Cog.listener()
+    async def on_reminder_timer_complete(self, timer: PGTimer):
+        author_id, channel_id, message = timer.args
+
+        try:
+            channel: discord.VoiceChannel | discord.TextChannel | discord.Thread = (
+                self.bot.get_channel(channel_id)
+                or (await self.bot.fetch_channel(channel_id))
+            )  # type: ignore
+        except discord.HTTPException:
+            return
+
+        message_id = timer.kwargs.get("message_id")
+        msg = f"<@{author_id}>, reminder from {timer.human_delta}: {message}"
+
+        try:
+            reference = await channel.fetch_message(message_id) if message_id else None
+        except:
+            reference = None
+
+        try:
+            await channel.send(msg, reference=reference)  # type:ignore
+        except discord.HTTPException:
+            return
+
+    # @commands.Cog.listener("on_message")
+    # async def on_message(self, message: discord.Message):
+    #     is_rep = await Rep(self.bot).check_if_rep(message)
+    #     if not is_rep:
+    #         return
+    #
+    #     ctx = await self.bot.get_context(message)
+
+
+#
+#     prompt = await ctx.prompt(
+#         "Do you want to be reminded next time you can rep?", timeout=30
+#     )
+#     if not prompt:
+#         return
+#
+#     now = message.created_at
+#     replacement = now.replace(hour=0, minute=0, second=0, microsecond=0)
+#     next_rep = replacement.replace(day=now.day + 1)
+#     timer = await self.create_timer(
+#         next_rep,
+#         "tatsu",
+#         message.author.id,
+#         created=message.created_at,
+#         message_id=message.id,
+#     )
+#     delta = timer_module.human_timedelta(next_rep, source=timer.created_at)
+#     await ctx.send(f"Okay, reminding {ctx.author.mention} in {delta}")
+#
+# @commands.Cog.listener()
+# async def on_tatsu_timer_complete(self, timer: PGTimer):
+#     (author_id,) = timer.args
+#
+#     user = self.bot.get_user(author_id)
+#
+#     if user is None:
+#         return
+#
+#     await user.send("You can now rep again.")

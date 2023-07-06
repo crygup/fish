@@ -11,7 +11,7 @@ from .downloads import DownloadCommands
 from .google import GoogleCommands
 from .money import MoneyCommands
 from .other import OtherCommands
-from .reminder import ReminderCommands
+from .reminders import ReminderCommands
 from .spotify import SpotifyCommands
 from .tags import TagCommands
 
