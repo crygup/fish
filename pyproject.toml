@@ -1,2 +1,5 @@
 [tool.pyright]
 reportPrivateUsage = "none"
+reportUnnecessaryTypeIgnoreComment = "warning"
+typeCheckingMode = "basic"
+strictParameterNoneValue = false

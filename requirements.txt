@@ -1,6 +1,6 @@
 git+https://github.com/gorialis/jishaku
 git+https://github.com/blanketsucks/lastfm.git
-discord==2.2.2
+discord
 isort
 black
 asyncpg
@@ -9,3 +9,6 @@ asyncpg-stubs
 yt-dlp
 python-dateutil
 playwright
+lxml
+parsedatetime
+lru-dict

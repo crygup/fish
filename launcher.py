@@ -6,7 +6,6 @@ import sys
 import tomllib
 
 import aiohttp
-from lastfm import Client as LastfmClient
 from redis import asyncio as aioredis
 
 from core import Fishie, create_pool
@@ -55,15 +54,14 @@ async def start(testing: bool):
     )
     logger.info("Connected to Postgres")
 
-    redis = await aioredis.from_url(config["databases"]["testing_redis_dsn"] if testing else "redis_dsn")  # type: ignore
+    redis = await aioredis.from_url(
+        config["databases"]["testing_redis_dsn"] if testing else "redis_dsn"
+    )
     logger.info("Connected to Redis")
 
     async with (
         aiohttp.ClientSession(headers=base_header) as session,
-        LastfmClient(config["keys"]["lastfm"]) as fmclient,
-        Fishie(
-            config=config, logger=logger, pool=pool, session=session, fm=fmclient
-        ) as bot,
+        Fishie(config=config, logger=logger, pool=pool, session=session) as bot,
     ):
         bot.redis = redis
         await bot.start(config["tokens"]["bot"])

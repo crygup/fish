@@ -7,6 +7,7 @@ import discord
 from core import Cog
 from .command_error import CommandErrors
 from .command_logs import CommandLogs
+
 if TYPE_CHECKING:
     from core import Fishie
 

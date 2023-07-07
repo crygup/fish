@@ -10,14 +10,13 @@ import asyncpg
 import discord
 from discord.abc import Messageable
 from discord.ext import commands
-from lastfm import Client as LastfmClient
 from redis import asyncio as aioredis
 
 from utils import MESSAGE_RE, Config, emojis
 
 if TYPE_CHECKING:
     from extensions.context import Context
-
+    from extensions.tools import Tools
 FCT = TypeVar("FCT", bound="Context")
 
 
@@ -30,13 +29,11 @@ class Fishie(commands.Bot):
         config: Config,
         logger: Logger,
         pool: "asyncpg.Pool[asyncpg.Record]",
-        fm: LastfmClient,
         session: aiohttp.ClientSession,
     ):
         self.config: Config = config
         self.logger: Logger = logger
         self.pool = pool
-        self.fm = fm
         self.session = session
         self.start_time: datetime.datetime
         self.embed_color = 0x2B2D31
@@ -135,8 +132,6 @@ class Fishie(commands.Bot):
         self.logger.info("Closed Postgres session")
         await self.redis.close()
         self.logger.info("Closed Redis session")
-        await self.fm.close()
-        self.logger.info("Closed Lastfm client session")
         await self.session.close()
         self.logger.info("Closed aiohttp session")
 
@@ -150,6 +145,8 @@ class Fishie(commands.Bot):
 
             if fm:
                 await self.redis.set(f"fm:{user_id}", fm)
-                self.logger.info(
-                    f'Added user "{user_id}"\'s last.fm account "{fm}"'
-                )
+                self.logger.info(f'Added user "{user_id}"\'s last.fm account "{fm}"')
+
+    @property
+    def tools(self) -> Optional[Tools]:
+        return self.get_cog('Tools')  # type: ignore

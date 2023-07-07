@@ -9,9 +9,13 @@ from discord.ext import commands
 from playwright.async_api import async_playwright
 
 from .downloads import Downloads
+from .reminders import Reminder
+from utils import URLConverter
 
 if TYPE_CHECKING:
     from core import Fishie
+
+param = commands.param
 
 
 class ScreenshotFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
@@ -19,12 +23,18 @@ class ScreenshotFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     full_page: bool = commands.flag(default=False, aliases=["fp"])
 
 
-class Tools(Downloads):
+class Tools(Downloads, Reminder):
     emoji = discord.PartialEmoji(name="\U0001f6e0")
 
     @commands.command(name="screenshot", aliases=("ss",))
     async def screenshot(
-        self, ctx: commands.Context[Fishie], website: str, *, flags: ScreenshotFlags
+        self,
+        ctx: commands.Context[Fishie],
+        website: str = param(description="The website's url.", converter=URLConverter),
+        *,
+        flags: ScreenshotFlags = param(
+            description="Flags to use while screenshotting."
+        ),
     ):
         async with ctx.typing():
             async with async_playwright() as playwright:
@@ -45,4 +55,4 @@ class Tools(Downloads):
 
 
 async def setup(bot: Fishie):
-    await bot.add_cog(Tools())
+    await bot.add_cog(Tools(bot))

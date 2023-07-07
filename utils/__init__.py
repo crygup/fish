@@ -6,3 +6,7 @@ from .functions import *
 from .regexes import *
 from .types import *
 from .vars import *
+from .views import *
+from .formats import *
+from .fuzzy import *
+from .time import *
