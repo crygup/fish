@@ -55,7 +55,7 @@ async def start(testing: bool):
     logger.info("Connected to Postgres")
 
     redis = await aioredis.from_url(
-        config["databases"]["testing_redis_dsn"] if testing else "redis_dsn"
+        config["databases"]["testing_redis_dsn" if testing else "redis_dsn"] 
     )
     logger.info("Connected to Redis")
 
