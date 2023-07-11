@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, TypeVar, Union
 
 import aiohttp
 import discord
+from discord.context_managers import Typing
 from discord.ext import commands
-from utils import AuthorView
+from discord.ext.commands.context import DeferTyping
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -56,12 +57,12 @@ class ConfirmationView(discord.ui.View):
         self.stop()
 
 
-class DisambiguatorView(AuthorView, Generic[T]):
+class DisambiguatorView(discord.ui.View, Generic[T]):
     message: discord.Message
     selected: T
 
     def __init__(self, ctx: Context, data: list[T], entry: Callable[[T], Any]):
-        super().__init__(ctx)
+        super().__init__()
         self.ctx: Context = ctx
         self.data: list[T] = data
 
@@ -80,12 +81,13 @@ class DisambiguatorView(AuthorView, Generic[T]):
         self.add_item(select)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.ctx.author.id:
-            await interaction.response.send_message(
-                "This select menu is not meant for you, sorry.", ephemeral=True
-            )
-            return False
-        return True
+        if interaction.user and interaction.user.id == self.ctx.author.id:
+            return True
+
+        await interaction.response.send_message(
+            "This confirmation dialog is not for you.", ephemeral=True
+        )
+        return False
 
     async def on_select_submit(self, interaction: discord.Interaction):
         index = int(self.select.values[0])
@@ -145,6 +147,12 @@ class Context(commands.Context["Fishie"]):
         )
         await view.wait()
         return view.selected
+
+    async def typing(self, *, ephemeral: bool = False) -> Typing | DeferTyping | None:
+        try:
+            return super().typing(ephemeral=ephemeral)
+        except:
+            return
 
 
 class GuildContext(Context):

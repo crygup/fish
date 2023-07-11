@@ -42,9 +42,9 @@ class Owner(Cog):
 
         await ctx.message.add_reaction(greenTick)
 
-    async def cog_check(self, ctx: commands.Context[Fishie]) -> bool:  # type: ignore # we use fishie instead of BotT
+    async def cog_check(self, ctx: commands.Context[Fishie]) -> bool:
         return await ctx.bot.is_owner(ctx.author)
 
 
 async def setup(bot: Fishie):
-    await bot.add_cog(Owner())
+    await bot.add_cog(Owner(bot))

@@ -4,17 +4,17 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from core import Cog
 from .command_error import CommandErrors
 from .command_logs import CommandLogs
+from .spotify import Spotify
 
 if TYPE_CHECKING:
     from core import Fishie
 
 
-class Events(CommandErrors, CommandLogs, Cog):
+class Events(CommandErrors, CommandLogs, Spotify):
     emoji = discord.PartialEmoji(name="\U0001f3a7")
 
 
 async def setup(bot: Fishie):
-    await bot.add_cog(Events())
+    await bot.add_cog(Events(bot))

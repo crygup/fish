@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
 );
 
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 
 CREATE TABLE IF NOT EXISTS plonks (
     id SERIAL PRIMARY KEY,
@@ -41,3 +42,60 @@ CREATE TABLE IF NOT EXISTS command_config (
 );
 
 CREATE INDEX IF NOT EXISTS command_config_guild_id_idx ON command_config (guild_id);
+
+CREATE TABLE IF NOT EXISTS avatars (
+    id SERIAL,
+    user_id BIGINT,
+    avatar_key TEXT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    avatar TEXT,
+    PRIMARY KEY(user_id, avatar_key)
+);
+
+CREATE TABLE IF NOT EXISTS guild_avatars (
+    id SERIAL,
+    member_id BIGINT,
+    guild_id BIGINT,
+    avatar_key TEXT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    avatar TEXT,
+    PRIMARY KEY(member_id, avatar_key, guild_id)
+);
+
+CREATE TABLE IF NOT EXISTS guild_icons (
+    id SERIAL,
+    guild_id BIGINT,
+    icon_key TEXT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    icon TEXT,
+    PRIMARY KEY(icon_key, guild_id)
+);
+
+CREATE TABLE IF NOT EXISTS username_logs (
+    id SERIAL,
+    user_id BIGINT,
+    username TEXT,
+    created_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS discrim_logs (
+    id SERIAL,
+    user_id BIGINT,
+    discrim TEXT,
+    created_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS nickname_logs (
+    id SERIAL,
+    user_id BIGINT,
+    guild_id BIGINT,
+    nickname TEXT,
+    created_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS guild_name_logs (
+    id SERIAL,
+    guild_id BIGINT,
+    name TEXT,
+    created_at TIMESTAMP WITH TIME ZONE
+);

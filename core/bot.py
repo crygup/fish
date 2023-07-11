@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import pkgutil
 from logging import Logger
-from typing import TYPE_CHECKING, Any, Optional, Type, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Type, TypeVar, Union
 
 import aiohttp
 import asyncpg
@@ -17,12 +17,16 @@ from utils import MESSAGE_RE, Config, emojis
 if TYPE_CHECKING:
     from extensions.context import Context
     from extensions.tools import Tools
+    from extensions.events import Events
+    from extensions.logging import Logging
+
 FCT = TypeVar("FCT", bound="Context")
 
 
 class Fishie(commands.Bot):
     redis: aioredis.Redis[Any]
     custom_emojis = emojis
+    cached_covers: Dict[str, Tuple[str, bool]] = {}
 
     def __init__(
         self,
@@ -41,6 +45,8 @@ class Fishie(commands.Bot):
         self._extensions = [
             m.name for m in pkgutil.iter_modules(["./extensions"], prefix="extensions.")
         ]
+        self.spotify_key: Optional[str] = None
+        self.cached_covers: Dict[str, Tuple[str, bool]] = {}
         super().__init__(
             command_prefix=commands.when_mentioned_or(";"),
             intents=discord.Intents.all(),
@@ -149,4 +155,12 @@ class Fishie(commands.Bot):
 
     @property
     def tools(self) -> Optional[Tools]:
-        return self.get_cog('Tools')  # type: ignore
+        return self.get_cog("Tools")  # type: ignore
+
+    @property
+    def events(self) -> Optional[Events]:
+        return self.get_cog("Events")  # type: ignore
+
+    @property
+    def logging(self) -> Optional[Logging]:
+        return self.get_cog("Logging")  # type: ignore

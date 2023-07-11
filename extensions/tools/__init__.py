@@ -6,11 +6,15 @@ from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
+from discord.ext.commands.context import Context
 from playwright.async_api import async_playwright
 
-from .downloads import Downloads
-from .reminders import Reminder
 from utils import URLConverter
+
+from .downloads import Downloads
+from .google import Google
+from .reminders import Reminder
+from .spotify import Spotify
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -23,7 +27,7 @@ class ScreenshotFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     full_page: bool = commands.flag(default=False, aliases=["fp"])
 
 
-class Tools(Downloads, Reminder):
+class Tools(Downloads, Reminder, Google, Spotify):
     emoji = discord.PartialEmoji(name="\U0001f6e0")
 
     @commands.command(name="screenshot", aliases=("ss",))

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import datetime
+import re
 from typing import TYPE_CHECKING, Any, Optional, Union
+
 import parsedatetime as pdt
 from dateutil.relativedelta import relativedelta
-from .formats import plural, human_join
-from discord.ext import commands
 from discord import app_commands
-import re
+from discord.ext import commands
+
+from .formats import human_join, plural
 
 # Monkey patch mins and secs into the units
 units = pdt.pdtLocales["en_US"].units
@@ -16,6 +18,7 @@ units["seconds"].append("secs")
 
 if TYPE_CHECKING:
     from typing_extensions import Self
+
     from extensions.context import Context
 
 
@@ -59,7 +62,7 @@ class ShortTime:
 
         data = {k: int(v) for k, v in match.groupdict(default=0).items()}
         now = now or datetime.datetime.now(datetime.timezone.utc)
-        self.dt = now + relativedelta(**data) #type: ignore
+        self.dt = now + relativedelta(**data)  # type: ignore
         if tzinfo is not datetime.timezone.utc:
             self.dt = self.dt.astimezone(tzinfo)
 
@@ -80,7 +83,7 @@ class RelativeDelta(app_commands.Transformer, commands.Converter):
             raise ValueError("invalid time provided")
 
         data = {k: int(v) for k, v in match.groupdict(default=0).items()}
-        return relativedelta(**data) #type: ignore
+        return relativedelta(**data)  # type: ignore
 
     async def convert(self, ctx: Context, argument: str) -> relativedelta:
         try:
@@ -107,12 +110,12 @@ class HumanTime:
     ):
         now = now or datetime.datetime.now(tzinfo)
         dt, status = self.calendar.parseDT(argument, sourceTime=now, tzinfo=None)
-        if not status.hasDateOrTime: #type: ignore
+        if not status.hasDateOrTime:  # type: ignore
             raise commands.BadArgument(
                 'invalid time provided, try e.g. "tomorrow" or "3 days"'
             )
 
-        if not status.hasTime: #type: ignore
+        if not status.hasTime:  # type: ignore
             # replace it with the current time
             dt = dt.replace(
                 hour=now.hour,
@@ -254,7 +257,7 @@ class UserFriendlyTime(commands.Converter):
         if match is not None and match.group(0):
             data = {k: int(v) for k, v in match.groupdict(default=0).items()}
             remaining = argument[match.end() :].strip()
-            dt = now + relativedelta(**data) #type: ignore
+            dt = now + relativedelta(**data)  # type: ignore
             result = FriendlyTimeResult(dt.astimezone(tzinfo))
             await result.ensure_constraints(ctx, self, now, remaining)
             return result

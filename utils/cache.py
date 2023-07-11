@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 import enum
 import time
-
 from functools import wraps
-from typing import Any, Callable, Coroutine, MutableMapping, TypeVar, Protocol
+from typing import Any, Callable, Coroutine, MutableMapping, Protocol, TypeVar
 
 from lru import LRU
 
@@ -134,11 +133,11 @@ def cache(
                 except KeyError:
                     continue
 
-        wrapper.cache = _internal_cache # type: ignore
-        wrapper.get_key = lambda *args, **kwargs: _make_key(args, kwargs) # type: ignore
-        wrapper.invalidate = _invalidate # type: ignore
-        wrapper.get_stats = _stats # type: ignore
-        wrapper.invalidate_containing = _invalidate_containing # type: ignore
+        wrapper.cache = _internal_cache  # type: ignore
+        wrapper.get_key = lambda *args, **kwargs: _make_key(args, kwargs)  # type: ignore
+        wrapper.invalidate = _invalidate  # type: ignore
+        wrapper.get_stats = _stats  # type: ignore
+        wrapper.invalidate_containing = _invalidate_containing  # type: ignore
         return wrapper  # type: ignore
 
     return decorator

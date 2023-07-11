@@ -1,7 +1,13 @@
-from typing import ParamSpec, TypedDict, TypeVar
+from typing import List, ParamSpec, TypedDict, TypeVar
 
 T = TypeVar("T")
 P = ParamSpec("P")
+
+
+class Webhooks(TypedDict):
+    avatars: List[str]
+    images: List[str]
+    icons: List[str]
 
 
 class Databases(TypedDict):
@@ -16,6 +22,10 @@ class Keys(TypedDict):
     fishie_api: str
     lastfm: str
     lastfm_secret: str
+    google: List[str]
+    google_id: str
+    spotify_id: str
+    spotify_secret: str
 
 
 class ConfigTokens(TypedDict):
@@ -28,3 +38,4 @@ class Config(TypedDict):
     tokens: ConfigTokens
     keys: Keys
     databases: Databases
+    webhooks: Webhooks

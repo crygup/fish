@@ -25,4 +25,4 @@ class Owner(Cog):
 
 
 async def setup(bot: Fishie):
-    await bot.add_cog(Owner())
+    await bot.add_cog(Owner(bot))

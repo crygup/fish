@@ -3,7 +3,7 @@
 import secrets
 from typing import Any, Dict
 
-import yt_dlp  # type: ignore # no stub file for library
+import yt_dlp
 
 from .errors import DownloadError, InvalidWebsite, VideoIsLive
 from .functions import to_thread
@@ -54,7 +54,7 @@ def download(url: str, format: str = "mp4"):
 
     with yt_dlp.YoutubeDL(options) as ydl:
         try:
-            ydl.download(video)  # type: ignore # yt_dlp library isn't typed
+            ydl.download(video)
         except ValueError as e:
             raise DownloadError(str(e))
 

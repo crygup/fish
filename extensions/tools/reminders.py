@@ -1,27 +1,30 @@
 from __future__ import annotations
-import random
-from typing import TYPE_CHECKING, Any, Optional, Sequence, NamedTuple
-from typing_extensions import Annotated
 
-from utils import time, formats, cache, fuzzy
-from discord.ext import commands
-from discord import app_commands
-from lxml import etree
+import asyncio
+import datetime
+import random
+import textwrap
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional, Sequence
+
+import asyncpg
 
 # TODO: replace with ZoneInfo when upgrading to 3.9
 import dateutil.tz
-from dateutil.zoneinfo import get_zonefile_instance
 import discord
-import asyncio
-import asyncpg
-import datetime
-import textwrap
+from dateutil.zoneinfo import get_zonefile_instance
+from discord import app_commands
+from discord.ext import commands
+from lxml import etree
+from typing_extensions import Annotated
+
 from core import Cog
+from utils import cache, formats, fuzzy, time
 
 if TYPE_CHECKING:
     from typing_extensions import Self
-    from extensions.context import Context
+
     from core.bot import Fishie
+    from extensions.context import Context
 
 
 class MaybeAcquire:

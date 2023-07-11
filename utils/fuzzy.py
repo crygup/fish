@@ -10,19 +10,19 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from __future__ import annotations
 
-import re
 import heapq
+import re
+from difflib import SequenceMatcher
 from typing import (
     Callable,
+    Generator,
     Iterable,
     Literal,
     Optional,
     Sequence,
     TypeVar,
-    Generator,
     overload,
 )
-from difflib import SequenceMatcher
 
 T = TypeVar("T")
 

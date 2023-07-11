@@ -1,6 +1,8 @@
 from __future__ import annotations
-import discord
+
 from typing import TYPE_CHECKING, Optional
+
+import discord
 
 if TYPE_CHECKING:
     from extensions.context import Context

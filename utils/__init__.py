@@ -2,11 +2,12 @@ from .converters import *
 from .downloads import *
 from .emojis import *
 from .errors import *
+from .formats import *
 from .functions import *
+from .fuzzy import *
+from .paginator import *
 from .regexes import *
+from .time import *
 from .types import *
 from .vars import *
 from .views import *
-from .formats import *
-from .fuzzy import *
-from .time import *
