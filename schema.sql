@@ -78,6 +78,13 @@ CREATE TABLE IF NOT EXISTS username_logs (
     created_at TIMESTAMP WITH TIME ZONE
 );
 
+CREATE TABLE IF NOT EXISTS display_name_logs (
+    id SERIAL,
+    user_id BIGINT,
+    display_name TEXT,
+    created_at TIMESTAMP WITH TIME ZONE
+);
+
 CREATE TABLE IF NOT EXISTS discrim_logs (
     id SERIAL,
     user_id BIGINT,
@@ -98,4 +105,33 @@ CREATE TABLE IF NOT EXISTS guild_name_logs (
     guild_id BIGINT,
     name TEXT,
     created_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS guild_icons (
+    id SERIAL,
+    guild_id BIGINT,
+    icon_key TEXT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    icon TEXT,
+    PRIMARY KEY(icon_key, guild_id)
+);
+
+CREATE TABLE IF NOT EXISTS status_logs (
+    id SERIAL,
+    user_id BIGINT,
+    status_name TEXT,
+    guild_id BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS opted_out (
+    user_id BIGINT,
+    items TEXT[],
+    PRIMARY KEY (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS guild_opted_out (
+    guild_id BIGINT,
+    items TEXT[],
+    PRIMARY KEY (guild_id)
 );

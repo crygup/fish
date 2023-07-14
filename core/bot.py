@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import pkgutil
 from logging import Logger
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Type, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
 import aiohttp
 import asyncpg
@@ -16,9 +16,9 @@ from utils import MESSAGE_RE, Config, emojis
 
 if TYPE_CHECKING:
     from extensions.context import Context
-    from extensions.tools import Tools
     from extensions.events import Events
     from extensions.logging import Logging
+    from extensions.tools import Tools
 
 FCT = TypeVar("FCT", bound="Context")
 
@@ -27,6 +27,7 @@ class Fishie(commands.Bot):
     redis: aioredis.Redis[Any]
     custom_emojis = emojis
     cached_covers: Dict[str, Tuple[str, bool]] = {}
+    pokemon: List[str]
 
     def __init__(
         self,
@@ -40,7 +41,6 @@ class Fishie(commands.Bot):
         self.pool = pool
         self.session = session
         self.start_time: datetime.datetime
-        self.embed_color = 0x2B2D31
         self.context_cls: Type[commands.Context[Fishie]] = commands.Context
         self._extensions = [
             m.name for m in pkgutil.iter_modules(["./extensions"], prefix="extensions.")
@@ -91,7 +91,7 @@ class Fishie(commands.Bot):
 
     async def on_ready(self):
         if not hasattr(self, "start_time"):
-            self.uptime = discord.utils.utcnow()
+            self.start_time = discord.utils.utcnow()
             self.logger.info(f"Logged into {str(self.user)}")
 
     async def fetch_message(
@@ -153,6 +153,20 @@ class Fishie(commands.Bot):
                 await self.redis.set(f"fm:{user_id}", fm)
                 self.logger.info(f'Added user "{user_id}"\'s last.fm account "{fm}"')
 
+        opted_out = await self.pool.fetch("SELECT * FROM opted_out")
+        for row in opted_out:
+            for item in row["items"]:
+                user_id = row["user_id"]
+                await self.redis.sadd(f"opted_out:{user_id}", item)
+                self.logger.info(f'Added "{item}" to opted out for user "{user_id}"')
+
+        guild_opted_out = await self.pool.fetch("SELECT * FROM guild_opted_out")
+        for row in guild_opted_out:
+            for item in row["items"]:
+                guild_id = row["guild_id"]
+                await self.redis.sadd(f"guild_opted_out:{guild_id}", item)
+                self.logger.info(f'Added "{item}" to opted out for guild "{guild_id}"')
+
     @property
     def tools(self) -> Optional[Tools]:
         return self.get_cog("Tools")  # type: ignore
@@ -164,3 +178,7 @@ class Fishie(commands.Bot):
     @property
     def logging(self) -> Optional[Logging]:
         return self.get_cog("Logging")  # type: ignore
+
+    @property
+    def embedcolor(self) -> int:
+        return 0x2B2D31

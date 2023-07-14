@@ -7,26 +7,20 @@ from discord.ext import commands
 
 from core import Cog
 
+from .logging import Logging
+
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context
 
 
-class Owner(Cog):
+class Settings(Logging):
     emoji = discord.PartialEmoji(name="\U00002699\U0000fe0f")
 
     def __init__(self, bot: Fishie):
         super().__init__()
         self.bot = bot
 
-    @commands.command(name="command")
-    async def command(self, ctx: Context):
-        await ctx.send("Hello world!")
-
-    @commands.Cog.listener("on_message")
-    async def on_message(self, message: discord.Message):
-        print(f"A message was sent! (ID: {message.id})")
-
 
 async def setup(bot: Fishie):
-    await bot.add_cog(Owner(bot))
+    await bot.add_cog(Settings(bot))

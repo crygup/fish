@@ -5,8 +5,9 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
 import discord
 from discord import app_commands
 from discord.ext import commands
+
 from core import Cog
-from utils import to_image, response_checker, get_sp_cover
+from utils import get_sp_cover, response_checker, to_image
 
 if TYPE_CHECKING:
     from extensions.context import Context

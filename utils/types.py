@@ -30,7 +30,7 @@ class Keys(TypedDict):
 
 class ConfigTokens(TypedDict):
     bot: str
-    evi: str
+    testing_bot: str
 
 
 class Config(TypedDict):

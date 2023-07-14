@@ -4,6 +4,7 @@ import re
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union
 
 from discord.ext import commands
+
 from .functions import response_checker
 from .vars import SpotifySearchData
 

@@ -1,5 +1,4 @@
 git+https://github.com/gorialis/jishaku
-git+https://github.com/blanketsucks/lastfm.git
 git+https://github.com/Rapptz/discord-ext-menus
 discord
 isort
@@ -13,3 +12,5 @@ playwright
 lxml
 parsedatetime
 lru-dict
+Pillow
+pandas

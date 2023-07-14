@@ -8,8 +8,8 @@ import tomllib
 import aiohttp
 from redis import asyncio as aioredis
 
-from core import Fishie, create_pool
-from utils import Config, base_header
+from core import Fishie
+from utils import Config, base_header, create_pool
 
 
 async def start(testing: bool):
@@ -55,7 +55,9 @@ async def start(testing: bool):
     logger.info("Connected to Postgres")
 
     redis = await aioredis.from_url(
-        config["databases"]["testing_redis_dsn" if testing else "redis_dsn"]
+        config["databases"]["testing_redis_dsn" if testing else "redis_dsn"],
+        encoding="utf-8",
+        decode_responses=True,
     )
     logger.info("Connected to Redis")
 
@@ -64,7 +66,9 @@ async def start(testing: bool):
         Fishie(config=config, logger=logger, pool=pool, session=session) as bot,
     ):
         bot.redis = redis
-        await bot.start(config["tokens"]["bot"])
+        await bot.start(
+            config["tokens"]["testing_bot"] if testing else config["tokens"]["bot"]
+        )
 
 
 if __name__ == "__main__":

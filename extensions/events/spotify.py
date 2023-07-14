@@ -3,10 +3,9 @@ from __future__ import annotations
 import base64
 from typing import TYPE_CHECKING, Any, Dict
 
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from core import Cog
-from discord.ext import tasks
 
 if TYPE_CHECKING:
     from core import Fishie

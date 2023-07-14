@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-from io import BytesIO
+import json
+import math
 import textwrap
-from typing import Awaitable, Callable, Sequence, TYPE_CHECKING, Tuple
+from io import BytesIO
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Sequence, Tuple
 
-from aiohttp import ClientResponse
 import aiohttp
+import asyncpg
+import discord
+import pandas as pd
+from aiohttp import ClientResponse
 from discord.ext import commands
+from PIL import Image, ImageSequence
 
 from .types import P, T
 
@@ -20,6 +26,30 @@ def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
         return await asyncio.to_thread(func, *args, **kwargs)
 
     return wrapper
+
+
+async def create_pool(connection_url: str) -> "asyncpg.Pool[asyncpg.Record]":
+    def _encode_jsonb(value: Any) -> Any:
+        return json.dumps(value)
+
+    def _decode_jsonb(value: Any) -> Any:
+        return json.loads(value)
+
+    async def init(con: "asyncpg.Connection[Any]"):
+        await con.set_type_codec(
+            "jsonb",
+            schema="pg_catalog",
+            encoder=_encode_jsonb,
+            decoder=_decode_jsonb,
+            format="text",
+        )
+
+    connection = await asyncpg.create_pool(connection_url, init=init)
+
+    if connection is None:
+        raise Exception("Failed to connect to database")
+
+    return connection
 
 
 def human_join(seq: Sequence[str], delim=", ", final="or", spaces: bool = True) -> str:
@@ -119,3 +149,83 @@ async def to_image(
         data = await resp.read()
 
         return data if bytes else BytesIO(data)
+
+
+# https://github.com/CuteFwan/Koishi/blob/master/cogs/utils/images.py#L4-L34
+def resize_to_limit(data: BytesIO, limit: int) -> BytesIO:
+    """
+    Downsize it for huge PIL images.
+    Half the resolution until the byte count is within the limit.
+    """
+    current_size = data.getbuffer().nbytes
+    while current_size > limit:
+        with Image.open(data) as im:
+            data = BytesIO()
+            if im.format == "PNG":
+                im = im.resize(tuple([i // 2 for i in im.size]), resample=Image.BICUBIC)
+                im.save(data, "png")
+            elif im.format == "GIF":
+                durations = []
+                new_frames = []
+                for frame in ImageSequence.Iterator(im):
+                    durations.append(frame.info["duration"])
+                    new_frames.append(
+                        frame.resize([i // 2 for i in im.size], resample=Image.BICUBIC)
+                    )
+                new_frames[0].save(
+                    data,
+                    save_all=True,
+                    append_images=new_frames[1:],
+                    format="gif",
+                    version=im.info["version"],
+                    duration=durations,
+                    loop=0,
+                    transparency=0,
+                    background=im.info["background"],
+                    palette=im.getpalette(),
+                )
+            data.seek(0)
+            current_size = data.getbuffer().nbytes
+    return data
+
+
+# https://github.com/CuteFwan/Koishi/blob/master/cogs/avatar.py#L82-L102
+@to_thread
+def format_bytes(filesize_limit: int, images: List[bytes]) -> BytesIO:
+    xbound = math.ceil(math.sqrt(len(images)))
+    ybound = math.ceil(len(images) / xbound)
+    size = int(2520 / xbound)
+
+    with Image.new(
+        "RGBA", size=(xbound * size, ybound * size), color=(0, 0, 0, 0)
+    ) as base:
+        x, y = 0, 0
+        for avy in images:
+            if avy:
+                im = Image.open(BytesIO(avy)).resize(
+                    (size, size), resample=Image.BICUBIC
+                )
+                base.paste(im, box=(x * size, y * size))
+            if x < xbound - 1:
+                x += 1
+            else:
+                x = 0
+                y += 1
+        buffer = BytesIO()
+        base.save(buffer, "png")
+        buffer.seek(0)
+        buffer = resize_to_limit(buffer, filesize_limit)
+        return buffer
+
+
+def format_status(member: discord.Member) -> str:
+    return f'{"on " if member.status is discord.Status.dnd else ""}{member.raw_status}'
+
+
+@to_thread
+def update_pokemon(bot: Fishie):
+    url = "https://raw.githubusercontent.com/poketwo/data/master/csv/pokemon.csv"
+    data = pd.read_csv(url)
+    pokemon = [str(p).lower() for p in data["name.en"]]
+
+    bot.pokemon = pokemon

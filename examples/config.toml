@@ -1,12 +1,17 @@
 owner_id=1
 
 [tokens]
-bot = ''
+bot=""
+testing_bot=""
 
 [keys]
-fishie_api=''
-lastfm=''
-lastfm_secret=''
+fishie_api=""
+lastfm=""
+lastfm_secret=""
+google=""
+google_id=""
+spotify_id=""
+spotify_secret=""
 
 [databases]
 postgre_dsn=""
@@ -14,3 +19,11 @@ testing_postgre_dsn=""
 
 redis_dsn=""
 testing_redis_dsn=""
+
+[webhooks]
+avatars=[]
+
+images=[]
+
+
+icons=[]

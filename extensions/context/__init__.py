@@ -148,7 +148,9 @@ class Context(commands.Context["Fishie"]):
         await view.wait()
         return view.selected
 
-    async def typing(self, *, ephemeral: bool = False) -> Typing | DeferTyping | None:
+    async def trigger_typing(
+        self, *, ephemeral: bool = False
+    ) -> Typing | DeferTyping | None:
         try:
             return super().typing(ephemeral=ephemeral)
         except:
@@ -158,6 +160,7 @@ class Context(commands.Context["Fishie"]):
 class GuildContext(Context):
     author: discord.Member
     channel: discord.abc.GuildChannel
+    guild: discord.Guild
 
 
 async def setup(bot: "Fishie") -> None:
