@@ -94,3 +94,20 @@ class User(Cog):
             return
 
         await self.add_status(after_m)
+
+    async def add_join(self, member: discord.Member):
+        sql = """
+        INSERT INTO member_join_logs(user_id, guild_id, time)
+        VALUES($1, $2, $3)
+        """
+
+        await self.bot.pool.execute(
+            sql, member.id, member.guild.id, discord.utils.utcnow()
+        )
+
+    @commands.Cog.listener("on_member_join")
+    async def join_log(self, _, after_m: discord.Member):
+        if "joins" in await self.bot.redis.smembers(f"opted_out:{after_m.id}"):
+            return
+
+        await self.add_join(after_m)

@@ -129,6 +129,7 @@ class Logging(Cog):
             "display": ["Display name logging", "\U0001f7e2"],
             "nickname": ["Nickname logging", "\U0001f7e2"],
             "discrim": ["Discriminator logging", "\U0001f7e2"],
+            "joins": ["Server join logging", "\U0001f7e2"],
         }
 
         if bool(records):

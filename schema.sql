@@ -17,8 +17,8 @@ CREATE TABLE IF NOT EXISTS reminders (
 CREATE INDEX IF NOT EXISTS reminders_expires_idx ON reminders (expires);
 
 CREATE TABLE IF NOT EXISTS user_settings (
-    user_id BIGINT PRIMARY KEY, -- The discord user ID
-    timezone TEXT -- The user's timezone
+    user_id BIGINT PRIMARY KEY,
+    timezone TEXT 
 );
 
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
@@ -135,3 +135,18 @@ CREATE TABLE IF NOT EXISTS guild_opted_out (
     items TEXT[],
     PRIMARY KEY (guild_id)
 );
+
+CREATE TABLE IF NOT EXISTS member_join_logs (
+    id SERIAL,
+    member_id BIGINT,
+    guild_id BIGINT,
+    time TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS guild_join_logs (
+    guild_id BIGINT,
+    owner_id BIGINT,
+    time TIMESTAMP WITH TIME ZONE
+);
+
+ALTER TABLE guild_join_logs ADD COLUMN IF NOT EXISTS owner_id BIGINT;
