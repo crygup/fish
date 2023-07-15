@@ -90,7 +90,9 @@ class Guild(Cog):
         INSERT INTO guild_join_logs(guild_id, owner_id, time)
         VALUES($1, $2, $3)"""
 
-        await self.bot.pool.execute(sql, guild.id, guild.owner_id, discord.utils.utcnow())
+        await self.bot.pool.execute(
+            sql, guild.id, guild.owner_id, discord.utils.utcnow()
+        )
 
     @commands.Cog.listener("on_guild_join")
     async def guild_join(self, _, after_g: discord.Guild):

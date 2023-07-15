@@ -9,6 +9,7 @@ from core import Cog
 
 from .logging import Logging
 from .server import Server
+
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context

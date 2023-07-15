@@ -5,7 +5,16 @@ import json
 import math
 import textwrap
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import aiohttp
 import asyncpg
@@ -229,6 +238,7 @@ def update_pokemon(bot: Fishie):
     pokemon = [str(p).lower() for p in data["name.en"]]
 
     bot.pokemon = pokemon
+
 
 async def get_or_fetch_user(bot: Fishie, user_id: int) -> discord.User:
     user = bot.get_user(user_id)

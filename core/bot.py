@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from extensions.events import Events
     from extensions.logging import Logging
     from extensions.tools import Tools
+    from extensions.settings import Settings
 
 FCT = TypeVar("FCT", bound="Context")
 
@@ -31,16 +32,17 @@ async def get_prefix(bot: Fishie, message: discord.Message) -> List[str]:
         return commands.when_mentioned_or(*default)(bot, message)
 
     prefixes = await bot.redis.smembers(f"prefixes:{message.guild.id}")
-    
+
     packed = default + list(prefixes)
 
-    comp = re.compile("^(" + "|".join(map(re.escape, packed)) + ").*", flags=re.I)  
+    comp = re.compile("^(" + "|".join(map(re.escape, packed)) + ").*", flags=re.I)
     match = comp.match(message.content)
 
     if match:
         return commands.when_mentioned_or(*[match.group(1)])(bot, message)
 
     return commands.when_mentioned_or(*packed)(bot, message)
+
 
 class Fishie(commands.Bot):
     redis: aioredis.Redis[Any]
@@ -71,7 +73,7 @@ class Fishie(commands.Bot):
         super().__init__(
             command_prefix=get_prefix,
             intents=discord.Intents.all(),
-            strip_after_prefix=True
+            strip_after_prefix=True,
         )
 
     async def load_extensions(self):
@@ -171,7 +173,7 @@ class Fishie(commands.Bot):
             prefix = record["prefix"]
             await self.redis.sadd(f"prefixes:{guild_id}", prefix)
             self.logger.info(f'Added prefix "{prefix}" to "{guild_id}"')
-        
+
         accounts = await self.pool.fetch("""SELECT * FROM accounts""")
 
         for record in accounts:
@@ -207,6 +209,10 @@ class Fishie(commands.Bot):
     @property
     def logging(self) -> Optional[Logging]:
         return self.get_cog("Logging")  # type: ignore
+
+    @property
+    def settings(self) -> Optional[Settings]:
+        return self.get_cog("Settings")  # type: ignore
 
     @property
     def embedcolor(self) -> int:

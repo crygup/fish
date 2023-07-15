@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional, Union
+import discord
 
 from discord.abc import Messageable
 from discord.ext import commands
@@ -35,17 +36,21 @@ class Owner(Cog):
     async def message(
         self,
         ctx: commands.Context[Fishie],
-        channel: Messageable,
+        channel: Optional[Union[Messageable, discord.User]] = commands.CurrentChannel,
         *,
         text: str,
     ):
         """Send a message"""
+        channel = channel or ctx.channel
         await channel.send(text)
 
         await ctx.message.add_reaction(greenTick)
 
     async def cog_check(self, ctx: commands.Context[Fishie]) -> bool:
-        return await ctx.bot.is_owner(ctx.author)
+        if await ctx.bot.is_owner(ctx.author):
+            return True
+        
+        raise commands.BadArgument("You are not allowed to use this command.")
 
 
 async def setup(bot: Fishie):

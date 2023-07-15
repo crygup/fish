@@ -39,7 +39,7 @@ class Tools(Downloads, Reminder, Google, Spotify):
         flags: ScreenshotFlags = param(
             description="Flags to use while screenshotting."
         ),
-    ):  
+    ):
         """Screenshot a website from the internet"""
         async with ctx.typing():
             async with async_playwright() as playwright:
