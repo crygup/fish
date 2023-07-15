@@ -150,3 +150,19 @@ CREATE TABLE IF NOT EXISTS guild_join_logs (
 );
 
 ALTER TABLE guild_join_logs ADD COLUMN IF NOT EXISTS owner_id BIGINT;
+
+CREATE TABLE IF NOT EXISTS guild_prefixes (
+    guild_id BIGINT,
+    prefix TEXT,
+    author_id BIGINT,
+    time TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (guild_id, prefix)
+);
+
+CREATE TABLE IF NOT EXISTS guild_settings (
+    guild_id BIGINT,
+    auto_download BIGINT,
+    poketwo BOOLEAN DEFAULT FALSE,
+    auto_reactions BOOLEAN DEFAULT FALSE,
+    PRIMARY KEY (guild_id)
+);

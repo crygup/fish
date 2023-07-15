@@ -24,6 +24,7 @@ class Owner(Cog):
         *,
         text: str,
     ):
+        """Reply to a message"""
         _message = await ctx.bot.fetch_message(message=message, channel=channel)
 
         await _message.reply(text)
@@ -38,6 +39,7 @@ class Owner(Cog):
         *,
         text: str,
     ):
+        """Send a message"""
         await channel.send(text)
 
         await ctx.message.add_reaction(greenTick)

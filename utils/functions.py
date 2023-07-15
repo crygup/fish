@@ -5,7 +5,7 @@ import json
 import math
 import textwrap
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Optional, Sequence, Tuple
 
 import aiohttp
 import asyncpg
@@ -229,3 +229,25 @@ def update_pokemon(bot: Fishie):
     pokemon = [str(p).lower() for p in data["name.en"]]
 
     bot.pokemon = pokemon
+
+async def get_or_fetch_user(bot: Fishie, user_id: int) -> discord.User:
+    user = bot.get_user(user_id)
+
+    if user is None:
+        user = await bot.fetch_user(user_id)
+
+    return user
+
+
+async def get_or_fetch_member(
+    guild: discord.Guild, member_id: int
+) -> Optional[discord.Member]:
+    member = guild.get_member(member_id)
+    if member is not None:
+        return member
+
+    members = await guild.query_members(limit=1, user_ids=[member_id], cache=True)
+    if not members:
+        return None
+
+    return members[0]

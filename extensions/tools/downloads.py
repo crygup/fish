@@ -32,6 +32,7 @@ class Downloads(Cog):
     async def download(
         self, ctx: commands.Context[Fishie], url: str, *, flags: DownloadFlags
     ):
+        """Download a video off the internet"""
         async with ctx.typing(ephemeral=True):
             filename = await download(url, flags.format)
 

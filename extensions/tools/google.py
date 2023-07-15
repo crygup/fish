@@ -89,6 +89,7 @@ class Google(Cog):
         extras={"google-command": True},
     )
     async def google_image(self, ctx: Context, *, query: str):
+        """Search google images"""
         url = f"https://customsearch.googleapis.com/customsearch/v1"
         params = {
             "cx": self.bot.config["keys"]["google_id"],
@@ -165,6 +166,7 @@ class Google(Cog):
     )
     @app_commands.describe(query="Video to search for")
     async def youtube(self, ctx: Context, *, query: str):
+        """Look up something on youtube"""
         await self.search_method(ctx, query, "video")
 
     @youtube.command(

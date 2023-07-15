@@ -242,6 +242,7 @@ class Commands(Cog):
         *,
         member: discord.Member = commands.param(default=lambda ctx: ctx.bot.user),
     ):
+        """Shows how long someone has been online"""
         if self.bot.user and self.bot.user.id == member.id:
             await ctx.send(
                 f"Hi, I have been awake for {human_timedelta(self.bot.start_time, suffix=False)}"

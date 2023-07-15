@@ -63,7 +63,7 @@ async def start(testing: bool):
 
     async with (
         aiohttp.ClientSession(headers=base_header) as session,
-        Fishie(config=config, logger=logger, pool=pool, session=session) as bot,
+        Fishie(config=config, logger=logger, pool=pool, session=session, testing=testing) as bot,
     ):
         bot.redis = redis
         await bot.start(

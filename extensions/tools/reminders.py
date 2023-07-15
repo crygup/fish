@@ -499,7 +499,7 @@ class Reminder(Cog):
             time.UserFriendlyTime(commands.clean_content, default="…"),
         ],
     ):
-        """Reminds you of something after a certain amount of time.
+        """Reminds you of something after a certain amount of time
 
         The input can be any direct date (e.g. YYYY-MM-DD) or a human
         readable offset. Examples:
@@ -668,7 +668,7 @@ class Reminder(Cog):
 
     @commands.hybrid_group()
     async def timezone(self, ctx: Context):
-        """Commands related to managing or retrieving timezone info."""
+        """Commands related to managing or retrieving timezone info"""
         await ctx.send_help(ctx.command)
 
     @timezone.command(name="set")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import pkgutil
 from logging import Logger
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
 import aiohttp
@@ -23,6 +24,24 @@ if TYPE_CHECKING:
 FCT = TypeVar("FCT", bound="Context")
 
 
+async def get_prefix(bot: Fishie, message: discord.Message) -> List[str]:
+    default = ["fish "] if not bot.testing else [";"]
+
+    if message.guild is None:
+        return commands.when_mentioned_or(*default)(bot, message)
+
+    prefixes = await bot.redis.smembers(f"prefixes:{message.guild.id}")
+    
+    packed = default + list(prefixes)
+
+    comp = re.compile("^(" + "|".join(map(re.escape, packed)) + ").*", flags=re.I)  
+    match = comp.match(message.content)
+
+    if match:
+        return commands.when_mentioned_or(*[match.group(1)])(bot, message)
+
+    return commands.when_mentioned_or(*packed)(bot, message)
+
 class Fishie(commands.Bot):
     redis: aioredis.Redis[Any]
     custom_emojis = emojis
@@ -35,6 +54,7 @@ class Fishie(commands.Bot):
         logger: Logger,
         pool: "asyncpg.Pool[asyncpg.Record]",
         session: aiohttp.ClientSession,
+        testing: bool = False,
     ):
         self.config: Config = config
         self.logger: Logger = logger
@@ -47,9 +67,11 @@ class Fishie(commands.Bot):
         ]
         self.spotify_key: Optional[str] = None
         self.cached_covers: Dict[str, Tuple[str, bool]] = {}
+        self.testing: bool = testing
         super().__init__(
-            command_prefix=commands.when_mentioned_or(";"),
+            command_prefix=get_prefix,
             intents=discord.Intents.all(),
+            strip_after_prefix=True
         )
 
     async def load_extensions(self):
@@ -142,10 +164,17 @@ class Fishie(commands.Bot):
         self.logger.info("Closed aiohttp session")
 
     async def populate_cache(self):
-        sql = """SELECT * FROM accounts"""
-        results = await self.pool.fetch(sql)
+        prefixes = await self.pool.fetch("""SELECT * FROM guild_prefixes""")
 
-        for record in results:
+        for record in prefixes:
+            guild_id = record["guild_id"]
+            prefix = record["prefix"]
+            await self.redis.sadd(f"prefixes:{guild_id}", prefix)
+            self.logger.info(f'Added prefix "{prefix}" to "{guild_id}"')
+        
+        accounts = await self.pool.fetch("""SELECT * FROM accounts""")
+
+        for record in accounts:
             user_id = record["user_id"]
             fm = record["last_fm"]
 

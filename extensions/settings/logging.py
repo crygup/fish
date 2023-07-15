@@ -120,6 +120,7 @@ class DropdownView(AuthorView):
 class Logging(Cog):
     @commands.hybrid_group(name="logging", fallback="user", invoke_without_command=True)
     async def logging(self, ctx: Context):
+        """Manage your logging settings for the bot"""
         sql = """SELECT * FROM opted_out WHERE user_id = $1"""
         records = await self.bot.pool.fetchrow(sql, ctx.author.id)
         data = {
@@ -143,6 +144,7 @@ class Logging(Cog):
     @commands.guild_only()
     @commands.has_guild_permissions(administrator=True)
     async def logging_server(self, ctx: GuildContext):
+        """Manage logging for the server"""
         sql = """SELECT * FROM guild_opted_out WHERE guild_id = $1"""
         records = await self.bot.pool.fetchrow(sql, ctx.guild.id)
         data = {
