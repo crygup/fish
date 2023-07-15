@@ -128,13 +128,13 @@ class Server(Cog):
         """
 
         await self.bot.pool.execute(sql, channel.guild.id, channel.id)
-        await self.bot.redis.sadd(f"auto_downloads", channel.id)
+        await self.bot.redis.sadd("auto_downloads", channel.id)
 
     async def remove_adl_channel(self, channel: discord.TextChannel):
         sql = """UPDATE guild_settings SET auto_download = NULL WHERE guild_id = $1"""
 
         await self.bot.pool.execute(sql, channel.guild.id)
-        await self.bot.redis.srem("auto_download_channels", str(channel.id))
+        await self.bot.redis.srem("auto_downloads", str(channel.id))
 
     @commands.hybrid_group(
         name="auto-download",

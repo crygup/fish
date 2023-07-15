@@ -49,7 +49,7 @@ class Owner(Cog):
     async def cog_check(self, ctx: commands.Context[Fishie]) -> bool:
         if await ctx.bot.is_owner(ctx.author):
             return True
-        
+
         raise commands.BadArgument("You are not allowed to use this command.")
 
 

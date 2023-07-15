@@ -43,6 +43,6 @@ class Downloads(Cog):
         await ctx.send(file=file, ephemeral=True)
 
         try:
-            os.remove(r".\files\downloads\{filename}")
+            os.remove(rf".\files\downloads\{filename}")
         except:
             pass

@@ -1,13 +1,15 @@
-# main file for download utils
-
+from __future__ import annotations
 import secrets
-from typing import Any, Dict
+from typing import Any, Dict, TYPE_CHECKING, Optional
 
 import yt_dlp
 
 from .errors import DownloadError, InvalidWebsite, VideoIsLive
 from .functions import to_thread
 from .regexes import SOUNDCLOUD_RE, TIKTOK_RE, VIDEOS_RE
+
+if TYPE_CHECKING:
+    from core import Fishie
 
 
 def match_filter(info: Dict[Any, Any]):
@@ -16,7 +18,7 @@ def match_filter(info: Dict[Any, Any]):
 
 
 @to_thread
-def download(url: str, format: str = "mp4"):
+def download(url: str, format: str = "mp4", bot: Optional[Fishie] = None):
     name = secrets.token_urlsafe(8)
     video_match = VIDEOS_RE.search(url)
     audio = False
@@ -55,7 +57,12 @@ def download(url: str, format: str = "mp4"):
     with yt_dlp.YoutubeDL(options) as ydl:
         try:
             ydl.download(video)
+            if bot:
+                bot.current_downloads.append(f"{name}.{format}")
         except ValueError as e:
             raise DownloadError(str(e))
 
+    if bot:
+        bot.logger.info(f"Downloaded video: {name}.{format}")
+        
     return f"{name}.{format}"

@@ -70,6 +70,7 @@ class Fishie(commands.Bot):
         self.spotify_key: Optional[str] = None
         self.cached_covers: Dict[str, Tuple[str, bool]] = {}
         self.testing: bool = testing
+        self.current_downloads: List[str] = []
         super().__init__(
             command_prefix=get_prefix,
             intents=discord.Intents.all(),
@@ -197,6 +198,14 @@ class Fishie(commands.Bot):
                 guild_id = row["guild_id"]
                 await self.redis.sadd(f"guild_opted_out:{guild_id}", item)
                 self.logger.info(f'Added "{item}" to opted out for guild "{guild_id}"')
+
+        guild_settings = await self.pool.fetch("SELECT * FROM guild_settings")
+        for row in guild_settings:
+            guild_id = row["guild_id"]
+            adl = row["auto_download"]
+            if adl:
+                await self.redis.sadd("auto_downloads", adl)
+                self.logger.info(f'Added auto download channel "{adl}" to guild "{guild_id}"')
 
     @property
     def tools(self) -> Optional[Tools]:
