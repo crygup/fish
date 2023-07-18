@@ -4,3 +4,4 @@ __pycache__/
 .env
 *.log
 /.vscode
+/twitter-cookies.txt

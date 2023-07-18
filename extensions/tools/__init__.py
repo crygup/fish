@@ -28,6 +28,8 @@ class ScreenshotFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
 
 
 class Tools(Downloads, Reminder, Google, Spotify):
+    """Quality of life tools"""
+
     emoji = discord.PartialEmoji(name="\U0001f6e0")
 
     @commands.command(name="screenshot", aliases=("ss",))

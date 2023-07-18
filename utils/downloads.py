@@ -1,12 +1,14 @@
 from __future__ import annotations
+
 import secrets
-from typing import Any, Dict, TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import yt_dlp
+from discord.ext import commands
 
 from .errors import DownloadError, InvalidWebsite, VideoIsLive
 from .functions import to_thread
-from .regexes import SOUNDCLOUD_RE, TIKTOK_RE, VIDEOS_RE
+from .regexes import SOUNDCLOUD_RE, TIKTOK_RE, TWITTER_RE, VIDEOS_RE
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -42,6 +44,12 @@ def download(url: str, format: str = "mp4", bot: Optional[Fishie] = None):
         format = "mp3"
         audio = True
 
+    if TWITTER_RE.search(video):
+        if not bot:
+            raise commands.BadArgument("Bot is required for twitter videos")
+        
+        options["cookies"] = r"twitter-cookies.txt"
+
     if audio:
         options["postprocessors"] = [
             {
@@ -64,5 +72,5 @@ def download(url: str, format: str = "mp4", bot: Optional[Fishie] = None):
 
     if bot:
         bot.logger.info(f"Downloaded video: {name}.{format}")
-        
+
     return f"{name}.{format}"

@@ -120,7 +120,7 @@ class Commands(Cog):
         await self.avatars_grid(ctx, user)
 
     @commands.command(name="usernames")
-    async def usernames(self, ctx: Context, *, user: discord.User):
+    async def usernames(self, ctx: Context, *, user: discord.User = commands.Author):
         """Shows a user's previous usernames"""
 
         results = await self.bot.pool.fetch(

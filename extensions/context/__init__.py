@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, TypeVar, Union
 
 import aiohttp
@@ -115,7 +116,7 @@ class Context(commands.Context["Fishie"]):
         delete_after: bool = True,
         author_id: Optional[int] = None,
         **kwargs,
-    ) -> Optional[bool]:
+    ) -> Optional[discord.Message]:
         author_id = author_id or self.author.id
         view = ConfirmationView(
             timeout=timeout,
@@ -125,7 +126,15 @@ class Context(commands.Context["Fishie"]):
         )
         view.message = await self.send(message, view=view, **kwargs)
         await view.wait()
-        return view.value
+        if view.value:
+            return view.message
+        else:
+            try:
+                await view.message.delete()
+            except:
+                pass
+
+            return None
 
     async def disambiguate(
         self, matches: list[T], entry: Callable[[T], Any], *, ephemeral: bool = False
@@ -155,6 +164,14 @@ class Context(commands.Context["Fishie"]):
             return super().typing(ephemeral=ephemeral)
         except:
             return
+
+    @property
+    def get_prefix(self):
+        prefix = self.prefix
+        if re.search(f"^{prefix} ", self.message.content):
+            return f"{prefix} "
+
+        return prefix
 
 
 class GuildContext(Context):

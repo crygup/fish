@@ -161,7 +161,6 @@ class Google(Cog):
         aliases=("yt",),
         invoke_without_command=True,
         fallback="video",
-        description="Search for a video",
         extras={"google-command": True},
     )
     @app_commands.describe(query="Video to search for")

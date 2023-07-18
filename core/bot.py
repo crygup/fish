@@ -2,9 +2,21 @@ from __future__ import annotations
 
 import datetime
 import pkgutil
-from logging import Logger
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
+import types
+from logging import Logger
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+)
 
 import aiohttp
 import asyncpg
@@ -19,8 +31,10 @@ if TYPE_CHECKING:
     from extensions.context import Context
     from extensions.events import Events
     from extensions.logging import Logging
-    from extensions.tools import Tools
     from extensions.settings import Settings
+    from extensions.tools import Tools
+
+    from .cog import Cog
 
 FCT = TypeVar("FCT", bound="Context")
 
@@ -205,7 +219,16 @@ class Fishie(commands.Bot):
             adl = row["auto_download"]
             if adl:
                 await self.redis.sadd("auto_downloads", adl)
-                self.logger.info(f'Added auto download channel "{adl}" to guild "{guild_id}"')
+                self.logger.info(
+                    f'Added auto download channel "{adl}" to guild "{guild_id}"'
+                )
+
+    def get_cog(self, name: str) -> Optional[Cog]:
+        return super().get_cog(name)  # type: ignore
+
+    @property
+    def cogs(self) -> Mapping[str, Cog]:
+        return super().cogs  # type: ignore
 
     @property
     def tools(self) -> Optional[Tools]:
@@ -225,4 +248,4 @@ class Fishie(commands.Bot):
 
     @property
     def embedcolor(self) -> int:
-        return 0x2B2D31
+        return 0xFAA0C1

@@ -6,6 +6,7 @@ from jishaku.cog import OPTIONAL_FEATURES, STANDARD_FEATURES
 from jishaku.features.baseclass import Feature
 
 from core import Cog
+from utils import fish_owner
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -13,6 +14,9 @@ if TYPE_CHECKING:
 
 
 class Jishaku(Cog, *OPTIONAL_FEATURES, *STANDARD_FEATURES):
+    emoji = fish_owner
+    hidden: bool = True
+
     @Feature.Command(parent="jsk", name="test")
     async def test(self, ctx: Context):
         await ctx.send("This is a test command!")

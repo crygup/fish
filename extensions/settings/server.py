@@ -6,8 +6,7 @@ import discord
 from discord.ext import commands
 
 from core import Cog
-
-from utils import FieldPageSource, Pager, get_or_fetch_user, AuthorView
+from utils import AuthorView, FieldPageSource, Pager, get_or_fetch_user
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -151,7 +150,7 @@ class Server(Cog):
         channel_id: int = await self.bot.pool.fetchval(sql, ctx.guild.id)
         if channel_id:
             raise commands.BadArgument(
-                f"An auto-download channel is already set in this server, if you would like to change or remove it please run the command `{ctx.prefix}auto-download remove`"
+                f"An auto-download channel is already set in this server, if you would like to change or remove it please run the command `{ctx.get_prefix}auto-download remove`"
             )
 
         if not channel:
@@ -176,7 +175,7 @@ class Server(Cog):
 
         if not channel_id:
             raise commands.BadArgument(
-                f"No auto-download channel found. You may set one with `{ctx.prefix}auto-download`"
+                f"No auto-download channel found. You may set one with `{ctx.get_prefix}auto-download`"
             )
 
         channel: discord.TextChannel = self.bot.get_channel(channel_id)  # type: ignore

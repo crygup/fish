@@ -528,7 +528,7 @@ class Reminder(Cog):
         msg = f"Alright {ctx.author.mention}, in {delta}: {when.arg}"
         # 10% chance of advertising timezone support (temporarily...?)
         if zone is None and random.randint(0, 10) == 5:
-            msg = f'{msg}\n\n\N{ELECTRIC LIGHT BULB} Did you know you can set your timezone with "{ctx.prefix}timezone set"?'
+            msg = f'{msg}\n\n\N{ELECTRIC LIGHT BULB} Did you know you can set your timezone with "{ctx.get_prefix}timezone set"?'
 
         await ctx.send(msg)
 

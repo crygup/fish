@@ -34,7 +34,7 @@ class Downloads(Cog):
     ):
         """Download a video off the internet"""
         async with ctx.typing(ephemeral=True):
-            filename = await download(url, flags.format)
+            filename = await download(url, flags.format, bot=self.bot)
 
         file = discord.File(
             rf".\files\downloads\{filename}", f"{flags.title}.{flags.format}"

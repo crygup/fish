@@ -10,6 +10,11 @@ class Webhooks(TypedDict):
     icons: List[str]
 
 
+class Twitter(TypedDict):
+    username: str
+    password: str
+
+
 class Databases(TypedDict):
     postgre_dsn: str
     testing_postgre_dsn: str
@@ -38,4 +43,5 @@ class Config(TypedDict):
     tokens: ConfigTokens
     keys: Keys
     databases: Databases
+    twitter: Twitter
     webhooks: Webhooks

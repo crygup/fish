@@ -13,3 +13,4 @@ class Cog(commands.Cog):
     emoji: Union[discord.Emoji, discord.PartialEmoji]
     aliases: List[str] = []
     bot: Fishie
+    hidden: bool = False

@@ -1,3 +1,4 @@
+from .checks import *
 from .converters import *
 from .downloads import *
 from .emojis import *

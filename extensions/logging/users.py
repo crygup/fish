@@ -18,6 +18,7 @@ class User(Cog):
     async def add_username(self, user: discord.User):
         sql = """
         INSERT INTO username_logs(user_id, username, created_at)
+        VALUES ($1, $2, $3)
         """
 
         await self.bot.pool.execute(sql, user.id, user.name, discord.utils.utcnow())

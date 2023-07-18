@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional, Union
-import discord
 
+import discord
 from discord.abc import Messageable
 from discord.ext import commands
 
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 class Owner(Cog):
     emoji = fish_owner
+    hidden: bool = True
 
     @commands.command(name="reply")
     async def reply(

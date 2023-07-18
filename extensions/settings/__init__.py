@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 
 class Settings(Logging, Server):
+    """User and server settings"""
+
     emoji = discord.PartialEmoji(name="\U00002699\U0000fe0f")
 
     def __init__(self, bot: Fishie):

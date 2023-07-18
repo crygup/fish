@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 
 class Logging(Avatars, Guild, User, Commands):
+    """Google data tracking on discord!"""
+
     emoji = discord.PartialEmoji(name="\U0001fab5")
 
     def __init__(self, bot: Fishie):
