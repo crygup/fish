@@ -1,8 +1,10 @@
-from typing import List, ParamSpec, TypedDict, TypeVar
+from typing import List, ParamSpec, TypedDict, TypeVar, Union
+
+import discord
 
 T = TypeVar("T")
 P = ParamSpec("P")
-
+EmojiInputType = Union[discord.Emoji, discord.PartialEmoji, str]
 
 class Webhooks(TypedDict):
     avatars: List[str]

@@ -190,7 +190,9 @@ class Server(Cog):
             "autosolve",
         ),
     )
+    @commands.has_guild_permissions(manage_guild=True)
     async def auto_solve(self, ctx: GuildContext):
+        """Toggle auto solving for Pokétwo hint messages"""
         value: Optional[bool] = await self.bot.pool.fetchval(
             "SELECT poketwo FROM guild_settings WHERE guild_id = $1", ctx.guild.id
         )
@@ -212,4 +214,38 @@ class Server(Cog):
 
         await ctx.send(
             f"{['Disabled', 'Enabled'][value]} Pokétwo auto-solving for this server."
+        )
+
+    @commands.command(
+        name="auto-reactions",
+        aliases=(
+            "auto_reactions",
+            "autoreactions",
+            "areactions"
+        ),
+    )
+    @commands.has_guild_permissions(manage_guild=True)
+    async def auto_reactions(self, ctx: GuildContext):
+        """Toggle auto reactions to media uploads"""
+        value: Optional[bool] = await self.bot.pool.fetchval(
+            "SELECT auto_reactions FROM guild_settings WHERE guild_id = $1", ctx.guild.id
+        )
+
+        value = not value if value else True
+
+        sql = """
+        INSERT INTO guild_settings (guild_id, auto_reactions) VALUES ($1, $2) 
+        ON CONFLICT (guild_id) DO UPDATE
+        SET auto_reactions = $2 
+        WHERE guild_settings.guild_id = $1
+        """
+
+        await self.bot.pool.execute(sql, ctx.guild.id, value)
+
+        func = [self.bot.redis.srem, self.bot.redis.sadd]
+
+        await func[value]("auto_reactions_guilds", ctx.guild.id)
+
+        await ctx.send(
+            f"{['Disabled', 'Enabled'][value]} auto media reactions for this server."
         )

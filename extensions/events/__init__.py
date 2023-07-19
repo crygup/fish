@@ -10,12 +10,12 @@ from .command_error import CommandErrors
 from .command_logs import CommandLogs
 from .pokemon import Pokemon
 from .tasks import Tasks
-
+from .auto_reactions import Reactions
 if TYPE_CHECKING:
     from core import Fishie
 
 
-class Events(CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon):
+class Events(CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon, Reactions):
     emoji = discord.PartialEmoji(name="\U0001f3a7")
     hidden: bool = True
 

@@ -25,7 +25,7 @@ from discord.abc import Messageable
 from discord.ext import commands
 from redis import asyncio as aioredis
 
-from utils import MESSAGE_RE, Config, emojis, update_pokemon
+from utils import MESSAGE_RE, Config, emojis, update_pokemon, EmojiInputType
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from .cog import Cog
 
 FCT = TypeVar("FCT", bound="Context")
-
 
 async def get_prefix(bot: Fishie, message: discord.Message) -> List[str]:
     default = ["fish "] if not bot.testing else [";"]
@@ -220,6 +219,7 @@ class Fishie(commands.Bot):
             guild_id = row["guild_id"]
             adl = row["auto_download"]
             poketwo = row["poketwo"]
+            auto_reactions = row["auto_reactions"]
 
             if adl:
                 await self.redis.sadd("auto_downloads", adl)
@@ -231,9 +231,20 @@ class Fishie(commands.Bot):
                 await self.redis.sadd("poketwo_guilds", guild_id)
                 self.logger.info(f'Added auto poketwo solving to guild "{guild_id}"')
 
+            if auto_reactions:
+                await self.redis.sadd("auto_reactions_guilds", guild_id)
+                self.logger.info(f'Added auto media reactions to guild "{guild_id}"')
+
+    async def add_reactions(self, message: discord.Message, reactions: List[EmojiInputType | discord.Reaction]):
+        for reaction in reactions:
+            try:
+                await message.add_reaction(reaction)
+            except:
+                pass
+
     def get_cog(self, name: str) -> Optional[Cog]:
         return super().get_cog(name)  # type: ignore
-
+    
     @property
     def cogs(self) -> Mapping[str, Cog]:
         return super().cogs  # type: ignore
