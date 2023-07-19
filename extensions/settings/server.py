@@ -182,3 +182,34 @@ class Server(Cog):
 
         await self.remove_adl_channel(channel)
         await ctx.send(f"Removed auto-downloads from {channel.mention}")
+
+    @commands.command(
+        name="auto-solve",
+        aliases=(
+            "auto_solve",
+            "autosolve",
+        ),
+    )
+    async def auto_solve(self, ctx: GuildContext):
+        value: Optional[bool] = await self.bot.pool.fetchval(
+            "SELECT poketwo FROM guild_settings WHERE guild_id = $1", ctx.guild.id
+        )
+
+        value = not value if value else True
+
+        sql = """
+        INSERT INTO guild_settings (guild_id, poketwo) VALUES ($1, $2) 
+        ON CONFLICT (guild_id) DO UPDATE
+        SET poketwo = $2 
+        WHERE guild_settings.guild_id = $1
+        """
+
+        await self.bot.pool.execute(sql, ctx.guild.id, value)
+
+        func = [self.bot.redis.srem, self.bot.redis.sadd]
+
+        await func[value]("poketwo_guilds", ctx.guild.id)
+
+        await ctx.send(
+            f"{['Disabled', 'Enabled'][value]} Pokétwo auto-solving for this server."
+        )

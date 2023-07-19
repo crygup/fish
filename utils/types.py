@@ -23,6 +23,12 @@ class Databases(TypedDict):
     testing_redis_dsn: str
 
 
+class Ids(TypedDict):
+    owner_id: int
+    poketwo_id: int
+    mudae_id: int
+
+
 class Keys(TypedDict):
     fishie_api: str
     lastfm: str
@@ -39,9 +45,9 @@ class ConfigTokens(TypedDict):
 
 
 class Config(TypedDict):
-    owner_id: int
     tokens: ConfigTokens
     keys: Keys
     databases: Databases
     twitter: Twitter
+    ids: Ids
     webhooks: Webhooks

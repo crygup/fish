@@ -25,7 +25,7 @@ from discord.abc import Messageable
 from discord.ext import commands
 from redis import asyncio as aioredis
 
-from utils import MESSAGE_RE, Config, emojis
+from utils import MESSAGE_RE, Config, emojis, update_pokemon
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -127,6 +127,8 @@ class Fishie(commands.Bot):
 
         await self.load_extensions()
         await self.populate_cache()
+        await update_pokemon(self)
+        self.logger.info(f"Added {len(self.pokemon):,} pokemon")
 
     async def on_ready(self):
         if not hasattr(self, "start_time"):
@@ -217,11 +219,17 @@ class Fishie(commands.Bot):
         for row in guild_settings:
             guild_id = row["guild_id"]
             adl = row["auto_download"]
+            poketwo = row["poketwo"]
+
             if adl:
                 await self.redis.sadd("auto_downloads", adl)
                 self.logger.info(
                     f'Added auto download channel "{adl}" to guild "{guild_id}"'
                 )
+
+            if poketwo:
+                await self.redis.sadd("poketwo_guilds", guild_id)
+                self.logger.info(f'Added auto poketwo solving to guild "{guild_id}"')
 
     def get_cog(self, name: str) -> Optional[Cog]:
         return super().get_cog(name)  # type: ignore

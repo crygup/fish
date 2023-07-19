@@ -8,13 +8,14 @@ from discord.ext import commands
 from .auto_download import AutoDownload
 from .command_error import CommandErrors
 from .command_logs import CommandLogs
+from .pokemon import Pokemon
 from .tasks import Tasks
 
 if TYPE_CHECKING:
     from core import Fishie
 
 
-class Events(CommandErrors, CommandLogs, Tasks, AutoDownload):
+class Events(CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon):
     emoji = discord.PartialEmoji(name="\U0001f3a7")
     hidden: bool = True
 

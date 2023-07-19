@@ -1,5 +1,3 @@
-owner_id=1
-
 [tokens]
 bot=""
 testing_bot=""
@@ -8,17 +6,26 @@ testing_bot=""
 fishie_api=""
 lastfm=""
 lastfm_secret=""
-google=""
+google=["list", "of", "keys"]
 google_id=""
 spotify_id=""
 spotify_secret=""
 
 [databases]
-postgre_dsn=""
+postgre_dsn="h"
 testing_postgre_dsn=""
 
 redis_dsn=""
 testing_redis_dsn=""
+
+[twitter]
+username=""
+password=""
+
+[ids]
+owner_id=1
+poketwo_id=1
+mudae_id=1
 
 [webhooks]
 avatars=[]

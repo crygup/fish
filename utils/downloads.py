@@ -47,7 +47,7 @@ def download(url: str, format: str = "mp4", bot: Optional[Fishie] = None):
     if TWITTER_RE.search(video):
         if not bot:
             raise commands.BadArgument("Bot is required for twitter videos")
-        
+
         options["cookies"] = r"twitter-cookies.txt"
 
     if audio:

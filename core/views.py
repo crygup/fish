@@ -32,7 +32,7 @@ class AuthorView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
         if (
-            interaction.user.id == self.ctx.bot.config["owner_id"]
+            interaction.user.id == self.ctx.bot.config["ids"]["owner_id"]
             or interaction.user.id == self.ctx.author.id
         ):
             return True
