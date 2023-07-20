@@ -28,6 +28,7 @@ class Databases(TypedDict):
 
 class Ids(TypedDict):
     owner_id: int
+    bot_id: int
     poketwo_id: int
     mudae_id: int
     join_logs_id: int

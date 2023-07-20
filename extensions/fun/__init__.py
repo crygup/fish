@@ -1,5 +1,6 @@
 from __future__ import annotations
 import random
+import re
 
 from typing import TYPE_CHECKING
 
@@ -26,10 +27,27 @@ class Fun(Cog):
         await ctx.send(view=RPSView(ctx))
 
     @commands.command(name='monark')
+    @commands.cooldown(1, 5)
     async def monark(self, ctx: Context):
         """monark said this"""
-        files = [r'.\files\monark\monark.jpg', r'.\files\monark\monark2.png']
-        await ctx.send(file=discord.File(random.choice(files), "monark.png"))
+
+        await ctx.send(file=discord.File(rf'.\files\monark\monark{random.randint(1,3)}.png', "monark.png"))
+
+    @commands.command(name="merica", aliases=("cm",))
+    @commands.cooldown(1, 5)
+    async def merica(self, ctx: Context, *, text: str):
+        """we love america!!!"""
+
+        await ctx.send(
+            re.sub(" ", " \U0001f1fa\U0001f1f8 ", text)[:2000],
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @commands.command(name="invite", aliases=("join",))
+    async def invite(self, ctx: Context):
+        """Sends a link to add me to a server."""
+
+        await ctx.send(discord.utils.oauth_url(self.bot.config["ids"]["bot_id"], permissions=self.bot.bot_permissions))
 
 async def setup(bot: Fishie):
     await bot.add_cog(Fun(bot))

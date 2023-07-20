@@ -246,7 +246,21 @@ class Fishie(commands.Bot):
                 await message.add_reaction(reaction)
             except:
                 pass
+    
+    @property
+    def bot_permissions(self) -> discord.Permissions:
+        perms = discord.Permissions()
+        perms.send_messages=True
+        perms.add_reactions=True
+        perms.manage_emojis_and_stickers=True
+        perms.embed_links=True
+        perms.attach_files=True
+        perms.external_emojis=True
+        perms.external_stickers=True
+        perms.read_message_history=True
 
+        return perms
+    
     def get_cog(self, name: str) -> Optional[Cog]:
         return super().get_cog(name)  # type: ignore
 
