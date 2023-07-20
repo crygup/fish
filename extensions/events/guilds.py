@@ -47,6 +47,15 @@ class Guilds(Cog):
 
         await self.post_guild(embed, guild)
 
+        sql = """
+        INSERT INTO guild_join_logs(guild_id, owner_id, time) 
+        VALUES($1, $2, $3)
+        """
+
+        await self.bot.pool.execute(
+            sql, guild.id, guild.owner_id, discord.utils.utcnow()
+        )
+
     @commands.Cog.listener("on_guild_remove")
     async def on_guild_remove(self, guild: discord.Guild):
         embed = discord.Embed(title=guild.name, timestamp=discord.utils.utcnow())
