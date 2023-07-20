@@ -18,7 +18,7 @@ from lxml import etree
 from typing_extensions import Annotated
 
 from core import Cog
-from utils import cache, formats, fuzzy, time
+from utils import cache, formats, fuzzy, time, FieldPageSource, Pager
 
 if TYPE_CHECKING:
     from typing_extensions import Self
@@ -567,41 +567,6 @@ class Reminder(Cog):
         if isinstance(error, time.BadTimeTransform):
             await interaction.response.send_message(str(error), ephemeral=True)
 
-    @reminder.command(name="list", ignore_extra=False)
-    async def reminder_list(self, ctx: Context):
-        """Shows the 10 latest currently running reminders."""
-        query = """SELECT id, expires, extra #>> '{args,2}'
-                   FROM reminders
-                   WHERE event = 'reminder'
-                   AND extra #>> '{args,0}' = $1
-                   ORDER BY expires
-                   LIMIT 10;
-                """
-
-        records = await ctx.bot.pool.fetch(query, str(ctx.author.id))
-
-        if len(records) == 0:
-            return await ctx.send("No currently running reminders.")
-
-        e = discord.Embed(colour=discord.Colour.blurple(), title="Reminders")
-
-        if len(records) == 10:
-            e.set_footer(text="Only showing up to 10 reminders.")
-        else:
-            e.set_footer(
-                text=f'{len(records)} reminder{"s" if len(records) > 1 else ""}'
-            )
-
-        for _id, expires, message in records:
-            shorten = textwrap.shorten(message, width=512)
-            e.add_field(
-                name=f'{_id}: {discord.utils.format_dt(expires, "R")}',
-                value=shorten,
-                inline=False,
-            )
-
-        await ctx.send(embed=e)
-
     @reminder.command(name="delete", aliases=["remove", "cancel"], ignore_extra=False)
     async def reminder_delete(self, ctx: Context, *, id: int):
         """Deletes a reminder by its ID.
@@ -665,6 +630,43 @@ class Reminder(Cog):
         await ctx.send(
             f"Successfully deleted {formats.plural(total):reminder}.", ephemeral=True  # type: ignore
         )
+
+    async def reminders_command(self, ctx: Context):
+        query = """SELECT id, expires, extra #>> '{args,2}'
+                   FROM reminders
+                   WHERE event = 'reminder'
+                   AND extra #>> '{args,0}' = $1
+                   ORDER BY expires
+                   LIMIT 10;
+                """
+
+        records = await ctx.bot.pool.fetch(query, str(ctx.author.id))
+
+        if len(records) == 0:
+            return await ctx.send("No currently running reminders.")
+
+        entries = [
+            (
+                f"{_id}: {discord.utils.format_dt(expires,'R')}",
+                textwrap.shorten(message, width=512),
+            )
+            for _id, expires, message in records
+        ]
+
+        p = FieldPageSource(entries, per_page=10)
+        p.embed.title = f"Reminders for {ctx.author}"
+        menu = Pager(p, ctx=ctx)
+        await menu.start(ctx)
+
+    @reminder.command(name="list", ignore_extra=False)
+    async def reminder_list(self, ctx: Context):
+        """Shows the 10 latest currently running reminders."""
+        await self.reminders_command(ctx)
+
+    @commands.command(name="reminders")
+    async def reminders(self, ctx: Context):
+        """Shows the 10 latest currently running reminders."""
+        await self.reminders_command(ctx)
 
     @commands.hybrid_group()
     async def timezone(self, ctx: Context):
