@@ -6,17 +6,20 @@ import discord
 from discord.ext import commands
 
 from .auto_download import AutoDownload
+from .auto_reactions import Reactions
 from .command_error import CommandErrors
 from .command_logs import CommandLogs
+from .guilds import Guilds
 from .pokemon import Pokemon
 from .tasks import Tasks
-from .auto_reactions import Reactions
 
 if TYPE_CHECKING:
     from core import Fishie
 
 
-class Events(CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon, Reactions):
+class Events(
+    CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon, Reactions, Guilds
+):
     emoji = discord.PartialEmoji(name="\U0001f3a7")
     hidden: bool = True
 

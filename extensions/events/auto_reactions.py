@@ -5,9 +5,9 @@ from typing import TYPE_CHECKING, List
 
 import discord
 from discord.ext import commands
-from utils import EmojiInputType
 
 from core import Cog
+from utils import EmojiInputType
 
 if TYPE_CHECKING:
     from context import Context

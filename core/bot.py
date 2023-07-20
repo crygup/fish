@@ -25,7 +25,7 @@ from discord.abc import Messageable
 from discord.ext import commands
 from redis import asyncio as aioredis
 
-from utils import MESSAGE_RE, Config, emojis, update_pokemon, EmojiInputType
+from utils import MESSAGE_RE, Config, EmojiInputType, emojis, update_pokemon
 
 if TYPE_CHECKING:
     from extensions.context import Context
