@@ -218,17 +218,14 @@ class Server(Cog):
 
     @commands.command(
         name="auto-reactions",
-        aliases=(
-            "auto_reactions",
-            "autoreactions",
-            "areactions"
-        ),
+        aliases=("auto_reactions", "autoreactions", "areactions"),
     )
     @commands.has_guild_permissions(manage_guild=True)
     async def auto_reactions(self, ctx: GuildContext):
         """Toggle auto reactions to media uploads"""
         value: Optional[bool] = await self.bot.pool.fetchval(
-            "SELECT auto_reactions FROM guild_settings WHERE guild_id = $1", ctx.guild.id
+            "SELECT auto_reactions FROM guild_settings WHERE guild_id = $1",
+            ctx.guild.id,
         )
 
         value = not value if value else True

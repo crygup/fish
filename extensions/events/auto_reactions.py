@@ -18,15 +18,21 @@ class Reactions(Cog):
         if message.guild is None:
             return
 
-        if str(message.guild.id) not in await self.bot.redis.smembers("auto_reactions_guilds"):
+        if str(message.guild.id) not in await self.bot.redis.smembers(
+            "auto_reactions_guilds"
+        ):
             return
 
         if message.attachments:
-            await self.bot.add_reactions(message, ["\U00002b06\U0000fe0f", "\U00002b07\U0000fe0f"])
+            await self.bot.add_reactions(
+                message, ["\U00002b06\U0000fe0f", "\U00002b07\U0000fe0f"]
+            )
 
         for embed in message.embeds:
             if embed.type != "rich":
-                await self.bot.add_reactions(message, ["\U00002b06\U0000fe0f", "\U00002b07\U0000fe0f"])
+                await self.bot.add_reactions(
+                    message, ["\U00002b06\U0000fe0f", "\U00002b07\U0000fe0f"]
+                )
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):

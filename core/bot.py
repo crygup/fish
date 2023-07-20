@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
 FCT = TypeVar("FCT", bound="Context")
 
+
 async def get_prefix(bot: Fishie, message: discord.Message) -> List[str]:
     default = ["fish "] if not bot.testing else [";"]
 
@@ -235,7 +236,11 @@ class Fishie(commands.Bot):
                 await self.redis.sadd("auto_reactions_guilds", guild_id)
                 self.logger.info(f'Added auto media reactions to guild "{guild_id}"')
 
-    async def add_reactions(self, message: discord.Message, reactions: List[EmojiInputType | discord.Reaction]):
+    async def add_reactions(
+        self,
+        message: discord.Message,
+        reactions: List[EmojiInputType | discord.Reaction],
+    ):
         for reaction in reactions:
             try:
                 await message.add_reaction(reaction)
@@ -244,7 +249,7 @@ class Fishie(commands.Bot):
 
     def get_cog(self, name: str) -> Optional[Cog]:
         return super().get_cog(name)  # type: ignore
-    
+
     @property
     def cogs(self) -> Mapping[str, Cog]:
         return super().cogs  # type: ignore

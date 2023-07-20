@@ -11,6 +11,7 @@ from .command_logs import CommandLogs
 from .pokemon import Pokemon
 from .tasks import Tasks
 from .auto_reactions import Reactions
+
 if TYPE_CHECKING:
     from core import Fishie
 

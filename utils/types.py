@@ -6,6 +6,7 @@ T = TypeVar("T")
 P = ParamSpec("P")
 EmojiInputType = Union[discord.Emoji, discord.PartialEmoji, str]
 
+
 class Webhooks(TypedDict):
     avatars: List[str]
     images: List[str]
@@ -29,6 +30,7 @@ class Ids(TypedDict):
     owner_id: int
     poketwo_id: int
     mudae_id: int
+    join_logs_id: int
 
 
 class Keys(TypedDict):

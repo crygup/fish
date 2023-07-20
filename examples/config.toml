@@ -1,36 +1,36 @@
 [tokens]
-bot=""
-testing_bot=""
+bot = ""
+testing_bot = ""
 
 [keys]
-fishie_api=""
-lastfm=""
-lastfm_secret=""
-google=["list", "of", "keys"]
-google_id=""
-spotify_id=""
-spotify_secret=""
+fishie_api = ""
+lastfm = ""
+lastfm_secret = ""
+google = ["list", "of", "keys"]
+google_id = ""
+spotify_id = ""
+spotify_secret = ""
 
 [databases]
-postgre_dsn="h"
-testing_postgre_dsn=""
+postgre_dsn = ""
+testing_postgre_dsn = ""
 
-redis_dsn=""
-testing_redis_dsn=""
+redis_dsn = ""
+testing_redis_dsn = ""
 
 [twitter]
-username=""
-password=""
+username = ""
+password = ""
 
 [ids]
-owner_id=1
-poketwo_id=1
-mudae_id=1
+owner_id = 1
+poketwo_id = 1
+mudae_id = 1
 
 [webhooks]
-avatars=[]
+avatars = []
 
-images=[]
+images = []
 
 
-icons=[]
+icons = []
