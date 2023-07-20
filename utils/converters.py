@@ -13,7 +13,10 @@ from .vars import SpotifySearchData
 if TYPE_CHECKING:
     from extensions.context import Context
 
-SVG_URL = 'https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/{chars}.svg'
+SVG_URL = (
+    "https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/{chars}.svg"
+)
+
 
 class URLConverter(commands.Converter[str]):
     async def convert(self, ctx: Context, argument: str) -> str:
@@ -79,14 +82,18 @@ class SpotifyConverter:
 
         return data[0]["external_urls"]["spotify"]
 
+
 async def render_with_rsvg(blob):
-    rsvg = 'rsvg-convert --width=1024'
-    proc = await asyncio.create_subprocess_shell(rsvg,
+    rsvg = "rsvg-convert --width=1024"
+    proc = await asyncio.create_subprocess_shell(
+        rsvg,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE)
+        stderr=asyncio.subprocess.PIPE,
+    )
     stdout, stderr = await proc.communicate(blob)
     return BytesIO(stdout), stderr
+
 
 class TwemojiConverter(commands.Converter):
     """Converts str to twemoji bytesio"""
@@ -94,13 +101,13 @@ class TwemojiConverter(commands.Converter):
     async def convert(self, ctx: Context, argument: str) -> BytesIO:
         if len(argument) >= 8:
             raise commands.BadArgument("Too long to be an emoji")
-        
+
         VS_16 = "\N{VARIATION SELECTOR-16}"
 
         resp = None
-        blob = b''
+        blob = b""
         while not resp or resp.status != 200:
-            chars = '-'.join(f'{ord(c):x}' for c in argument)
+            chars = "-".join(f"{ord(c):x}" for c in argument)
             async with ctx.bot.session.get(SVG_URL.format(chars=chars)) as resp:
                 if resp.status != 200:
                     if VS_16 in argument:
@@ -109,12 +116,12 @@ class TwemojiConverter(commands.Converter):
                             new_ipt = argument.replace(VS_16, "")
                         ipt = new_ipt
                         continue
-                    raise commands.BadArgument('Not a valid unicode emoji.')
+                    raise commands.BadArgument("Not a valid unicode emoji.")
                 blob = await resp.read()
 
         converted, stderr = await render_with_rsvg(blob)
 
         if stderr:
             raise Exception(stderr.decode())
-        
+
         return converted

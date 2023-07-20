@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 class Fun(Cog):
     """Fun miscellaneous commands"""
+
     emoji = discord.PartialEmoji(name="\U0001f604")
 
     def __init__(self, bot: Fishie):
@@ -26,12 +27,16 @@ class Fun(Cog):
     async def RPSCommand(self, ctx: Context):
         await ctx.send(view=RPSView(ctx))
 
-    @commands.command(name='monark')
+    @commands.command(name="monark")
     @commands.cooldown(1, 5)
     async def monark(self, ctx: Context):
         """monark said this"""
 
-        await ctx.send(file=discord.File(rf'.\files\monark\monark{random.randint(1,3)}.png', "monark.png"))
+        await ctx.send(
+            file=discord.File(
+                rf"files/monark/monark{random.randint(1,3)}.png", "monark.png"
+            )
+        )
 
     @commands.command(name="merica", aliases=("cm",))
     @commands.cooldown(1, 5)
@@ -47,7 +52,12 @@ class Fun(Cog):
     async def invite(self, ctx: Context):
         """Sends a link to add me to a server."""
 
-        await ctx.send(discord.utils.oauth_url(self.bot.config["ids"]["bot_id"], permissions=self.bot.bot_permissions))
+        await ctx.send(
+            discord.utils.oauth_url(
+                self.bot.config["ids"]["bot_id"], permissions=self.bot.bot_permissions
+            )
+        )
+
 
 async def setup(bot: Fishie):
     await bot.add_cog(Fun(bot))

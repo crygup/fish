@@ -13,16 +13,19 @@ from discord.ext import commands
 
 Choice: TypeAlias = Union[Literal["rock"], Literal["paper"], Literal["scissors"]]
 
+
 class RPSWin(Enum):
     win = 1
     loss = 2
     draw = 3
+
 
 @dataclass()
 class RPSResults:
     user_choice: Choice
     bot_choice: Choice
     result: RPSWin
+
 
 class RPSView(AuthorView):
     bot_choice: Choice
@@ -37,45 +40,44 @@ class RPSView(AuthorView):
 
         if self.bot_choice == "rock":
             return RPSResults("rock", "rock", RPSWin.draw)
-        
+
         if self.bot_choice == "paper":
             return RPSResults("rock", "paper", RPSWin.loss)
-        
+
         return RPSResults("rock", "scissors", RPSWin.win)
-        
+
     def paper_choice(self):
         # if USER chose paper
         if self.bot_choice == "rock":
             return RPSResults("paper", "rock", RPSWin.win)
-        
+
         if self.bot_choice == "paper":
             return RPSResults("paper", "paper", RPSWin.draw)
-        
+
         return RPSResults("paper", "scissors", RPSWin.loss)
-        
+
     def scissors_choice(self):
         # if USER chose scissors
         if self.bot_choice == "rock":
             return RPSResults("scissors", "rock", RPSWin.loss)
-        
+
         if self.bot_choice == "paper":
             return RPSResults("scissors", "paper", RPSWin.win)
-        
+
         return RPSResults("scissors", "scissors", RPSWin.draw)
-    
+
     async def send_result(
-        self, choice: Choice, interaction: discord.Interaction, button: discord.ui.Button
-    ):  
+        self,
+        choice: Choice,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
         choices = {
             "rock": self.rock_choice,
             "paper": self.paper_choice,
-            "scissors": self.scissors_choice
+            "scissors": self.scissors_choice,
         }
-        answer = {
-            "win": "You win!",
-            "loss": "You lost!",
-            "draw": "We draw!"
-        }
+        answer = {"win": "You win!", "loss": "You lost!", "draw": "We draw!"}
         style = {
             "win": discord.ButtonStyle.green,
             "loss": discord.ButtonStyle.red,
@@ -92,7 +94,8 @@ class RPSView(AuthorView):
             raise commands.BadArgument("Somehow the message was empty.")
 
         await interaction.message.edit(
-            content=f"{answer[results.result.name]} I chose {self.bot_choice}.", view=self
+            content=f"{answer[results.result.name]} I chose {self.bot_choice}.",
+            view=self,
         )
 
         await interaction.response.defer()
