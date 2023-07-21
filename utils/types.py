@@ -1,10 +1,28 @@
-from typing import List, ParamSpec, TypedDict, TypeVar, Union
+from typing import List, Optional, ParamSpec, TypeAlias, TypedDict, TypeVar, Union
 
 import discord
 
 T = TypeVar("T")
 P = ParamSpec("P")
 EmojiInputType = Union[discord.Emoji, discord.PartialEmoji, str]
+
+AllChannels: TypeAlias = Union[
+    discord.TextChannel,
+    discord.VoiceChannel,
+    discord.CategoryChannel,
+    discord.StageChannel,
+    discord.ForumChannel,
+    discord.Thread,
+]
+DiscordObjects: TypeAlias = Optional[
+    Union[
+        discord.Message,
+        discord.Member,
+        discord.User,
+        discord.Guild,
+        AllChannels,
+    ]
+]
 
 
 class Webhooks(TypedDict):

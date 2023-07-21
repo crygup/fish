@@ -18,7 +18,7 @@ from lxml import etree
 from typing_extensions import Annotated
 
 from core import Cog
-from utils import cache, formats, fuzzy, time, FieldPageSource, Pager
+from utils import FieldPageSource, Pager, cache, formats, fuzzy, time
 
 if TYPE_CHECKING:
     from typing_extensions import Self

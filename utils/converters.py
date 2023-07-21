@@ -1,8 +1,8 @@
 from __future__ import annotations
-import asyncio
-from io import BytesIO
 
+import asyncio
 import re
+from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union
 
 from discord.ext import commands

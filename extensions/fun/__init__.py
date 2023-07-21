@@ -1,12 +1,14 @@
 from __future__ import annotations
+
 import random
 import re
-
 from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
+
 from core import Cog
+
 from .helpers import RPSView
 
 if TYPE_CHECKING:

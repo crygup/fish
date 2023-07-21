@@ -1,15 +1,15 @@
 import random
-from typing import Any, Coroutine, Literal, Optional, Union, TypeAlias
-
-import discord
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Coroutine, Literal, Optional, TypeAlias, Union
 
+import discord
+from discord.ext import commands
 from discord.interactions import Interaction
 from discord.ui.item import Item
+
 from extensions.context import Context
 from utils import AuthorView
-from discord.ext import commands
 
 Choice: TypeAlias = Union[Literal["rock"], Literal["paper"], Literal["scissors"]]
 

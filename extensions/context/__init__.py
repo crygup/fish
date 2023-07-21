@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, TypeVar, Union
+from io import StringIO
+from typing import TYPE_CHECKING, Any, Callable, Generic, List, Optional, TypeVar
 
 import aiohttp
 import discord
@@ -172,6 +173,13 @@ class Context(commands.Context["Fishie"]):
             return f"{prefix} "
 
         return prefix
+
+    def too_big(self, text: str) -> discord.File:
+        s = StringIO()
+        s.write(text)
+        s.seek(0)
+        file = discord.File(s, "large.txt")  # type: ignore
+        return file
 
 
 class GuildContext(Context):
