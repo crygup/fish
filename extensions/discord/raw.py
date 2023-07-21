@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import discord
 from discord.ext import commands
-import json
+
 from core import Cog
 from utils import AllChannels, DiscordObjects
 
@@ -62,7 +63,9 @@ class RawCommands(Cog):
             data = await self.raw_user(arg)
 
         elif isinstance(arg, discord.Member):
-            await ctx.send(f"Got {type(arg)} \nChannel type: {type(ctx.channel)} \nGuild ID: {arg.guild.id}")
+            await ctx.send(
+                f"Got {type(arg)} \nChannel type: {type(ctx.channel)} \nGuild ID: {arg.guild.id}"
+            )
             data = await self.raw_member(arg)
 
         elif isinstance(arg, discord.Guild):
@@ -87,7 +90,8 @@ class RawCommands(Cog):
 
         await ctx.send(content, files=files)
 
-    
     @raw.command(name="user")
-    async def raw_user_command(self, ctx: Context, *, user: discord.User = commands.Author):
+    async def raw_user_command(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ):
         await self.raw_user(user)

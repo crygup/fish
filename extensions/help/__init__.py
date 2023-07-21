@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import types
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any, List, Mapping, Optional, TypeAlias, Union
@@ -121,13 +122,39 @@ class HelpCommand(commands.HelpCommand):
             color=bot.embedcolor,
             description=cog.description,
         )
+        if cog.aliases:
+            embed.add_field(
+                name="Aliases",
+                value=human_join([f"`{a}`" for a in cog.aliases], final="and"),
+                inline=False,
+            )
+
         embed.add_field(
             name="Commands",
             value=human_join([f"`{c.name}`" for c in cmds], final="and"),
         )
+
         view = CogHelpView(self.context, [c for _, c in bot.cogs.items()])
         view.add_item(CommandHelpDropdown(ctx, [c for c in cog.get_commands()]))
         await ctx.send(embed=embed, view=view)
+
+    async def send_error_message(self, error: commands.CommandError):
+        ctx = self.context
+        bot = ctx.bot
+
+        pattern = re.compile(r'No command called "(?P<name>[a-zA-Z0-9]{1,25})" found.')
+        results = pattern.match(str(error))
+
+        if not bool(results):
+            raise commands.BadArgument(str(error))
+
+        match = results.group("name").lower()
+
+        for _, cog in bot.cogs.items():
+            if match == cog.qualified_name.lower() or match in [
+                a.lower() for a in cog.aliases
+            ]:
+                return await self.send_cog_help(cog)
 
 
 class CogHelpDropdown(discord.ui.Select):
