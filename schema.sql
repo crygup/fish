@@ -124,6 +124,8 @@ CREATE TABLE IF NOT EXISTS status_logs (
     created_at TIMESTAMP WITH TIME ZONE
 );
 
+ALTER TABLE status_logs ADD COLUMN IF NOT EXISTS device TEXT;
+
 CREATE TABLE IF NOT EXISTS opted_out (
     user_id BIGINT,
     items TEXT[],

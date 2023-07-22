@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+import sys
+import traceback
+from typing import TYPE_CHECKING, Any, Optional
 
 import discord
+from discord.interactions import Interaction
+from discord.ui.item import Item
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -35,3 +39,18 @@ class AuthorView(discord.ui.View):
             ephemeral=True,
         )
         return False
+
+    async def on_error(
+        self, interaction: Interaction, error: Exception, item: Item[Any]
+    ):
+        self.ctx.bot.logger.info(
+            f'View {self} errored by {self.ctx.author}. Full content: "{self.ctx.message.content}"'
+        )
+        traceback.print_exception(
+            type(error), error, error.__traceback__, file=sys.stderr
+        )
+
+        try:
+            await interaction.response.send_message(str(error), ephemeral=True)
+        except discord.InteractionResponded:
+            await interaction.followup.send(content=str(error), ephemeral=True)

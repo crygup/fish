@@ -25,10 +25,11 @@ from discord.abc import Messageable
 from discord.ext import commands
 from redis import asyncio as aioredis
 
-from utils import MESSAGE_RE, Config, EmojiInputType, emojis, update_pokemon
+from utils import MESSAGE_RE, Config, EmojiInputType, Emojis, update_pokemon
 
 if TYPE_CHECKING:
     from extensions.context import Context
+    from extensions.discord import Discord as DiscordCog
     from extensions.events import Events
     from extensions.logging import Logging
     from extensions.settings import Settings
@@ -60,7 +61,7 @@ async def get_prefix(bot: Fishie, message: discord.Message) -> List[str]:
 
 class Fishie(commands.Bot):
     redis: aioredis.Redis[Any]
-    custom_emojis = emojis
+    custom_emojis = Emojis()
     cached_covers: Dict[str, Tuple[str, bool]] = {}
     pokemon: List[str]
 
@@ -283,6 +284,10 @@ class Fishie(commands.Bot):
     @property
     def settings(self) -> Optional[Settings]:
         return self.get_cog("Settings")  # type: ignore
+
+    @property
+    def discord(self) -> Optional[DiscordCog]:
+        return self.get_cog("Discord")  # type: ignore
 
     @property
     def embedcolor(self) -> int:

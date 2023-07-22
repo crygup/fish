@@ -8,6 +8,7 @@ from discord.ext import commands
 from utils import fish_discord
 
 from .emojis import Emojis
+from .info import Info
 from .raw import RawCommands
 
 if TYPE_CHECKING:
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
     from extensions.context import Context
 
 
-class Discord(Emojis, RawCommands):
+class Discord(Emojis, RawCommands, Info):
     """Commands for discord itself"""
 
     emoji = fish_discord
