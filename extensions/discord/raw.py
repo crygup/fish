@@ -31,6 +31,7 @@ class RawCommands(Cog):
         return dict(await self.bot.http.get_channel(channel.id))
 
     @commands.group(name="raw", invoke_without_command=True)
+    @commands.cooldown(1,30, commands.BucketType.user)
     async def raw(
         self,
         ctx: Context,
@@ -38,7 +39,9 @@ class RawCommands(Cog):
             displayed_name="argument", displayed_default="[Object=<Replied Message>]"
         ),
     ):
-        print(arg, type(arg))
+        """
+        Gets the raw data for a discord Object
+        """
         if arg is None:
             ref = ctx.message.reference
 
@@ -91,7 +94,20 @@ class RawCommands(Cog):
         await ctx.send(content, files=files)
 
     @raw.command(name="user")
+    @commands.cooldown(1,30, commands.BucketType.user)
     async def raw_user_command(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
-        await self.raw_user(user)
+        data = await self.raw_user(user)
+        b = "`" * 3
+        data = json.dumps(data, indent=4, sort_keys=True)
+        content = f"{b}json\n{data}\n{b}"
+
+        if len(content) > 2000:
+            content = "Text too long."
+            files = [ctx.too_big(str(data))]
+
+        else:
+            files = []
+
+        await ctx.send(content, files=files)

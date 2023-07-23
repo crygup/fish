@@ -27,6 +27,9 @@ class Fun(Cog):
 
     @commands.command(name="rock-paper-scissors", aliases=("rockpaperscissors", "rps"))
     async def RPSCommand(self, ctx: Context):
+        """
+        Play rock paper scissors against me!
+        """
         await ctx.send(view=RPSView(ctx))
 
     @commands.command(name="monark")

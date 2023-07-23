@@ -646,6 +646,9 @@ class Info(Cog):
         *,
         user: Union[discord.Member, discord.User] = commands.Author,
     ):
+        """
+        Get information about a user
+        """
         await self.user_info(ctx, user)
 
     def channel_embed(self, channel: AllChannels) -> discord.Embed:
@@ -758,6 +761,9 @@ class Info(Cog):
             default=lambda ctx: ctx.channel,
         ),
     ):
+        """
+        Get information about a channel
+        """
         types = {
             discord.TextChannel: self.text_info,
             discord.CategoryChannel: self.category_info,
@@ -776,6 +782,7 @@ class Info(Cog):
         *,
         user: Union[discord.Member, discord.User] = commands.Author,
     ):
+        """Get or edit a user's avatar"""
         fuser = await self.bot.fetch_user(user.id)
         embed = discord.Embed(color=fuser.accent_color or self.bot.embedcolor)
         embed.set_author(name=f"{user}'s avatar", icon_url=user.display_avatar.url)

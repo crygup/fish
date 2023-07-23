@@ -26,6 +26,7 @@ class Emojis(Cog):
         ctx: Context,
         emoji: Union[discord.Emoji, discord.PartialEmoji, TwemojiConverter],
     ):
+        """Gets information about an emoji"""
         if isinstance(emoji, BytesIO):
             return await ctx.send(file=discord.File(emoji, "emoji.png"))
 
