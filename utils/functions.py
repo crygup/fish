@@ -14,6 +14,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    Union,
 )
 
 import aiohttp
@@ -25,6 +26,7 @@ from discord.ext import commands
 from PIL import Image, ImageSequence
 
 from .types import P, T
+from .vars import USER_FLAGS
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -59,6 +61,12 @@ async def create_pool(connection_url: str) -> "asyncpg.Pool[asyncpg.Record]":
         raise Exception("Failed to connect to database")
 
     return connection
+
+
+def format_name(user: Union[discord.User, discord.Member]) -> str:
+    emoji = USER_FLAGS.get(user.id)
+    emoji = f"{emoji} " if emoji else ""
+    return f"{emoji}{user}"
 
 
 def human_join(seq: Sequence[str], delim=", ", final="or", spaces: bool = True) -> str:

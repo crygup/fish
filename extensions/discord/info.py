@@ -14,12 +14,23 @@ from typing import (
 )
 
 import discord
+from discord.components import SelectOption
 from discord.ext import commands
 from discord.interactions import Interaction
+from discord.utils import MISSING
 
 from core import Cog
 from extensions.context import Context
-from utils import USER_FLAGS, AuthorView, human_join, reply
+from utils import (
+    USER_FLAGS,
+    AuthorView,
+    human_join,
+    reply,
+    AllChannels,
+    fish_edit,
+    fish_download,
+    fish_go_back,
+)
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -27,6 +38,9 @@ if TYPE_CHECKING:
 statuses: TypeAlias = Union[
     Literal["online"], Literal["offline"], Literal["dnd"], Literal["idle"]
 ]
+
+BURPLE = discord.ButtonStyle.blurple
+GREEN = discord.ButtonStyle.green
 
 
 class UserDropdown(discord.ui.Select):
@@ -275,11 +289,6 @@ class UserDropdown(discord.ui.Select):
         await interaction.response.defer()
 
 
-class UserViewButtons(AuthorView):
-    def __init__(self, ctx: Context, *, timeout: float | None = None):
-        super().__init__(ctx, timeout=timeout)
-
-
 class UserView(AuthorView):
     def __init__(
         self,
@@ -292,12 +301,221 @@ class UserView(AuthorView):
         self.add_item(UserDropdown(ctx, user, index_embed, fetched_user))
 
 
+class QualityDropdown(discord.ui.Select):
+    view: EditDropdownView
+
+    def __init__(self):
+        sizes = ["16", "32", "64", "128", "256", "512", "1024", "2048", "4096"]
+        options = [
+            discord.SelectOption(label=f"{size}px", value=size) for size in sizes
+        ]
+
+        super().__init__(placeholder="Select a quality", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.asset = self.view.asset.with_size(int(self.values[0]))
+        self.view.embed.set_image(url=self.view.asset.url)
+
+        await interaction.response.edit_message(embed=self.view.embed)
+
+
+class FormatDropdown(discord.ui.Select):
+    view: EditDropdownView
+
+    def __init__(
+        self,
+        asset: discord.Asset,
+    ):
+        formats = ["webp", "jpeg", "jpg", "png"]
+
+        if asset.is_animated():
+            formats.append("gif")
+
+        options = [
+            discord.SelectOption(label=_format, value=_format) for _format in formats
+        ]
+
+        super().__init__(placeholder="Select a format", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.asset = self.view.asset.with_format(self.values[0])  # type: ignore
+        self.view.embed.set_image(url=self.view.asset.url)
+
+        await interaction.response.edit_message(embed=self.view.embed)
+
+
+class EditDropdownView(AuthorView):
+    asset: discord.Asset
+
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.User, discord.Member],
+        embed: discord.Embed,
+        asset: discord.Asset,
+        fetched_user: Optional[discord.User] = None,
+        option: Union[Literal["quality"], Literal["format"]] = "quality",
+    ):
+        super().__init__(ctx)
+        self.user = user
+        self.fetched_user = fetched_user
+        self.embed = embed
+        self.asset = asset
+
+        self.add_item(QualityDropdown()) if option == "quality" else self.add_item(
+            FormatDropdown(asset)
+        )
+
+    @discord.ui.button(emoji=fish_go_back, row=1, style=BURPLE)
+    async def go_back(self, interaction: discord.Interaction, _):
+        await interaction.response.edit_message(
+            embed=self.embed,
+            view=EditView(
+                self.ctx, self.user, self.embed, self.asset, self.fetched_user
+            ),
+        )
+
+
+class EditView(AuthorView):
+    asset: discord.Asset
+
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.User, discord.Member],
+        embed: discord.Embed,
+        asset: discord.Asset,
+        fetched_user: Optional[discord.User] = None,
+    ):
+        super().__init__(ctx)
+        self.user = user
+        self.fetched_user = fetched_user
+        self.embed = embed
+        self.asset = asset
+
+        self.server.disabled = isinstance(user, discord.User) or not hasattr(
+            user, "guild_avatar"
+        )
+
+        self.avatar.disabled = not user.avatar or user.avatar.key == asset.key
+
+    async def edit_message(self, interaction: discord.Interaction):
+        self.embed.set_image(url=self.asset.url)
+        await interaction.response.edit_message(embed=self.embed)
+
+    @discord.ui.button(label="Default Avatar", row=0, style=BURPLE)
+    async def avatar(self, interaction: discord.Interaction, _):
+        if not self.user.avatar:
+            self.avatar.disabled = True
+            raise commands.BadArgument("User's avatar does not exist")
+
+        self.asset = self.user.avatar
+
+        await self.edit_message(interaction)
+
+    @discord.ui.button(label="Server Avatar", row=0, style=BURPLE)
+    async def server(self, interaction: discord.Interaction, _):
+        if not isinstance(self.user, discord.Member) or self.user.guild_avatar is None:
+            self.server.disabled = True
+            raise commands.BadArgument("User's server avatar does not exist")
+
+        self.asset = self.user.guild_avatar
+
+        await self.edit_message(interaction)
+
+    @discord.ui.button(emoji=fish_go_back, row=0, style=BURPLE)
+    async def go_back(self, interaction: discord.Interaction, _):
+        await interaction.response.edit_message(
+            embed=self.embed,
+            view=AvatarView(
+                self.ctx, self.user, self.embed, self.fetched_user, self.asset
+            ),
+        )
+
+    @discord.ui.button(label="Avatar Quality", row=1, style=GREEN)
+    async def quality(self, interaction: discord.Interaction, _):
+        await interaction.response.edit_message(
+            embed=self.embed,
+            view=EditDropdownView(
+                self.ctx,
+                self.user,
+                self.embed,
+                self.asset,
+                self.fetched_user,
+                "quality",
+            ),
+        )
+
+    @discord.ui.button(label="Avatar Format", row=1, style=GREEN)
+    async def _format(self, interaction: discord.Interaction, _):
+        await interaction.response.edit_message(
+            embed=self.embed,
+            view=EditDropdownView(
+                self.ctx, self.user, self.embed, self.asset, self.fetched_user, "format"
+            ),
+        )
+
+
+class AvatarView(AuthorView):
+    asset: discord.Asset
+
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.User, discord.Member],
+        embed: discord.Embed,
+        fetched_user: Optional[discord.User] = None,
+        asset: Optional[discord.Asset] = None,
+    ):
+        super().__init__(ctx)
+        self.user = user
+        self.fetched_user = fetched_user
+        self.embed = embed
+        self.asset = asset or user.display_avatar
+
+        self.edit.disabled = self.asset.key.isdigit()
+
+    @discord.ui.button(label="Edit", row=0, style=BURPLE, emoji=fish_edit)
+    async def edit(self, interaction: discord.Interaction, _):
+        if interaction.message is None:
+            raise commands.BadArgument("Somehow message was none, try again.")
+
+        view = EditView(self.ctx, self.user, self.embed, self.asset)
+
+        await interaction.message.edit(view=view)
+        await interaction.response.defer()
+
+    @discord.ui.button(
+        label="Save",
+        row=0,
+        style=GREEN,
+        emoji=fish_download,
+    )
+    async def save(self, interaction: discord.Interaction, _):
+        if interaction.message is None:
+            raise commands.BadArgument("Somehow message was none, try again.")
+
+        file = await self.asset.to_file()
+        self.embed.set_image(url=f"attachment://{file.filename}")
+        await interaction.message.edit(embed=self.embed, attachments=[file], view=None)
+        await interaction.response.send_message(
+            "Avatar saved! Here's how saving avatars works: the avatar is saved as a " 
+            "file in this message instead of being used as a Discord avatar. This " 
+            "means that unless the message with the file gets deleted, the avatar "
+            "will remain forever, unlike user avatars, which will be deleted if the "
+            "user decides to change theirs to something else later on.",
+            ephemeral=True,
+        )
+
+
 class Info(Cog):
     async def has_nitro(
         self, member: discord.Member, fetched_user: Optional[discord.User] = None
     ) -> bool:
         fetched_user = fetched_user or await self.bot.fetch_user(member.id)
-        custom_activity: discord.CustomActivity | None = discord.utils.find(lambda a: isinstance(a, discord.CustomActivity), member.activities)  # type: ignore
+        custom_activity: discord.CustomActivity | None = discord.utils.find(  # type: ignore
+            lambda a: isinstance(a, discord.CustomActivity), member.activities
+        )
         return any(
             [
                 member.display_avatar.is_animated(),
@@ -370,7 +588,7 @@ class Info(Cog):
             sql = """
             INSERT INTO status_logs (   user_id, status_name,
                                         guild_id, created_at)
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4)
             """
             await self.bot.pool.execute(
                 sql, member.id, member.status.name, member.guild.id, now
@@ -429,3 +647,149 @@ class Info(Cog):
         user: Union[discord.Member, discord.User] = commands.Author,
     ):
         await self.user_info(ctx, user)
+
+    def channel_embed(self, channel: AllChannels) -> discord.Embed:
+        embed = discord.Embed(
+            color=self.bot.embedcolor,
+            timestamp=channel.created_at,
+            title=channel.name,
+        )
+
+        embed.set_footer(text=f"ID: {channel.id} \nCreated at")
+
+        if isinstance(
+            channel, (discord.TextChannel, discord.VoiceChannel, discord.StageChannel)
+        ):
+            embed.add_field(
+                name="Members",
+                value=f"{len(channel.members):,} ({sum(m.bot for m in channel.members):,} bots)",
+            )
+
+        return embed
+
+    async def text_info(self, ctx: Context, channel: discord.TextChannel):
+        embed = self.channel_embed(channel)
+        embed.description = channel.topic
+        await ctx.send(embed=embed)
+
+    async def category_info(self, ctx: Context, channel: discord.CategoryChannel):
+        embed = self.channel_embed(channel)
+
+        if isinstance(ctx.author, discord.Member):
+            text = f"{len(channel.channels)}"
+            private = sum(
+                not c.permissions_for(ctx.author).read_messages
+                for c in channel.channels
+            )
+            if private > 0:
+                text += f" ({private:,} private)"
+
+            embed.add_field(
+                name="Channels",
+                value=text,
+            )
+
+        await ctx.send(embed=embed)
+
+    async def voice_info(
+        self, ctx: Context, channel: Union[discord.VoiceChannel, discord.StageChannel]
+    ):
+        embed = self.channel_embed(channel)
+
+        vc_limit = (
+            "No User limit"
+            if not bool(channel.user_limit)
+            else f"{channel.user_limit:,} User limit"
+        )
+
+        embed.add_field(
+            name="Details",
+            value=f"{channel.video_quality_mode.name.capitalize()} Video Quality\n"
+            f"{channel.rtc_region.capitalize() if channel.rtc_region else 'Automatic'} region\n"
+            f"{vc_limit}\n"
+            f"{str(channel.bitrate)[:-3]}kbps",
+        )
+
+        await ctx.send(embed=embed)
+
+    async def thread_info(self, ctx: Context, channel: discord.Thread):
+        embed = self.channel_embed(channel)
+        members = await channel.fetch_members()
+        embed.add_field(
+            name="Members",
+            value=f"{len(members):,}",
+        )
+
+        if channel.parent:
+            parent = channel.parent
+            embed.add_field(
+                name="Parent channel", value=f"{parent} (`{parent.id}`)", inline=False
+            )
+
+        if channel.owner:
+            owner = channel.owner
+            embed.add_field(name="Owner", value=f"{owner} (`{owner.id}`)", inline=False)
+
+        await ctx.send(embed=embed)
+
+    async def forum_info(self, ctx: Context, channel: discord.ForumChannel):
+        embed = self.channel_embed(channel)
+
+        embed.description = channel.topic
+
+        embed.add_field(name="Posts", value=f"{len(channel.threads)}")
+
+        embed.add_field(
+            name="Tags",
+            value=human_join(
+                [f"{s.emoji or ''}{s.name}" for s in channel.available_tags],
+                final="and",
+            ),
+        )
+
+        await ctx.send(embed=embed)
+
+    @commands.command(name="channelinfo", aliases=("channel", "ci"))
+    async def channelinfo(
+        self,
+        ctx: Context,
+        channel: AllChannels = commands.param(
+            displayed_default="[channel=<current channel>]",
+            default=lambda ctx: ctx.channel,
+        ),
+    ):
+        types = {
+            discord.TextChannel: self.text_info,
+            discord.CategoryChannel: self.category_info,
+            discord.VoiceChannel: self.voice_info,
+            discord.StageChannel: self.voice_info,
+            discord.Thread: self.thread_info,
+            discord.ForumChannel: self.forum_info,
+        }
+
+        await types[type(channel)](ctx, channel)
+
+    @commands.command(name="avatar", aliases=("pfp", "av", "avy", "avi"))
+    async def avatar(
+        self,
+        ctx: Context,
+        *,
+        user: Union[discord.Member, discord.User] = commands.Author,
+    ):
+        fuser = await self.bot.fetch_user(user.id)
+        embed = discord.Embed(color=fuser.accent_color or self.bot.embedcolor)
+        embed.set_author(name=f"{user}'s avatar", icon_url=user.display_avatar.url)
+
+        embed.set_image(url=user.display_avatar.url)
+
+        sql = """SELECT created_at FROM avatars WHERE user_id = $1 ORDER BY created_at DESC"""
+
+        last_av: Optional[datetime.datetime] = await self.bot.pool.fetchval(
+            sql, user.id
+        )
+
+        if last_av:
+            embed.timestamp = last_av
+            embed.set_footer(text="Last avatar saved")
+
+        await ctx.send(embed=embed, view=AvatarView(ctx, user, embed, fuser))
