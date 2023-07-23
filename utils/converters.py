@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import re
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
 
 from discord.ext import commands
+from bs4 import BeautifulSoup
 
-from .functions import response_checker
-from .vars import SpotifySearchData
+from .functions import response_checker, to_thread
+from .regexes import TENOR_PAGE_RE
+from .vars import base_header
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -125,3 +127,36 @@ class TwemojiConverter(commands.Converter):
             raise Exception(stderr.decode())
 
         return converted
+
+
+class TenorUrlConverter(commands.Converter):
+    @to_thread
+    def get_url(self, text: str) -> str:
+        scraper = BeautifulSoup(text, "html.parser")
+        container = scraper.find(id="single-gif-container")
+
+        if not container:
+            raise commands.BadArgument("Couldn't find anything.")
+
+        try:
+            element = container.find("div").find("div").find("img")  # type: ignore
+        except Exception as e:
+            raise commands.BadArgument(f"Something went wrong. \n{e}")
+
+        if element is None:
+            raise commands.BadArgument(f"Something went wrong.")
+
+        return element["src"]  # type: ignore
+
+    async def convert(self, ctx: Context, url: str) -> str:
+        TUrl = TENOR_PAGE_RE.search(url)
+
+        if not TUrl:
+            raise commands.BadArgument("Invalid Tenor URL.")
+
+        async with ctx.session.get(TUrl.group(0), headers=base_header) as r:
+            text = await r.text()
+
+        url = await self.get_url(text)
+
+        return re.sub("AAAAd", "AAAAC", url)

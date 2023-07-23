@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from io import BytesIO
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Dict, Any
 
 import discord
 from discord.ext import commands
-from discord.ext.commands.context import Context
 from playwright.async_api import async_playwright
 
-from utils import URLConverter
+from utils import URLConverter, TenorUrlConverter, UrbanPageSource, Pager
 
 from .downloads import Downloads
 from .google import Google
@@ -18,6 +17,7 @@ from .spotify import Spotify
 
 if TYPE_CHECKING:
     from core import Fishie
+    from extensions.context import Context
 
 param = commands.param
 
@@ -35,7 +35,7 @@ class Tools(Downloads, Reminder, Google, Spotify):
     @commands.command(name="screenshot", aliases=("ss",))
     async def screenshot(
         self,
-        ctx: commands.Context[Fishie],
+        ctx: Context,
         website: str = param(description="The website's url.", converter=URLConverter),
         *,
         flags: ScreenshotFlags = param(
@@ -59,6 +59,31 @@ class Tools(Downloads, Reminder, Google, Spotify):
                 )
 
         await ctx.send(file=file)
+
+    @commands.command(name="tenor")
+    async def tenor(self, ctx: commands.Context, url: TenorUrlConverter):
+        """Gets the actual gif URL from a tenor link"""
+
+        await ctx.send(f"Here is the real URL: {url}")
+
+    @commands.command(name="urban")
+    async def urban(self, ctx: Context, *, word: str):
+        """Search for a word on urban
+
+        Warning: could be NSFW"""
+
+        url = "https://api.urbandictionary.com/v0/define"
+
+        async with ctx.session.get(url, params={"term": word}) as resp:
+            json = await resp.json()
+            data: List[Dict[Any, Any]] = json.get("list", [])
+
+            if not data:
+                raise commands.BadArgument("Nothing was found for this phrase.")
+
+        p = UrbanPageSource(data, per_page=4)
+        menu = Pager(p, ctx=ctx)
+        await menu.start(ctx)
 
 
 async def setup(bot: Fishie):

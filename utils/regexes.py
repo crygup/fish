@@ -30,3 +30,8 @@ SOUNDCLOUD_RE: Pattern[str] = comp(r"https?://(on.)?soundcloud.com/[a-zA-Z0-9_-]
 
 # discord
 MESSAGE_RE: Pattern[str] = comp(r"https://discord.com/channels/(?P<parent_id>@me|[0-9]{8,})/(?P<channel_id>[0-9]{8,})/(?P<message_id>[0-9]{8,})")
+EMOJI_RE: Pattern[str] = comp(r"<a?:[a-zA-Z0-9\_]{1,}:[0-9]{1,}>")
+
+# tenor
+TENOR_PAGE_RE: Pattern = comp(r"https?://(www\.)?tenor\.com/view/\S+/?")
+TENOR_GIF_RE: Pattern = comp(r"https?://(www\.)?c\.tenor\.com/\S+/\S+\.gif/?")
