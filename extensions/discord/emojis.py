@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import TwemojiConverter, human_join, plural, to_image
+from utils import (
+    TwemojiConverter,
+    human_join,
+    plural,
+    to_image,
+    EMOJI_RE,
+)
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
@@ -121,3 +127,40 @@ class Emojis(Cog):
             await ctx.send(f"Renamed {emoji}")
         except Exception as e:
             raise commands.BadArgument(f"Failed to rename emoji\n{e}")
+
+    @commands.command(name="steal", aliases=("copy", "clone"))
+    @commands.has_permissions(manage_emojis=True)
+    @commands.bot_has_permissions(manage_emojis=True)
+    async def steal(self, ctx: GuildContext, *, emojis: Optional[str]):
+        """Clones emojis to the current server"""
+        if ctx.ref:
+            emojis = ctx.ref.content
+
+        if not emojis:
+            raise commands.BadArgument("No emojis found.")
+
+        emoji_results = EMOJI_RE.findall(emojis)
+
+        if not bool(emoji_results):
+            raise commands.BadArgument("No emojis found.")
+
+        message = await ctx.send("Stealing emojis...")
+
+        completed_emojis = []
+        for result in emoji_results:
+            emoji = await commands.PartialEmojiConverter().convert(ctx, result)
+
+            if emoji is None:
+                continue
+
+            try:
+                e = await ctx.guild.create_custom_emoji(
+                    name=emoji.name, image=await emoji.read()
+                )
+                completed_emojis.append(str(e))
+            except discord.HTTPException:
+                pass
+
+            await message.edit(
+                content=f'Successfully stole {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(emoji_results)})*.'
+            )

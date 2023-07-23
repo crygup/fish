@@ -181,6 +181,18 @@ class Context(commands.Context["Fishie"]):
         file = discord.File(s, "large.txt")  # type: ignore
         return file
 
+    @property
+    def ref(self) -> Optional[discord.Message]:
+        ref = self.message.reference
+
+        if not ref:
+            return None
+
+        if isinstance(ref.resolved, discord.DeletedReferencedMessage):
+            return None
+
+        return ref.resolved
+
 
 class GuildContext(Context):
     author: discord.Member
