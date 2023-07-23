@@ -500,7 +500,7 @@ class AvatarView(AuthorView):
         await interaction.message.edit(embed=self.embed, attachments=[file], view=None)
         await interaction.response.send_message(
             "Avatar saved! Here's how saving avatars works: the avatar is saved as a " 
-            "file in this message instead of being used as a Discord avatar. This " 
+            "file in this message instead of a Discord user avatar. This " 
             "means that unless the message with the file gets deleted, the avatar "
             "will remain forever, unlike user avatars, which will be deleted if the "
             "user decides to change theirs to something else later on.",
