@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from collections import Counter
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -18,7 +19,6 @@ from discord.ext import commands
 from discord.interactions import Interaction
 
 from core import Cog
-from extensions.context import Context
 from utils import (
     USER_FLAGS,
     AllChannels,
@@ -31,7 +31,7 @@ from utils import (
 )
 
 if TYPE_CHECKING:
-    from extensions.context import Context
+    from extensions.context import Context, GuildContext
 
 statuses: TypeAlias = Union[
     Literal["online"], Literal["offline"], Literal["dnd"], Literal["idle"]
@@ -773,7 +773,9 @@ class Info(Cog):
 
         await types[type(channel)](ctx, channel)
 
-    @commands.hybrid_group(name="avatar", aliases=("pfp", "av", "avy", "avi"), fallback="get")
+    @commands.hybrid_group(
+        name="avatar", aliases=("pfp", "av", "avy", "avi"), fallback="get"
+    )
     async def avatar(
         self,
         ctx: Context,
@@ -825,7 +827,7 @@ class Info(Cog):
         user = await self.bot.fetch_user(user.id)
         if not user.banner:
             raise commands.BadArgument("User has no banner.")
-        
+
         embed = discord.Embed(color=user.accent_color or self.bot.embedcolor)
         embed.set_author(name=f"{user}'s banner", icon_url=user.display_avatar.url)
 
@@ -834,3 +836,81 @@ class Info(Cog):
         embed.set_image(url=f"attachment://{file.filename}")
 
         await ctx.send(embed=embed, file=file)
+
+    async def server_info(self, ctx: GuildContext, guild: discord.Guild):
+        embed = discord.Embed(timestamp=guild.created_at)
+        images = []
+
+        name = (
+            f"{guild.name}  •  {guild.vanity_url}" if guild.vanity_url else guild.name
+        )
+        embed.set_author(name=name)
+
+        if guild.description:
+            embed.description = discord.utils.escape_markdown(guild.description)
+
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+            images.append(f"[Icon]({guild.icon.url})")
+
+        if guild.banner:
+            images.append(f"[Banner]({guild.banner.url})")
+
+        if guild.splash:
+            images.append(f"[Splash]({guild.splash.url})")
+
+        bots = sum(m.bot for m in guild.members)
+        embed.add_field(
+            name=f"Members",
+            value=f"{guild.member_count:,} ({bots:,} bots)",
+        )
+
+        channels_text = f"{len(guild.channels):,}"
+        private = sum(
+            not c.permissions_for(ctx.author).read_messages for c in guild.channels
+        )
+        if private > 0:
+            channels_text += f" ({private:,} private)"
+
+        embed.add_field(name=f"Channels", value=channels_text)
+
+        embed.add_field(name="Roles", value=f"{len(guild.roles):,} Roles")
+
+        embed.add_field(name="Owner", value=f"<@{guild.owner_id}>", inline=True)
+
+        embed.add_field(
+            name=f"Level {guild.premium_tier}",
+            value=f"{len(guild.premium_subscribers):,} Boosters\n"
+            f"{guild.premium_subscription_count:,} Boosts",
+        )
+
+        emoji_stats = Counter()
+        for emoji in guild.emojis:
+            if emoji.animated:
+                emoji_stats["animated"] += 1
+                emoji_stats["animated_disabled"] += not emoji.available
+            else:
+                emoji_stats["regular"] += 1
+                emoji_stats["disabled"] += not emoji.available
+
+        fmt = (
+            f'{emoji_stats["regular"]}/{guild.emoji_limit} Regular\n'
+            f'{emoji_stats["animated"]}/{guild.emoji_limit} Animated\n'
+        )
+        if emoji_stats["disabled"] or emoji_stats["animated_disabled"]:
+            fmt = f'{fmt}Disabled: {emoji_stats["disabled"]} regular, {emoji_stats["animated_disabled"]} animated\n'
+
+        embed.add_field(name="Emojis", value=fmt)
+
+        if bool(images):
+            embed.add_field(name="Images", value=", ".join(images), inline=False)
+
+        embed.set_footer(text=f"ID: {guild.id} \nCreated at")
+        await ctx.send(embed=embed)
+
+    @commands.command(name="serverinfo", aliases=("server", "si"))
+    @commands.guild_only()
+    async def serverinfo(
+        self, ctx: GuildContext, *, guild: discord.Guild = commands.CurrentGuild
+    ):
+        await self.server_info(ctx, guild)
