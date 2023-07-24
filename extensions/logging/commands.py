@@ -27,12 +27,7 @@ if TYPE_CHECKING:
 
 
 class Commands(Cog):
-    @commands.hybrid_group(
-        name="avatars", fallback="list", aliases=("pfps", "avis", "avs")
-    )
-    async def avatars(self, ctx: Context, *, user: discord.User = commands.Author):
-        """Shows a user's previous avatars"""
-
+    async def avatars_func(self, ctx: Context, user: discord.User):
         sql = """
         SELECT * FROM avatars WHERE user_id = $1
         ORDER BY created_at DESC
@@ -62,6 +57,14 @@ class Commands(Cog):
             source.embed.title = f"Avatars for {user}"
             pager = Pager(source, ctx=ctx)
             await pager.start(ctx)
+
+    @commands.hybrid_group(
+        name="avatars", fallback="list", aliases=("pfps", "avis", "avs")
+    )
+    async def avatars(self, ctx: Context, *, user: discord.User = commands.Author):
+        """Shows a user's previous avatars"""
+
+        await self.avatars_func(ctx, user)
 
     async def avatars_grid(self, ctx: Context, user: discord.User):
         sql = """
@@ -170,6 +173,62 @@ class Commands(Cog):
         source = FieldPageSource(entries=entries)
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Display names for {user}"
+        pager = Pager(source, ctx=ctx)
+        await pager.start(ctx)
+
+    @commands.command(name="nicknames", aliases=("nicks",))
+    async def nicknames(
+        self, ctx: Context, *, member: discord.Member = commands.Author
+    ):
+        """Shows a user's previous nicknames"""
+
+        results = await self.bot.pool.fetch(
+            "SELECT * FROM nickname_logs WHERE user_id = $1 ORDER BY created_at DESC",
+            member.id,
+        )
+
+        if not bool(results):
+            raise commands.BadArgument(f"I have no nicknames on records for {member}")
+
+        entries = [
+            (
+                r["nickname"],
+                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")} | `ID: {r["id"]}`',
+            )
+            for r in results
+        ]
+
+        source = FieldPageSource(entries=entries)
+        source.embed.color = self.bot.embedcolor
+        source.embed.title = f"Nicknames names for {member}"
+        pager = Pager(source, ctx=ctx)
+        await pager.start(ctx)
+
+    @commands.command(name="discrims", aliases=("discriminators",))
+    async def discrims(self, ctx: Context, *, member: discord.Member = commands.Author):
+        """Shows a user's previous discrim_logs"""
+
+        results = await self.bot.pool.fetch(
+            "SELECT * FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC",
+            member.id,
+        )
+
+        if not bool(results):
+            raise commands.BadArgument(
+                f"I have no discriminators on records for {member}"
+            )
+
+        entries = [
+            (
+                r["discrim"],
+                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")} | `ID: {r["id"]}`',
+            )
+            for r in results
+        ]
+
+        source = FieldPageSource(entries=entries)
+        source.embed.color = self.bot.embedcolor
+        source.embed.title = f"Discriminators names for {member}"
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
