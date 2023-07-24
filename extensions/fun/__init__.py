@@ -11,8 +11,8 @@ from discord.ext import commands
 from core import Cog
 from utils import to_image
 
-from .helpers import RPSView, WTPView, dagpi
 from .about import About
+from .helpers import RPSView, WTPView, dagpi
 
 if TYPE_CHECKING:
     from core import Fishie

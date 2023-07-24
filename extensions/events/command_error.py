@@ -38,9 +38,13 @@ class CommandErrors(Cog):
             type(error), error, error.__traceback__, file=sys.stderr
         )
 
-        if isinstance(error, valid_errors):
-            await ctx.send(str(error))
-        else:
-            await ctx.send(
-                "Well that wasn't supposed to happen, this has been reported."
-            )
+        msg = (
+            str(error)
+            if isinstance(error, valid_errors)
+            else "Well that wasn't supposed to happen, this has been reported."
+        )
+
+        if ctx.interaction:
+            return await ctx.interaction.followup.send(msg)
+
+        await ctx.send(msg)

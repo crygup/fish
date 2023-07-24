@@ -11,7 +11,7 @@ from core import Cog
 from utils import AllChannels, DiscordObjects
 
 if TYPE_CHECKING:
-    from extensions.context import Context, GuildContext
+    from extensions.context import Context
 
 
 class RawCommands(Cog):
