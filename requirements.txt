@@ -16,3 +16,4 @@ Pillow
 pandas
 beautifulsoup4
 psutil
+cachetools

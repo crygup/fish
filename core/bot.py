@@ -21,6 +21,7 @@ from typing import (
 import aiohttp
 import asyncpg
 import discord
+from cachetools import TTLCache
 from discord.abc import Messageable
 from discord.ext import commands
 from redis import asyncio as aioredis
@@ -89,12 +90,38 @@ class Fishie(commands.Bot):
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(
             60.0, 60.0, commands.BucketType.default
         )
+        self.messages: TTLCache[str, discord.Message] = TTLCache(
+            maxsize=1000, ttl=300.0
+        )  # {repr(ctx): message(from ctx.send) }
 
         super().__init__(
             command_prefix=get_prefix,
             intents=discord.Intents.all(),
             strip_after_prefix=True,
         )
+
+    # thanks leo
+    async def on_message_edit(
+        self, before: discord.Message, after: discord.Message
+    ) -> None:
+        if before.content != after.content:
+            await self.process_commands(after)
+
+    async def on_raw_message_delete(
+        self, payload: discord.RawMessageDeleteEvent
+    ) -> None:
+        _repr_regex = f"<extensions\\.context bound to message \\({payload.channel_id}-{payload.message_id}-[0-9]+\\)>"
+        pattern = re.compile(_repr_regex)
+        messages = {r: m for r, m in self.messages.items() if pattern.fullmatch(r)}
+        for _repr, message in messages.items():
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+            try:
+                del self.messages[_repr]
+            except KeyError:
+                pass
 
     async def load_extensions(self):
         for ext in self._extensions:

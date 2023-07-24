@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from io import StringIO
-from typing import TYPE_CHECKING, Any, Callable, Generic, List, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generic, List, Optional, TypeVar
 
 import aiohttp
 import discord
@@ -14,6 +15,16 @@ if TYPE_CHECKING:
     from core import Fishie
 
 T = TypeVar("T")
+
+VALID_EDIT_KWARGS: Dict[str, Any] = {
+    "content": None,
+    "embeds": [],
+    "attachments": [],
+    "suppress": False,
+    "delete_after": None,
+    "allowed_mentions": None,
+    "view": None,
+}
 
 
 class ConfirmationView(discord.ui.View):
@@ -108,6 +119,9 @@ class Context(commands.Context["Fishie"]):
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self.session = self.bot.session
+        self._message_count: int = 0
+        self.pool = self.bot.pool
+        self.redis = self.bot.redis
 
     async def prompt(
         self,
@@ -192,6 +206,69 @@ class Context(commands.Context["Fishie"]):
             return None
 
         return ref.resolved
+
+    # thanks leo
+    async def send(
+        self, content: str | None = None, *args: Any, **kwargs: Any
+    ) -> discord.Message:
+        if kwargs.get("embed") and kwargs.get("embeds"):
+            raise TypeError("Cannot mix embed and embeds keyword arguments.")
+
+        embeds = kwargs.pop("embeds", []) or (
+            [kwargs.pop("embed")] if kwargs.get("embed", None) else []
+        )
+
+        kwargs["embeds"] = embeds
+
+        if self._previous_message:
+            new_kwargs = deepcopy(VALID_EDIT_KWARGS)
+            new_kwargs["content"] = content
+            new_kwargs.update(kwargs)
+            edit_kw = {k: v for k, v in new_kwargs.items() if k in VALID_EDIT_KWARGS}
+            attachments = new_kwargs.pop("files", []) or (
+                [new_kwargs.pop("file")] if new_kwargs.get("file", None) else []
+            )
+
+            if attachments:
+                edit_kw["attachments"] = attachments
+                new_kwargs["files"] = attachments
+
+            try:
+                m = await self._previous_message.edit(**edit_kw)
+                self._previous_message = m
+                self._message_count += 1
+                return m
+            except discord.HTTPException:
+                self._previous_message = None
+                self._previous_message = m = await super().send(content, **kwargs)
+                return m
+
+        self._previous_message = m = await super().send(content, **kwargs)
+        self._message_count += 1
+        return m
+
+    @property
+    def _previous_message(self) -> Optional[discord.Message]:
+        if self.message:
+            try:
+                return self.bot.messages[repr(self)]
+            except KeyError:
+                return None
+
+    @_previous_message.setter
+    def _previous_message(self, message: Optional[discord.Message]) -> None:
+        if isinstance(message, discord.Message):
+            self.bot.messages[repr(self)] = message
+        else:
+            self.bot.messages.pop(repr(self), None)
+
+    def __repr__(self) -> str:
+        if self.message:
+            return f"<extensions.context bound to message ({self.channel.id}-{self.message.id}-{self._message_count})>"
+        elif self.interaction:
+            return f"<extensions.context bound to interaction {self.interaction}>"
+
+        return super().__repr__()
 
 
 class GuildContext(Context):
