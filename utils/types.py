@@ -60,6 +60,7 @@ class Keys(TypedDict):
     google_id: str
     spotify_id: str
     spotify_secret: str
+    dagpi: str
 
 
 class ConfigTokens(TypedDict):

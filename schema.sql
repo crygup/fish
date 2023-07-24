@@ -168,3 +168,11 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     auto_reactions BOOLEAN DEFAULT FALSE,
     PRIMARY KEY (guild_id)
 );
+
+CREATE TABLE IF NOT EXISTS pokemon_guesses (
+    pokemon_name TEXT,
+    author_id BIGINT,
+    correct BIGINT DEFAULT 0,
+    incorrect BIGINT DEFAULT 0,
+    PRIMARY KEY (pokemon_name, author_id)
+);

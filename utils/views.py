@@ -40,9 +40,7 @@ class AuthorView(discord.ui.View):
         )
         return False
 
-    async def on_error(
-        self, interaction: Interaction, error: Exception, item: Item[Any]
-    ):
+    async def on_error(self, interaction: Interaction, error: Exception, _):
         self.ctx.bot.logger.info(
             f'View {self} errored by {self.ctx.author}. Full content: "{self.ctx.message.content}"'
         )

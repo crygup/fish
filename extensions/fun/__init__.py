@@ -8,8 +8,8 @@ import discord
 from discord.ext import commands
 
 from core import Cog
-
-from .helpers import RPSView
+from utils import to_image
+from .helpers import RPSView, dagpi, WTPView
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -62,6 +62,22 @@ class Fun(Cog):
                 self.bot.config["ids"]["bot_id"], permissions=self.bot.bot_permissions
             )
         )
+
+    @commands.command(name="wtp", hidden=True)
+    async def wtp(self, ctx: Context):
+        await ctx.typing()
+
+        data = await dagpi(self.bot, ctx.message, "https://api.dagpi.xyz/data/wtp")
+
+        embed = discord.Embed(color=self.bot.embedcolor)
+        embed.set_author(name="Who's that pokemon?")
+
+        image = await to_image(ctx.session, data["question"])
+        file = discord.File(fp=image, filename="pokemon.png")
+
+        embed.set_image(url="attachment://pokemon.png")
+
+        await ctx.send(embed=embed, file=file, view=WTPView(ctx, data))
 
 
 async def setup(bot: Fishie):

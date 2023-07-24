@@ -86,6 +86,10 @@ class Fishie(commands.Bot):
         self.cached_covers: Dict[str, Tuple[str, bool]] = {}
         self.testing: bool = testing
         self.current_downloads: List[str] = []
+        self.dagpi_rl = commands.CooldownMapping.from_cooldown(
+            60.0, 60.0, commands.BucketType.default
+        )
+
         super().__init__(
             command_prefix=get_prefix,
             intents=discord.Intents.all(),

@@ -1,15 +1,22 @@
+from __future__ import annotations
+
 import random
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Coroutine, Literal, Optional, TypeAlias, Union
+import sys
+import traceback
+from typing import Any, Dict, Literal, TypeAlias, Union, TYPE_CHECKING
 
 import discord
 from discord.ext import commands
 from discord.interactions import Interaction
-from discord.ui.item import Item
+
 
 from extensions.context import Context
-from utils import AuthorView
+from utils import AuthorView, response_checker, to_image, pokeball
+
+if TYPE_CHECKING:
+    from core import Fishie
 
 Choice: TypeAlias = Union[Literal["rock"], Literal["paper"], Literal["scissors"]]
 
@@ -117,3 +124,111 @@ class RPSView(AuthorView):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
         await self.send_result("scissors", interaction, button)
+
+
+async def dagpi(bot: Fishie, message: discord.Message, url: str) -> Dict[str, str]:
+    bucket = bot.dagpi_rl.get_bucket(message)
+
+    if bucket is None:
+        raise commands.BadArgument("No bucket found")
+
+    retry_after = bucket.update_rate_limit()
+
+    if retry_after:
+        raise commands.BadArgument("Rate limited exceeded")
+
+    headers = {"Authorization": bot.config["keys"]["dagpi"]}
+
+    async with bot.session.get(url, headers=headers) as r:
+        if r.status == 429:
+            raise commands.BadArgument("Rate limited exceeded")
+
+        response_checker(r)
+
+        data = await r.json()
+
+    return data
+
+
+class WTPModal(discord.ui.Modal, title="Who's that Pokémon?"):
+    view: WTPView
+
+    def __init__(self, ctx: Context, data: Dict[Any, Any]):
+        super().__init__()
+        self.ctx = ctx
+        self.data = data
+
+    pokemon = discord.ui.TextInput(
+        label="Who's that Pokémon?",
+        style=discord.TextStyle.short,
+        required=True,
+    )
+
+    def _as(self, n: int) -> str:
+        return "s" if n > 1 or n == 0 else ""
+
+    async def update_data(self) -> discord.Embed:
+        name = str(self.data["Data"]["name"]).lower()
+        given_name = self.pokemon.value.lower()
+        correct: bool = name == given_name
+        embed = discord.Embed(
+            color=discord.Colour.green() if correct else discord.Colour.red()
+        )
+        table = ["incorrect", "correct"][correct]
+        embed.set_author(name=f"{table}!".title())
+
+        sql = f"""
+        INSERT INTO pokemon_guesses (pokemon_name, author_id, {table}) VALUES ($1, $2, $3)
+        ON CONFLICT (pokemon_name, author_id) DO UPDATE SET
+        {table} = pokemon_guesses.{table} + 1 WHERE pokemon_guesses.pokemon_name = $1 AND pokemon_guesses.author_id = $2
+        RETURNING *
+        """
+
+        data = await self.ctx.bot.pool.fetchrow(sql, name, self.ctx.author.id, 1)
+
+        if not bool(data):
+            raise commands.BadArgument("No data found for this user.")
+
+        embed.set_footer(
+            text=f"You've got {name.title()} correct {data['correct']:,} time{self._as(data['correct'])} and incorrect {data['incorrect']:,} time{self._as(data['incorrect'])}"
+        )
+
+        return embed
+
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = await self.update_data()
+
+        file = discord.File(
+            await to_image(self.ctx.session, self.data["answer"]),
+            filename="pokemon.png",
+        )
+
+        embed.set_image(url="attachment://pokemon.png")
+
+        await interaction.response.edit_message(
+            attachments=[file], embed=embed, view=None
+        )
+
+    async def on_error(self, interaction: Interaction, error: Exception):
+        self.ctx.bot.logger.info(
+            f'View {self} errored by {self.ctx.author}. Full content: "{self.ctx.message.content}"'
+        )
+        traceback.print_exception(
+            type(error), error, error.__traceback__, file=sys.stderr
+        )
+
+        try:
+            await interaction.response.send_message(str(error), ephemeral=True)
+        except discord.InteractionResponded:
+            await interaction.followup.send(content=str(error), ephemeral=True)
+
+
+class WTPView(AuthorView):
+    def __init__(self, ctx: Context, data: dict[str, str]):
+        super().__init__(ctx)
+        self.ctx = ctx
+        self.data = data
+
+    @discord.ui.button(label="Guess", emoji=pokeball, style=discord.ButtonStyle.green)
+    async def modal(self, interaction: discord.Interaction, __):
+        await interaction.response.send_modal(WTPModal(self.ctx, self.data))

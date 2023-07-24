@@ -31,7 +31,7 @@ class RawCommands(Cog):
         return dict(await self.bot.http.get_channel(channel.id))
 
     @commands.group(name="raw", invoke_without_command=True)
-    @commands.cooldown(1,30, commands.BucketType.user)
+    @commands.cooldown(1, 30, commands.BucketType.user)
     async def raw(
         self,
         ctx: Context,
@@ -94,7 +94,7 @@ class RawCommands(Cog):
         await ctx.send(content, files=files)
 
     @raw.command(name="user")
-    @commands.cooldown(1,30, commands.BucketType.user)
+    @commands.cooldown(1, 30, commands.BucketType.user)
     async def raw_user_command(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
