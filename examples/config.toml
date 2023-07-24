@@ -6,10 +6,15 @@ testing_bot = ""
 fishie_api = ""
 lastfm = ""
 lastfm_secret = ""
-google = ["list", "of", "keys"]
+google = [
+    "",
+    "",
+    "",
+]
 google_id = ""
 spotify_id = ""
 spotify_secret = ""
+dagpi = ""
 
 [databases]
 postgre_dsn = ""
@@ -24,8 +29,10 @@ password = ""
 
 [ids]
 owner_id = 1
+bot_id = 1
 poketwo_id = 1
 mudae_id = 1
+join_logs_id = 1
 
 [webhooks]
 avatars = []
