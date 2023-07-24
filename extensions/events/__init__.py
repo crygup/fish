@@ -12,13 +12,14 @@ from .command_logs import CommandLogs
 from .guilds import Guilds
 from .pokemon import Pokemon
 from .tasks import Tasks
+from .xp import XPCog
 
 if TYPE_CHECKING:
     from core import Fishie
 
 
 class Events(
-    CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon, Reactions, Guilds
+    CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon, Reactions, Guilds, XPCog
 ):
     emoji = discord.PartialEmoji(name="\U0001f3a7")
     hidden: bool = True
@@ -28,6 +29,9 @@ class Events(
         self.bot = bot
         self.cd_mapping = commands.CooldownMapping.from_cooldown(
             1, 5, commands.BucketType.member
+        )
+        self.xp_cd = commands.CooldownMapping.from_cooldown(
+            1, 60, commands.BucketType.user
         )
 
 

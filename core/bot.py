@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime
 import pkgutil
 import re
+import sys
+import traceback
 import types
 from logging import Logger
 from typing import (
@@ -122,6 +124,21 @@ class Fishie(commands.Bot):
                 del self.messages[_repr]
             except KeyError:
                 pass
+    
+    async def on_error(self, event: str, *args: Any, **kwargs: Any) -> None:
+        _, error, _ = sys.exc_info()
+        if not error:
+            raise
+        
+        self.logger.info(
+            f'Event {event} errored'
+        )
+        
+        traceback.print_exception(
+            type(error), error, error.__traceback__, file=sys.stderr
+        )
+
+        return await super().on_error(event, *args, **kwargs)
 
     async def load_extensions(self):
         for ext in self._extensions:

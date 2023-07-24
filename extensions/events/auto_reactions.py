@@ -35,9 +35,9 @@ class Reactions(Cog):
                 )
 
     @commands.Cog.listener("on_message")
-    async def on_message(self, message: discord.Message):
+    async def reaction_message(self, message: discord.Message):
         await self.add_reactions(message)
 
     @commands.Cog.listener("on_message_edit")
-    async def on_message_edit(self, _, message: discord.Message):
+    async def reaction_edit(self, _, message: discord.Message):
         await self.add_reactions(message)

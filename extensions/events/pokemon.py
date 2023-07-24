@@ -37,7 +37,7 @@ class Pokemon(Cog):
         return found
 
     @commands.Cog.listener("on_message")
-    async def on_message(self, message: discord.Message):
+    async def on_pokemon(self, message: discord.Message):
         if message.author.id != self.bot.config["ids"]["poketwo_id"]:
             return
 

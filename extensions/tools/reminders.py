@@ -489,7 +489,9 @@ class Reminder(Cog):
 
         return timer
 
-    @commands.hybrid_group(name="remind", aliases=["timer", "reminder", "remindme"], usage="<when>")
+    @commands.hybrid_group(
+        name="remind", aliases=["timer", "reminder", "remindme"], usage="<when>"
+    )
     async def reminder(
         self,
         ctx: Context,

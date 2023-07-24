@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import discord
 from discord.ext import commands
@@ -86,6 +86,20 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
         menu = Pager(p, ctx=ctx)
         await menu.start(ctx)
 
+    @commands.hybrid_command(name="xp")
+    async def xp(self, ctx: Context, *, user: discord.User = commands.Author):
+        xp: Optional[int] = await self.bot.pool.fetchval("SELECT xp FROM message_xp WHERE user_id = $1", user.id)
+
+        if not bool(xp):
+            raise commands.BadArgument("This user has no recorded XP")
+
+        await ctx.send(f"{user} has {xp:,} XP")
+
+    @commands.hybrid_command(name="rank")
+    async def rank(self, ctx: Context, *, user: discord.User = commands.Author):
+        xp = await self.bot.pool.fetch("SELECT * FROM message_xp ORDER BY xp",)
+
+        ...
 
 async def setup(bot: Fishie):
     await bot.add_cog(Tools(bot))

@@ -185,3 +185,11 @@ CREATE TABLE IF NOT EXISTS command_logs (
     command TEXT,
     created_at TIMESTAMP WITH TIME ZONE
 );
+
+CREATE TABLE IF NOT EXISTS message_xp (
+    id SERIAL,
+    user_id BIGINT,
+    messages BIGINT,
+    xp BIGINT,
+    PRIMARY KEY (user_id)  
+);
