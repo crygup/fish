@@ -269,3 +269,17 @@ async def get_or_fetch_member(
         return None
 
     return members[0]
+
+
+def natural_size(size_in_bytes: int) -> str:
+    """
+    Converts a number of bytes to an appropriately-scaled unit
+    E.g.:
+        1024 -> 1.00 KiB
+        12345678 -> 11.77 MiB
+    """
+    units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB")
+
+    power = int(math.log(max(abs(size_in_bytes), 1), 1024))
+
+    return f"{size_in_bytes / (1024 ** power):.2f} {units[power]}"

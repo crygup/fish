@@ -15,3 +15,4 @@ lru-dict
 Pillow
 pandas
 beautifulsoup4
+psutil

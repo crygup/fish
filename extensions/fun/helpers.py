@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
-from enum import Enum
 import sys
 import traceback
-from typing import Any, Dict, Literal, TypeAlias, Union, TYPE_CHECKING
+from dataclasses import dataclass
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Dict, Literal, TypeAlias, Union
 
 import discord
 from discord.ext import commands
 from discord.interactions import Interaction
 
-
 from extensions.context import Context
-from utils import AuthorView, response_checker, to_image, pokeball
+from utils import AuthorView, pokeball, response_checker, to_image
 
 if TYPE_CHECKING:
     from core import Fishie

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from io import BytesIO
-from typing import TYPE_CHECKING, List, Dict, Any
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import discord
 from discord.ext import commands
 from playwright.async_api import async_playwright
 
-from utils import URLConverter, TenorUrlConverter, UrbanPageSource, Pager
+from utils import Pager, TenorUrlConverter, UrbanPageSource, URLConverter
 
 from .downloads import Downloads
 from .google import Google

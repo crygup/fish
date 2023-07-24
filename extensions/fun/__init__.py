@@ -5,18 +5,21 @@ import re
 from typing import TYPE_CHECKING
 
 import discord
+import psutil
 from discord.ext import commands
 
 from core import Cog
 from utils import to_image
-from .helpers import RPSView, dagpi, WTPView
+
+from .helpers import RPSView, WTPView, dagpi
+from .about import About
 
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context
 
 
-class Fun(Cog):
+class Fun(About):
     """Fun miscellaneous commands"""
 
     emoji = discord.PartialEmoji(name="\U0001f604")
@@ -24,6 +27,10 @@ class Fun(Cog):
     def __init__(self, bot: Fishie):
         super().__init__()
         self.bot = bot
+        self.process = psutil.Process()
+        self.invite_url = discord.utils.oauth_url(
+            self.bot.config["ids"]["bot_id"], permissions=self.bot.bot_permissions
+        )
 
     @commands.command(name="rock-paper-scissors", aliases=("rockpaperscissors", "rps"))
     async def RPSCommand(self, ctx: Context):
@@ -57,11 +64,7 @@ class Fun(Cog):
     async def invite(self, ctx: Context):
         """Sends a link to add me to a server."""
 
-        await ctx.send(
-            discord.utils.oauth_url(
-                self.bot.config["ids"]["bot_id"], permissions=self.bot.bot_permissions
-            )
-        )
+        await ctx.send(self.invite_url)
 
     @commands.command(name="wtp", hidden=True)
     async def wtp(self, ctx: Context):

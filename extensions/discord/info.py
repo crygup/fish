@@ -23,13 +23,13 @@ from core import Cog
 from extensions.context import Context
 from utils import (
     USER_FLAGS,
+    AllChannels,
     AuthorView,
+    fish_download,
+    fish_edit,
+    fish_go_back,
     human_join,
     reply,
-    AllChannels,
-    fish_edit,
-    fish_download,
-    fish_go_back,
 )
 
 if TYPE_CHECKING:

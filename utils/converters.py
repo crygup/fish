@@ -5,8 +5,8 @@ import re
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
 
-from discord.ext import commands
 from bs4 import BeautifulSoup
+from discord.ext import commands
 
 from .functions import response_checker, to_thread
 from .regexes import TENOR_PAGE_RE

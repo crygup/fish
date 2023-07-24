@@ -7,13 +7,7 @@ import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import (
-    TwemojiConverter,
-    human_join,
-    plural,
-    to_image,
-    EMOJI_RE,
-)
+from utils import EMOJI_RE, TwemojiConverter, human_join, plural, to_image
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext

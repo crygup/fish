@@ -176,3 +176,12 @@ CREATE TABLE IF NOT EXISTS pokemon_guesses (
     incorrect BIGINT DEFAULT 0,
     PRIMARY KEY (pokemon_name, author_id)
 );
+
+CREATE TABLE IF NOT EXISTS command_logs (
+    user_id BIGINT,
+    guild_id BIGINT,
+    channel_id BIGINT,
+    message_id BIGINT,
+    command TEXT,
+    created_at TIMESTAMP WITH TIME ZONE
+);
