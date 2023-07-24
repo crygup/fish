@@ -14,10 +14,8 @@ from typing import (
 )
 
 import discord
-from discord.components import SelectOption
 from discord.ext import commands
 from discord.interactions import Interaction
-from discord.utils import MISSING
 
 from core import Cog
 from extensions.context import Context
@@ -775,7 +773,7 @@ class Info(Cog):
 
         await types[type(channel)](ctx, channel)
 
-    @commands.command(name="avatar", aliases=("pfp", "av", "avy", "avi"))
+    @commands.hybrid_group(name="avatar", aliases=("pfp", "av", "avy", "avi"), fallback="get")
     async def avatar(
         self,
         ctx: Context,
@@ -800,3 +798,39 @@ class Info(Cog):
             embed.set_footer(text="Last avatar saved")
 
         await ctx.send(embed=embed, view=AvatarView(ctx, user, embed, fuser))
+
+    @avatar.command(name="history", aliases=("h",))
+    async def avatar_history(
+        self,
+        ctx: Context,
+        *,
+        user: discord.User = commands.Author,
+    ):
+        """Get a user's avatar history"""
+        logging = self.bot.logging
+
+        if not logging:
+            raise commands.BadArgument("Could not find logging cog.")
+
+        await logging.avatars_func(ctx, user)
+
+    @commands.command(name="banner")
+    async def banner(
+        self,
+        ctx: Context,
+        *,
+        user: Union[discord.Member, discord.User] = commands.Author,
+    ):
+        """Get or edit a user's banner"""
+        user = await self.bot.fetch_user(user.id)
+        if not user.banner:
+            raise commands.BadArgument("User has no banner.")
+        
+        embed = discord.Embed(color=user.accent_color or self.bot.embedcolor)
+        embed.set_author(name=f"{user}'s banner", icon_url=user.display_avatar.url)
+
+        file = await user.banner.to_file()
+
+        embed.set_image(url=f"attachment://{file.filename}")
+
+        await ctx.send(embed=embed, file=file)
