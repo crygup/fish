@@ -42,16 +42,11 @@ class CommandErrors(Cog):
             type(error), error, error.__traceback__, file=sys.stderr
         )
 
-        msg = (
-            str(error)
-            if isinstance(error, valid_errors)
-            else "Well that wasn't supposed to happen, this has been reported."
-        )
+        if isinstance(error, valid_errors):
+            if ctx.interaction:
+                return await ctx.interaction.followup.send(str(error))
 
-        if ctx.interaction:
-            return await ctx.interaction.followup.send(msg)
-
-        await ctx.send(msg)
+            return await ctx.send(str(error))
 
         excinfo = "".join(
             traceback.format_exception(
