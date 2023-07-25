@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import EMOJI_RE, TwemojiConverter, human_join, plural, to_image
+from utils import EMOJI_RE, TwemojiConverter, human_join, plural, to_image, SimplePages
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
@@ -159,3 +159,16 @@ class Emojis(Cog):
             await message.edit(
                 content=f'Successfully stole {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(emoji_results)})*.'
             )
+
+    @commands.command(name="emojis")
+    async def emojis(self, ctx: Context, guild: discord.Guild = commands.CurrentGuild):
+        """Get the server emojis."""
+        if not guild.emojis:
+            raise commands.GuildNotFound("Guild has no emojis")
+
+        order = sorted(guild.emojis, key=lambda e: e.created_at)
+
+        data = [f"{str(e)} `<:{e.name}\u200b:{e.id}>`" for e in order]
+        pages = SimplePages(entries=data, per_page=10, ctx=ctx)
+        pages.embed.title = f"Emojis for {guild.name}"
+        await pages.start(ctx)
