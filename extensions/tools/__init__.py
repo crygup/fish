@@ -8,7 +8,14 @@ import discord
 from discord.ext import commands
 from playwright.async_api import async_playwright
 
-from utils import Pager, TenorUrlConverter, UrbanPageSource, URLConverter
+from utils import (
+    Pager,
+    TenorUrlConverter,
+    UrbanPageSource,
+    URLConverter,
+    SimplePages,
+    get_or_fetch_user,
+)
 
 from .downloads import Downloads
 from .google import Google
@@ -88,18 +95,39 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
 
     @commands.hybrid_command(name="xp")
     async def xp(self, ctx: Context, *, user: discord.User = commands.Author):
-        xp: Optional[int] = await self.bot.pool.fetchval("SELECT xp FROM message_xp WHERE user_id = $1", user.id)
+        xp: Optional[int] = await self.bot.pool.fetchval(
+            "SELECT xp FROM message_xp WHERE user_id = $1", user.id
+        )
 
         if not bool(xp):
             raise commands.BadArgument("This user has no recorded XP")
 
         await ctx.send(f"{user} has {xp:,} XP")
 
-    @commands.hybrid_command(name="rank")
-    async def rank(self, ctx: Context, *, user: discord.User = commands.Author):
-        xp = await self.bot.pool.fetch("SELECT * FROM message_xp ORDER BY xp",)
+    async def lb_name(self, user_id: int) -> discord.User | int:
+        try:
+            return await get_or_fetch_user(self.bot, user_id)
+        except:
+            return user_id
 
-        ...
+    @commands.hybrid_command(name="rank", aliases=("leaderboard", "lb"))
+    async def rank(self, ctx: Context):
+        xp = await self.bot.pool.fetch(
+            "SELECT user_id, xp FROM message_xp ORDER BY xp DESC LIMIT 100",
+        )
+
+        if not bool(xp):
+            raise commands.BadArgument("No data found")
+
+        data: Data[int, int] = dict(xp)  # type: ignore
+
+        data = [
+            f"{await self.lb_name(user_id)}: {xp:,}" for user_id, xp in data.items()
+        ]
+        pages = SimplePages(entries=data, per_page=10, ctx=ctx)
+        pages.embed.title = f"Gloabl ranks"
+        await pages.start(ctx)
+
 
 async def setup(bot: Fishie):
     await bot.add_cog(Tools(bot))

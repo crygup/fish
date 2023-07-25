@@ -124,16 +124,14 @@ class Fishie(commands.Bot):
                 del self.messages[_repr]
             except KeyError:
                 pass
-    
+
     async def on_error(self, event: str, *args: Any, **kwargs: Any) -> None:
         _, error, _ = sys.exc_info()
         if not error:
             raise
-        
-        self.logger.info(
-            f'Event {event} errored'
-        )
-        
+
+        self.logger.info(f"Event {event} errored")
+
         traceback.print_exception(
             type(error), error, error.__traceback__, file=sys.stderr
         )
