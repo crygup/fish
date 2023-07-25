@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Union
-
-import discord
-from discord.ext import commands
+from typing import TYPE_CHECKING
 
 from utils import fish_discord
 
@@ -13,7 +10,6 @@ from .raw import RawCommands
 
 if TYPE_CHECKING:
     from core import Fishie
-    from extensions.context import Context
 
 
 class Discord(Emojis, RawCommands, Info):

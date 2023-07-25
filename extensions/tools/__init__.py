@@ -6,14 +6,15 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import discord
 from discord.ext import commands
+from discord.utils import escape_markdown
 from playwright.async_api import async_playwright
 
 from utils import (
     Pager,
+    SimplePages,
     TenorUrlConverter,
     UrbanPageSource,
     URLConverter,
-    SimplePages,
     get_or_fetch_user,
 )
 
@@ -122,7 +123,8 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
         data: Data[int, int] = dict(xp)  # type: ignore
 
         data = [
-            f"{await self.lb_name(user_id)}: {xp:,}" for user_id, xp in data.items()
+            escape_markdown(f"{await self.lb_name(user_id)}: {xp:,}")
+            for user_id, xp in data.items()
         ]
         pages = SimplePages(entries=data, per_page=10, ctx=ctx)
         pages.embed.title = f"Gloabl ranks"

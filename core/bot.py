@@ -5,7 +5,6 @@ import pkgutil
 import re
 import sys
 import traceback
-import types
 from logging import Logger
 from typing import (
     TYPE_CHECKING,
@@ -31,8 +30,9 @@ from redis import asyncio as aioredis
 from utils import MESSAGE_RE, Config, EmojiInputType, Emojis, update_pokemon
 
 if TYPE_CHECKING:
-    from extensions.context import Context
     from extensions.discord import Discord as DiscordCog
+
+    from extensions.context import Context
     from extensions.events import Events
     from extensions.logging import Logging
     from extensions.settings import Settings
@@ -237,16 +237,6 @@ class Fishie(commands.Bot):
             prefix = record["prefix"]
             await self.redis.sadd(f"prefixes:{guild_id}", prefix)
             self.logger.info(f'Added prefix "{prefix}" to "{guild_id}"')
-
-        accounts = await self.pool.fetch("""SELECT * FROM accounts""")
-
-        for record in accounts:
-            user_id = record["user_id"]
-            fm = record["last_fm"]
-
-            if fm:
-                await self.redis.set(f"fm:{user_id}", fm)
-                self.logger.info(f'Added user "{user_id}"\'s last.fm account "{fm}"')
 
         opted_out = await self.pool.fetch("SELECT * FROM opted_out")
         for row in opted_out:

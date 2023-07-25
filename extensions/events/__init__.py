@@ -33,6 +33,9 @@ class Events(
         self.xp_cd = commands.CooldownMapping.from_cooldown(
             1, 60, commands.BucketType.user
         )
+        self.error_logs = discord.Webhook.from_url(
+            bot.config["webhooks"]["error_logs"], session=bot.session
+        )
 
 
 async def setup(bot: Fishie):

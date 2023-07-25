@@ -10,7 +10,6 @@ from core import Cog
 from utils import AuthorView, interaction_only, to_image
 
 if TYPE_CHECKING:
-    from core import Fishie
     from extensions.context import Context, GuildContext
 
 

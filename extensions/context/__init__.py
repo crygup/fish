@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from io import StringIO
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generic, List, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generic, Optional, TypeVar
 
 import aiohttp
 import discord
@@ -192,7 +192,7 @@ class Context(commands.Context["Fishie"]):
         s = StringIO()
         s.write(text)
         s.seek(0)
-        file = discord.File(s, "large.txt")  # type: ignore
+        file = discord.File(s, "large.txt")
         return file
 
     @property

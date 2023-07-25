@@ -3,16 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import discord
-from discord.ext import commands
-
-from core import Cog
 
 from .logging import Logging
 from .server import Server
 
 if TYPE_CHECKING:
     from core import Fishie
-    from extensions.context import Context
 
 
 class Settings(Logging, Server):

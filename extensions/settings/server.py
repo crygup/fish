@@ -9,7 +9,6 @@ from core import Cog
 from utils import AuthorView, FieldPageSource, Pager, get_or_fetch_user
 
 if TYPE_CHECKING:
-    from core import Fishie
     from extensions.context import GuildContext
 
 
@@ -28,7 +27,7 @@ class Dropdown(discord.ui.ChannelSelect):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        channel: discord.TextChannel = self.values[0]  # type: ignore
+        channel: discord.TextChannel = self.values[0]
 
         if self.ctx.bot.settings is None:
             raise commands.BadArgument("Settings cog could not be found somehow.")
@@ -178,7 +177,7 @@ class Server(Cog):
                 f"No auto-download channel found. You may set one with `{ctx.get_prefix}auto-download`"
             )
 
-        channel: discord.TextChannel = self.bot.get_channel(channel_id)  # type: ignore
+        channel: discord.TextChannel = self.bot.get_channel(channel_id)
 
         await self.remove_adl_channel(channel)
         await ctx.send(f"Removed auto-downloads from {channel.mention}")
