@@ -31,7 +31,7 @@ def download(url: str, format: str = "mp4", bot: Optional[Fishie] = None):
     video = video_match.group(0)
 
     options: Dict[Any, Any] = {
-        "outtmpl": rf"files\downloads\{name}.%(ext)s",
+        "outtmpl": rf"files/downloads/{name}.%(ext)s",
         "quiet": True,
         "max_filesize": 100_000_000,
         "match_filter": match_filter,
@@ -45,9 +45,6 @@ def download(url: str, format: str = "mp4", bot: Optional[Fishie] = None):
         audio = True
 
     if TWITTER_RE.search(video):
-        if not bot:
-            raise commands.BadArgument("Bot is required for twitter videos")
-
         options["cookies"] = r"twitter-cookies.txt"
 
     if audio:

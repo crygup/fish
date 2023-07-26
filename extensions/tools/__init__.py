@@ -113,6 +113,7 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
 
     @commands.hybrid_command(name="rank", aliases=("leaderboard", "lb"))
     async def rank(self, ctx: Context):
+        """Check your global rank"""
         xp = await self.bot.pool.fetch(
             "SELECT user_id, xp FROM message_xp ORDER BY xp DESC LIMIT 100",
         )

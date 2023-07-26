@@ -46,11 +46,11 @@ class AutoDownload(Cog):
         async with ctx.typing(ephemeral=True):
             filename = await download(message.content, bot=self.bot)
 
-        file = discord.File(rf"files\downloads\{filename}", f"{filename}")
+        file = discord.File(rf"files/downloads/{filename}", f"{filename}")
 
         await ctx.send(file=file, ephemeral=True)
 
         try:
-            os.remove(rf"files\downloads\{filename}")
+            os.remove(rf"files/downloads/{filename}")
         except:
             pass

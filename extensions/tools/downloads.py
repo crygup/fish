@@ -37,12 +37,12 @@ class Downloads(Cog):
             filename = await download(url, flags.format, bot=self.bot)
 
         file = discord.File(
-            rf"files\downloads\{filename}", f"{flags.title}.{flags.format}"
+            rf"files/downloads/{filename}", f"{flags.title}.{flags.format}"
         )
 
         await ctx.send(file=file, ephemeral=True)
 
         try:
-            os.remove(rf"files\downloads\{filename}")
+            os.remove(rf"files/downloads/{filename}")
         except:
             pass
