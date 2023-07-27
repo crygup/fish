@@ -817,7 +817,7 @@ class Info(Cog):
         await logging.avatars_func(ctx, user)
 
     @commands.command(name="banner")
-    async def banner(
+    async def user_banner(
         self,
         ctx: Context,
         *,
@@ -919,8 +919,32 @@ class Info(Cog):
         if guild.icon is None:
             raise commands.BadArgument(f"{guild} has no icon.")
 
-        embed = discord.Embed(color=self.bot.embedcolor, title=f"{guild}'s server icon")
+        embed = discord.Embed(color=self.bot.embedcolor, title=f"{guild}'s icon")
         file = await guild.icon.to_file()
+
+        embed.set_image(url=f"attachment://{file.filename}")
+
+        await ctx.send(embed=embed, file=file)
+
+    async def server_banner(self, ctx: Context, guild: discord.Guild):
+        if guild.banner is None:
+            raise commands.BadArgument(f"{guild} has no banner.")
+
+        embed = discord.Embed(color=self.bot.embedcolor, title=f"{guild}'s banner")
+
+        file = await guild.banner.to_file()
+
+        embed.set_image(url=f"attachment://{file.filename}")
+
+        await ctx.send(embed=embed, file=file)
+
+    async def server_splash(self, ctx: Context, guild: discord.Guild):
+        if guild.splash is None:
+            raise commands.BadArgument(f"{guild} has no splash.")
+
+        embed = discord.Embed(color=self.bot.embedcolor, title=f"{guild}'s splash")
+
+        file = await guild.splash.to_file()
 
         embed.set_image(url=f"attachment://{file.filename}")
 
@@ -932,6 +956,30 @@ class Info(Cog):
     ):
         await self.server_icon(ctx, guild)
 
+    @serverinfo.command(name="banner")
+    async def serverinfo_banner(
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
+    ):
+        await self.server_banner(ctx, guild)
+
+    @serverinfo.command(name="splash", aliases=("invitebackground", "invitebg", "ibg"))
+    async def serverinfo_splash(
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
+    ):
+        await self.server_splash(ctx, guild)
+
     @commands.command(name="icon")
     async def icon(self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild):
         await self.server_icon(ctx, guild)
+
+    @commands.command(name="serverbanner", aliases=("sbanner",))
+    async def server_banner_command(
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
+    ):
+        await self.server_banner(ctx, guild)
+
+    @commands.command(name="splash", aliases=("invitebackground", "invitebg", "ibg"))
+    async def splash(
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
+    ):
+        await self.server_splash(ctx, guild)
