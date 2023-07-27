@@ -908,9 +908,30 @@ class Info(Cog):
         embed.set_footer(text=f"ID: {guild.id} \nCreated at")
         await ctx.send(embed=embed)
 
-    @commands.command(name="serverinfo", aliases=("server", "si"))
+    @commands.group(name="serverinfo", aliases=("server", "si"))
     @commands.guild_only()
     async def serverinfo(
         self, ctx: GuildContext, *, guild: discord.Guild = commands.CurrentGuild
     ):
         await self.server_info(ctx, guild)
+
+    async def server_icon(self, ctx: Context, guild: discord.Guild):
+        if guild.icon is None:
+            raise commands.BadArgument(f"{guild} has no icon.")
+
+        embed = discord.Embed(color=self.bot.embedcolor, title=f"{guild}'s server icon")
+        file = await guild.icon.to_file()
+
+        embed.set_image(url=f"attachment://{file.filename}")
+
+        await ctx.send(embed=embed, file=file)
+
+    @serverinfo.command(name="icon")
+    async def serverinfo_icon(
+        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
+    ):
+        await self.server_icon(ctx, guild)
+
+    @commands.command(name="icon")
+    async def icon(self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild):
+        await self.server_icon(ctx, guild)

@@ -192,7 +192,7 @@ class Context(commands.Context["Fishie"]):
         s = StringIO()
         s.write(text)
         s.seek(0)
-        file = discord.File(s, "large.txt") # type: ignore
+        file = discord.File(s, "large.txt")  # type: ignore
         return file
 
     @property

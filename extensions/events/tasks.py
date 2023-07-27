@@ -49,10 +49,10 @@ class Tasks(Cog):
             "part",
             "ytdl",
         )
-        for file in os.listdir(r"/files/downloads"):
+        for file in os.listdir(r"files/downloads"):
             if file.endswith(valid_formats):
-                if re.sub("(ytdl|part)", "", file):
-                    os.remove(rf"/files/downloads/{file}")
+                if re.search("(ytdl|part)", file):
+                    os.remove(rf"files/downloads/{file}")
 
     @tasks.loop(minutes=30.0)
     async def set_key_task(self):
