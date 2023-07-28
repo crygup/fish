@@ -29,7 +29,7 @@ Users have the right to opt out of any data collection by Fishie. If you do not 
 
 ## Data Security
 
-[ TO BE WRITTEN SOON ]
+Our server resides in a highly secure data center, and access is safeguarded using SSH (Secure Shell) with additional security measures. We enforce the use of VPN technology or similarly secure methods for accessing our databases, ensuring that they remain isolated from external access. The server's firewall permits only essential ports, and we regularly update our system to maintain optimal security.
 
 ## Third-Party Access
 
