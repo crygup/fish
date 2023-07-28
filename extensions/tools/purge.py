@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import Counter
 
 import re
 from typing import (
@@ -54,7 +55,7 @@ class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
 
 
 class PurgeCog(Cog):
-    @commands.group(name="purge", invoke_without_command=True, fallback="messages")
+    @commands.hybrid_command(name="purge", invoke_without_command=True, fallback="messages")
     @commands.bot_has_permissions(manage_messages=True)
     @commands.has_guild_permissions(manage_messages=True)
     @commands.guild_only()
@@ -68,19 +69,12 @@ class PurgeCog(Cog):
         """
         Mass delete some messages
         """
-        amount = amount or 100
-
         predicates: list[Callable[[discord.Message], Any]] = []
-        op = all if flags.require == "all" else any
-
         if flags.bot:
             if flags.webhooks:
                 predicates.append(lambda m: m.author.bot)
             else:
-                predicates.append(
-                    lambda m: (m.webhook_id is None or m.interaction is not None)
-                    and m.author.bot
-                )
+                predicates.append(lambda m: (m.webhook_id is None or m.interaction is not None) and m.author.bot)
         elif flags.webhooks:
             predicates.append(lambda m: m.webhook_id is not None)
 
@@ -94,7 +88,8 @@ class PurgeCog(Cog):
             predicates.append(lambda m: len(m.reactions))
 
         if flags.emoji:
-            predicates.append(lambda m: re.search(r"<:(\w+):(\d+)>", m.content))
+            custom_emoji = re.compile(r'<:(\w+):(\d+)>')
+            predicates.append(lambda m: custom_emoji.search(m.content))
 
         if flags.user:
             predicates.append(lambda m: m.author == flags.user)
@@ -103,47 +98,49 @@ class PurgeCog(Cog):
             predicates.append(lambda m: flags.contains in m.content)  # type: ignore
 
         if flags.starts:
-            predicates.append(lambda m: m.content.startswith(flags.starts))  # type: ignore
+            predicates.append(lambda m: m.content.startswith(flags.prefix))  # type: ignore
 
         if flags.ends:
-            predicates.append(lambda m: m.content.endswith(flags.ends))  # type: ignore
+            predicates.append(lambda m: m.content.endswith(flags.suffix))  # type: ignore
+
+        if not predicates:
+            # If nothing is passed then default to `True` to emulate ?purge all behaviour
+            predicates.append(lambda m: True)
 
         channel: PurgeChannels = flags.channel if flags.channel else ctx.channel  # type: ignore
+
+        op = all if flags.require == 'all' else any
 
         def predicate(m: discord.Message) -> bool:
             r = op(p(m) for p in predicates)
             return r
 
+        if flags.after:
+            if amount is None:
+                amount = 2000
+
+        if amount is None:
+            amount = 100
+
         before = discord.Object(id=flags.before) if flags.before else None
         after = discord.Object(id=flags.after) if flags.after else None
+        await ctx.defer()
 
-        confirm = await ctx.prompt(
-            f"I am about to purge {plural(amount):message}, do you wish to continue?",
-            timeout=30,
-            delete_after=False,
-        )
+        if before is None and ctx.interaction is not None:
+            # If no before: is passed and we're in a slash command,
+            # the deferred message will be deleted by purge and the followup will not show up.
+            # To work around this, we need to get the deferred message's ID and avoid deleting it.
+            before = await ctx.interaction.original_response()
 
-        if not confirm:
-            raise commands.BadArgument("Aborting.")
+        try:
+            deleted = await channel.purge(limit=amount, before=before, after=after, check=predicate)
+        except discord.Forbidden as e:
+            return await ctx.send('I do not have permissions to delete messages.')
+        except discord.HTTPException as e:
+            return await ctx.send(f'Error: {e} (try a smaller search?)')
 
-        async with ctx.typing():
-            try:
-                deleted = await channel.purge(
-                    limit=amount, before=before, after=after, check=predicate
-                )
-            except discord.Forbidden as e:
-                raise commands.BadArgument(
-                    "I do not have permissions to delete messages."
-                )
-            except discord.HTTPException as e:
-                raise commands.BadArgument(f"Error: {e} (try a smaller search?)")
-
-            await confirm.edit(
-                content=f"Deleted {plural(len(deleted)):message}.",
-                delete_after=7,
-                view=None,
-            )
-
+        await ctx.send(f'Deleted {plural(len(deleted)):message}.', delete_after=7)
+        
     async def purge_guild_invites(
         self, ctx: GuildContext, guild: discord.Guild, amount: Optional[int] = None
     ):
@@ -184,7 +181,7 @@ class PurgeCog(Cog):
 
         await ctx.send(f"Deleted {completed - failed}/{completed} invites.")
 
-    @purge.command(name="invites")
+    @commands.hybrid_command(name="purge-invites")
     @commands.has_guild_permissions(manage_guild=True, manage_channels=True)
     @commands.bot_has_permissions(manage_guild=True, manage_channels=True)
     @commands.guild_only()

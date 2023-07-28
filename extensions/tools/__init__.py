@@ -96,6 +96,7 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
 
     @commands.hybrid_command(name="xp")
     async def xp(self, ctx: Context, *, user: discord.User = commands.Author):
+        """Check the XP you have."""
         xp: Optional[int] = await self.bot.pool.fetchval(
             "SELECT xp FROM message_xp WHERE user_id = $1", user.id
         )
