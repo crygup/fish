@@ -11,6 +11,9 @@ Fishie may collect and store the following information from Discord users for th
 - User IDs: This is used to identify users uniquely within Discord.
 - Usernames: Usernames are collected to personalize user interactions with Fishie.
 - Statuses: We may collect user statuses to provide specific responses based on online, offline, or other Discord statuses.
+- Guild joins: We collect information about the guilds Fishie is added to as a means to prevent spam.
+- Avatars: Fishie stores user avatars for certain commands that require avatar display.
+- Message Counts: We collect and store message counts for XP and levelling-based commands to track user progress and provide XP-related features.
 
 # Use of Collected Information
 
@@ -18,6 +21,7 @@ Fishie may collect and store the following information from Discord users for th
 
 - Provide User Commands: The data collected is utilized to process and execute user commands efficiently.
 - User-Specified Logging: Fishie may store data as per the user's request for logging purposes.
+- XP and Levelling: Message counts are used to calculate XP, track user levels, and provide XP-based rewards and features.
 
 ## Opting Out and Data Deletion
 
