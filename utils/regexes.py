@@ -13,6 +13,7 @@ VIDEOS_RE: Pattern[str] = comp(
     (https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11})?
     (https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11}))?
     (https?://(on.)?soundcloud.com/[a-zA-Z0-9_-]{3,25}/?([a-z0-9_-]{3,255})?)?
+    (https?://(www\.pinterest\.com/pin/[0-9]{1,}/)?(pin\.it/[a-zA-Z0-9]{1,})?)?
     """,
     X,
 )
@@ -27,6 +28,7 @@ YT_CLIP_RE: Pattern[str] = comp(r"https://(www.)?youtube.com/clip/[A-Za-z0-9_-]{
 YT_SHORT_RE: Pattern[str] = comp(r"https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}")
 YOUTUBE_RE: Pattern[str] = comp(r"https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})")
 SOUNDCLOUD_RE: Pattern[str] = comp(r"https?://(on.)?soundcloud.com/[a-zA-Z0-9_-]{3,25}/?([a-z0-9_-]{3,255})?")
+PINTEREST_RE: Pattern[str] = comp(r"https?://(www\.pinterest\.com/pin/[0-9]{1,}/)?(pin\.it/[a-zA-Z0-9]{1,})?")
 
 # discord
 MESSAGE_RE: Pattern[str] = comp(r"https://discord.com/channels/(?P<parent_id>@me|[0-9]{8,})/(?P<channel_id>[0-9]{8,})/(?P<message_id>[0-9]{8,})")
