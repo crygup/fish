@@ -4,7 +4,7 @@ Effective Date: 7/27/2023
 
 Thank you for using Fishie, the Discord bot ("Fishie", "we", "us", or "our"). This Privacy Policy outlines how Fishie collects, uses, and protects your personal information when you interact with our bot on Discord. By using Fishie, you consent to the practices described in this policy.
 
-## Information Collected
+# Information Collected
 
 Fishie may collect and store the following information from Discord users for the purpose of providing helpful user commands and user-specified logging:
 
