@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import asyncpg
 from jishaku.cog import OPTIONAL_FEATURES, STANDARD_FEATURES
 from jishaku.features.baseclass import Feature
 
 from core import Cog
 from utils import fish_owner
+from discord.ext import commands
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -19,7 +21,7 @@ class Jishaku(Cog, *OPTIONAL_FEATURES, *STANDARD_FEATURES):
 
     @Feature.Command(parent="jsk", name="test")
     async def test(self, ctx: Context):
-        await ctx.send("This is a test command!")
+        raise commands.BadArgument("Test error")
 
 
 async def setup(bot: Fishie):

@@ -48,26 +48,4 @@ class CommandErrors(Cog):
 
             return await ctx.send(str(error))
 
-        excinfo = "".join(
-            traceback.format_exception(
-                type(error), error, error.__traceback__, chain=False
-            )
-        )
-
-        embed = discord.Embed(title="Command Error", colour=self.bot.embedcolor)
-        embed.add_field(name="Name", value=command.qualified_name)
-        embed.add_field(name="Author", value=f"{ctx.author} (ID: {ctx.author.id})")
-
-        fmt = f"Channel: {ctx.channel} (ID: {ctx.channel.id})"
-
-        if ctx.guild:
-            fmt = f"{fmt}\nGuild: {ctx.guild} (ID: {ctx.guild.id})"
-
-        embed.add_field(name="Location", value=fmt, inline=False)
-        embed.add_field(
-            name="Content", value=textwrap.shorten(ctx.message.content, 512)
-        )
-
-        embed.description = f"```py\n{excinfo}\n```"
-        embed.timestamp = discord.utils.utcnow()
-        await self.error_logs.send(embed=embed)
+        await self.bot.log_error(error)

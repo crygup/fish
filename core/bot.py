@@ -5,6 +5,7 @@ import pkgutil
 import re
 import sys
 import traceback
+from io import StringIO
 from logging import Logger
 from typing import (
     TYPE_CHECKING,
@@ -30,9 +31,8 @@ from redis import asyncio as aioredis
 from utils import MESSAGE_RE, Config, EmojiInputType, Emojis, update_pokemon
 
 if TYPE_CHECKING:
-    from extensions.discord import Discord as DiscordCog
-
     from extensions.context import Context
+    from extensions.discord_ext import Discord as DiscordCog
     from extensions.events import Events
     from extensions.logging import Logging
     from extensions.settings import Settings
@@ -67,6 +67,7 @@ class Fishie(commands.Bot):
     custom_emojis = Emojis()
     cached_covers: Dict[str, Tuple[str, bool]] = {}
     pokemon: List[str]
+    error_logs: discord.Webhook
 
     def __init__(
         self,
@@ -125,6 +126,29 @@ class Fishie(commands.Bot):
             except KeyError:
                 pass
 
+    def too_big(self, text: str) -> discord.File:
+        s = StringIO()
+        s.write(text)
+        s.seek(0)
+        file = discord.File(s, "large.txt")  # type: ignore
+        return file
+
+    async def log_error(self, error: Exception | commands.CommandError | BaseException):
+        excinfo = "".join(
+            traceback.format_exception(
+                type(error), error, error.__traceback__, chain=False
+            )
+        )
+
+        if len(excinfo) > 2000:
+            files = [self.too_big(excinfo)]
+            excinfo = "File too large"
+        else:
+            files = []
+            excinfo = f"```py\n{excinfo}\n```"
+
+        await self.error_logs.send(content=excinfo, files=files)
+
     async def on_error(self, event: str, *args: Any, **kwargs: Any) -> None:
         _, error, _ = sys.exc_info()
         if not error:
@@ -135,6 +159,8 @@ class Fishie(commands.Bot):
         traceback.print_exception(
             type(error), error, error.__traceback__, file=sys.stderr
         )
+
+        await self.log_error(error)
 
         return await super().on_error(event, *args, **kwargs)
 
@@ -176,6 +202,10 @@ class Fishie(commands.Bot):
         await self.populate_cache()
         await update_pokemon(self)
         self.logger.info(f"Added {len(self.pokemon):,} pokemon")
+
+        self.error_logs = discord.Webhook.from_url(
+            self.config["webhooks"]["error_logs"], session=self.session
+        )
 
     async def on_ready(self):
         if not hasattr(self, "start_time"):

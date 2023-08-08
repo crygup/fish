@@ -33,5 +33,4 @@ valid_errors = (
     InvalidWebsite,
     VideoIsLive,
     DownloadError,
-    commands.CommandError,
 )
