@@ -107,7 +107,7 @@ class User(Cog):
         )
 
     @commands.Cog.listener("on_member_join")
-    async def join_log(self, _, member: discord.Member):
+    async def join_log(self, old_member, member: discord.Member):
         if "joins" in await self.bot.redis.smembers(f"opted_out:{member.id}"):
             return
 
