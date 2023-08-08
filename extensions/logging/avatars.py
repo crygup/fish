@@ -25,7 +25,7 @@ class Avatars(Cog):
         guild_id: Optional[int] = None,
     ):
         webhook = discord.Webhook.from_url(
-            random.choice(self.bot.config["webhooks"]["avatars"]),
+            random.choice(self.bot.config["webhooks"]["images"]),
             session=self.bot.session,
         )
         try:

@@ -26,9 +26,7 @@ DiscordObjects: TypeAlias = Optional[
 
 
 class Webhooks(TypedDict):
-    avatars: List[str]
     images: List[str]
-    icons: List[str]
     error_logs: str
 
 

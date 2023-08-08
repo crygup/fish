@@ -24,7 +24,7 @@ class Guild(Cog):
         asset: discord.Asset,
     ):
         webhook = discord.Webhook.from_url(
-            random.choice(self.bot.config["webhooks"]["icons"]),
+            random.choice(self.bot.config["webhooks"]["images"]),
             session=self.bot.session,
         )
         try:

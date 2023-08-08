@@ -35,9 +35,5 @@ mudae_id = 1
 join_logs_id = 1
 
 [webhooks]
-avatars = []
-
 images = []
-
-
-icons = []
+error_logs = ""
