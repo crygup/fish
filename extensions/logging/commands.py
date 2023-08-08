@@ -183,8 +183,9 @@ class Commands(Cog):
         """Shows a user's previous nicknames"""
 
         results = await self.bot.pool.fetch(
-            "SELECT * FROM nickname_logs WHERE user_id = $1 ORDER BY created_at DESC",
+            "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC",
             member.id,
+            member.guild.id,
         )
 
         if not bool(results):
