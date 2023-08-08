@@ -98,7 +98,7 @@ class User(Cog):
 
     async def add_join(self, member: discord.Member):
         sql = """
-        INSERT INTO member_join_logs(user_id, guild_id, time)
+        INSERT INTO member_join_logs(member_id, guild_id, time)
         VALUES($1, $2, $3)
         """
 
