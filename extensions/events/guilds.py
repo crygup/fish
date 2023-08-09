@@ -39,7 +39,7 @@ class Guilds(Cog):
         await channel.send(embed=embed)
 
     @commands.Cog.listener("on_guild_join")
-    async def on_guild_join(self, old_guild, guild: discord.Guild):
+    async def on_guild_join(self, guild: discord.Guild):
         embed = discord.Embed(title=guild.name, timestamp=discord.utils.utcnow())
         embed.set_author(
             name="Joined Guild", icon_url=guild.icon.url if guild.icon else None

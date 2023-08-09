@@ -1,17 +1,9 @@
 from __future__ import annotations
 
-import base64
-import random
-from typing import TYPE_CHECKING
-
-import asyncpg
 import discord
 from discord.ext import commands
 
 from core import Cog
-
-if TYPE_CHECKING:
-    from core import Fishie
 
 
 class User(Cog):
@@ -107,7 +99,7 @@ class User(Cog):
         )
 
     @commands.Cog.listener("on_member_join")
-    async def join_log(self, old_member, member: discord.Member):
+    async def member_join_logs(self, member: discord.Member):
         if "joins" in await self.bot.redis.smembers(f"opted_out:{member.id}"):
             return
 
