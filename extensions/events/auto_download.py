@@ -46,9 +46,12 @@ class AutoDownload(Cog):
         async with ctx.typing(ephemeral=True):
             filename = await download(message.content, bot=self.bot)
 
-        file = discord.File(rf"files/downloads/{filename}", f"{filename}")
+        try:
+            file = discord.File(rf"files/downloads/{filename}", f"{filename}")
 
-        await ctx.send(file=file, ephemeral=True)
+            await ctx.send(file=file, ephemeral=True)
+        except FileNotFoundError:
+            await ctx.send("No file found, maybe file too large or improper URL provided.")
 
         try:
             os.remove(rf"files/downloads/{filename}")
