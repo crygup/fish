@@ -105,7 +105,7 @@ class Guilds(Cog):
         )
 
     @commands.Cog.listener("on_guild_remove")
-    async def on_guild_remove(self, old_guild, guild: discord.Guild):
+    async def on_guild_remove(self, guild: discord.Guild):
         embed = discord.Embed(title=guild.name, timestamp=discord.utils.utcnow())
         embed.set_author(
             name="Left Guild", icon_url=guild.icon.url if guild.icon else None
