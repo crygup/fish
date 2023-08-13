@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import asyncpg
+from discord.ext import commands
 from jishaku.cog import OPTIONAL_FEATURES, STANDARD_FEATURES
 from jishaku.features.baseclass import Feature
 
 from core import Cog
 from utils import fish_owner
-from discord.ext import commands
 
 if TYPE_CHECKING:
     from core import Fishie

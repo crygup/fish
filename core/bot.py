@@ -96,6 +96,7 @@ class Fishie(commands.Bot):
         self.messages: TTLCache[str, discord.Message] = TTLCache(
             maxsize=1000, ttl=300.0
         )  # {repr(ctx): message(from ctx.send) }
+        self.support_invite: str = f"https://discord.gg/Fct5UGadcb"
 
         super().__init__(
             command_prefix=get_prefix,

@@ -51,7 +51,9 @@ class AutoDownload(Cog):
 
             await ctx.send(file=file, ephemeral=True)
         except FileNotFoundError:
-            await ctx.send("No file found, maybe file too large or improper URL provided.")
+            await ctx.send(
+                "No file found, maybe file too large or improper URL provided."
+            )
 
         try:
             os.remove(rf"files/downloads/{filename}")
