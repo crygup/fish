@@ -55,7 +55,7 @@ class Guilds(Cog):
             timestamp=discord.utils.utcnow(),
         )
 
-        msg = f"This server currently has only {guild.member_count} members, which is insufficient for using this bot. The solution to this issue is to either add the bot to a larger server or join the support server and utilize the bot there."
+        msg = f"This server currently has only {sum(not m.bot for m in guild.members)} members, which is insufficient for using this bot. The solution to this issue is to either add the bot to a larger server or join the support server and utilize the bot there."
 
         embed.add_field(name="Member count issue", value=msg)
         embed.add_field(
