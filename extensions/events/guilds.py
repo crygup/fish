@@ -76,8 +76,11 @@ class Guilds(Cog):
             await guild.leave()
             return
 
-        await channel.send(embed=embed)
-
+        try:
+            await channel.send(embed=embed)
+        except:
+            pass
+        
         await guild.leave()
 
     @commands.Cog.listener("on_guild_join")
