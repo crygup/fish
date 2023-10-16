@@ -4,7 +4,7 @@ import asyncio
 import base64
 import datetime
 import random
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import asyncpg
 import discord
@@ -22,19 +22,26 @@ from utils import (
 )
 
 if TYPE_CHECKING:
-    from core import Fishie
     from extensions.context import Context, GuildContext
 
 
 class Commands(Cog):
-    async def avatars_func(self, ctx: Context, user: discord.User):
-        sql = """
-        SELECT * FROM avatars WHERE user_id = $1
-        ORDER BY created_at DESC
-        """
+    async def avatars_func(
+        self, ctx: Context, user: discord.User, guild_id: Optional[int] = None
+    ):
+        sql = (
+            """SELECT * FROM guild_avatars WHERE member_id = $1 AND guild_id = $2 ORDER BY created_at DESC"""
+            if guild_id
+            else """SELECT * FROM avatars WHERE user_id = $1 ORDER BY created_at DESC"""
+        )
+
+        if guild_id:
+            args = (sql, user.id, guild_id)
+        else:
+            args = (sql, user.id)
 
         async with ctx.typing():
-            records: List[asyncpg.Record] = await self.bot.pool.fetch(sql, user.id)
+            records: List[asyncpg.Record] = await self.bot.pool.fetch(*args)  # type: ignore # i think this is a typing bug, not stubbed properly
 
             if not bool(records):
                 raise commands.BadArgument(f"I have no avatars on record for {user}")
@@ -54,26 +61,32 @@ class Commands(Cog):
                 if user.color == discord.Color.default()
                 else user.color
             )
-            source.embed.title = f"Avatars for {user}"
+            source.embed.title = (
+                f"{['Avatars', 'Guild avatars'][bool(guild_id)]} for {user}"
+            )
             pager = Pager(source, ctx=ctx)
             await pager.start(ctx)
 
-    @commands.hybrid_group(
-        name="avatars", fallback="list", aliases=("pfps", "avis", "avs")
-    )
-    async def avatars(self, ctx: Context, *, user: discord.User = commands.Author):
-        """Shows a user's previous avatars"""
+    async def avatars_grid(
+        self, ctx: Context, user: discord.User, guild_id: Optional[int] = None
+    ):
+        sql = (
+            """SELECT * FROM guild_avatars WHERE member_id = $1 AND guild_id = $2 ORDER BY created_at DESC LIMIT 100"""
+            if guild_id
+            else """SELECT * FROM avatars WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100"""
+        )
 
-        await self.avatars_func(ctx, user)
-
-    async def avatars_grid(self, ctx: Context, user: discord.User):
-        sql = """
-        SELECT * FROM avatars WHERE user_id = $1
-        ORDER BY created_at DESC LIMIT 100
-        """
+        if guild_id:
+            args = (sql, user.id, guild_id)
+            table = "guild_avatars"
+            user_id = "member_id"
+        else:
+            args = (sql, user.id)
+            table = "avatars"
+            user_id = "user_id"
 
         async with ctx.typing():
-            records: List[asyncpg.Record] = await self.bot.pool.fetch(sql, user.id)
+            records: List[asyncpg.Record] = await self.bot.pool.fetch(*args)  # type: ignore # same as above
 
             if not bool(records):
                 raise commands.BadArgument(f"{user} has no avatars on record.")
@@ -91,7 +104,7 @@ class Commands(Cog):
 
             if len(records) >= 100:
                 first_avatar: datetime.datetime = await self.bot.pool.fetchval(
-                    """SELECT created_at FROM avatars WHERE user_id = $1 ORDER BY created_at ASC""",
+                    f"""SELECT created_at FROM {table} WHERE {user_id} = $1 ORDER BY created_at ASC""",
                     user.id,
                 )
             else:
@@ -104,10 +117,29 @@ class Commands(Cog):
                 f"Viewing avatars in a grid view for {user}", file=file, embed=embed
             )
 
-    @commands.command(
+    @commands.group(
+        name="avatars", aliases=("pfps", "avis", "avs"), invoke_without_command=True
+    )
+    async def avatars(self, ctx: Context, *, user: discord.User = commands.Author):
+        """Shows a user's previous avatars"""
+
+        await self.avatars_func(ctx, user)
+
+    @avatars.command(name="server", aliases=("guild", "s"))
+    @commands.guild_only()
+    async def server_avatars(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ):
+        """Shows a member's previous server avatars"""
+        if ctx.guild is None:
+            return  # wont happen
+
+        await self.avatars_func(ctx, user, ctx.guild.id)
+
+    @commands.group(
         name="avatarhistory",
         aliases=("avyh", "avatar-history", "avatar_history", "pfph", "avh"),
-        hidden=True,
+        invoke_without_command=True,
     )
     async def avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
@@ -115,12 +147,12 @@ class Commands(Cog):
         """Shows a user's previous avatars in a grid view"""
         await self.avatars_grid(ctx, user)
 
-    @avatars.command(name="grid", fallback="list", aliases=("c", "collection"))
-    async def avatars_grid_command(
+    @avatar_history.command(name="server", aliases=("guild", "s"))
+    async def server_avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows a user's previous avatars in a grid view"""
-        await self.avatars_grid(ctx, user)
+        await self.avatars_grid(ctx, user, 848507662437449750)
 
     @commands.command(name="usernames")
     async def usernames(self, ctx: Context, *, user: discord.User = commands.Author):

@@ -41,7 +41,7 @@ class Guilds(Cog):
     async def guild_too_small(self, guild: discord.Guild):
         if guild.owner_id == self.bot.config["ids"]["owner_id"]:
             return
-        
+
         self.bot.logger.info(
             f"I left the guild '{guild}' (ID: {guild.id}) due to its small membership size. There were only {guild.member_count} members."
         )
@@ -80,7 +80,7 @@ class Guilds(Cog):
             await channel.send(embed=embed)
         except:
             pass
-        
+
         await guild.leave()
 
     @commands.Cog.listener("on_guild_join")
