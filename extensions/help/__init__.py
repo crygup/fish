@@ -29,7 +29,7 @@ def make_command_embed(
     embed = discord.Embed(
         color=bot.embedcolor,
         title=command.name.capitalize(),
-        description=command.description,
+        description=command.description or command.help,
     )
     embed.add_field(
         name="Usage",
