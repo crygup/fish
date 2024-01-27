@@ -6,3 +6,4 @@ __pycache__/
 /.vscode
 /twitter-cookies.txt
 /extensions/private
+testing.py
