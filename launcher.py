@@ -50,12 +50,12 @@ async def start(testing: bool):
         os.environ[env] = "True"
 
     pool = await create_pool(
-        config["databases"]["testing_postgre_dsn" if testing else "postgre_dsn"]
+        config["databases"]["psql_testing" if testing else "psql"]
     )
     logger.info("Connected to Postgres")
 
     redis = await aioredis.from_url(
-        config["databases"]["testing_redis_dsn" if testing else "redis_dsn"],
+        config["databases"]["redis_testing" if testing else "redis"],
         encoding="utf-8",
         decode_responses=True,
     )

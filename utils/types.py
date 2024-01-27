@@ -36,11 +36,11 @@ class Twitter(TypedDict):
 
 
 class Databases(TypedDict):
-    postgre_dsn: str
-    testing_postgre_dsn: str
+    psql: str
+    psql_testing: str
 
-    redis_dsn: str
-    testing_redis_dsn: str
+    redis: str
+    redis_testing: str
 
 
 class Ids(TypedDict):

@@ -17,11 +17,11 @@ spotify_secret = ""
 dagpi = ""
 
 [databases]
-postgre_dsn = ""
-testing_postgre_dsn = ""
+psql = ""
+psql_testing = ""
 
-redis_dsn = ""
-testing_redis_dsn = ""
+redis = ""
+redis_testing = ""
 
 [twitter]
 username = ""
