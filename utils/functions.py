@@ -2,20 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import textwrap
 from io import BytesIO
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Awaitable,
-    Callable,
-    List,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import (TYPE_CHECKING, Any, Awaitable, Callable, List, Optional,
+                    Sequence, Tuple, Union)
 
 import aiohttp
 import asyncpg
@@ -139,9 +131,7 @@ async def get_sp_cover(bot: Fishie, query: str) -> Tuple[str, bool]:
 
     try:
         cover = results["albums"]["items"][0]["images"][0]["url"]
-        nsfw = results["albums"]["items"][0]["id"] in await bot.redis.smembers(
-            "nsfw_covers"
-        )
+        nsfw = results["albums"]["items"][0]["id"] in await bot.redis.smembers("nsfw_covers")  # type: ignore
 
         try:
             bot.cached_covers[query] = (cover, nsfw)
@@ -179,7 +169,7 @@ def resize_to_limit(data: BytesIO, limit: int) -> BytesIO:
         with Image.open(data) as im:
             data = BytesIO()
             if im.format == "PNG":
-                im = im.resize(tuple([i // 2 for i in im.size]), resample=Image.BICUBIC)
+                im = im.resize(tuple([i // 2 for i in im.size]), resample=Image.BICUBIC)  # type: ignore
                 im.save(data, "png")
             elif im.format == "GIF":
                 durations = []
@@ -283,3 +273,18 @@ def natural_size(size_in_bytes: int) -> str:
     power = int(math.log(max(abs(size_in_bytes), 1), 1024))
 
     return f"{size_in_bytes / (1024 ** power):.2f} {units[power]}"
+
+
+async def run(cmd):
+    logger = logging.getLogger("fishie")
+    proc = await asyncio.create_subprocess_shell(
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+
+    stdout, stderr = await proc.communicate()
+
+    logger.info(f"[{cmd!r} exited with {proc.returncode}]")
+    if stdout:
+        logger.info(f"[stdout]\n{stdout.decode()}")
+    if stderr:
+        logger.error(f"[stderr]\n{stderr.decode()}")

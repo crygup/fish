@@ -9,13 +9,8 @@ from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
-from utils import (
-    AuthorView,
-    GoogleImageData,
-    GoogleImagePageSource,
-    Pager,
-    response_checker,
-)
+from utils import (AuthorView, GoogleImageData, GoogleImagePageSource, Pager,
+                   response_checker)
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -47,12 +42,18 @@ class Google(Cog):
             "cx": self.bot.config["keys"]["google_id"],
             "q": query,
             "key": random.choice(self.bot.config["keys"]["google"]),
-            "safe": "off"
-            if isinstance(
-                ctx.channel,
-                (discord.DMChannel, discord.PartialMessageable, discord.GroupChannel),
-            )
-            else ["active", "off"][ctx.channel.is_nsfw()],
+            "safe": (
+                "off"
+                if isinstance(
+                    ctx.channel,
+                    (
+                        discord.DMChannel,
+                        discord.PartialMessageable,
+                        discord.GroupChannel,
+                    ),
+                )
+                else ["active", "off"][ctx.channel.is_nsfw()]
+            ),
         }
         await ctx.typing()
 
@@ -96,12 +97,18 @@ class Google(Cog):
             "q": query,
             "key": random.choice(self.bot.config["keys"]["google"]),
             "searchType": "image",
-            "safe": "off"
-            if isinstance(
-                ctx.channel,
-                (discord.DMChannel, discord.PartialMessageable, discord.GroupChannel),
-            )
-            else ["active", "off"][ctx.channel.is_nsfw()],
+            "safe": (
+                "off"
+                if isinstance(
+                    ctx.channel,
+                    (
+                        discord.DMChannel,
+                        discord.PartialMessageable,
+                        discord.GroupChannel,
+                    ),
+                )
+                else ["active", "off"][ctx.channel.is_nsfw()]
+            ),
         }
 
         await ctx.typing()

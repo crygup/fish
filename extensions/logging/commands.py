@@ -11,15 +11,8 @@ import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import (
-    AvatarsPageSource,
-    FieldPageSource,
-    Pager,
-    format_bytes,
-    format_status,
-    human_timedelta,
-    to_image,
-)
+from utils import (AvatarsPageSource, FieldPageSource, Pager, format_bytes,
+                   format_status, human_timedelta, to_image)
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext

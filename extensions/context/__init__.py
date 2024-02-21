@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from io import StringIO
-from typing import TYPE_CHECKING, Any, Callable, Dict, Generic, Optional, TypeVar
+from typing import (TYPE_CHECKING, Any, Callable, Dict, Generic, Optional,
+                    TypeVar)
 
 import aiohttp
 import discord

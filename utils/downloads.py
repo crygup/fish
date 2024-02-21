@@ -46,22 +46,26 @@ def download(url: str, format: str = "mp4", bot: Optional[Fishie] = None):
 
     if TWITTER_RE.search(video):
         options["cookies"] = r"twitter-cookies.txt"
-        options['postprocessors'] = [{
-            'key': 'Exec',
-            'exec_cmd': [
-                'mv %(filename)q %(filename)q.temp',
-                'ffmpeg -y -i %(filename)q.temp -c copy -map 0 -brand mp42 %(filename)q',
-                'rm %(filename)q.temp',
-            ],
-            'when': 'after_move',
-        }]
+        options["postprocessors"] = [
+            {
+                "key": "Exec",
+                "exec_cmd": [
+                    "mv %(filename)q %(filename)q.temp",
+                    "ffmpeg -y -i %(filename)q.temp -c copy -map 0 -brand mp42 %(filename)q",
+                    "rm %(filename)q.temp",
+                ],
+                "when": "after_move",
+            }
+        ]
 
     if audio:
-        options.setdefault("postprocessors", []).append({
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": format,
-            "preferredquality": "192",
-        })
+        options.setdefault("postprocessors", []).append(
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": format,
+                "preferredquality": "192",
+            }
+        )
         options["format"] = "bestaudio/best"
     else:
         options["format"] = f"bestvideo+bestaudio[ext={format}]/best"

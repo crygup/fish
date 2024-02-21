@@ -2,33 +2,16 @@ from __future__ import annotations
 
 import datetime
 from collections import Counter
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    TypeAlias,
-    Union,
-)
+from typing import (TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple,
+                    TypeAlias, Union)
 
 import discord
 from discord.ext import commands
 from discord.interactions import Interaction
 
 from core import Cog
-from utils import (
-    USER_FLAGS,
-    AllChannels,
-    AuthorView,
-    fish_download,
-    fish_edit,
-    fish_go_back,
-    human_join,
-    reply,
-)
+from utils import (USER_FLAGS, AllChannels, AuthorView, fish_download,
+                   fish_edit, fish_go_back, human_join, reply)
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
@@ -360,8 +343,10 @@ class EditDropdownView(AuthorView):
         self.embed = embed
         self.asset = asset
 
-        self.add_item(QualityDropdown()) if option == "quality" else self.add_item(
-            FormatDropdown(asset)
+        (
+            self.add_item(QualityDropdown())
+            if option == "quality"
+            else self.add_item(FormatDropdown(asset))
         )
 
     @discord.ui.button(emoji=fish_go_back, row=1, style=BURPLE)
@@ -537,9 +522,11 @@ class Info(Cog):
             "server_owner": isinstance(member, discord.Member)
             and member.guild.owner == member,
             "booster": isinstance(member, discord.Member) and member.premium_since,
-            "nitro": await self.has_nitro(member, fetched_user)
-            if isinstance(member, discord.Member)
-            else False,
+            "nitro": (
+                await self.has_nitro(member, fetched_user)
+                if isinstance(member, discord.Member)
+                else False
+            ),
         }
         public_flags.update(new_values)
 

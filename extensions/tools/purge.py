@@ -2,16 +2,8 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Awaitable,
-    Callable,
-    Literal,
-    Optional,
-    TypeAlias,
-    Union,
-)
+from typing import (TYPE_CHECKING, Any, Awaitable, Callable, Literal, Optional,
+                    TypeAlias, Union)
 
 import discord
 from discord import app_commands

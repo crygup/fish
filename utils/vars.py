@@ -2,42 +2,12 @@ from dataclasses import dataclass
 
 import discord
 
-from .emojis import (
-    active_developer,
-    balance,
-    bfr,
-    bot,
-    bot_dev,
-    bravery,
-    brillance,
-    bughunterlv1,
-    bughunterlv2,
-    certified_moderator,
-    cola,
-    earlysupporter,
-    eli,
-    fish_owner,
-    hypesquad,
-    jawn,
-    jpj,
-    kami,
-    kaylynn,
-    leo,
-    leog,
-    lunachup,
-    monark,
-    mv,
-    partner,
-    razy,
-    regor,
-    samir,
-    skeezr,
-    spike,
-    staff,
-    system,
-    tuco,
-    yaz,
-)
+from .emojis import (active_developer, balance, bfr, bot, bot_dev, bravery,
+                     brillance, bughunterlv1, bughunterlv2,
+                     certified_moderator, cola, earlysupporter, eli,
+                     fish_owner, hypesquad, jawn, jpj, kami, kaylynn, leo,
+                     leog, lunachup, monark, mv, partner, razy, regor, samir,
+                     skeezr, spike, staff, system, tuco, yaz)
 
 USER_FLAGS = {
     "staff": f"{staff} Discord Staff",

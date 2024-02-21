@@ -3,23 +3,16 @@ from __future__ import annotations
 import asyncio
 import datetime
 import re
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Optional,
-    Protocol,
-    Tuple,
-    runtime_checkable,
-)
+from typing import (TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Tuple,
+                    runtime_checkable)
 
 import discord
 from dateutil.parser import parse
 from discord.ext import commands, menus
 from discord.ext.commands import Paginator as CommandPaginator
 
-from .emojis import fish_check, fish_gopage, fish_next, fish_previous, fish_trash
+from .emojis import (fish_check, fish_gopage, fish_next, fish_previous,
+                     fish_trash)
 from .functions import human_join
 from .vars import GoogleImageData
 

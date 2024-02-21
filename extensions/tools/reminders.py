@@ -7,7 +7,6 @@ import textwrap
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional, Sequence
 
 import asyncpg
-
 # TODO: replace with ZoneInfo when upgrading to 3.9
 import dateutil.tz
 import discord
