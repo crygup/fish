@@ -43,7 +43,8 @@ USER_FLAGS = {
     198145509242699777: f"{jawn} Jawn",
     659385299809599500: f"{samir} Samir",
     829421985846263839: f"{sybel} Sybel",
-    739641420645924986: f"{drew} Drewskeky"
+    739641420645924986: f"{drew} Drewskeky",
+    280030020305420289: f"{nathan} Nathan"
 }
 
 base_header = {
