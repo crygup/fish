@@ -2,12 +2,7 @@ from dataclasses import dataclass
 
 import discord
 
-from .emojis import (active_developer, balance, bfr, bot, bot_dev, bravery,
-                     brillance, bughunterlv1, bughunterlv2,
-                     certified_moderator, cola, earlysupporter, eli,
-                     fish_owner, hypesquad, jawn, jpj, kami, kaylynn, leo,
-                     leog, lunachup, monark, mv, partner, razy, regor, samir,
-                     skeezr, spike, staff, system, tuco, yaz)
+from .emojis import *
 
 USER_FLAGS = {
     "staff": f"{staff} Discord Staff",
@@ -47,6 +42,8 @@ USER_FLAGS = {
     391004605032431616: f"{monark} Monark",
     198145509242699777: f"{jawn} Jawn",
     659385299809599500: f"{samir} Samir",
+    829421985846263839: f"{sybel} Sybel",
+    739641420645924986: f"{drew} Drewskeky"
 }
 
 base_header = {

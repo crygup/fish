@@ -599,7 +599,8 @@ class Info(Cog):
         bar = "\u2800" * 47
         embed.set_footer(text=f"{bar} \nID: {user.id} \nCreated at")
 
-        embed.add_field(name="Badges", value="\n".join(badges))
+        if bool(badges):
+            embed.add_field(name="Badges", value="\n".join(badges))
 
         if isinstance(user, discord.Member):
             joined = user.joined_at or discord.utils.utcnow()

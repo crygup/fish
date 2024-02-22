@@ -76,7 +76,8 @@ monark = PartialEmoji(name="monark", id=1132067164053049475)
 samir = PartialEmoji(name="samir", id=1132064265524752414)
 jawn_emojis = [PartialEmoji(name="\U0001f32d"), PartialEmoji(name="\U0001f354"), PartialEmoji(name="\U0001f1fa\U0001f1f8")]
 jawn = " ".join([str(e) for e in jawn_emojis])
-
+sybel = PartialEmoji(name="sybel", id=1210053787385856040)
+drew = PartialEmoji(name="\U0001f41d")
 # fmt: on
 
 
@@ -146,6 +147,8 @@ class Emojis:
     monark = monark
     samir = samir
     jawn = jawn
+    sybel = sybel
+    drew = drew
 
 
 emoji_list = [
@@ -214,4 +217,6 @@ emoji_list = [
     monark,
     samir,
     jawn,
+    sybel,
+    drew
 ]
