@@ -138,14 +138,14 @@ class Commands(Cog):
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows a user's previous avatars in a grid view"""
-        await self.avatars_grid(ctx, user)
+        await ctx.send("Due to a recent discord update this command is broken, please use 'fish avatars' in the meantime")
 
     @avatar_history.command(name="server", aliases=("guild", "s"))
     async def server_avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows a user's previous avatars in a grid view"""
-        await self.avatars_grid(ctx, user, 848507662437449750)
+        await ctx.send("Due to a recent discord update this command is broken, please use 'fish avatars' in the meantime")
 
     @commands.command(name="usernames")
     async def usernames(self, ctx: Context, *, user: discord.User = commands.Author):
