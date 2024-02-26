@@ -1,5 +1,4 @@
-from typing import (List, Optional, ParamSpec, TypeAlias, TypedDict, TypeVar,
-                    Union)
+from typing import List, Optional, ParamSpec, TypeAlias, TypedDict, TypeVar, Union
 
 import discord
 

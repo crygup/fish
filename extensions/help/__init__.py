@@ -3,8 +3,7 @@ from __future__ import annotations
 import re
 import types
 from textwrap import dedent
-from typing import (TYPE_CHECKING, Any, List, Mapping, Optional, TypeAlias,
-                    Union)
+from typing import TYPE_CHECKING, Any, List, Mapping, Optional, TypeAlias, Union
 
 import discord
 from discord.ext import commands

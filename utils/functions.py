@@ -6,8 +6,17 @@ import logging
 import math
 import textwrap
 from io import BytesIO
-from typing import (TYPE_CHECKING, Any, Awaitable, Callable, List, Optional,
-                    Sequence, Tuple, Union)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import aiohttp
 import asyncpg

@@ -11,8 +11,15 @@ import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import (AvatarsPageSource, FieldPageSource, Pager, format_bytes,
-                   format_status, human_timedelta, to_image)
+from utils import (
+    AvatarsPageSource,
+    FieldPageSource,
+    Pager,
+    format_bytes,
+    format_status,
+    human_timedelta,
+    to_image,
+)
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
@@ -90,7 +97,7 @@ class Commands(Cog):
 
             file = discord.File(
                 await format_bytes(
-                    ctx.guild.filesize_limit if ctx.guild else 8388608, avatars # type: ignore
+                    ctx.guild.filesize_limit if ctx.guild else 8388608, avatars  # type: ignore
                 ),
                 f"{user.id}_avatar_history.png",
             )
@@ -138,14 +145,18 @@ class Commands(Cog):
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows a user's previous avatars in a grid view"""
-        await ctx.send("Due to a recent discord update this command is broken, please use 'fish avatars' in the meantime")
+        await ctx.send(
+            "Due to a recent discord update this command is broken, please use 'fish avatars' in the meantime"
+        )
 
     @avatar_history.command(name="server", aliases=("guild", "s"))
     async def server_avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows a user's previous avatars in a grid view"""
-        await ctx.send("Due to a recent discord update this command is broken, please use 'fish avatars' in the meantime")
+        await ctx.send(
+            "Due to a recent discord update this command is broken, please use 'fish avatars' in the meantime"
+        )
 
     @commands.command(name="usernames")
     async def usernames(self, ctx: Context, *, user: discord.User = commands.Author):

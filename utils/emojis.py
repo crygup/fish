@@ -221,5 +221,5 @@ emoji_list = [
     jawn,
     sybel,
     drew,
-    nathan
+    nathan,
 ]

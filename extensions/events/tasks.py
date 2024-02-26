@@ -50,7 +50,9 @@ class Tasks(Cog):
         )
         for file in os.listdir(r"files/downloads"):
             if file.endswith(valid_formats):
-                subprocess.run([f"rm {file}"], shell=True, cwd="files/downloads", check=False)
+                subprocess.run(
+                    [f"rm {file}"], shell=True, cwd="files/downloads", check=False
+                )
 
     @tasks.loop(minutes=30.0)
     async def set_key_task(self):
