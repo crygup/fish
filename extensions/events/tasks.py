@@ -3,14 +3,13 @@ from __future__ import annotations
 import base64
 import os
 import re
+import subprocess
 from typing import TYPE_CHECKING, Any, Dict
 
 from discord.ext import commands, tasks
 
 from core import Cog
-
-if TYPE_CHECKING:
-    from core import Fishie
+from utils import run
 
 
 class Tasks(Cog):
@@ -51,8 +50,7 @@ class Tasks(Cog):
         )
         for file in os.listdir(r"files/downloads"):
             if file.endswith(valid_formats):
-                if re.search("(ytdl|part)", file):
-                    os.remove(rf"files/downloads/{file}")
+                subprocess.run([f"rm {file}"], shell=True, cwd="files/downloads", check=False)
 
     @tasks.loop(minutes=30.0)
     async def set_key_task(self):

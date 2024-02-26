@@ -90,7 +90,7 @@ class Commands(Cog):
 
             file = discord.File(
                 await format_bytes(
-                    ctx.guild.filesize_limit if ctx.guild else 8388608, avatars
+                    ctx.guild.filesize_limit if ctx.guild else 8388608, avatars # type: ignore
                 ),
                 f"{user.id}_avatar_history.png",
             )

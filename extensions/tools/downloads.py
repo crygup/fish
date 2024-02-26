@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING, Literal
 
 import discord
 from discord.ext import commands
-
 from core import Cog
-from utils import download
+from utils import download, run
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -43,6 +42,6 @@ class Downloads(Cog):
         await ctx.send(file=file, ephemeral=True)
 
         try:
-            os.remove(rf"files/downloads/{filename}")
+            await run(f"cd files/downloads && rm {filename}")
         except:
             pass

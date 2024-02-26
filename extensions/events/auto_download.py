@@ -7,7 +7,7 @@ import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import VIDEOS_RE, download
+from utils import VIDEOS_RE, download, run
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -22,7 +22,7 @@ class AutoDownload(Cog):
     async def auto_download(self, message: discord.Message):
         if str(message.channel.id) not in await self.bot.redis.smembers(
             "auto_downloads"
-        ):
+        ): # type: ignore
             return
 
         if message.author.bot:
@@ -50,12 +50,12 @@ class AutoDownload(Cog):
             file = discord.File(rf"files/downloads/{filename}", f"{filename}")
 
             await ctx.send(file=file, ephemeral=True)
-        except FileNotFoundError:
+        except (FileNotFoundError, discord.HTTPException):
             await ctx.send(
                 "No file found, maybe file too large or improper URL provided."
             )
 
         try:
-            os.remove(rf"files/downloads/{filename}")
+            await run(f"cd files/downloads && rm {filename}")
         except:
             pass
