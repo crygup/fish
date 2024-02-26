@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING, Literal
 import discord
 from discord.ext import commands
 from core import Cog
-from utils import download, run
+from utils import download, run, TenorUrlConverter, to_image
 
 if TYPE_CHECKING:
     from core import Fishie
+    from extensions.context import Context
 
 
 class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
@@ -28,11 +29,21 @@ class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
 
 class Downloads(Cog):
     @commands.hybrid_command(name="download", aliases=("dl",))
-    async def download(
-        self, ctx: commands.Context[Fishie], url: str, *, flags: DownloadFlags
-    ):
+    async def download(self, ctx: Context, url: str, *, flags: DownloadFlags):
         """Download a video off the internet"""
         async with ctx.typing(ephemeral=True):
+            try:
+                url = await TenorUrlConverter().convert(ctx, url)
+                img = await to_image(ctx.session, url)
+                await ctx.send(
+                    file=discord.File(img, filename="tenor.gif"), ephemeral=True
+                )
+
+                return
+
+            except commands.BadArgument:
+                pass
+
             filename = await download(url, flags.format, bot=self.bot)
 
         file = discord.File(

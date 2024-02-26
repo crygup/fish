@@ -7,10 +7,10 @@ import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import VIDEOS_RE, download, run
+from utils import VIDEOS_RE, download, run, TenorUrlConverter, to_image, TENOR_PAGE_RE
 
 if TYPE_CHECKING:
-    from core import Fishie
+    from extensions.context import Context
 
 
 class AutoDownload(Cog):
@@ -22,16 +22,18 @@ class AutoDownload(Cog):
     async def auto_download(self, message: discord.Message):
         if str(message.channel.id) not in await self.bot.redis.smembers(
             "auto_downloads"
-        ): # type: ignore
+        ):  # type: ignore
             return
 
         if message.author.bot:
             return
 
         video_match = VIDEOS_RE.search(message.content)
+        tenor_match = TENOR_PAGE_RE.search(message.content)
 
-        if video_match is None or video_match and video_match.group(0) == "":
-            return
+        if not tenor_match:
+            if video_match is None or video_match and video_match.group(0) == "":
+                return
 
         bucket = self.cd_mapping.get_bucket(message)
 
@@ -41,7 +43,20 @@ class AutoDownload(Cog):
             if retry_after:
                 return
 
-        ctx = await self.bot.get_context(message)
+        ctx: Context = await self.bot.get_context(message)  # type: ignore
+
+        if tenor_match:
+            try:
+                url = await TenorUrlConverter().convert(ctx, message.content)
+                img = await to_image(ctx.session, url)
+                await ctx.send(
+                    file=discord.File(img, filename="tenor.gif"), ephemeral=True
+                )
+
+                return
+
+            except commands.BadArgument:
+                pass
 
         async with ctx.typing(ephemeral=True):
             filename = await download(message.content, bot=self.bot)

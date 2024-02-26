@@ -9,8 +9,13 @@ from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
-from utils import (AuthorView, GoogleImageData, GoogleImagePageSource, Pager,
-                   response_checker)
+from utils import (
+    AuthorView,
+    GoogleImageData,
+    GoogleImagePageSource,
+    Pager,
+    response_checker,
+)
 
 if TYPE_CHECKING:
     from core import Fishie

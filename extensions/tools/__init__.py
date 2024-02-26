@@ -9,8 +9,14 @@ from discord.ext import commands
 from discord.utils import escape_markdown
 from playwright.async_api import async_playwright
 
-from utils import (Pager, SimplePages, TenorUrlConverter, UrbanPageSource,
-                   URLConverter, get_or_fetch_user)
+from utils import (
+    Pager,
+    SimplePages,
+    TenorUrlConverter,
+    UrbanPageSource,
+    URLConverter,
+    get_or_fetch_user,
+)
 
 from .downloads import Downloads
 from .google import Google
