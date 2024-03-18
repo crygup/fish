@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import discord
 from discord.ext import commands
@@ -123,21 +123,32 @@ class Emojis(Cog):
         except Exception as e:
             raise commands.BadArgument(f"Failed to rename emoji\n{e}")
 
-    @commands.command(name="steal", aliases=("copy", "clone"))
-    @commands.has_permissions(manage_emojis=True)
-    @commands.bot_has_permissions(manage_emojis=True)
-    async def steal(self, ctx: GuildContext, *, emojis: Optional[str]):
-        """Clones emojis to the current server"""
-        if ctx.ref:
-            emojis = ctx.ref.content
+    async def steal_stickers(
+        self, ctx: GuildContext, stickers: List[discord.StickerItem]
+    ):
+        """Function for stealing stickers"""
+        message = await ctx.send("Stealing sticker")
 
-        if not emojis:
-            raise commands.BadArgument("No emojis found.")
+        for StickerItem in stickers:
+            sticker = await StickerItem.fetch()
+            if isinstance(sticker, discord.StandardSticker):
+                await message.edit(content="Cannot steal that type of sticker.")
+                return
 
-        emoji_results = EMOJI_RE.findall(emojis)
+            image = await to_image(ctx.session, sticker.url)
+            file = discord.File(fp=image)
+            sticker = await ctx.guild.create_sticker(
+                name=sticker.name,
+                description=sticker.description or "Not provided",
+                emoji=sticker.emoji or "wave", # type: ignore # dumb false error
+                file=file,
+            )
 
-        if not bool(emoji_results):
-            raise commands.BadArgument("No emojis found.")
+        await message.edit(content="Successfully stole sticker.")
+        await ctx.send(stickers=[sticker])
+
+    async def steal_emojis(self, ctx: GuildContext, emoji_results: List[Any]):
+        """Function for stealing emojis"""
 
         message = await ctx.send("Stealing emojis...")
 
@@ -159,6 +170,28 @@ class Emojis(Cog):
             await message.edit(
                 content=f'Successfully stole {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(emoji_results)})*.'
             )
+
+    @commands.command(name="steal", aliases=("copy", "clone"))
+    @commands.has_permissions(manage_emojis_and_stickers=True)
+    @commands.bot_has_permissions(manage_emojis_and_stickers=True)
+    async def steal(self, ctx: GuildContext, *, emojis: Optional[str]):
+        """Clones emojis/stickers to the current server"""
+
+        if ctx.ref:
+            if ctx.ref.stickers:
+                return await self.steal_stickers(ctx, ctx.ref.stickers)
+
+            emojis = ctx.ref.content
+
+        if not emojis:
+            raise commands.BadArgument("No emojis found.")
+
+        emoji_results = EMOJI_RE.findall(emojis)
+
+        if not bool(emoji_results):
+            raise commands.BadArgument("No emojis found.")
+
+        await self.steal_emojis(ctx, emoji_results)
 
     @commands.command(name="emojis")
     async def emojis(self, ctx: Context, guild: discord.Guild = commands.CurrentGuild):
