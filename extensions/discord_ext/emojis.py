@@ -140,7 +140,7 @@ class Emojis(Cog):
             sticker = await ctx.guild.create_sticker(
                 name=sticker.name,
                 description=sticker.description or "Not provided",
-                emoji=sticker.emoji or "wave", # type: ignore # dumb false error
+                emoji=sticker.emoji or "wave",  # type: ignore # dumb false error
                 file=file,
             )
 
