@@ -369,7 +369,7 @@ class Commands(Cog):
             f"{member} has been {format_status(member)} for {human_timedelta(results['created_at'], suffix=False)}."
         )
 
-    @commands.command(name="joins")
+    @commands.group(name="joins", invoke_without_command=True)
     @commands.guild_only()
     async def joins(self, ctx: GuildContext, member: discord.Member = commands.Author):
         if "joins" in self.bot.db_cache.get_opted_out(member.id):
@@ -389,3 +389,36 @@ class Commands(Cog):
             results = 1
 
         await ctx.send(f"{member} has joined {ctx.guild} {plural(results):time}.")
+
+    @joins.command(name="leaderboard", aliases=("lb",))
+    @commands.guild_only()
+    async def joins_leaderboard(self, ctx: GuildContext):
+        results = await ctx.pool.fetch(
+                "SELECT COUNT(*), member_id FROM member_join_logs WHERE guild_id = $1 GROUP BY member_id ORDER BY COUNT(*) DESC LIMIT 10",
+                ctx.guild.id,
+            )
+
+        if not results:
+            return await ctx.send("No join logs found for this server.")
+
+        results = sorted(results, key=lambda x: x["count"], reverse=True)
+        entries = [
+            (
+                await self.bot.fetch_user(r["member_id"]),
+                r["count"],
+            )
+            for r in results
+        ]
+
+        embed = discord.Embed()
+
+        for idx, i in enumerate(entries, start=1):
+            embed.add_field(
+                name = f"Rank {idx}",
+                value = f"{i[0].mention}\n{i[1]} joins.",
+                inline=False
+            )
+        
+        await ctx.send(embed=embed)
+
+
