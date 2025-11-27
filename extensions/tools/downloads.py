@@ -37,7 +37,7 @@ class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
 
 
 class Downloads(Cog):
-    @commands.hybrid_command(name="download", aliases=("dl",))
+    @commands.hybrid_command(name="download", aliases=("dl",), enabled=False)
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def download(self, ctx: Context, url: str, *, flags: DownloadFlags):

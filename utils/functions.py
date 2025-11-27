@@ -216,13 +216,13 @@ def format_bytes(filesize_limit: int, images: List[bytes]) -> BytesIO:
     size = int(2520 / xbound)
 
     with Image.new(
-        "RGBA", size=(xbound * size, ybound * size), color=(0, 0, 0, 0)
+        "RGBA", size=(xbound * size, ybound * size), color=(0, 0, 0, 0) # type: ignore
     ) as base:
         x, y = 0, 0
         for avy in images:
             if avy:
                 im = Image.open(BytesIO(avy)).resize(
-                    (size, size), resample=Image.BICUBIC
+                    (size, size), resample=Image.BICUBIC # type: ignore
                 )
                 base.paste(im, box=(x * size, y * size))
             if x < xbound - 1:
@@ -241,13 +241,14 @@ def format_status(member: discord.Member) -> str:
     return f'{"on " if member.status is discord.Status.dnd else ""}{member.raw_status}'
 
 
-@to_thread
-def update_pokemon(bot: Fishie):
+async def update_pokemon(bot: Fishie):
     url = "https://raw.githubusercontent.com/poketwo/data/master/csv/pokemon.csv"
     data = pd.read_csv(url)
     pokemon = [str(p).lower() for p in data["name.en"]]
 
-    bot.pokemon = pokemon
+    manual_pokemon = await bot.pool.fetch("""SELECT name FROM added_pokemon""")
+
+    bot.pokemon = pokemon + [str(record["name"]).lower() for record in manual_pokemon]
 
 
 async def get_or_fetch_user(bot: Fishie, user_id: int) -> discord.User:

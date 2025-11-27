@@ -6,6 +6,8 @@ __pycache__/
 /.vscode
 /files/cookies/twitter-cookies.txt
 /files/cookies/instagram-cookies.txt
+/files/cookies/youtube-cookies.txt
+/files/cookies/cobalt.json
 /extensions/private
 testing.py
 /files/downloads/

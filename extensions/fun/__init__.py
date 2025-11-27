@@ -101,6 +101,12 @@ class Fun(About):
                 )
             )
 
+    @commands.command(name="slap")
+    async def slap(self, ctx: Context, user: discord.User):
+        """Slap a user"""
+        
+        
+
 
 async def setup(bot: Fishie):
     await bot.add_cog(Fun(bot))

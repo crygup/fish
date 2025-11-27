@@ -7,7 +7,7 @@ from discord.abc import Messageable
 from discord.ext import commands
 
 from core import Cog
-from utils import fish_owner, greenTick, AllMsgbleChannels
+from utils import fish_owner, greenTick, AllMsgbleChannels, update_pokemon, fish_x
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -22,9 +22,9 @@ class Owner(Cog):
         super().__init__()
         self.bot = bot
 
-    async def _add_reaction(self, ctx: Context, msg: discord.Message):
+    async def _add_reaction(self, ctx: Context, msg: discord.Message, check: bool = True):
         try:
-            await ctx.message.add_reaction(greenTick)
+            await ctx.message.add_reaction(greenTick if check else fish_x)
         except:
             pass
 
@@ -58,15 +58,52 @@ class Owner(Cog):
 
         await self._add_reaction(ctx, ctx.message)
 
-    @commands.command(name="test")
-    async def test(self, ctx: Context, user: discord.User = commands.Author): ...
+    @commands.group(name="pokemon", invoke_without_command=True)
+    async def pokemon(self, ctx: Context):
+        await ctx.send(f"There are currently {len(self.bot.pokemon):,} cached.")
+    
+    @pokemon.command(name="update")
+    async def pokemon_update(self, ctx: Context):
+        await update_pokemon(self.bot)
+        await self._add_reaction(ctx, ctx.message)
+
+    @pokemon.command(name="add")
+    async def pokemon_add(self, ctx: Context, *, name: str):
+        sql = """
+        INSERT INTO added_pokemon (name, created_at) VALUES ($1, $2)
+        """
+
+        try:
+            await self.bot.pool.execute(sql, name.lower(), discord.utils.utcnow())
+            await update_pokemon(self.bot)
+            await self._add_reaction(ctx, ctx.message)
+        except:
+            await self._add_reaction(ctx, ctx.message, check=False)
+
+    
+    @pokemon.command(name="solve")
+    async def pokemon_solve(self, ctx: Context):
+        events = self.bot.events
+        if not events:
+            raise commands.BadArgument("Events cog is not loaded, could possibly have failed to load.")
+        
+        msg = ctx.message.reference
+        
+        if not msg:
+            raise commands.BadArgument("Reply to a message to solve it")
+        
+        found = events.auto_solve(msg.resolved.content.lower()) # type: ignore
+
+        if bool(found) == False:
+            return await self._add_reaction(ctx, ctx.message, check=False)
+        
+        await ctx.send("\n".join(found))
 
     async def cog_check(self, ctx: commands.Context[Fishie]) -> bool:
         if await ctx.bot.is_owner(ctx.author):
             return True
 
         raise commands.BadArgument("You are not allowed to use this command.")
-
 
 async def setup(bot: Fishie):
     await bot.add_cog(Owner(bot))

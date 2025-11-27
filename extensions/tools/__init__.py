@@ -109,6 +109,76 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
     """Quality of life tools"""
 
     emoji = discord.PartialEmoji(name="\U0001f6e0")
+    cyrillic_letters = {
+        "A": "А",
+        "B": "В",
+        "C": "С",
+        "D": "‌**D**‌",
+        "E": "Е",
+        "F": "‌**F**‌",
+        "G": "Ԍ",
+        "H": "Η",
+        "I": "І",
+        "J": "Ј",
+        "K": "Κ",
+        "L": "Ꮮ",
+        "M": "Μ",
+        "N": "Ν",
+        "O": "Ο",
+        "P": "Ρ",
+        "Q": "‌**Q**‌",
+        "R": "Ꮢ",
+        "S": "Ѕ",
+        "T": "Τ",
+        "U": "Ս",
+        "V": "Ꮩ",
+        "W": "Ꮃ",
+        "X": "Χ",
+        "Y": "Υ",
+        "Z": "Ζ",
+
+        "a": "а",
+        "b": "‌**b**‌",
+        "c": "ϲ",
+        "d": "ԁ",
+        "e": "е",
+        "f": "‌**f**‌",
+        "g": "ɡ",
+        "h": "һ",
+        "i": "і",
+        "j": "ϳ",
+        "k": "‌**k**‌",
+        "l": "ⅼ",
+        "m": "‌**m**‌",
+        "n": "‌**n**‌",
+        "o": "ο",
+        "p": "р",
+        "q": "‌**q**‌",
+        "r": "‌**r**‌",
+        "s": "ѕ",
+        "t": "‌**t**‌",
+        "u": "υ",
+        "v": "ν",
+        "w": "‌**w**‌",
+        "x": "х",
+        "y": "у",
+        "z": "‌**z**‌",
+        " ": " "
+} 
+
+    @commands.command(name="cyrillic", alias=("cryllic",))
+    async def cyrillic(self, ctx: Context, *, words: str):
+        words = discord.utils.escape_markdown(words, ignore_links=False)
+        all_letters = [letter for word in words for letter in word]
+        new_words = []
+
+        for letter in all_letters:
+            try:
+                new_words.append(self.cyrillic_letters[letter])
+            except:
+                new_words.append(f"‌**{letter}**‌")
+        fmt = "".join(new_words)
+        await ctx.send(fmt[:2000])
 
     @commands.command(name="screenshot", aliases=("ss",))
     async def screenshot(
@@ -234,6 +304,8 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
 
         embed.set_footer(text="To add or remove accounts please click the button below")
         await ctx.send(embed=embed, view=AccountsView(ctx, results, embed))
+
+
 
 
 async def setup(bot: Fishie):

@@ -267,3 +267,9 @@ CREATE TABLE IF NOT EXISTS sold_fish (
     kraken BIGINT,
     PRIMARY KEY (user_id)
 );
+
+CREATE TABLE IF NOT EXISTS added_pokemon (
+    name TEXT,
+    created_at TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (name)
+);

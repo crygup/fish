@@ -176,8 +176,8 @@ class Fishie(commands.Bot):
                 await self.load_extension(ext)
                 self.logger.info(f"Loaded extension: {ext}")
             except Exception as e:
-                self.logger.warn(f"Failed to load extension: {ext}")
-                self.logger.warn(f"{e.__class__.__name__}: {str(e)}")
+                self.logger.warning(f"Failed to load extension: {ext}")
+                self.logger.warning(f"{e.__class__.__name__}: {str(e)}")
                 continue
 
     async def unload_extensions(self):
@@ -186,8 +186,8 @@ class Fishie(commands.Bot):
                 await self.unload_extension(ext)
                 self.logger.info(f"Unloaded extension: {ext}")
             except Exception as e:
-                self.logger.warn(f"Failed to unload extension: {ext}")
-                self.logger.warn(f"{e.__class__.__name__}: {str(e)}")
+                self.logger.warning(f"Failed to unload extension: {ext}")
+                self.logger.warning(f"{e.__class__.__name__}: {str(e)}")
                 continue
 
     async def reload_extensions(self):
@@ -196,8 +196,8 @@ class Fishie(commands.Bot):
                 await self.reload_extension(ext)
                 self.logger.info(f"Reloaded extension: {ext}")
             except Exception as e:
-                self.logger.warn(f"Failed to reload extension: {ext}")
-                self.logger.warn(f"{e.__class__.__name__}: {str(e)}")
+                self.logger.warning(f"Failed to reload extension: {ext}")
+                self.logger.warning(f"{e.__class__.__name__}: {str(e)}")
                 continue
 
     async def setup_hook(self) -> None:

@@ -82,11 +82,15 @@ class Downloader:
         if cobalt_checker(self.url):
             s = await self.ctx.session.post(
                 headers=self.headers,
-                url="https://cobalt.catgirls.one/",
+                url="http://10.0.0.1:9000/",
                 json=self.json_data,
             )
 
             data: Dict[Any, Any] = await s.json()
+            temp = VIDEOS_RE.search(self.url)
+            
+            if temp:
+                self.url = temp.group(0)
 
             try:
                 await self.ctx.send(file=self.ctx.bot.too_big(json.dumps(data, indent=4))) # debug
@@ -109,13 +113,23 @@ class Downloader:
                     allowed_mentions=discord.AllowedMentions.all(),
                 )
                 await self.ctx.bot.log_error(error=err)
-                _err = data.get(
-                    "text",
-                    "Something went wrong, this was sent to the developers, sorry.",
-                )
+                
+                _err = "Something went wrong, this was sent to the developers, sorry."
+                
+                if data["status"] == "error":
+                    err_code = data["error"]["code"]
 
-                if "service api" in _err:
-                    _err = "Overloading downloads, sorry. Try again later!"
+                    err_codes_fmt = {
+                        "error.api.content.video.unavailable": "This video is unavailable please try a different upload, sorry.",
+                        "error.api.fetch.empty": "This link doesnt seem to exist anymore or I don't have access to it, sorry.",
+                        "error.api.fetch.critical": "This video is age restricted, private, or deleted as I do not have access to it anymore, sorry.",
+                        "error.api.content.video.age": "This video is age restricted and I cannot access it, sorry."
+                    }
+
+                    try:
+                        _err = err_codes_fmt[err_code]
+                    except:
+                        _err = _err
 
                 await self.ctx.send(f"{capitalize_text(_err)} Error ID: `{_id}`")
                 raise commands.NotOwner()
