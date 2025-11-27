@@ -6,7 +6,9 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import asyncpg
 import discord
+from discord import utils
 from discord.ext import commands
+from discord.http import Route
 
 from core import Cog
 from utils import (
@@ -16,8 +18,8 @@ from utils import (
     format_bytes,
     format_status,
     human_timedelta,
-    to_image,
     plural,
+    to_image,
 )
 
 if TYPE_CHECKING:
@@ -25,6 +27,17 @@ if TYPE_CHECKING:
 
 
 class Commands(Cog):
+    async def refresh_urls(self, attachment_urls: List[str]) -> List[str]:
+        json = {"attachment_urls": attachment_urls}
+
+        req = await self.bot.http.request(
+            Route("POST", "/attachments/refresh-urls"),
+            json=json,
+        )
+
+        refreshed_urls = req.get("refreshed_urls", [])
+        return [url["refreshed"] for url in refreshed_urls]
+
     async def avatars_func(
         self, ctx: Context, user: discord.User, guild_id: Optional[int] = None
     ):
@@ -90,13 +103,21 @@ class Commands(Cog):
             if not bool(records):
                 raise commands.BadArgument(f"{user} has no avatars on record.")
 
+            urls = [record["avatar"] for record in records]
+            refreshed = [
+                url
+                for chunk in utils.as_chunks(urls, max_size=50)
+                for url in await self.refresh_urls(chunk)
+            ]
+
             avatars = await asyncio.gather(
-                *[to_image(ctx.session, row["avatar"], bytes=True) for row in records]
+                *[to_image(ctx.session, url, bytes=True) for url in refreshed]
             )
 
             file = discord.File(
                 await format_bytes(
-                    ctx.guild.filesize_limit if ctx.guild else 8388608, avatars  # type: ignore
+                    ctx.guild.filesize_limit if ctx.guild else 8388608,
+                    avatars,  # type: ignore
                 ),
                 f"{user.id}_avatar_history.png",
             )
@@ -110,8 +131,10 @@ class Commands(Cog):
                 first_avatar = records[-1]["created_at"]
 
             embed = discord.Embed(color=self.bot.embedcolor, timestamp=first_avatar)
+
             embed.set_image(url=f"attachment://{user.id}_avatar_history.png")
             embed.set_footer(text="First avatar saved")
+
             await ctx.send(
                 f"Viewing avatars in a grid view for {user}", file=file, embed=embed
             )
@@ -142,34 +165,16 @@ class Commands(Cog):
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows a user's previous avatars in a grid view"""
-        if ctx.author.id != 766953372309127168:
-            return await ctx.send(
-                "Due to a recent discord update this command is broken, please use 'fish avatars' in the meantime"
-            )
 
-        results = await self.bot.pool.fetchrow(
-            "SELECT * FROM avatars WHERE user_id = $1", user.id
-        )
-
-        if not results:
-            raise commands.BadArgument("Could not find any avatars for this user.")
-
-        archive: discord.TextChannel = self.bot.get_channel(
-            1237318125062586439
-        )  # type:ignore # wont be none
-
-        msg = await archive.send(results["avatar"])
-
-        await ctx.send(msg.content)
+        await self.avatars_grid(ctx, user)
 
     @avatar_history.command(name="server", aliases=("guild", "s"))
     async def server_avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows a user's previous avatars in a grid view"""
-        await ctx.send(
-            "Due to a recent discord update this command is broken, please use 'fish avatars' in the meantime"
-        )
+
+        await self.avatars_grid(ctx, user, ctx.guild.id)
 
     @commands.command(name="usernames")
     async def usernames(self, ctx: Context, *, user: discord.User = commands.Author):
@@ -186,7 +191,7 @@ class Commands(Cog):
         entries = [
             (
                 r["username"],
-                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")} | `ID: {r["id"]}`',
+                f"{discord.utils.format_dt(r['created_at'], 'R')}  |  {discord.utils.format_dt(r['created_at'], 'd')} | `ID: {r['id']}`",
             )
             for r in results
         ]
@@ -214,7 +219,7 @@ class Commands(Cog):
         entries = [
             (
                 r["display_name"],
-                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")} | `ID: {r["id"]}`',
+                f"{discord.utils.format_dt(r['created_at'], 'R')}  |  {discord.utils.format_dt(r['created_at'], 'd')} | `ID: {r['id']}`",
             )
             for r in results
         ]
@@ -223,6 +228,7 @@ class Commands(Cog):
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Display names for {user}"
         pager = Pager(source, ctx=ctx)
+
         await pager.start(ctx)
 
     @commands.command(name="nicknames", aliases=("nicks",))
@@ -243,7 +249,7 @@ class Commands(Cog):
         entries = [
             (
                 r["nickname"],
-                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")} | `ID: {r["id"]}`',
+                f"{discord.utils.format_dt(r['created_at'], 'R')}  |  {discord.utils.format_dt(r['created_at'], 'd')} | `ID: {r['id']}`",
             )
             for r in results
         ]
@@ -271,7 +277,7 @@ class Commands(Cog):
         entries = [
             (
                 r["discrim"],
-                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")} | `ID: {r["id"]}`',
+                f"{discord.utils.format_dt(r['created_at'], 'R')}  |  {discord.utils.format_dt(r['created_at'], 'd')} | `ID: {r['id']}`",
             )
             for r in results
         ]
@@ -300,7 +306,7 @@ class Commands(Cog):
         entries = [
             (
                 r["name"],
-                f'{discord.utils.format_dt(r["created_at"], "R")}  |  {discord.utils.format_dt(r["created_at"], "d")} | `ID: {r["id"]}`',
+                f"{discord.utils.format_dt(r['created_at'], 'R')}  |  {discord.utils.format_dt(r['created_at'], 'd')} | `ID: {r['id']}`",
             )
             for r in results
         ]
