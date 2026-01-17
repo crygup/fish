@@ -19,3 +19,15 @@ def interaction_only():
         )
 
     return commands.check(predicate)
+
+
+def lastfm_command():
+    def predicate(ctx: Context):
+        if ctx.author.id in ctx.bot.db_cache.lastfm:
+            return True
+
+        raise commands.BadArgument(
+            "Please connect your last.fm account to the bot first before using this command"
+        )
+
+    return commands.check(predicate)

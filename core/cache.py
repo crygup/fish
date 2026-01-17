@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class db_cache:
@@ -9,6 +9,10 @@ class db_cache:
     auto_reaction_guilds: List[int] = []
     nsfw_covers: List[int] = []
     pinboard: Dict[int, int] = {}
+    lastfm: dict[int, str] = {}
+
+    def add_account(self, user_id: int, last_fm: str): # later change this and add more than just last_fm and be dynamic 
+        self.lastfm.update({user_id: last_fm})
 
     def add_prefix(self, guild_id: int, prefix: str) -> List[str]:
         try:

@@ -39,6 +39,7 @@ def cobalt_checker(url: str) -> bool:
         or YOUTUBE_RE.search(url)
         or TWITTER_RE.search(url)
         or REDDIT_RE.search(url)
+        or INSTAGRAM_RE.search(url)
     ):
         return True
     else:
@@ -72,7 +73,7 @@ class Downloader:
             "videoQuality": "max",
             "downloadMode": "audio" if format == "mp3" else "auto",
             "youtubeVideoCodec": "h264",
-            "twitterGif": self.twitterGif,
+            "convertGif": self.twitterGif,
         }
 
     async def _download(self) -> discord.File:
@@ -94,6 +95,7 @@ class Downloader:
 
             try:
                 await self.ctx.send(file=self.ctx.bot.too_big(json.dumps(data, indent=4))) # debug
+                #CobaltUrl = data["url"].replace("cobalt.catgirls.one", "10.0.0.1:9000")
                 async with self.ctx.session.get(url=data["url"]) as body:
                     bData = await body.read()
 
@@ -223,19 +225,20 @@ class Downloader:
         files: List[discord.File] = []
         MVD: None | discord.Message = None
 
-        if INSTAGRAM_RE.search(self.url):
-            files.append(
-                await self.manual_dl(cookies="files/cookies/instagram-cookies.txt")
-            )
+        # if INSTAGRAM_RE.search(self.url):
+        #     files.append(
+        #         await self.manual_dl(cookies="files/cookies/instagram-cookies.txt")
+        #     )
 
-        elif TWITTER_RE.search(self.url):
+        if TWITTER_RE.search(self.url):
             s = await self.ctx.session.post(
                 headers=self.headers,
-                url="https://olly.imput.net/",
+                url="http://10.0.0.1:9000/",
                 json=self.json_data,
             )
             data: Dict[Any, Any] = await s.json()
-            
+
+
             if data.get("status") == "picker":
                 MVD = await self.ctx.send("Multiple videos detected, downloading.")
                 for pd in data["picker"]:
@@ -260,6 +263,7 @@ class Downloader:
                 files.append(await self._download())
         else:
             files.append(await self._download())
+
         try:
 
             await self.ctx.send(
@@ -296,3 +300,12 @@ class Downloader:
                 return f.read()
         else:
             return fp.read()
+
+    # async def set_token(self, ):
+    #         s = await self.ctx.session.post(
+    #             headers=self.headers,
+    #             url="http://10.0.0.1:9000/session",
+    #         )
+    #         data: Dict[Any, Any] = await s.json()
+
+    #         self.headers.update({""})

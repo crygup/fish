@@ -18,45 +18,45 @@ class AutoDownload(Cog):
         1, 5, commands.BucketType.member
     )
 
-    @commands.Cog.listener("on_message")
-    async def auto_download(self, message: discord.Message):
-        if message.channel.id not in self.bot.db_cache.auto_downloads:
-            return
+    # @commands.Cog.listener("on_message")
+    # async def auto_download(self, message: discord.Message):
+    #     if message.channel.id not in self.bot.db_cache.auto_downloads:
+    #         return
 
-        if message.author.bot:
-            return
+    #     if message.author.bot:
+    #         return
 
-        video_match = VIDEOS_RE.search(message.content)
-        tenor_match = TENOR_PAGE_RE.search(message.content)
+    #     video_match = VIDEOS_RE.search(message.content)
+    #     tenor_match = TENOR_PAGE_RE.search(message.content)
 
-        if not tenor_match:
-            if video_match is None or video_match and video_match.group(0) == "":
-                return
+    #     if not tenor_match:
+    #         if video_match is None or video_match and video_match.group(0) == "":
+    #             return
 
-        bucket = self.cd_mapping.get_bucket(message)
+    #     bucket = self.cd_mapping.get_bucket(message)
 
-        if bucket:
-            retry_after = bucket.update_rate_limit()
+    #     if bucket:
+    #         retry_after = bucket.update_rate_limit()
 
-            if retry_after:
-                return
+    #         if retry_after:
+    #             return
 
-        ctx: Context = await self.bot.get_context(message)  # type: ignore
+    #     ctx: Context = await self.bot.get_context(message)  # type: ignore
 
-        if tenor_match:
-            try:
-                url = await TenorUrlConverter().convert(ctx, message.content)
-                img = await to_image(ctx.session, url)
-                await ctx.send(
-                    file=discord.File(img, filename="tenor.gif"), ephemeral=True
-                )
+    #     if tenor_match:
+    #         try:
+    #             url = await TenorUrlConverter().convert(ctx, message.content)
+    #             img = await to_image(ctx.session, url)
+    #             await ctx.send(
+    #                 file=discord.File(img, filename="tenor.gif"), ephemeral=True
+    #             )
 
-                return
+    #             return
 
-            except commands.BadArgument:
-                pass
+    #         except commands.BadArgument:
+    #             pass
     
-        async with ctx.typing(ephemeral=True):
-            dl = Downloader(ctx, message.content)
+    #     async with ctx.typing(ephemeral=True):
+    #         dl = Downloader(ctx, message.content)
             
-            await dl.download()
+    #         await dl.download()

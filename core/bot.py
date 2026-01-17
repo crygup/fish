@@ -315,6 +315,15 @@ class Fishie(commands.Bot):
                 self.db_cache.add_reaction_guilds(guild_id)
                 self.logger.info(f'Added auto media reactions to guild "{guild_id}"')
 
+        accounts = await self.pool.fetch("SELECT * FROM accounts")
+        for row in accounts:
+            last_fm: str = row["lastfm"]
+            user_id: int = row["user_id"]
+
+            self.db_cache.add_account(user_id=user_id, last_fm=last_fm)
+            self.logger.info(f'Added last.fm account "{last_fm}" to user "{user_id}"')
+
+
     async def add_reactions(
         self,
         message: discord.Message,
@@ -366,6 +375,10 @@ class Fishie(commands.Bot):
     @property
     def discord(self) -> Optional[DiscordCog]:
         return self.get_cog("Discord")  # type: ignore
+
+    @property
+    def lastfm(self) -> Optional[DiscordCog]:
+        return self.get_cog("Lastfm")  # type: ignore
 
     # @property
     # def fishing(self) -> Optional[Fishing]:
