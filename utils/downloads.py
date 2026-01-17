@@ -95,8 +95,8 @@ class Downloader:
                 self.url = temp.group(0)
 
             try:
-                #await self.ctx.send(file=self.ctx.bot.too_big(json.dumps(data, indent=4))) # debug
-                CobaltUrl = data["url"].replace("https://", "http://")
+                await self.ctx.send(file=self.ctx.bot.too_big(json.dumps(data, indent=4))) # debug
+                CobaltUrl = data["url"].replace("https://10.0.0.1:9000", "http://10.0.0.1:9000")
                 async with self.ctx.session.get(url=CobaltUrl) as body:
                     bData = await body.read()
 
