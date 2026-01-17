@@ -173,7 +173,8 @@ class Commands(Cog):
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows a user's previous avatars in a grid view"""
-
+        assert ctx.guild
+        
         await self.avatars_grid(ctx, user, ctx.guild.id)
 
     @commands.command(name="usernames")
