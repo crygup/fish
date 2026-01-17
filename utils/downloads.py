@@ -35,10 +35,7 @@ def match_filter(info: Dict[Any, Any]):
 def cobalt_checker(url: str) -> bool:
     if (
         TIKTOK_RE.search(url)
-        or YT_SHORT_RE.search(url)
-        or YOUTUBE_RE.search(url)
         or TWITTER_RE.search(url)
-        or REDDIT_RE.search(url)
         or INSTAGRAM_RE.search(url)
     ):
         return True
@@ -80,6 +77,10 @@ class Downloader:
         if YT_CLIP_RE.search(self.url):
             raise DownloadError("Youtube clips are not supported at the moment, sorry.")
 
+        if (YOUTUBE_RE.search(self.url) or YT_SHORT_RE.search(self.url)):
+            raise DownloadError("youtube broken :/")
+            return await self.manual_dl("files/cookies/youtube-cookies.txt")
+
         if cobalt_checker(self.url):
             s = await self.ctx.session.post(
                 headers=self.headers,
@@ -94,9 +95,9 @@ class Downloader:
                 self.url = temp.group(0)
 
             try:
-                await self.ctx.send(file=self.ctx.bot.too_big(json.dumps(data, indent=4))) # debug
-                #CobaltUrl = data["url"].replace("cobalt.catgirls.one", "10.0.0.1:9000")
-                async with self.ctx.session.get(url=data["url"]) as body:
+                #await self.ctx.send(file=self.ctx.bot.too_big(json.dumps(data, indent=4))) # debug
+                CobaltUrl = data["url"].replace("https://", "http://")
+                async with self.ctx.session.get(url=CobaltUrl) as body:
                     bData = await body.read()
 
                 if TWITTER_RE.search(self.url) and data["status"] == "stream":
@@ -144,7 +145,7 @@ class Downloader:
     def yt_dlp_download(self) -> discord.File:
         video_match = VIDEOS_RE.search(self.url)
         audio = False
-
+        
         if video_match is None or video_match and video_match.group(0) == "":
             raise InvalidWebsite()
 
@@ -161,21 +162,6 @@ class Downloader:
             self.format = "mp3"
             audio = True
 
-        # if TWITTER_RE.search(video):
-        #     options["cookies"] = r"files/cookies/twitter-cookies.txt"
-        #     options["postprocessors"] = [
-        #         {
-        #             "key": "Exec",
-        #             "exec_cmd": [
-        #                 "mv %(filename)q %(filename)q.temp",
-        #                 "ffmpeg -y -i %(filename)q.temp -c copy -map 0 -brand mp42 %(filename)q",
-        #                 "rm %(filename)q.temp",
-        #             ],
-        #             "when": "after_move",
-        #         }
-        #     ]
-        #     video = re.sub("x.com", "twitter.com", video, count=1)
-
         if audio:
             options.setdefault("postprocessors", []).append(
                 {
@@ -188,7 +174,7 @@ class Downloader:
         else:
             options["format"] = f"bestvideo+bestaudio[ext={self.format}]/best"
 
-        with yt_dlp.YoutubeDL(options) as ydl:
+        with yt_dlp.YoutubeDL(options) as ydl: # type: ignore # its fineeee
             try:
                 ydl.download(video)
                 self.ctx.bot.current_downloads.append(f"{self.filename}.{self.format}")
@@ -210,8 +196,9 @@ class Downloader:
         cmd += f"--format bestvideo+bestaudio[ext={self.format}]/best "
         cmd += f'-o "{self.filename}.%(ext)s" '
         cmd += '-P "files/downloads"'
+        # cmd += '--remote-components ejs:github'
 
-        self.ctx.bot.logger.warn(cmd)
+        self.ctx.bot.logger.warning(cmd)
 
         await run(cmd)
         self.ctx.bot.current_downloads.append(f"{self.filename}.{self.format}")
@@ -224,11 +211,6 @@ class Downloader:
     async def download(self):
         files: List[discord.File] = []
         MVD: None | discord.Message = None
-
-        # if INSTAGRAM_RE.search(self.url):
-        #     files.append(
-        #         await self.manual_dl(cookies="files/cookies/instagram-cookies.txt")
-        #     )
 
         if TWITTER_RE.search(self.url):
             s = await self.ctx.session.post(
@@ -300,12 +282,3 @@ class Downloader:
                 return f.read()
         else:
             return fp.read()
-
-    # async def set_token(self, ):
-    #         s = await self.ctx.session.post(
-    #             headers=self.headers,
-    #             url="http://10.0.0.1:9000/session",
-    #         )
-    #         data: Dict[Any, Any] = await s.json()
-
-    #         self.headers.update({""})

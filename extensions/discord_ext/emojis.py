@@ -14,6 +14,55 @@ if TYPE_CHECKING:
 
 
 class Emojis(Cog):
+
+    async def steal_stickers(
+        self, ctx: GuildContext, stickers: List[discord.StickerItem]
+    ):
+        """Function for stealing stickers"""
+        message = await ctx.send("Stealing sticker")
+
+        for StickerItem in stickers:
+            sticker = await StickerItem.fetch()
+            if isinstance(sticker, discord.StandardSticker):
+                await message.edit(content="Cannot steal that type of sticker.")
+                return
+
+            image = await to_image(ctx.session, sticker.url)
+            file = discord.File(fp=image)
+            sticker = await ctx.guild.create_sticker(
+                name=sticker.name,
+                description=sticker.description or "Not provided",
+                emoji=sticker.emoji or "wave",  # type: ignore # dumb false error
+                file=file,
+            )
+
+        await message.edit(content="Successfully stole sticker.")
+        await ctx.send(stickers=[sticker])
+
+    async def steal_emojis(self, ctx: GuildContext, emoji_results: List[Any]):
+        """Function for stealing emojis"""
+
+        message = await ctx.send("Stealing emojis...")
+
+        completed_emojis = []
+        for result in emoji_results:
+            emoji = await commands.PartialEmojiConverter().convert(ctx, result)
+
+            if emoji is None:
+                continue
+
+            try:
+                e = await ctx.guild.create_custom_emoji(
+                    name=emoji.name, image=await emoji.read()
+                )
+                completed_emojis.append(str(e))
+            except discord.HTTPException:
+                pass
+
+            await message.edit(
+                content=f'Successfully stole {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(emoji_results)})*.'
+            )
+
     @commands.group(name="emoji", invoke_without_command=True)
     async def emoji_group(
         self,
@@ -122,54 +171,6 @@ class Emojis(Cog):
             await ctx.send(f"Renamed {emoji}")
         except Exception as e:
             raise commands.BadArgument(f"Failed to rename emoji\n{e}")
-
-    async def steal_stickers(
-        self, ctx: GuildContext, stickers: List[discord.StickerItem]
-    ):
-        """Function for stealing stickers"""
-        message = await ctx.send("Stealing sticker")
-
-        for StickerItem in stickers:
-            sticker = await StickerItem.fetch()
-            if isinstance(sticker, discord.StandardSticker):
-                await message.edit(content="Cannot steal that type of sticker.")
-                return
-
-            image = await to_image(ctx.session, sticker.url)
-            file = discord.File(fp=image)
-            sticker = await ctx.guild.create_sticker(
-                name=sticker.name,
-                description=sticker.description or "Not provided",
-                emoji=sticker.emoji or "wave",  # type: ignore # dumb false error
-                file=file,
-            )
-
-        await message.edit(content="Successfully stole sticker.")
-        await ctx.send(stickers=[sticker])
-
-    async def steal_emojis(self, ctx: GuildContext, emoji_results: List[Any]):
-        """Function for stealing emojis"""
-
-        message = await ctx.send("Stealing emojis...")
-
-        completed_emojis = []
-        for result in emoji_results:
-            emoji = await commands.PartialEmojiConverter().convert(ctx, result)
-
-            if emoji is None:
-                continue
-
-            try:
-                e = await ctx.guild.create_custom_emoji(
-                    name=emoji.name, image=await emoji.read()
-                )
-                completed_emojis.append(str(e))
-            except discord.HTTPException:
-                pass
-
-            await message.edit(
-                content=f'Successfully stole {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(emoji_results)})*.'
-            )
 
     @commands.command(name="steal", aliases=("copy", "clone"))
     @commands.has_permissions(manage_emojis_and_stickers=True)
