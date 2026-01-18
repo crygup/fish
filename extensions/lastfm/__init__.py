@@ -6,6 +6,7 @@ import discord
 import re
 import datetime
 from discord.ext import commands
+from discord import app_commands
 
 from core import Cog
 from utils import lastfm_command, to_image, format_millis, plural, fish_discord
@@ -29,6 +30,8 @@ class Lastfm(Cog):
             return await resp.json()
 
     @commands.hybrid_command(name="fm", enabled=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @lastfm_command()
     async def command(self, ctx: Context, user: discord.User = commands.Author):
         """Get your currently playing or most recently listened to song from last.fm"""
@@ -42,7 +45,7 @@ class Lastfm(Cog):
         files = []
         embed = discord.Embed(color=self.bot.embedcolor)
         author_name = "was listening to" if lt.get("date") else "is listening to"
-        
+
         thumbnail_url = re.sub(r"/u/.*/", "/u/", lt["image"][-1]["#text"])
 
         if not re.search("2a96cbd8b46e442fc41c2b86b821562f.png", thumbnail_url):

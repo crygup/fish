@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import asyncpg
 import discord
-from discord import utils
+from discord import utils, app_commands
 from discord.ext import commands
 from discord.http import Route
 
@@ -139,9 +139,9 @@ class Commands(Cog):
                 f"Viewing avatars in a grid view for {user}", file=file, embed=embed
             )
 
-    @commands.group(
-        name="avatars", aliases=("pfps", "avis", "avs"), invoke_without_command=True
-    )
+    @commands.hybrid_group(name="avatars", aliases=("pfps", "avis", "avs"))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def avatars(self, ctx: Context, *, user: discord.User = commands.Author):
         """Shows a user's previous avatars"""
 
@@ -160,6 +160,8 @@ class Commands(Cog):
         name="avatarhistory",
         aliases=("avyh", "avatar-history", "avatar_history", "pfph", "avh"),
     )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):

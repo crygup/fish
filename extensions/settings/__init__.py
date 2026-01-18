@@ -9,6 +9,7 @@ from discord.ext import commands
 from .logging import Logging
 from .server import Server
 from utils import LASTFM_USERNAME, lastfm_command
+from discord import app_commands
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -29,14 +30,18 @@ class Settings(Logging, Server):
     )
     async def link(self, ctx: Context):
         """Link an account to fishie"""
-        await ctx.send("lowk only last.fm exists rn so do link lastfm <username>", ephemeral=True)
+        await ctx.send(
+            "lowk only last.fm exists rn so do link lastfm <username>", ephemeral=True
+        )
 
     @link.command(name="lastfm")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def link_lastfm(self, ctx: Context, username: str):
         """Link your last.fm to fishie"""
         if not LASTFM_USERNAME.search(username):
             commands.BadArgument("Username provided is invalid, please check again")
-        
+
         sql = """
         INSERT INTO accounts (user_id, lastfm) VALUES ($1, $2 )
         """
@@ -48,12 +53,16 @@ class Settings(Logging, Server):
     @commands.hybrid_group(
         name="unlink",
     )
-    async def unlink(self, ctx: Context): 
+    async def unlink(self, ctx: Context):
         """Unlink an account from fishie"""
-        await ctx.send("lowk only last.fm exists rn so do unlink lastfm <username>", ephemeral=True)
+        await ctx.send(
+            "lowk only last.fm exists rn so do unlink lastfm <username>", ephemeral=True
+        )
 
     @unlink.command(name="lastfm")
     @lastfm_command()
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def unlink_lastfm(self, ctx: Context):
         """Unlink your last.fm from fishie"""
         lfm_name = self.bot.db_cache.lastfm[ctx.author.id]
@@ -64,6 +73,7 @@ class Settings(Logging, Server):
         await self.bot.pool.execute(sql, ctx.author.id, lfm_name)
         self.bot.db_cache.remove_account(ctx.author.id)
         await ctx.send("done")
+
 
 async def setup(bot: Fishie):
     await bot.add_cog(Settings(bot))
