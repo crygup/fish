@@ -27,11 +27,13 @@ class Settings(Logging, Server):
     @commands.hybrid_group(
         name="link",
     )
-    async def link(self, ctx: Context): 
+    async def link(self, ctx: Context):
+        """Link an account to fishie"""
         await ctx.send("lowk only last.fm exists rn so do link lastfm <username>", ephemeral=True)
 
     @link.command(name="lastfm")
     async def link_lastfm(self, ctx: Context, username: str):
+        """Link your last.fm to fishie"""
         if not LASTFM_USERNAME.search(username):
             commands.BadArgument("Username provided is invalid, please check again")
         
@@ -47,11 +49,13 @@ class Settings(Logging, Server):
         name="unlink",
     )
     async def unlink(self, ctx: Context): 
+        """Unlink an account from fishie"""
         await ctx.send("lowk only last.fm exists rn so do unlink lastfm <username>", ephemeral=True)
 
     @unlink.command(name="lastfm")
     @lastfm_command()
     async def unlink_lastfm(self, ctx: Context):
+        """Unlink your last.fm from fishie"""
         lfm_name = self.bot.db_cache.lastfm[ctx.author.id]
         sql = """
         DELETE FROM accounts WHERE user_id = $1 AND lastfm = $2

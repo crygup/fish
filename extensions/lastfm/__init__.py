@@ -31,6 +31,7 @@ class Lastfm(Cog):
     @commands.hybrid_command(name="fm", enabled=True)
     @lastfm_command()
     async def command(self, ctx: Context, user: discord.User = commands.Author):
+        """Get your currently playing or most recently listened to song from last.fm"""
         lfm_user = self.bot.db_cache.lastfm[user.id]
 
         data = {"method": "user.getrecenttracks", "user": lfm_user}

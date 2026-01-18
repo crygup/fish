@@ -165,7 +165,7 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
         " ": " ",
     }
 
-    @commands.command(name="cyrillic", alias=("cryllic",))
+    @commands.command(name="cyrillic", aliases=["cryllic",])
     async def cyrillic(self, ctx: Context, *, words: str):
         words = discord.utils.escape_markdown(words, ignore_links=False)
         all_letters = [letter for word in words for letter in word]
