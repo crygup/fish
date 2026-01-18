@@ -50,7 +50,7 @@ class Top(Cog):
         data = {
             "method": f"user.{mode}",
             "user": lfm_user,
-            "limit": 100,
+            "limit": 250,
             "period": time_period,
         }
 
