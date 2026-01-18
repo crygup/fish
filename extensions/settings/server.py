@@ -53,7 +53,7 @@ class DropdownView(AuthorView):
 
 
 class Server(Cog):
-    @commands.hybrid_group(name="prefix", fallback="get", invoke_without_command=True)
+    @commands.hybrid_group(name="prefix", fallback="get")
     @commands.guild_only()
     async def prefix(self, ctx: GuildContext):
         """Manage the server prefixes"""

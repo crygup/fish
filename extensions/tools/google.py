@@ -171,7 +171,6 @@ class Google(Cog):
     @commands.hybrid_group(
         name="youtube",
         aliases=("yt",),
-        invoke_without_command=True,
         fallback="video",
         extras={"google-command": True},
     )

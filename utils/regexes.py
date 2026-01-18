@@ -37,3 +37,6 @@ EMOJI_RE: Pattern[str] = comp(r"<a?:[a-zA-Z0-9\_]{1,}:[0-9]{1,}>")
 # tenor
 TENOR_PAGE_RE: Pattern = comp(r"https?://(www\.)?tenor\.com/view/\S+/?")
 TENOR_GIF_RE: Pattern = comp(r"https?://(www\.)?c\.tenor\.com/\S+/\S+\.gif/?")
+
+# websites
+LASTFM_USERNAME: Pattern = comp(r"[a-zA-Z\_\-]{2,15}")

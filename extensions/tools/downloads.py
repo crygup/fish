@@ -42,7 +42,7 @@ class Downloads(Cog):
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def download(self, ctx: Context, url: str, *, flags: DownloadFlags):
         """Download a video off the internet"""
-        
+
         async with ctx.typing(ephemeral=flags.hidden):
             try:
                 url = await TenorUrlConverter().convert(ctx, url)

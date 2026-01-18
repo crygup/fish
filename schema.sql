@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS accounts (
     user_id BIGINT NOT NULL,
-    last_fm TEXT,
+    lastfm TEXT,
     steam TEXT,
     roblox TEXT,
     genshin TEXT,

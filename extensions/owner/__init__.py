@@ -22,7 +22,9 @@ class Owner(Cog):
         super().__init__()
         self.bot = bot
 
-    async def _add_reaction(self, ctx: Context, msg: discord.Message, check: bool = True):
+    async def _add_reaction(
+        self, ctx: Context, msg: discord.Message, check: bool = True
+    ):
         try:
             await ctx.message.add_reaction(greenTick if check else fish_x)
         except:
@@ -53,15 +55,15 @@ class Owner(Cog):
         text: str,
     ):
         """Send a message"""
-        channel = channel or ctx.channel # type: ignore
-        await channel.send(text, allowed_mentions=discord.AllowedMentions.all()) # type: ignore
+        channel = channel or ctx.channel  # type: ignore
+        await channel.send(text, allowed_mentions=discord.AllowedMentions.all())  # type: ignore
 
         await self._add_reaction(ctx, ctx.message)
 
     @commands.group(name="pokemon", invoke_without_command=True)
     async def pokemon(self, ctx: Context):
         await ctx.send(f"There are currently {len(self.bot.pokemon):,} cached.")
-    
+
     @pokemon.command(name="update")
     async def pokemon_update(self, ctx: Context):
         await update_pokemon(self.bot)
@@ -80,23 +82,24 @@ class Owner(Cog):
         except:
             await self._add_reaction(ctx, ctx.message, check=False)
 
-    
     @pokemon.command(name="solve")
     async def pokemon_solve(self, ctx: Context):
         events = self.bot.events
         if not events:
-            raise commands.BadArgument("Events cog is not loaded, could possibly have failed to load.")
-        
+            raise commands.BadArgument(
+                "Events cog is not loaded, could possibly have failed to load."
+            )
+
         msg = ctx.message.reference
-        
+
         if not msg:
             raise commands.BadArgument("Reply to a message to solve it")
-        
-        found = events.auto_solve(msg.resolved.content.lower()) # type: ignore
+
+        found = events.auto_solve(msg.resolved.content.lower())  # type: ignore
 
         if bool(found) == False:
             return await self._add_reaction(ctx, ctx.message, check=False)
-        
+
         await ctx.send("\n".join(found))
 
     async def cog_check(self, ctx: commands.Context[Fishie]) -> bool:
@@ -104,6 +107,7 @@ class Owner(Cog):
             return True
 
         raise commands.BadArgument("You are not allowed to use this command.")
+
 
 async def setup(bot: Fishie):
     await bot.add_cog(Owner(bot))

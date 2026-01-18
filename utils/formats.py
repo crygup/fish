@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Sequence, Optional
 
 
 class plural:
-    def __init__(self, value: int):
+    def __init__(self, value: int, return_count: Optional[bool] = True):
         self.value: int = value
+        self.return_count = return_count
 
     def __format__(self, format_spec: str) -> str:
         v = self.value
         singular, _, plural = format_spec.partition("|")
         plural = plural or f"{singular}s"
         if abs(v) != 1:
-            return f"{v} {plural}"
-        return f"{v} {singular}"
+            return f"{v} {plural}" if self.return_count else plural
+        return f"{v} {singular}" if self.return_count else singular
 
 
 def human_join(seq: Sequence[str], delim: str = ", ", final: str = "or") -> str:

@@ -136,7 +136,6 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
         "X": "Χ",
         "Y": "Υ",
         "Z": "Ζ",
-
         "a": "а",
         "b": "‌**b**‌",
         "c": "ϲ",
@@ -163,8 +162,8 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
         "x": "х",
         "y": "у",
         "z": "‌**z**‌",
-        " ": " "
-} 
+        " ": " ",
+    }
 
     @commands.command(name="cyrillic", alias=("cryllic",))
     async def cyrillic(self, ctx: Context, *, words: str):
@@ -304,8 +303,6 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog):
 
         embed.set_footer(text="To add or remove accounts please click the button below")
         await ctx.send(embed=embed, view=AccountsView(ctx, results, embed))
-
-
 
 
 async def setup(bot: Fishie):

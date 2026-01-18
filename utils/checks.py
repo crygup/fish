@@ -27,7 +27,7 @@ def lastfm_command():
             return True
 
         raise commands.BadArgument(
-            "Please connect your last.fm account to the bot first before using this command"
+            f"Please connect your last.fm account to the bot first before using this command. See command `link lastfm`"
         )
 
     return commands.check(predicate)

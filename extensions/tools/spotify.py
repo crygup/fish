@@ -52,7 +52,6 @@ class Spotify(Cog):
     @commands.hybrid_group(
         name="spotify",
         aliases=("sp", "s", "song", "track"),
-        invoke_without_command=True,
         fallback="track",
     )
     @app_commands.allowed_installs(guilds=True, users=True)

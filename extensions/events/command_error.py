@@ -42,6 +42,9 @@ class CommandErrors(Cog):
             type(error), error, error.__traceback__, file=sys.stderr
         )
 
-        await ctx.send(str(error))
+        removed_keys = str(error).replace(
+            ctx.bot.config["keys"]["lastfm"], "REDACTED_KEY"
+        )
+        await ctx.send(removed_keys)
 
         await self.bot.log_error(error)

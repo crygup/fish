@@ -156,10 +156,9 @@ class Commands(Cog):
 
         await self.avatars_func(ctx, user, ctx.guild.id)
 
-    @commands.group(
+    @commands.hybrid_group(
         name="avatarhistory",
         aliases=("avyh", "avatar-history", "avatar_history", "pfph", "avh"),
-        invoke_without_command=True,
     )
     async def avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
@@ -169,12 +168,13 @@ class Commands(Cog):
         await self.avatars_grid(ctx, user)
 
     @avatar_history.command(name="server", aliases=("guild", "s"))
+    @commands.guild_only()
     async def server_avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
         """Shows a user's previous avatars in a grid view"""
         assert ctx.guild
-        
+
         await self.avatars_grid(ctx, user, ctx.guild.id)
 
     @commands.command(name="usernames")

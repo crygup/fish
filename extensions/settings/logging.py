@@ -132,7 +132,7 @@ class DropdownView(AuthorView):
 
 
 class Logging(Cog):
-    @commands.hybrid_group(name="logging", fallback="user", invoke_without_command=True)
+    @commands.hybrid_group(name="logging", fallback="user")
     async def logging(self, ctx: Context):
         """Manage your logging settings for the bot"""
         sql = """SELECT * FROM opted_out WHERE user_id = $1"""

@@ -11,8 +11,15 @@ class db_cache:
     pinboard: Dict[int, int] = {}
     lastfm: dict[int, str] = {}
 
-    def add_account(self, user_id: int, last_fm: str): # later change this and add more than just last_fm and be dynamic 
+    def add_account(
+        self, user_id: int, last_fm: str
+    ):  # later change this and add more than just last_fm and be dynamic
         self.lastfm.update({user_id: last_fm})
+
+    def remove_account(
+        self, user_id: int
+    ):
+        del self.lastfm[user_id]
 
     def add_prefix(self, guild_id: int, prefix: str) -> List[str]:
         try:

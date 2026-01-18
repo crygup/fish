@@ -216,13 +216,13 @@ def format_bytes(filesize_limit: int, images: List[bytes]) -> BytesIO:
     size = int(2520 / xbound)
 
     with Image.new(
-        "RGBA", size=(xbound * size, ybound * size), color=(0, 0, 0, 0) # type: ignore
+        "RGBA", size=(xbound * size, ybound * size), color=(0, 0, 0, 0)  # type: ignore
     ) as base:
         x, y = 0, 0
         for avy in images:
             if avy:
                 im = Image.open(BytesIO(avy)).resize(
-                    (size, size), resample=Image.BICUBIC # type: ignore
+                    (size, size), resample=Image.BICUBIC  # type: ignore
                 )
                 base.paste(im, box=(x * size, y * size))
             if x < xbound - 1:
@@ -312,7 +312,7 @@ async def identify_mobile(self) -> None:
             "properties": {
                 "os": sys.platform,
                 "browser": "discord iOS",
-                "device": "discord.py",
+                "device": "discord iOS",
             },
             "compress": True,
             "large_threshold": 250,
@@ -375,3 +375,23 @@ def capitalize_text(text):
     capitalized_text = re.sub(pattern, capitalize_match, text)
 
     return capitalized_text
+
+
+def format_millis(count: int) -> str:
+    seconds = count // 1000
+
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+
+    parts = []
+
+    if hours > 0:
+        parts.append(str(hours))
+        parts.append(f"{minutes:02}")
+    elif minutes > 0:
+        parts.append(str(minutes))
+
+    parts.append(f"{seconds:02}" if parts else str(seconds))
+
+    return ":".join(parts)

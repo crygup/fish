@@ -55,8 +55,8 @@ class AutoDownload(Cog):
 
             except commands.BadArgument:
                 pass
-    
+
         async with ctx.typing(ephemeral=True):
             dl = Downloader(ctx, message.content)
-            
+
             await dl.download()

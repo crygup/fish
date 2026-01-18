@@ -33,11 +33,7 @@ def match_filter(info: Dict[Any, Any]):
 
 
 def cobalt_checker(url: str) -> bool:
-    if (
-        TIKTOK_RE.search(url)
-        or TWITTER_RE.search(url)
-        or INSTAGRAM_RE.search(url)
-    ):
+    if TIKTOK_RE.search(url) or TWITTER_RE.search(url) or INSTAGRAM_RE.search(url):
         return True
     else:
         return False
@@ -77,7 +73,7 @@ class Downloader:
         if YT_CLIP_RE.search(self.url):
             raise DownloadError("Youtube clips are not supported at the moment, sorry.")
 
-        if (YOUTUBE_RE.search(self.url) or YT_SHORT_RE.search(self.url)):
+        if YOUTUBE_RE.search(self.url) or YT_SHORT_RE.search(self.url):
             raise DownloadError("youtube broken :/")
             return await self.manual_dl("files/cookies/youtube-cookies.txt")
 
@@ -90,13 +86,15 @@ class Downloader:
 
             data: Dict[Any, Any] = await s.json()
             temp = VIDEOS_RE.search(self.url)
-            
+
             if temp:
                 self.url = temp.group(0)
 
             try:
-                #await self.ctx.send(file=self.ctx.bot.too_big(json.dumps(data, indent=4))) # debug
-                CobaltUrl = data["url"].replace("https://10.0.0.1:9000", "http://10.0.0.1:9000")
+                # await self.ctx.send(file=self.ctx.bot.too_big(json.dumps(data, indent=4))) # debug
+                CobaltUrl = data["url"].replace(
+                    "https://10.0.0.1:9000", "http://10.0.0.1:9000"
+                )
                 async with self.ctx.session.get(url=CobaltUrl) as body:
                     bData = await body.read()
 
@@ -116,9 +114,9 @@ class Downloader:
                     allowed_mentions=discord.AllowedMentions.all(),
                 )
                 await self.ctx.bot.log_error(error=err)
-                
+
                 _err = "Something went wrong, this was sent to the developers, sorry."
-                
+
                 if data["status"] == "error":
                     err_code = data["error"]["code"]
 
@@ -126,7 +124,7 @@ class Downloader:
                         "error.api.content.video.unavailable": "This video is unavailable please try a different upload, sorry.",
                         "error.api.fetch.empty": "This link doesnt seem to exist anymore or I don't have access to it, sorry.",
                         "error.api.fetch.critical": "This video is age restricted, private, or deleted as I do not have access to it anymore, sorry.",
-                        "error.api.content.video.age": "This video is age restricted and I cannot access it, sorry."
+                        "error.api.content.video.age": "This video is age restricted and I cannot access it, sorry.",
                     }
 
                     try:
@@ -145,7 +143,7 @@ class Downloader:
     def yt_dlp_download(self) -> discord.File:
         video_match = VIDEOS_RE.search(self.url)
         audio = False
-        
+
         if video_match is None or video_match and video_match.group(0) == "":
             raise InvalidWebsite()
 
@@ -174,7 +172,7 @@ class Downloader:
         else:
             options["format"] = f"bestvideo+bestaudio[ext={self.format}]/best"
 
-        with yt_dlp.YoutubeDL(options) as ydl: # type: ignore # its fineeee
+        with yt_dlp.YoutubeDL(options) as ydl:  # type: ignore # its fineeee
             try:
                 ydl.download(video)
                 self.ctx.bot.current_downloads.append(f"{self.filename}.{self.format}")
@@ -219,7 +217,6 @@ class Downloader:
                 json=self.json_data,
             )
             data: Dict[Any, Any] = await s.json()
-
 
             if data.get("status") == "picker":
                 MVD = await self.ctx.send("Multiple videos detected, downloading.")

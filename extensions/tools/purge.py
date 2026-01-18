@@ -56,7 +56,7 @@ class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
 
 class PurgeCog(Cog):
     @commands.hybrid_command(
-        name="purge", invoke_without_command=True, fallback="messages"
+        name="purge",
     )
     @commands.bot_has_permissions(manage_messages=True)
     @commands.has_guild_permissions(manage_messages=True)

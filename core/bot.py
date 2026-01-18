@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from extensions.logging import Logging
     from extensions.settings import Settings
     from extensions.tools import Tools
+    from extensions.lastfm import Lastfm
 
     # from extensions.fishing import Fishing
 
@@ -323,7 +324,6 @@ class Fishie(commands.Bot):
             self.db_cache.add_account(user_id=user_id, last_fm=last_fm)
             self.logger.info(f'Added last.fm account "{last_fm}" to user "{user_id}"')
 
-
     async def add_reactions(
         self,
         message: discord.Message,
@@ -377,7 +377,7 @@ class Fishie(commands.Bot):
         return self.get_cog("Discord")  # type: ignore
 
     @property
-    def lastfm(self) -> Optional[DiscordCog]:
+    def lastfm(self) -> Optional[Lastfm]:
         return self.get_cog("Lastfm")  # type: ignore
 
     # @property
