@@ -28,6 +28,8 @@ class Settings(Logging, Server):
     @commands.hybrid_group(
         name="link",
     )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def link(self, ctx: Context):
         """Link an account to fishie"""
         await ctx.send(
@@ -53,6 +55,8 @@ class Settings(Logging, Server):
     @commands.hybrid_group(
         name="unlink",
     )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def unlink(self, ctx: Context):
         """Unlink an account from fishie"""
         await ctx.send(
