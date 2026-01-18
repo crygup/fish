@@ -29,7 +29,7 @@ class Lastfm(Cog):
         async with self.bot.session.get(self.api, params=data) as resp:
             return await resp.json()
 
-    @commands.hybrid_command(name="fm", enabled=True)
+    @commands.hybrid_command(name="fm", enabled=True, aliases=("np","nowplaying","fuckyoutony"))
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @lastfm_command()
