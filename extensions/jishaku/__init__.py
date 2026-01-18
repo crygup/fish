@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 
 class Jishaku(Cog, *OPTIONAL_FEATURES, *STANDARD_FEATURES):
+    """fart"""
+
     emoji = fish_owner
     hidden: bool = True
 

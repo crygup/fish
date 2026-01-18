@@ -35,7 +35,7 @@ class About(Cog):
         )
         today = len([result for result in results if result["created_at"] >= start])
         memory_usage = self.process.memory_full_info().uss / 1024**2
-        cpu_usage = self.process.cpu_percent() / psutil.cpu_count()
+        cpu_usage = self.process.cpu_percent() / psutil.cpu_count()  # type: ignore
         liz = await get_or_fetch_user(
             bot=self.bot, user_id=self.bot.config["ids"]["owner_id"]
         )
@@ -110,7 +110,7 @@ class About(Cog):
 
             mem = self.process.memory_full_info()
             memory_usage = mem.uss / 1024**2
-            cpu_usage = self.process.cpu_percent() / psutil.cpu_count()
+            cpu_usage = self.process.cpu_percent() / psutil.cpu_count()  # type: ignore
 
             message = f"""
                         memory : {memory_usage:.2f} MiB

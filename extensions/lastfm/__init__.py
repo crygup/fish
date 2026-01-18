@@ -9,92 +9,113 @@ from discord.ext import commands
 from discord import app_commands
 
 from core import Cog
-from utils import lastfm_command, to_image, format_millis, plural, fish_discord
+from utils import (
+    lastfm_command,
+    to_image,
+    format_millis,
+    plural,
+    fish_discord,
+    lfm_emoji,
+)
 from typing import Dict, Any
+from .top import Top
 
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context
 
 
-class Lastfm(Cog):
-    emoji = discord.PartialEmoji(name="\U00002699\U0000fe0f")
+class Lastfm(Top):
+    """Last.fm integration"""
+
+    emoji = lfm_emoji
 
     def __init__(self, bot: Fishie):
         super().__init__()
         self.bot = bot
-        self.api = f"http://ws.audioscrobbler.com/2.0/?api_key={bot.config['keys']['lastfm']}&format=json"
 
     async def lfm_get(self, data: Dict[Any, Any]):
-        async with self.bot.session.get(self.api, params=data) as resp:
+        async with self.bot.session.get(self.bot.lfm_api, params=data) as resp:
             return await resp.json()
 
-    @commands.hybrid_command(name="fm", enabled=True, aliases=("np","nowplaying","fuckyoutony"))
+    @commands.hybrid_command(
+        name="fm", enabled=True, aliases=("np", "nowplaying", "fuckyoutony")
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @lastfm_command()
     async def command(self, ctx: Context, user: discord.User = commands.Author):
         """Get your currently playing or most recently listened to song from last.fm"""
-        lfm_user = self.bot.db_cache.lastfm[user.id]
+        async with ctx.typing():
+            try:
+                lfm_user = self.bot.db_cache.lastfm[user.id]
+            except KeyError:
+                raise commands.BadArgument(
+                    "This user has not connected their last.fm account"
+                )
 
-        data = {"method": "user.getrecenttracks", "user": lfm_user}
+            data = {"method": "user.getrecenttracks", "user": lfm_user}
 
-        response = await self.lfm_get(data)
-        lt = response["recenttracks"]["track"][0]
+            response = await self.lfm_get(data)
+            lt = response["recenttracks"]["track"][0]
 
-        files = []
-        embed = discord.Embed(color=self.bot.embedcolor)
-        author_name = "was listening to" if lt.get("date") else "is listening to"
+            files = []
+            embed = discord.Embed(color=self.bot.embedcolor)
+            author_name = "was listening to" if lt.get("date") else "is listening to"
 
-        thumbnail_url = re.sub(r"/u/.*/", "/u/", lt["image"][-1]["#text"])
+            thumbnail_url = re.sub(r"/u/.*/", "/u/", lt["image"][-1]["#text"])
 
-        if not re.search("2a96cbd8b46e442fc41c2b86b821562f.png", thumbnail_url):
-            fp = await to_image(ctx.session, thumbnail_url)
-            file = discord.File(fp=fp, filename="cover.png")
-            files.append(file)
-            embed.set_thumbnail(url="attachment://cover.png")
+            if not re.search("2a96cbd8b46e442fc41c2b86b821562f.png", thumbnail_url):
+                fp = await to_image(ctx.session, thumbnail_url)
+                file = discord.File(fp=fp, filename="cover.png")
+                files.append(file)
+                embed.set_thumbnail(url="attachment://cover.png")
 
-        embed.set_author(
-            name=f"{user.display_name} {author_name}"[:256],
-            icon_url=user.display_avatar.url,
-            url=f"https://last.fm/user/{lfm_user}",
-        )
+            embed.set_author(
+                name=f"{user.display_name} {author_name}"[:256],
+                icon_url=user.display_avatar.url,
+                url=f"https://last.fm/user/{lfm_user}",
+            )
 
-        embed.url = lt["url"]
-        embed.description = f"**{lt['artist']['#text']}** - *{lt['album']['#text']}*"
+            embed.url = lt["url"]
+            embed.description = (
+                f"**{lt['artist']['#text']}** - *{lt['album']['#text']}*"
+            )
 
-        tData = (
-            {"method": "track.getInfo", "mbid": lt["mbid"], "user": lfm_user}
-            if lt["mbid"]
-            else {
-                "method": "track.getInfo",
-                "artist": lt["artist"]["#text"],
-                "track": lt["name"],
-                "user": lfm_user,
-            }
-        )
+            tData = (
+                {"method": "track.getInfo", "mbid": lt["mbid"], "user": lfm_user}
+                if lt["mbid"]
+                else {
+                    "method": "track.getInfo",
+                    "artist": lt["artist"]["#text"],
+                    "track": lt["name"],
+                    "user": lfm_user,
+                }
+            )
 
-        tResponse = await self.lfm_get(tData)
-        t = tResponse["track"]
-        footer_text = ""
-        tp = int(t["userplaycount"])
-        time = f"{format_millis(int(t['duration']))}"
-        if tp != 0:
-            splitter = " - " if time != "0" else ""
-            footer_text += f"{tp:,} track {plural(tp, False):play} {splitter}"
-        if time != "0":
-            footer_text += f"\U0001f551 {time}"
+            tResponse = await self.lfm_get(tData)
+            t = tResponse["track"]
+            footer_text = ""
+            tp = int(t["userplaycount"])
+            time = f"{format_millis(int(t['duration']))}"
+            if tp != 0:
+                splitter = " - " if time != "0" else ""
+                footer_text += f"{tp:,} track {plural(tp, False):play} {splitter}"
+            if time != "0":
+                footer_text += f"\U0001f551 {time}"
 
-        if lt.get("date"):
-            embed.timestamp = datetime.datetime.fromtimestamp(int(lt["date"]["uts"]))
-            footer_text += "\nLast play"
+            if lt.get("date"):
+                embed.timestamp = datetime.datetime.fromtimestamp(
+                    int(lt["date"]["uts"])
+                )
+                footer_text += "\nLast play"
 
-        embed.set_footer(text=footer_text)
+            embed.set_footer(text=footer_text)
 
-        loved = f" \U00002764\U0000fe0f" if {t["userloved"]} != "0" else ""
-        embed.title = f'{lt["name"]}{loved}'
+            loved = f" \U00002764\U0000fe0f" if {t["userloved"]} != "0" else ""
+            embed.title = f'{lt["name"]}{loved}'
 
-        await ctx.send(embed=embed, files=files)
+            await ctx.send(embed=embed, files=files)
 
 
 async def setup(bot: Fishie):

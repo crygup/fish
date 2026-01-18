@@ -48,6 +48,15 @@ USER_FLAGS = {
     280030020305420289: f"{nathan} Nathan",
 }
 
+lastfm_period = {
+    "overall": "overall",
+    "7day": "weekly",
+    "1month": "monthly",
+    "3month": "quarterly",
+    "6month": "half-yearly",
+    "12month": "yearly",
+}
+
 base_header = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
 }

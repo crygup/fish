@@ -139,7 +139,9 @@ class Commands(Cog):
                 f"Viewing avatars in a grid view for {user}", file=file, embed=embed
             )
 
-    @commands.hybrid_group(name="avatars", aliases=("pfps", "avis", "avs"))
+    @commands.hybrid_group(
+        name="avatars", aliases=("pfps", "avis", "avs"), fallback="profile"
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def avatars(self, ctx: Context, *, user: discord.User = commands.Author):
@@ -159,6 +161,7 @@ class Commands(Cog):
     @commands.hybrid_group(
         name="avatarhistory",
         aliases=("avyh", "avatar-history", "avatar_history", "pfph", "avh"),
+        fallback="profile",
     )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -205,7 +208,9 @@ class Commands(Cog):
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
-    @commands.command(name="names", aliases=("display_names", "displaynames"))
+    @commands.hybrid_command(name="names", aliases=("display_names", "displaynames"))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def display_names(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
@@ -234,7 +239,10 @@ class Commands(Cog):
 
         await pager.start(ctx)
 
-    @commands.command(name="nicknames", aliases=("nicks",))
+    @commands.hybrid_command(name="nicknames", aliases=("nicks",))
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    @commands.guild_only()
     async def nicknames(
         self, ctx: Context, *, member: discord.Member = commands.Author
     ):
@@ -263,9 +271,11 @@ class Commands(Cog):
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
-    @commands.command(name="discrims", aliases=("discriminators",))
+    @commands.hybrid_command(name="discrims", aliases=("discriminators",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def discrims(self, ctx: Context, *, member: discord.Member = commands.Author):
-        """Shows a user's previous discrim_logs"""
+        """Shows a user's previous discrims"""
 
         results = await self.bot.pool.fetch(
             "SELECT * FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC",

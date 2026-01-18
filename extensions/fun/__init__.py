@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import discord
 import psutil
 from discord.ext import commands
+from discord import app_commands
 
 from core import Cog
 from utils import to_image
@@ -60,7 +61,9 @@ class Fun(About):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @commands.command(name="invite", aliases=("join",))
+    @commands.hybrid_command(name="invite", aliases=("join",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def invite(self, ctx: Context):
         """Sends a link to add me to a server."""
 
@@ -90,6 +93,8 @@ class Fun(About):
         ),
     )
     @commands.cooldown(1, 15, commands.BucketType.channel)
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def badapple(self, ctx: Context):
         """Bad Apple!! feat.nomico"""
 
@@ -100,10 +105,6 @@ class Fun(About):
                     filename=f"fishie_loves_{ctx.author.name}.mp4",
                 )
             )
-
-    @commands.command(name="slap")
-    async def slap(self, ctx: Context, user: discord.User):
-        """Slap a user"""
 
 
 async def setup(bot: Fishie):

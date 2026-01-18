@@ -30,7 +30,7 @@ python = PartialEmoji(id=949147461849604176, name="python")
 user = PartialEmoji(id=971924020389892106, name="user")
 loading = PartialEmoji(id=974280851762327563, name="loading", animated=True)
 pokeball = PartialEmoji(id=1006847357381521428, name="pokeball")
-lastfm = PartialEmoji(id=1006848047923351612, name="lastfm")
+lfm_emoji = PartialEmoji(id=1006848047923351612, name="lastfm")
 steam = PartialEmoji(id=1095791386999132231, name="steam")
 roblox = PartialEmoji(id=1095791384893603840, name="roblox")
 
@@ -109,7 +109,7 @@ class Emojis:
     user = user
     loading = loading
     pokeball = pokeball
-    lastfm = lastfm
+    lfm_emoji = lfm_emoji
     steam = steam
     roblox = roblox
     balance = balance
@@ -182,7 +182,7 @@ emoji_list = [
     user,
     loading,
     pokeball,
-    lastfm,
+    lfm_emoji,
     steam,
     roblox,
     balance,

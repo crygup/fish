@@ -103,6 +103,7 @@ class Fishie(commands.Bot):
             maxsize=1000, ttl=300.0
         )  # {repr(ctx): message(from ctx.send) }
         self.support_invite: str = f"https://discord.gg/Fct5UGadcb"
+        self.lfm_api = f"http://ws.audioscrobbler.com/2.0/?api_key={self.config['keys']['lastfm']}&format=json"
 
         super().__init__(
             command_prefix=get_prefix,

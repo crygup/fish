@@ -20,6 +20,26 @@ SVG_URL = (
 )
 
 
+class LastfmTimeConverter(commands.Converter):
+    async def convert(self, _, argument: str) -> str:
+        response = "overall"
+
+        if re.search("7d|weekly|week", argument, re.IGNORECASE):
+            response = "7day"
+        elif re.search("1mon|1m|monthy|m", argument, re.IGNORECASE):
+            response = "1month"
+        elif re.search("3mon|3m|quarterly|q", argument, re.IGNORECASE):
+            response = "3month"
+        elif re.search(
+            "6mon|6m|half-yearly|halfyearly|half|h", argument, re.IGNORECASE
+        ):
+            response = "6month"
+        elif re.search("12mon|12m|yeary|y", argument, re.IGNORECASE):
+            response = "12month"
+
+        return response
+
+
 class URLConverter(commands.Converter[str]):
     async def convert(self, ctx: Context, argument: str) -> str:
         if not re.match(r"^https?://", argument):
