@@ -19,13 +19,14 @@ from utils import (
 )
 from typing import Dict, Any
 from .top import Top
+from .charts import Charts
 
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context
 
 
-class Lastfm(Top):
+class Lastfm(Top, Charts):
     """Last.fm integration"""
 
     emoji = lfm_emoji

@@ -43,12 +43,16 @@ class CommandErrors(Cog):
         )
 
         if isinstance(error, commands.HybridCommandError):
-            await ctx.send("Something went wrong while processing this command, try again?")
+            await ctx.send(
+                "Something went wrong while processing this command, try again?"
+            )
             await self.bot.log_error(error)
             return
-        
-        removed_keys = str(error).replace(
-            ctx.bot.config["keys"]["lastfm"], "REDACTED_KEY"
+
+        removed_keys = (
+            str(error)
+            .replace(ctx.bot.config["keys"]["lastfm"], "REDACTED_KEY")
+            .replace(ctx.bot.config["keys"]["spotify_id"], "REDACTED_KEY")
         )
         await ctx.send(removed_keys)
 
