@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 format_table = {
     "avatars": "user_id",
     "guild_avatars": "member_id",
-    "status_logs": "user_id",
     "username_logs": "user_id",
     "display_name_logs": "user_id",
     "nickname_logs": "user_id",
@@ -139,7 +138,6 @@ class Logging(Cog):
         records = await self.bot.pool.fetchrow(sql, ctx.author.id)
         data = {
             "avatar": ["Avatar logging", "\U0001f7e2"],
-            "status": ["Status logging", "\U0001f7e2"],
             "username": ["Username logging", "\U0001f7e2"],
             "display": ["Display name logging", "\U0001f7e2"],
             "nickname": ["Nickname logging", "\U0001f7e2"],
@@ -203,7 +201,6 @@ class Logging(Cog):
         data = {
             "avatars": "Avatars",
             "guild_avatars": "Avatars",
-            "status_logs": "Statuses",
             "username_logs": "Usernames",
             "display_name_logs": "Display names",
             "nickname_logs": "Nicknames",
@@ -223,7 +220,6 @@ class Logging(Cog):
         prompt: Union[
             Literal["avatars"],
             Literal["guild_avatars"],
-            Literal["status_logs"],
             Literal["username_logs"],
             Literal["display_name_logs"],
             Literal["nickname_logs"],

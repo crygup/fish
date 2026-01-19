@@ -68,26 +68,6 @@ class User(Cog):
 
         await self.add_nickname(after_m)
 
-    async def add_status(self, member: discord.Member):
-        sql = """
-        INSERT INTO status_logs(user_id, status_name, guild_id, created_at)
-        VALUES($1, $2, $3, $4)
-        """
-
-        await self.bot.pool.execute(
-            sql, member.id, member.status.name, member.guild.id, discord.utils.utcnow()
-        )
-
-    @commands.Cog.listener("on_presence_update")
-    async def status_update(self, before_m: discord.Member, after_m: discord.Member):
-        if before_m.status == after_m.status:
-            return
-
-        if "status" in self.bot.db_cache.get_opted_out(after_m.id):
-            return
-
-        await self.add_status(after_m)
-
     async def add_join(self, member: discord.Member):
         sql = """
         INSERT INTO member_join_logs(member_id, guild_id, time)

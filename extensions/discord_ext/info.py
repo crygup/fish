@@ -62,7 +62,6 @@ class UserDropdown(discord.ui.Select):
         self.avatar_cache: Optional[discord.Embed] = None
         self.banner_cache: Optional[discord.Embed] = None
         self.bot_cache: Optional[discord.Embed] = None
-        self.status_cache: Optional[discord.Embed] = None
 
         options = [
             discord.SelectOption(
@@ -92,16 +91,6 @@ class UserDropdown(discord.ui.Select):
                     description=f"View {user}'s banner",
                     emoji=discord.PartialEmoji(name="\U0001f3f3"),
                     value="banner",
-                )
-            )
-
-        if isinstance(user, discord.Member):
-            options.append(
-                discord.SelectOption(
-                    label="Statuses",
-                    description=f"View {user}'s statuses",
-                    emoji=discord.PartialEmoji(name="\U000023f3"),
-                    value="status",
                 )
             )
 
@@ -237,55 +226,6 @@ class UserDropdown(discord.ui.Select):
         self.bot_cache = embed
         return embed
 
-    async def status_response(self):
-        if self.status_cache:
-            return self.status_cache
-
-        ctx = self.ctx
-        user = self.user
-        fuser = self.fetched_user or await ctx.bot.fetch_user(user.id)
-        color = fuser.accent_color or ctx.bot.embedcolor
-
-        embed = discord.Embed(color=color)
-        embed.set_author(name=f"{user}'s status info", icon_url=user.display_avatar.url)
-
-        if isinstance(user, discord.Member):
-            embed.add_field(
-                name="Devices",
-                value=f"**Desktop**: `{user.desktop_status.value}`\n"
-                f"**Website**: `{user.web_status.value}`\n"
-                f"**Mobile**: `{user.mobile_status.value}`",
-            )
-            if ctx.bot.discord:
-                online = await self.get_status(user, "online")
-                dnd = await self.get_status(user, "dnd")
-                idle = await self.get_status(user, "idle")
-                offline = await self.get_status(user, "offline")
-
-                statuses = [s for s in [online, dnd, idle, offline] if s]
-
-                text = ""
-
-                for status in statuses:
-                    text += f"**{status[1].capitalize()}**: {discord.utils.format_dt(status[0], 'R')}\n"
-
-                if bool(text):
-                    embed.add_field(name="Last status", value=text)
-
-        self.status_cache = embed
-        return embed
-
-    async def get_status(
-        self, member: discord.Member, status: statuses
-    ) -> Optional[Tuple[datetime.datetime, str]]:
-        if not self.ctx.bot.discord:
-            raise commands.BadArgument("Discord cog not found.")
-
-        try:
-            return await self.ctx.bot.discord.last_status(member, status=status)
-        except commands.BadArgument:
-            return None
-
     async def callback(self, interaction: Interaction):
         value = self.values[0]
 
@@ -294,7 +234,6 @@ class UserDropdown(discord.ui.Select):
             "avatar": self.avatar_response,
             "banner": self.banner_response,
             "bot": self.bot_response,
-            "status": self.status_response,
         }
 
         if value in options.keys():
@@ -586,45 +525,6 @@ class Info(Cog):
             member.guild.members, key=lambda m: m.joined_at or discord.utils.utcnow()
         )
         return members.index(member) + 1
-
-    async def last_status(
-        self,
-        member: discord.Member,
-        status: Optional[statuses] = None,
-    ) -> Tuple[datetime.datetime, str]:
-        sql = """SELECT created_at, status_name FROM status_logs WHERE user_id = $1 AND guild_id = $2"""
-        args = (member.id, member.guild.id)
-
-        if status:
-            sql += " AND status_name = $3"
-            args = (member.id, member.guild.id, status)
-
-        sql += " ORDER BY created_at DESC"
-
-        results = await self.bot.pool.fetchrow(sql, *args)
-
-        if not bool(results):
-            if status:
-                raise commands.BadArgument(
-                    "Could not find a specific status for that member."
-                )
-
-            now = discord.utils.utcnow()
-            sql = """
-            INSERT INTO status_logs (   user_id, status_name,
-                                        guild_id, created_at)
-            VALUES ($1, $2, $3, $4)
-            """
-            await self.bot.pool.execute(
-                sql, member.id, member.status.name, member.guild.id, now
-            )
-            return now, member.status.name
-
-        return results["created_at"], results["status_name"]
-
-    def format_status(self, status: str) -> str:
-        return f"{['','on '][status == 'dnd']}{status}"
-
     async def user_info(self, ctx: Context, user: Union[discord.Member, discord.User]):
         fuser = await self.bot.fetch_user(user.id)
 
@@ -650,18 +550,6 @@ class Info(Cog):
                 f"{reply} {discord.utils.format_dt(joined, 'R')}"
             )
             embed.add_field(name="Joined", value=pos_text)
-
-            status, status_name = await self.last_status(user)
-
-            status_text = (
-                f"{discord.utils.format_dt(status, 'D')}\n"
-                f"{reply} {discord.utils.format_dt(status, 'R')}"
-            )
-
-            embed.add_field(
-                name=f"{self.format_status(status_name)} since".capitalize(),
-                value=status_text,
-            )
 
         await ctx.send(embed=embed, view=UserView(ctx, user, embed, fuser))
 

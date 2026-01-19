@@ -117,16 +117,6 @@ CREATE TABLE IF NOT EXISTS guild_icons (
     PRIMARY KEY(icon_key, guild_id)
 );
 
-CREATE TABLE IF NOT EXISTS status_logs (
-    id SERIAL,
-    user_id BIGINT,
-    status_name TEXT,
-    guild_id BIGINT,
-    created_at TIMESTAMP WITH TIME ZONE
-);
-
-ALTER TABLE status_logs ADD COLUMN IF NOT EXISTS device TEXT;
-
 CREATE TABLE IF NOT EXISTS opted_out (
     user_id BIGINT,
     items TEXT[],

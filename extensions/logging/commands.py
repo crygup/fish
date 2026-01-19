@@ -366,27 +366,14 @@ class Commands(Cog):
     @commands.guild_only()
     async def uptime(
         self,
-        ctx: GuildContext,
-        *,
-        member: discord.Member = commands.param(default=lambda ctx: ctx.bot.user),
+        ctx: GuildContext
     ):
-        """Shows how long someone has been online"""
-        if self.bot.user and self.bot.user.id == member.id:
+        """Shows how long the bot has been online"""
+        if self.bot.user:
             await ctx.send(
                 f"Hi, I have been awake for {human_timedelta(self.bot.start_time, suffix=False)}"
             )
             return
-
-        sql = """SELECT * FROM status_logs WHERE user_id = $1 AND guild_id = $2"""
-
-        results = await self.bot.pool.fetchrow(sql, member.id, ctx.guild.id)
-
-        if not bool(results):
-            raise commands.BadArgument(f"I have no status records for {member}")
-
-        await ctx.send(
-            f"{member} has been {format_status(member)} for {human_timedelta(results['created_at'], suffix=False)}."
-        )
 
     @commands.command(name="joins")
     @commands.guild_only()

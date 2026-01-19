@@ -311,8 +311,8 @@ async def identify_mobile(self) -> None:
             "token": self.token,
             "properties": {
                 "os": sys.platform,
-                "browser": "discord iOS",
-                "device": "discord iOS",
+                "browser": "Discord iOS",
+                "device": "Discord iOS",
             },
             "compress": True,
             "large_threshold": 250,
