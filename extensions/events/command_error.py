@@ -42,12 +42,12 @@ class CommandErrors(Cog):
             type(error), error, error.__traceback__, file=sys.stderr
         )
 
-        if isinstance(error, commands.HybridCommandError):
-            await ctx.send(
-                "Something went wrong while processing this command, try again?"
-            )
-            await self.bot.log_error(error)
-            return
+        # if isinstance(error, commands.HybridCommandError):
+        #     await ctx.send(
+        #         "Something went wrong while processing this command, try again?"
+        #     )
+        #     await self.bot.log_error(error)
+        #     return
 
         removed_keys = (
             str(error)

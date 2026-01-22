@@ -60,12 +60,6 @@ class ChartEmbed(ui.LayoutView):
         )
         self.add_item(self.container)
 
-
-async def lfm_get(ctx: Context, data: Dict[Any, Any]):
-    async with ctx.bot.session.get(ctx.bot.lfm_api, params=data) as resp:
-        return await resp.json()
-
-
 async def chart_cmd(
     ctx: Context,
     user: discord.User,
@@ -82,7 +76,7 @@ async def chart_cmd(
 
     data = {"method": "user.getrecenttracks", "user": lfm_user}
 
-    rtResponse = (await lfm_get(ctx, data))[f"recenttracks"]["@attr"]
+    rtResponse = (await ctx.bot.lfm_get(data))[f"recenttracks"]["@attr"]
     view = ChartEmbed(
         ctx,
         file,
@@ -138,7 +132,7 @@ async def make_image(
 
     cv = 0
     images = []
-    response = (await lfm_get(ctx, data))[f"top{modeName[mode]}s"]
+    response = (await ctx.bot.lfm_get(data))[f"top{modeName[mode]}s"]
     items: List[Dict[Any, Any]] = response[modeName[mode]]
     bio = ""
     for item in items:

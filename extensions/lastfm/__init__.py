@@ -35,10 +35,6 @@ class Lastfm(Top, Charts):
         super().__init__()
         self.bot = bot
 
-    async def lfm_get(self, data: Dict[Any, Any]):
-        async with self.bot.session.get(self.bot.lfm_api, params=data) as resp:
-            return await resp.json()
-
     @commands.hybrid_command(
         name="fm", enabled=True, aliases=("np", "nowplaying", "fuckyoutony")
     )
@@ -57,7 +53,7 @@ class Lastfm(Top, Charts):
 
             data = {"method": "user.getrecenttracks", "user": lfm_user}
 
-            response = await self.lfm_get(data)
+            response = await self.bot.lfm_get(data)
             lt = response["recenttracks"]["track"][0]
 
             files = []
@@ -94,7 +90,7 @@ class Lastfm(Top, Charts):
                 }
             )
 
-            tResponse = await self.lfm_get(tData)
+            tResponse = await self.bot.lfm_get(tData)
             t = tResponse["track"]
             footer_text = ""
             tp = int(t["userplaycount"])
@@ -111,9 +107,10 @@ class Lastfm(Top, Charts):
                 )
                 footer_text += "\nLast play"
 
-            embed.set_footer(text=footer_text)
+            if footer_text != "":
+                embed.set_footer(text=footer_text)
 
-            loved = f" \U00002764\U0000fe0f" if {t["userloved"]} != "0" else ""
+            loved = f" \U00002764\U0000fe0f" if t["userloved"] != "0" else ""
             embed.title = f'{lt["name"]}{loved}'
 
             await ctx.send(embed=embed, files=files)

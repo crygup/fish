@@ -388,3 +388,7 @@ class Fishie(commands.Bot):
     @property
     def embedcolor(self) -> int:
         return 0xFAA0C1
+
+    async def lfm_get(self, data: Dict[Any, Any]):
+        async with self.session.get(self.lfm_api, params=data) as resp:
+            return await resp.json()

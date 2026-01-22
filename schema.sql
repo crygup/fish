@@ -263,3 +263,9 @@ CREATE TABLE IF NOT EXISTS added_pokemon (
     created_at TIMESTAMP WITH TIME ZONE,
     PRIMARY KEY (name)
 );
+
+-- CREATE TABLE IF NOT EXISTS whoknows (
+--     artist TEXT,
+--     users JSONB DEFAULT ('{}'::jsonb), 
+--     PRIMARY KEY (artist)
+-- );

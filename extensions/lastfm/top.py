@@ -29,10 +29,6 @@ modeName = {"gettopartists": "artist", "gettopalbums": "album", "gettoptracks": 
 
 
 class Top(Cog):
-    async def lfm_get(self, data: Dict[Any, Any]):
-        async with self.bot.session.get(self.bot.lfm_api, params=data) as resp:
-            return await resp.json()
-
     async def list_top(
         self,
         ctx: Context,
@@ -54,7 +50,7 @@ class Top(Cog):
             "period": time_period,
         }
 
-        response = (await self.lfm_get(data))[f"top{modeName[mode]}s"]
+        response = (await self.bot.lfm_get(data))[f"top{modeName[mode]}s"]
         items = response[modeName[mode]]
 
         info = [
