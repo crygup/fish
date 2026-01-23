@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 
 
 class Guilds(Cog):
+    allowed_guilds = [1159760133895766049]
+
     async def post_guild(self, embed: discord.Embed, guild: discord.Guild):
         embed.add_field(
             name="Created", value=discord.utils.format_dt(guild.created_at, "d")
@@ -85,7 +87,7 @@ class Guilds(Cog):
 
     @commands.Cog.listener("on_guild_join")
     async def on_guild_join(self, guild: discord.Guild):
-        if sum(not m.bot for m in guild.members) <= 5:
+        if sum(not m.bot for m in guild.members) <= 5 and guild.id not in self.allowed_guilds:
             await self.guild_too_small(guild)
             return
 
