@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
 import discord
@@ -7,11 +8,22 @@ from discord.abc import Messageable
 from discord.ext import commands
 
 from core import Cog
-from utils import fish_owner, greenTick, AllMsgbleChannels, update_pokemon, fish_x
+from utils import (
+    fish_owner,
+    greenTick,
+    AllMsgbleChannels,
+    update_pokemon,
+    fish_x,
+    ROBLOX_ASSET_RE,
+)
 
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context
+
+roblox_headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
 
 
 class Owner(Cog):
@@ -101,6 +113,71 @@ class Owner(Cog):
             return await self._add_reaction(ctx, ctx.message, check=False)
 
         await ctx.send("\n".join(found))
+
+    @commands.hybrid_group("roblox")
+    async def roblox_group(self, ctx: Context): ...
+
+    @roblox_group.command("asset")
+    async def roblox_asset(self, ctx: Context, asset_id: str):
+        try:
+            aid = int(asset_id)
+        except ValueError:
+            result = ROBLOX_ASSET_RE.search(asset_id)
+
+            if not result:
+                raise commands.CommandError(
+                    "Could not find ID in the url(?) provided, please provide a valid URL or simply provide the ID"
+                )
+            else:
+                aid = result.group(4)
+
+        aid = str(aid)
+
+        async with ctx.bot.session.get(
+            f"https://economy.roblox.com/v2/assets/{aid}/details", headers=roblox_headers
+        ) as resp:
+            if resp.status != 200:
+                raise commands.CommandError(
+                    "Could not find valid asset matching that ID, are you sure you copied the correct one?"
+                )
+            data = await resp.json()
+
+            asset_type = data.get("AssetTypeId")
+            if asset_type not in (11, 12):  # 11/12 = Shirt/Pants
+                raise commands.CommandError(
+                    "ID provided is not a classic shirt or pants."
+                )
+
+            async with ctx.bot.session.get(
+                f"https://assetdelivery.roblox.com/v1/asset/?id={aid}",headers=roblox_headers,
+                allow_redirects=True,
+            ) as asset_resp:
+                final_url = str(asset_resp.url)
+
+            # Step 3: Parse the XML to extract the actual texture asset ID
+            async with ctx.bot.session.get(final_url) as xml_resp:
+                xml_text = await xml_resp.text()
+
+            # The texture URL is embedded in the XML like: <url>http://www.roblox.com/asset/?id=XXXXXXX</url>
+            import re
+
+            match = re.search(r"<url>.*?id=(\d+)</url>", xml_text)
+            if not match:
+                raise commands.CommandError(
+                    "Unable to parse texture id from link, if this persist, contact developers"
+                )
+
+            texture_id = match.group(1)
+
+            # Step 4: Get the renderable image URL via thumbnails API
+            async with ctx.bot.session.get(
+                f"https://thumbnails.roblox.com/v1/assets?assetIds={texture_id}&size=420x420&format=Png", headers=roblox_headers
+            ) as thumb_resp:
+                thumb_data = await thumb_resp.json()
+
+            image_url = thumb_data["data"][0]["imageUrl"]
+
+            await ctx.send(image_url)
 
     async def cog_check(self, ctx: commands.Context[Fishie]) -> bool:
         if await ctx.bot.is_owner(ctx.author):

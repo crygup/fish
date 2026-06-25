@@ -60,6 +60,7 @@ class Downloader:
         self.headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "Authorization": "Api-Key fdb79bba-df5e-4219-af96-b66935b213df"
         }
         self.json_data = {
             "url": self.url,
@@ -80,7 +81,7 @@ class Downloader:
         if cobalt_checker(self.url):
             s = await self.ctx.session.post(
                 headers=self.headers,
-                url="http://10.0.0.1:9000/",
+                url="https://cobalt.may-be.gay/",
                 json=self.json_data,
             )
 

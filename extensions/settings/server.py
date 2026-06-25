@@ -11,10 +11,8 @@ from utils import AuthorView, FieldPageSource, Pager, get_or_fetch_user
 if TYPE_CHECKING:
     from extensions.context import GuildContext
 
-
 def to_lower(argument: str):
     return argument.lower()
-
 
 class Dropdown(discord.ui.ChannelSelect):
     def __init__(self, ctx: GuildContext):
@@ -248,3 +246,7 @@ class Server(Cog):
         await ctx.send(
             f"{['Disabled', 'Enabled'][value]} auto media reactions for this server."
         )
+
+    # @commands.hybrid_group(name="honeypot")
+    # async def honeypot(self, ctx: GuildContext):
+    #     ...
