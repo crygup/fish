@@ -50,7 +50,7 @@ async def start(testing: bool):
     for env in jsk_envs:
         os.environ[env] = "True"
 
-    pool = await create_pool(config["databases"]["psql_testing" if testing else "psql"])
+    pool = await create_pool(config["databases"]["psql"])
     logger.info("Connected to Postgres")
 
     timeout = aiohttp.ClientTimeout(total=30)

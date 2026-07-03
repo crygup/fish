@@ -49,11 +49,6 @@ class CommandErrors(Cog):
         #     await self.bot.log_error(error)
         #     return
 
-        removed_keys = (
-            str(error)
-            .replace(ctx.bot.config["keys"]["lastfm"], "REDACTED_KEY")
-            .replace(ctx.bot.config["keys"]["spotify_id"], "REDACTED_KEY")
-        )
-        await ctx.send(removed_keys)
-
+        error_str = self.bot.redact(str(error))
+        await ctx.send(error_str)
         await self.bot.log_error(error)

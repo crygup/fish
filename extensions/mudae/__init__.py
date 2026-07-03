@@ -7,14 +7,14 @@ from discord.ext import commands
 
 from core import Cog
 
-from .reminders import MudaeReminders
+# from .reminders import MudaeReminders
 from .sphere import SphereCog
 from utils import mudae_circle
 if TYPE_CHECKING:
     from core import Fishie
 
 
-class Mudae(SphereCog, MudaeReminders):
+class Mudae(SphereCog):
     """Mudae tools."""
 
     emoji = mudae_circle

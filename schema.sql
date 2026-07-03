@@ -116,15 +116,6 @@ CREATE TABLE IF NOT EXISTS guild_name_logs (
     created_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE TABLE IF NOT EXISTS guild_icons (
-    id SERIAL,
-    guild_id BIGINT,
-    icon_key TEXT,
-    created_at TIMESTAMP WITH TIME ZONE,
-    icon TEXT,
-    PRIMARY KEY(icon_key, guild_id)
-);
-
 CREATE TABLE IF NOT EXISTS opted_out (
     user_id BIGINT,
     items TEXT[],

@@ -100,7 +100,7 @@ def response_checker(response: ClientResponse) -> bool:
         403: "The request was forbidden.",
     }
     for br, reason in bad_response.items():
-        if br == response:
+        if br == response.status:
             raise commands.BadArgument(reason)
 
     if str(response.status).startswith("5"):
@@ -210,9 +210,11 @@ def resize_to_limit(data: BytesIO, limit: int) -> BytesIO:
 
 # https://github.com/CuteFwan/Koishi/blob/master/cogs/avatar.py#L82-L102
 @to_thread
-def format_bytes(filesize_limit: int, images: List[bytes]) -> BytesIO:
-    xbound = math.ceil(math.sqrt(len(images)))
-    ybound = math.ceil(len(images) / xbound)
+def format_bytes(filesize_limit: int, images: List[bytes], *, xbound: int = 0, ybound: int = 0) -> BytesIO:
+    if not xbound:
+        xbound = math.ceil(math.sqrt(len(images)))
+    if not ybound:
+        ybound = math.ceil(len(images) / xbound)
     size = int(2520 / xbound)
 
     with Image.new(

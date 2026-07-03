@@ -119,12 +119,18 @@ class Downloader:
         yt-dlp's ``res`` sort key handles both landscape and portrait.
         """
         audio = SOUNDCLOUD_RE.search(video) or self.format == "mp3"
+        has_cookies = bool(_get_cookies(video))
 
         options: Dict[Any, Any] = {
             "outtmpl": rf"files/downloads/{self.filename}.%(ext)s",
             "quiet": False,
             "match_filter": match_filter,
             "logger": _YtDlpLogger(self.ctx.bot.logger),
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         }
 
         if cookies := _get_cookies(video):
@@ -163,8 +169,7 @@ class Downloader:
             rc = 0
         else:
             if is_youtube:
-                has_cookies = bool(options.get("cookiefile"))
-                attempts = []
+                attempts: list[tuple[str, object, bool]] = []
 
                 if has_cookies:
                     attempts.append(("best", ["web"], True))
@@ -174,7 +179,9 @@ class Downloader:
                     ("best", None, False),
                 ]
             else:
-                attempts = [("bestvideo+bestaudio/best", None, False)]
+                attempts = [("best", None, True)]
+                if has_cookies:
+                    attempts.append(("best", None, False))
 
             rc = 1
             for fmt, clients, use_cookies in attempts:

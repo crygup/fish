@@ -41,7 +41,7 @@ class Lastfm(Top, Charts):
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @lastfm_command()
-    async def command(self, ctx: Context, user: discord.User = commands.Author):
+    async def justfmmealreadybruh(self, ctx: Context, user: discord.User = commands.Author):
         """Get your currently playing or most recently listened to song from last.fm"""
         async with ctx.typing():
             try:
@@ -54,7 +54,12 @@ class Lastfm(Top, Charts):
             data = {"method": "user.getrecenttracks", "user": lfm_user}
 
             response = await self.bot.lfm_get(data)
-            lt = response["recenttracks"]["track"][0]
+            tracks = response.get("recenttracks", {}).get("track")
+            if not tracks:
+                raise commands.BadArgument(
+                    f"No recent tracks found for **{lfm_user}**."
+                )
+            lt = tracks[0] if isinstance(tracks, list) else tracks
 
             files = []
             embed = discord.Embed(color=self.bot.embedcolor)
@@ -81,7 +86,7 @@ class Lastfm(Top, Charts):
 
             tData = (
                 {"method": "track.getInfo", "mbid": lt["mbid"], "user": lfm_user}
-                if lt["mbid"]
+                if lt.get("mbid")
                 else {
                     "method": "track.getInfo",
                     "artist": lt["artist"]["#text"],
@@ -90,16 +95,21 @@ class Lastfm(Top, Charts):
                 }
             )
 
-            tResponse = await self.bot.lfm_get(tData)
-            t = tResponse["track"]
+            try:
+                tResponse = await self.bot.lfm_get(tData)
+                t = tResponse.get("track")
+            except Exception:
+                t = None
+
             footer_text = ""
-            tp = int(t["userplaycount"])
-            time = f"{format_millis(int(t['duration']))}"
-            if tp != 0:
-                splitter = " - " if time != "0" else ""
-                footer_text += f"{tp:,} track {plural(tp, False):play} {splitter}"
-            if time != "0":
-                footer_text += f"\U0001f551 {time}"
+            if t:
+                tp = int(t.get("userplaycount", 0))
+                dur = format_millis(int(t.get("duration", 0)))
+                if tp != 0:
+                    splitter = " - " if dur != "0" else ""
+                    footer_text += f"{tp:,} track {plural(tp, False):play} {splitter}"
+                if dur != "0":
+                    footer_text += f"\U0001f551 {dur}"
 
             if lt.get("date"):
                 embed.timestamp = datetime.datetime.fromtimestamp(
@@ -107,14 +117,13 @@ class Lastfm(Top, Charts):
                 )
                 footer_text += "\nLast play"
 
-            if footer_text != "":
+            if footer_text:
                 embed.set_footer(text=footer_text)
 
-            loved = f" \U00002764\U0000fe0f" if t["userloved"] != "0" else ""
+            loved = f" \U00002764\U0000fe0f" if t and t.get("userloved") != "0" else ""
             embed.title = f'{lt["name"]}{loved}'
 
             await ctx.send(embed=embed, files=files)
-
 
 async def setup(bot: Fishie):
     await bot.add_cog(Lastfm(bot))

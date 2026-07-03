@@ -69,8 +69,10 @@ class Fun(About):
 
         await ctx.send(self.invite_url)
 
-    @commands.hybrid_command(name="8ball", aliases=("eightball",))
-    async def eightball(self, ctx: Context, *, question: str):
+    @commands.hybrid_command(name="8ball")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def _8ball(self, ctx: Context, *, question: str = commands.param(displayed_name="question", description="What shall you ask?")):
         """Ask the magic 8-ball a question.
 
         tony wanted this command"""
@@ -95,9 +97,24 @@ class Fun(About):
             "My sources say no.",
             "Outlook not so good.",
             "Very doubtful.",
+            "prolly",
+            "prolly not",
+            "cheese beast",
+            "are you him?",
+            "himmers bro",
+            "ur mic is on btw",
+            "u might be muted",
+            "ur a beast",
+            "ur him",
+            "BANG",
+            "sure man"
         )
 
-        await ctx.send(random.choice(answers))
+        msg = random.choice(answers)
+        if ctx.interaction:
+            msg += f"\n-# {ctx.author.display_name} asked: *{question}*"
+        
+        await ctx.send(msg)
 
     @commands.command(name="wtp", hidden=True, enabled=False)
     async def wtp(self, ctx: Context):

@@ -108,7 +108,7 @@ class Fishie(commands.Bot):
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(
             60.0, 60.0, commands.BucketType.default
         )
-        self.messages: TTLCache[str, discord.Message] = TTLCache(
+        self.messages: TTLCache[str, discord.Message] = TTLCache[str, discord.Message](
             maxsize=1000, ttl=300.0
         )  # {repr(ctx): message(from ctx.send) }
         self.support_invite: str = f"https://discord.gg/Fct5UGadcb"
@@ -143,6 +143,37 @@ class Fishie(commands.Bot):
             except KeyError:
                 pass
 
+    # ------------------------------------------------------------------
+    # secret redaction
+    # ------------------------------------------------------------------
+
+    _secrets: set[str] | None = None
+
+    def _build_secrets(self) -> set[str]:
+        """Return every leaf string value from the config, for redaction."""
+        secrets: set[str] = set()
+
+        def walk(obj: object) -> None:
+            if isinstance(obj, str):
+                if len(obj) > 3:
+                    secrets.add(obj)
+            elif isinstance(obj, dict):
+                for v in obj.values():
+                    walk(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    walk(item)
+
+        walk(self.config)
+        return secrets
+
+    def redact(self, text: str) -> str:
+        if self._secrets is None:
+            self._secrets = self._build_secrets()
+        for secret in sorted(self._secrets, key=len, reverse=True):
+            text = text.replace(secret, "[REDACTED]")
+        return text
+
     def too_big(self, text: str) -> discord.File:
         s = StringIO()
         s.write(text)
@@ -156,6 +187,8 @@ class Fishie(commands.Bot):
                 type(error), error, error.__traceback__, chain=False
             )
         )
+
+        excinfo = self.redact(excinfo)
 
         if len(excinfo) > 2000:
             files = [self.too_big(excinfo)]
