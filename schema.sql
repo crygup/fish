@@ -25,6 +25,14 @@ CREATE TABLE IF NOT EXISTS user_settings (
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 
+CREATE TABLE IF NOT EXISTS user_statuses (
+    user_id BIGINT NOT NULL,
+    guild_id BIGINT NOT NULL,
+    status TEXT NOT NULL,
+    last_seen TIMESTAMP WITH TIME ZONE DEFAULT (now() at time zone 'utc'),
+    PRIMARY KEY (user_id, guild_id, status)
+);
+
 CREATE TABLE IF NOT EXISTS plonks (
     id SERIAL PRIMARY KEY,
     guild_id BIGINT,
@@ -264,8 +272,43 @@ CREATE TABLE IF NOT EXISTS added_pokemon (
     PRIMARY KEY (name)
 );
 
--- CREATE TABLE IF NOT EXISTS whoknows (
---     artist TEXT,
---     users JSONB DEFAULT ('{}'::jsonb), 
---     PRIMARY KEY (artist)
--- );
+CREATE TABLE IF NOT EXISTS pokemon_solves (
+    id SERIAL,
+    user_id BIGINT NOT NULL,
+    pokemon_name TEXT NOT NULL,
+    method TEXT NOT NULL,
+    guild_id BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT (now() at time zone 'utc')
+);
+
+CREATE TABLE IF NOT EXISTS roblox_templates (
+    asset_id BIGINT PRIMARY KEY,
+    image_url TEXT NOT NULL,
+    item_name TEXT NOT NULL DEFAULT '',
+    extra JSONB DEFAULT ('{}'::jsonb),
+    cached_at TIMESTAMP WITH TIME ZONE DEFAULT (now() at time zone 'utc')
+);
+
+CREATE TABLE IF NOT EXISTS mudae_timers (
+    guild_id BIGINT NOT NULL,
+    item TEXT NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    PRIMARY KEY (guild_id, item)
+);
+
+CREATE TABLE IF NOT EXISTS mudae_subs (
+    guild_id BIGINT NOT NULL,
+    item TEXT NOT NULL,
+    user_ids BIGINT[] NOT NULL DEFAULT '{}',
+    PRIMARY KEY (guild_id, item)
+);
+
+CREATE TABLE IF NOT EXISTS mudae_channels (
+    guild_id BIGINT PRIMARY KEY,
+    channel_id BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mudae_dm_consent (
+    user_id BIGINT PRIMARY KEY,
+    consented BOOLEAN NOT NULL DEFAULT TRUE
+);

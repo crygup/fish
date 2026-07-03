@@ -14,7 +14,11 @@ Fishie may collect and store the following information from Discord users for th
 - Guild joins: We collect information about the guilds Fishie is added to as a means to prevent spam.
 - Avatars: Fishie stores user avatars for certain commands that require avatar display.
 - Message Counts: We collect and store message counts for XP and levelling-based commands to track user progress and provide XP-related features.
-
+- Reminder Content: When you set a reminder, the reminder text and associated message/channel IDs are stored to deliver the reminder.
+- Linked Accounts: Usernames for third-party services (Last.fm, Steam, Roblox, Genshin) are stored when you link accounts.
+- Roblox Assets: Asset IDs and cached image URLs for Roblox clothing templates are stored to avoid redundant API requests.
+- Mudae Subscriptions: User IDs are stored per-server for Mudae timer reminder subscriptions. These are deleted after the timer fires.
+- Pokémon Solves: User IDs and Pokémon names are logged when the Pokétwo auto-solve or manual solve features are used.
 # Use of Collected Information
 
 ## Fishie uses the collected information to perform the following actions:

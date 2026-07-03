@@ -29,7 +29,7 @@ def make_command_embed(
     embed = discord.Embed(
         color=bot.embedcolor,
         title=command.name.capitalize(),
-        description=command.description or command.help,
+        description=command.description or command.help or "",
     )
     embed.add_field(
         name="Usage",
@@ -102,27 +102,20 @@ class HelpCommand(commands.HelpCommand):
     async def send_command_help(self, command: commands.Command[Cog, ..., Any]):
         ctx = self.context
         embed = make_command_embed(ctx, command)
+        cmds = await self.filter_commands(command.cog.get_commands(), sort=True)
+        await ctx.send(embed=embed, view=CommandHelpView(ctx, cmds))
 
-        await ctx.send(
-            embed=embed,
-            view=CommandHelpView(ctx, [c for c in command.cog.get_commands()]),
-        )
-
-    # fish help <group>
     async def send_group_help(self, group: commands.Group[Cog, ..., commands.Command]):
         ctx = self.context
         embed = make_command_embed(ctx, group)
-
-        await ctx.send(
-            embed=embed,
-            view=CommandHelpView(ctx, [c for c in group.cog.get_commands()]),
-        )
+        cmds = await self.filter_commands(group.commands, sort=True)
+        await ctx.send(embed=embed, view=CommandHelpView(ctx, cmds))
 
     # fish help <cog>
     async def send_cog_help(self, cog: Cog):
         ctx = self.context
         bot = ctx.bot
-        cmds = cog.get_commands()
+        cmds = await self.filter_commands(cog.get_commands(), sort=True)
 
         embed = discord.Embed(
             title=f"{cog.emoji} {cog.qualified_name}",
@@ -138,11 +131,13 @@ class HelpCommand(commands.HelpCommand):
 
         embed.add_field(
             name="Commands",
-            value=human_join([f"`{c.name}`" for c in cmds], final="and"),
+            value=human_join([f"`{c.name}`" for c in cmds], final="and") if cmds else "No commands",
         )
 
+        filtered = await self.filter_commands([c for c in cog.get_commands()], sort=True)
         view = CogHelpView(self.context, [c for _, c in bot.cogs.items()])
-        view.add_item(CommandHelpDropdown(ctx, [c for c in cog.get_commands()]))
+        if filtered:
+            view.add_item(CommandHelpDropdown(ctx, filtered))
         await ctx.send(embed=embed, view=view)
 
     async def send_error_message(self, error: commands.CommandError):
@@ -181,7 +176,7 @@ class CogHelpDropdown(discord.ui.Select):
                 discord.SelectOption(
                     label=cog.qualified_name,
                     emoji=cog.emoji,
-                    description=cog.description,
+                    description=(cog.description or "").split("\n")[0],
                 )
             )
 
@@ -239,7 +234,7 @@ class CommandHelpDropdown(discord.ui.Select):
         for cmd in cmds:
             if cmd.hidden:
                 continue
-            desc = cmd.help.split("\n")[0] if cmd.help else cmd.description
+            desc = (cmd.help or cmd.description or "").split("\n")[0]
             options.append(
                 discord.SelectOption(
                     label=cmd.name.capitalize(),
@@ -248,14 +243,20 @@ class CommandHelpDropdown(discord.ui.Select):
                 )
             )
 
+        if not options:
+            options.append(discord.SelectOption(label="No commands to show.", value="none"))
         super().__init__(
             placeholder="Choose a command", min_values=1, max_values=1, options=options
         )
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         ctx = self.ctx
-        bot = ctx.bot
-        command: commands.Command[Cog, ..., Any] = bot.get_command(self.values[0])  # type: ignore
+        command: commands.Command[Cog, ..., Any] | None = None
+        for cmd in self.cmds:
+            if cmd.name.lower() == self.values[0]:
+                command = cmd
+                break
 
         if command is None:
             raise commands.BadArgument("Could not find that command somehow.")
@@ -264,16 +265,39 @@ class CommandHelpDropdown(discord.ui.Select):
 
         if not interaction.message:
             raise commands.BadArgument("Somehow no message was found.")
+        view = None
+        if isinstance(self.view, CogHelpView):
+            if isinstance(command, commands.Group):
+                try:
+                    raw = list(command.commands)
+                except Exception:
+                    raw = []
+                subcmds = [c for c in raw if not c.hidden]
+                if subcmds:
+                    if len(self.view.children) > 1:
+                        self.view.remove_item(self.view.children[-1])
+                    self.view.add_item(CommandHelpDropdown(ctx, subcmds))
+            await interaction.message.edit(embed=embed, view=self.view)
+            return
 
-        await interaction.message.edit(embed=embed)
-        await interaction.response.defer()
-
+        if isinstance(command, commands.Group):
+            try:
+                raw = list(command.commands)
+            except Exception:
+                raw = []
+            subcmds = [c for c in raw if not c.hidden]
+            if subcmds and command.cog:
+                all_cogs = [c for _, c in ctx.bot.cogs.items() if c]
+                view = CogHelpView(ctx, all_cogs)
+                view.add_item(CommandHelpDropdown(ctx, subcmds))
+        await interaction.message.edit(embed=embed, view=view)
 
 class CommandHelpView(AuthorView):
     def __init__(self, ctx: Context, cmds: List[commands.Command[Cog, ..., Any]]):
         super().__init__(ctx)
+        if not cmds:
+            return
         new_cmds = [cmds[i : i + 25] for i in range(0, len(cmds), 25)]
-
         for cmd_list in new_cmds:
             self.add_item(CommandHelpDropdown(ctx, cmd_list))
 

@@ -363,17 +363,44 @@ class Commands(Cog):
             await pager.start(ctx)
 
     @commands.command(name="uptime")
-    @commands.guild_only()
     async def uptime(
         self,
-        ctx: GuildContext
+        ctx: GuildContext,
+        *,
+        user: Optional[discord.User] = None
     ):
-        """Shows how long the bot has been online"""
-        if self.bot.user:
-            await ctx.send(
-                f"Hi, I have been awake for {human_timedelta(self.bot.start_time, suffix=False)}"
-            )
+        """Shows how long the bot has been online, or a user's last seen status"""
+        if user is None:
+            if self.bot.user:
+                await ctx.send(
+                    f"Hi, I have been awake for {human_timedelta(self.bot.start_time, suffix=False)}"
+                )
             return
+
+        row = None
+
+        if ctx.guild:
+            row = await self.bot.pool.fetchrow(
+                "SELECT status, last_seen FROM user_statuses WHERE user_id = $1 AND guild_id = $2 ORDER BY last_seen DESC LIMIT 1",
+                user.id,
+                ctx.guild.id,
+            )
+
+        if row is None:
+            row = await self.bot.pool.fetchrow(
+                "SELECT status, last_seen FROM user_statuses WHERE user_id = $1 ORDER BY last_seen DESC LIMIT 1",
+                user.id,
+            )
+
+        if row is None:
+            await ctx.send(f"I haven't seen {user} online yet.")
+            return
+
+        status = row["status"]
+        last_seen = row["last_seen"]
+        delta = human_timedelta(last_seen, suffix=False)
+        status_nice = status if status != "dnd" else f"on Do Not Disturb"
+        await ctx.send(f"{user} was last seen ***{status_nice}*** {delta} ago.")
 
     @commands.command(name="joins")
     @commands.guild_only()

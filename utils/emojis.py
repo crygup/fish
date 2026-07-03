@@ -33,6 +33,7 @@ pokeball = PartialEmoji(id=1006847357381521428, name="pokeball")
 lfm_emoji = PartialEmoji(id=1006848047923351612, name="lastfm")
 steam = PartialEmoji(id=1095791386999132231, name="steam")
 roblox = PartialEmoji(id=1095791384893603840, name="roblox")
+mudae_circle = PartialEmoji(id=1522435062765715526, name="mudae_circle")
 
 # discord
 balance = PartialEmoji(id=949147429733793832, name="balance")
@@ -81,10 +82,29 @@ drew = PartialEmoji(name="\U0001f41d")
 nathan = PartialEmoji(name="\U0001f97a")
 dochi = PartialEmoji(name="\U0001f9a7")
 tony = PartialEmoji(name="mariSparkle", id=1390265426008604703)
+
+# mudae
+spB = PartialEmoji(name="spB", id=1437140639987929108)
+spT = PartialEmoji(name="spT", id=1437140651614535680)
+spG = PartialEmoji(name="spG", id=1437140664193126441)
+spY = PartialEmoji(name="spY", id=1437140677187338310)
+spO = PartialEmoji(name="spO", id=1437140688608432185)
+sp = PartialEmoji(name="sp", id=1437140700604137554)
+spU = PartialEmoji(name="spU", id=1437140748423270441)
+spP = PartialEmoji(name="SpP", id=1437140625844867244)
 # fmt: on
 
 
 class Emojis:
+    sp = sp
+    sp = spB
+    sp = spT
+    sp = spG
+    sp = spY
+    sp = spO
+    spU = spU
+    spP = spP
+    mudae_circle = mudae_circle
     fish_check = fish_check
     fish_downvote = fish_downvote
     fish_gopage = fish_gopage
@@ -158,6 +178,15 @@ class Emojis:
 
 
 emoji_list = [
+    sp,
+    spB,
+    spT,
+    spG,
+    spY,
+    spO,
+    spU,
+    spP,
+    mudae_circle,
     fish_check,
     fish_downvote,
     fish_gopage,

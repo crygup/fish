@@ -53,8 +53,9 @@ async def start(testing: bool):
     pool = await create_pool(config["databases"]["psql_testing" if testing else "psql"])
     logger.info("Connected to Postgres")
 
+    timeout = aiohttp.ClientTimeout(total=30)
     async with (
-        aiohttp.ClientSession(headers=base_header) as session,
+        aiohttp.ClientSession(headers=base_header, timeout=timeout) as session,
         Fishie(
             config=config, logger=logger, pool=pool, session=session, testing=testing
         ) as bot,

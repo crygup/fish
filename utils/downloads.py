@@ -1,42 +1,80 @@
 from __future__ import annotations
 
-import json
+import glob
 import os
 import secrets
+import subprocess
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import discord
 import yt_dlp
-from discord.ext import commands
+
 from .errors import DownloadError, InvalidWebsite, VideoIsLive
-from .functions import to_thread, run, litterbox, capitalize_text
+from .functions import to_thread, run, litterbox
 from .regexes import (
+    INSTAGRAM_RE,
     SOUNDCLOUD_RE,
     TIKTOK_RE,
     TWITTER_RE,
-    VIDEOS_RE,
-    INSTAGRAM_RE,
     YOUTUBE_RE,
     YT_SHORT_RE,
-    YT_CLIP_RE,
-    REDDIT_RE,
 )
-from io import BytesIO, BufferedReader
+from io import BufferedReader, BytesIO
 
 if TYPE_CHECKING:
     from core import Context
+
+MAX_FILESIZE: int = 50_000_000  # 50 MB
+
+_COOKIE_MAP: list[tuple[Any, str]] = [
+    (YOUTUBE_RE, "files/cookies/youtube-cookies.txt"),
+    (YT_SHORT_RE, "files/cookies/youtube-cookies.txt"),
+    (TWITTER_RE, "files/cookies/twitter-cookies.txt"),
+    (INSTAGRAM_RE, "files/cookies/instagram-cookies.txt"),
+]
+
+
+def _get_cookies(url: str) -> Optional[str]:
+    for pattern, path in _COOKIE_MAP:
+        if pattern.search(url) and os.path.isfile(path):
+            return path
+    return None
+
+
+class _YtDlpLogger:
+    """Routes yt-dlp log output to the bot's logger so failures are visible."""
+
+    def __init__(self, logger: Any) -> None:
+        self._logger = logger
+
+    def debug(self, msg: str) -> None:
+        self._logger.debug(msg)
+
+    def info(self, msg: str) -> None:
+        self._logger.info(msg)
+
+    def warning(self, msg: str) -> None:
+        self._logger.warning(msg)
+
+    def error(self, msg: str) -> None:
+        self._logger.error(msg)
+
+
+# ffmpeg filter for optimized GIF conversion:
+#   10 fps, 480px wide (AR preserved), lanczos scaling,
+#   palettegen with diff mode + 128 colors,
+#   paletteuse with Bayer ordered dithering (smaller output than Floyd-Steinberg).
+GIF_FILTER: str = (
+    "fps=10,scale=480:-1:flags=lanczos,"
+    "split[s0][s1];"
+    "[s0]palettegen=max_colors=128:stats_mode=diff[p];"
+    "[s1][p]paletteuse=dither=bayer:bayer_scale=5"
+)
 
 
 def match_filter(info: Dict[Any, Any]):
     if info.get("live_status", None) == "is_live":
         raise VideoIsLive()
-
-
-def cobalt_checker(url: str) -> bool:
-    if TIKTOK_RE.search(url) or TWITTER_RE.search(url) or INSTAGRAM_RE.search(url):
-        return True
-    else:
-        return False
 
 
 class Downloader:
@@ -45,207 +83,215 @@ class Downloader:
         ctx: Context,
         url: str,
         format: str = "mp4",
-        twitterGif: Optional[bool] = True,
-        picker: Optional[bool] = False,
-        filename: Optional[str] = secrets.token_urlsafe(8).strip("-"),
+        filename: Optional[str] = None,
         hidden: Optional[bool] = False,
+        twitter_gif: bool = False,
     ) -> None:
         self.ctx = ctx
         self.url = url
         self.format = format
-        self.twitterGif = twitterGif
-        self.picker = picker
-        self.filename = filename
+        self.filename = filename or secrets.token_urlsafe(8).strip("-")
         self.hidden = hidden
-        self.headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": "Api-Key fdb79bba-df5e-4219-af96-b66935b213df"
-        }
-        self.json_data = {
-            "url": self.url,
-            "videoQuality": "max",
-            "downloadMode": "audio" if format == "mp3" else "auto",
-            "youtubeVideoCodec": "h264",
-            "convertGif": self.twitterGif,
-        }
+        self.twitter_gif = twitter_gif
 
-    async def _download(self) -> discord.File:
-        if YT_CLIP_RE.search(self.url):
-            raise DownloadError("Youtube clips are not supported at the moment, sorry.")
+    def _output_glob(self) -> str:
+        return f"files/downloads/{self.filename}.*"
 
-        if YOUTUBE_RE.search(self.url) or YT_SHORT_RE.search(self.url):
-            raise DownloadError("youtube broken :/")
-            return await self.manual_dl("files/cookies/youtube-cookies.txt")
+    def _find_output(self) -> str:
+        matches = glob.glob(self._output_glob())
+        if not matches:
+            raise DownloadError("Download completed but no output file was found.")
+        return matches[0]
 
-        if cobalt_checker(self.url):
-            s = await self.ctx.session.post(
-                headers=self.headers,
-                url="https://cobalt.may-be.gay/",
-                json=self.json_data,
-            )
-
-            data: Dict[Any, Any] = await s.json()
-            temp = VIDEOS_RE.search(self.url)
-
-            if temp:
-                self.url = temp.group(0)
-
+    def _cleanup_output(self) -> None:
+        for path in glob.glob(self._output_glob()):
             try:
-                # await self.ctx.send(file=self.ctx.bot.too_big(json.dumps(data, indent=4))) # debug
-                CobaltUrl = data["url"].replace(
-                    "https://10.0.0.1:9000", "http://10.0.0.1:9000"
-                )
-                async with self.ctx.session.get(url=CobaltUrl) as body:
-                    bData = await body.read()
+                os.remove(path)
+            except OSError:
+                pass
 
-                if TWITTER_RE.search(self.url) and data["status"] == "stream":
-                    self.format = "gif"
-
-                file = discord.File(
-                    BytesIO(bData), filename=f"{self.filename}.{self.format}"
-                )
-            except Exception as err:
-                err_chan: discord.TextChannel = self.ctx.bot.get_channel(989112775487922237)  # type: ignore
-                _id = secrets.token_urlsafe(5)
-
-                await err_chan.send(
-                    f"<@766953372309127168> | <{self.url}> | {_id}",
-                    file=self.ctx.too_big(json.dumps(data, indent=4)),
-                    allowed_mentions=discord.AllowedMentions.all(),
-                )
-                await self.ctx.bot.log_error(error=err)
-
-                _err = "Something went wrong, this was sent to the developers, sorry."
-
-                if data["status"] == "error":
-                    err_code = data["error"]["code"]
-
-                    err_codes_fmt = {
-                        "error.api.content.video.unavailable": "This video is unavailable please try a different upload, sorry.",
-                        "error.api.fetch.empty": "This link doesnt seem to exist anymore or I don't have access to it, sorry.",
-                        "error.api.fetch.critical": "This video is age restricted, private, or deleted as I do not have access to it anymore, sorry.",
-                        "error.api.content.video.age": "This video is age restricted and I cannot access it, sorry.",
-                    }
-
-                    try:
-                        _err = err_codes_fmt[err_code]
-                    except:
-                        _err = _err
-
-                await self.ctx.send(f"{capitalize_text(_err)} Error ID: `{_id}`")
-                raise commands.NotOwner()
-        else:
-            file = await self.yt_dlp_download()
-
-        return file
 
     @to_thread
-    def yt_dlp_download(self) -> discord.File:
-        video_match = VIDEOS_RE.search(self.url)
-        audio = False
+    def _yt_dlp_download(self, video: str, *, res_target: int) -> str:
+        """Download via yt-dlp; return the output *path* on disk.
 
-        if video_match is None or video_match and video_match.group(0) == "":
-            raise InvalidWebsite()
-
-        video = video_match.group(0)
+        ``res_target`` is the smaller-dimension target (1080 or 720);
+        yt-dlp's ``res`` sort key handles both landscape and portrait.
+        """
+        audio = SOUNDCLOUD_RE.search(video) or self.format == "mp3"
 
         options: Dict[Any, Any] = {
             "outtmpl": rf"files/downloads/{self.filename}.%(ext)s",
-            "quiet": True,
-            "max_filesize": 100_000_000,
+            "quiet": False,
             "match_filter": match_filter,
+            "logger": _YtDlpLogger(self.ctx.bot.logger),
         }
 
-        if SOUNDCLOUD_RE.search(video) or self.format == "mp3":
-            self.format = "mp3"
-            audio = True
+        if cookies := _get_cookies(video):
+            options["cookiefile"] = cookies
+
+        is_youtube = bool(YOUTUBE_RE.search(video) or YT_SHORT_RE.search(video))
+
+        if is_youtube:
+            # Let yt-dlp fetch the EJS challenge solver from GitHub
+            # (first run downloads + caches; subsequent runs are instant).
+            options["remote_components"] = ["ejs:github"]
+            # Try deno/node for JS challenges; if deno isn't in the bot's
+            # PATH, set DENO_PATH in the environment.
+            _deno = os.environ.get("DENO_PATH", "deno")
+            options["js_runtimes"] = {"deno": {"path": _deno}, "node": {}}
+
+        rc = 1
 
         if audio:
+            self.format = "mp3"
+            options["format"] = "bestaudio/best"
             options.setdefault("postprocessors", []).append(
                 {
                     "key": "FFmpegExtractAudio",
-                    "preferredcodec": format,
+                    "preferredcodec": "mp3",
                     "preferredquality": "192",
                 }
             )
-            options["format"] = "bestaudio/best"
+
+            with yt_dlp.YoutubeDL(options) as ydl:  # type: ignore
+                try:
+                    ydl.download([video])
+                except Exception as e:
+                    raise DownloadError(str(e)) from e
+
+            rc = 0
         else:
-            options["format"] = f"bestvideo+bestaudio[ext={self.format}]/best"
+            if is_youtube:
+                has_cookies = bool(options.get("cookiefile"))
+                attempts = []
 
-        with yt_dlp.YoutubeDL(options) as ydl:  # type: ignore # its fineeee
-            try:
-                ydl.download(video)
-                self.ctx.bot.current_downloads.append(f"{self.filename}.{self.format}")
-            except ValueError as e:
-                raise DownloadError(str(e))
+                if has_cookies:
+                    attempts.append(("best", ["web"], True))
 
-        return discord.File(
-            f"files/downloads/{self.filename}.{self.format}",
-            filename=f"{self.filename}.{self.format}",
+                attempts += [
+                    ("best", ["android"], False),
+                    ("best", None, False),
+                ]
+            else:
+                attempts = [("bestvideo+bestaudio/best", None, False)]
+
+            rc = 1
+            for fmt, clients, use_cookies in attempts:
+                opts = dict(options)
+                opts["format"] = fmt
+                if clients is not None:
+                    opts.setdefault("extractor_args", {}).setdefault("youtube", {})[
+                        "player_client"
+                    ] = clients
+                else:
+                    opts.pop("extractor_args", None)
+                if not use_cookies:
+                    opts.pop("cookiefile", None)
+
+                with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore
+                    try:
+                        rc = ydl.download([video])
+                    except Exception:
+                        rc = 1
+
+                if rc == 0:
+                    break
+
+        if rc != 0:
+            raise DownloadError(
+                "yt-dlp was unable to download this video. "
+                "The site may be blocking the request, or the video is unavailable."
+            )
+
+        output_path = self._find_output()
+        self.ctx.bot.current_downloads.append(os.path.basename(output_path))
+        return output_path
+
+    @to_thread
+    def _convert_to_gif(self, input_path: str) -> str:
+        """Convert a video file to an optimized GIF via ffmpeg.
+
+        Returns the path to the new ``.gif`` file (the original is removed).
+        """
+        output_path = input_path.rsplit(".", 1)[0] + ".gif"
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-i",
+                input_path,
+                "-vf",
+                GIF_FILTER,
+                "-y",
+                output_path,
+            ],
+            capture_output=True,
+            text=True,
         )
 
-    async def manual_dl(self, cookies: Optional[str]) -> discord.File:
-        """Manually runs the yt-dlp command line download.
+        if result.returncode != 0:
+            os.remove(input_path)
+            tail = (
+                result.stderr.strip().rsplit("\n", 1)[-1]
+                if result.stderr
+                else "unknown error"
+            )
+            raise DownloadError(f"GIF conversion failed: {tail}")
 
-        Cookies should be a path to the cookies"""
-        cmd = f"venv/bin/yt-dlp {self.url} "
-        if cookies:
-            cmd += f"--cookies {cookies} "
-        cmd += f"--format bestvideo+bestaudio[ext={self.format}]/best "
-        cmd += f'-o "{self.filename}.%(ext)s" '
-        cmd += '-P "files/downloads"'
-        # cmd += '--remote-components ejs:github'
-
-        self.ctx.bot.logger.warning(cmd)
-
-        await run(cmd)
-        self.ctx.bot.current_downloads.append(f"{self.filename}.{self.format}")
-
-        return discord.File(
-            f"files/downloads/{self.filename}.{self.format}",
-            filename=f"{self.filename}.{self.format}",
+        os.remove(input_path)
+        return output_path
+    
+    async def _download(self) -> discord.File:
+        _ALLOWED = (
+            YOUTUBE_RE,
+            YT_SHORT_RE,
+            INSTAGRAM_RE,
+            TIKTOK_RE,
+            SOUNDCLOUD_RE,
+            TWITTER_RE,
         )
+        if not any(p.search(self.url) for p in _ALLOWED):
+            raise InvalidWebsite()
+
+        is_audio = SOUNDCLOUD_RE.search(self.url) or self.format == "mp3"
+
+        output_path = await self._yt_dlp_download(self.url, res_target=1080)
+
+        if is_audio:
+            return discord.File(output_path, filename=os.path.basename(output_path))
+
+        if os.path.getsize(output_path) > MAX_FILESIZE:
+            self._cleanup_output()
+            output_path = await self._yt_dlp_download(self.url, res_target=720)
+
+            if os.path.getsize(output_path) > MAX_FILESIZE:
+                self._cleanup_output()
+                raise DownloadError(
+                    "This video exceeds 50 MB even at 720p. Try a shorter clip."
+                )
+
+        if self.twitter_gif and TWITTER_RE.search(self.url):
+            output_path = await self._convert_to_gif(output_path)
+            self.format = "gif"
+
+            if os.path.getsize(output_path) > MAX_FILESIZE:
+                self._cleanup_output()
+                raise DownloadError(
+                    "GIF conversion exceeded 50 MB. Try a shorter clip or omit `--gif`."
+                )
+
+        return discord.File(output_path, filename=os.path.basename(output_path))
 
     async def download(self):
         files: List[discord.File] = []
-        MVD: None | discord.Message = None
-
-        if TWITTER_RE.search(self.url):
-            s = await self.ctx.session.post(
-                headers=self.headers,
-                url="http://10.0.0.1:9000/",
-                json=self.json_data,
-            )
-            data: Dict[Any, Any] = await s.json()
-
-            if data.get("status") == "picker":
-                MVD = await self.ctx.send("Multiple videos detected, downloading.")
-                for pd in data["picker"]:
-                    tempformat = "mp4"
-
-                    if pd["type"] == "photo":
-                        continue
-
-                    if pd["type"] == "gif":
-                        tempformat = "gif"
-
-                    async with self.ctx.session.get(url=pd["url"]) as body:
-                        bData = await body.read()
-
-                    files.append(
-                        discord.File(
-                            BytesIO(bData), filename=f"{self.filename}.{tempformat}"
-                        )
-                    )
-
-            else:
-                files.append(await self._download())
-        else:
-            files.append(await self._download())
 
         try:
+            files.append(await self._download())
+        except DownloadError as e:
+            await self.ctx.send(str(e), ephemeral=self.hidden)
+            return
 
+        try:
             await self.ctx.send(
                 files=files,
                 mention_author=True,
@@ -253,30 +299,30 @@ class Downloader:
                 ephemeral=self.hidden,
             )
         except discord.HTTPException:
-            text = "Files were too big, try a smaller video. **These will delete after 72 hours**\n\n"
+            text = (
+                "Files were too big for Discord. "
+                "**These will delete after 72 hours**\n\n"
+            )
             for file in files:
-                bytes = await self.file_to_bytes(file)
-                url = await litterbox(self.ctx.session, bytes, file.filename)
+                file_bytes = await self._file_to_bytes(file)
+                url = await litterbox(self.ctx.session, file_bytes, file.filename)
                 text += f"{url}\n"
-
             await self.ctx.send(text, ephemeral=self.hidden)
 
-        if MVD:
-            await MVD.delete()
-
         for file in files:
-
             try:
-                await run(f"cd files/downloads && rm {file.filename}")
-            except:
+                await run(f'cd files/downloads && rm "{file.filename}"')
+            except Exception:
                 pass
 
+        self._cleanup_output()
+
     @to_thread
-    def file_to_bytes(self, file: discord.File) -> bytes:
+    def _file_to_bytes(self, file: discord.File) -> bytes:
         fp: BufferedReader | BytesIO = file.fp  # type: ignore
 
-        if isinstance(fp, os.PathLike):
-            with open(fp.name, "rb") as f:
+        if isinstance(fp, (os.PathLike, str)):
+            with open(str(fp), "rb") as f:
                 return f.read()
         else:
             return fp.read()

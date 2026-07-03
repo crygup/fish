@@ -14,6 +14,7 @@ from typing import (
     Union,
 )
 
+import asyncpg
 import discord
 from discord.ext import commands
 from discord.interactions import Interaction
@@ -62,6 +63,14 @@ class UserDropdown(discord.ui.Select):
         self.avatar_cache: Optional[discord.Embed] = None
         self.banner_cache: Optional[discord.Embed] = None
         self.bot_cache: Optional[discord.Embed] = None
+        self.statuses_cache: Optional[discord.Embed] = None
+
+        if isinstance(user, discord.Member):
+            self._guild_id: Optional[int] = user.guild.id
+        elif ctx.guild:
+            self._guild_id = ctx.guild.id
+        else:
+            self._guild_id = None
 
         options = [
             discord.SelectOption(
@@ -81,6 +90,12 @@ class UserDropdown(discord.ui.Select):
                 description=f"View {user}'s reviews",
                 emoji=discord.PartialEmoji(name="\U0001f4d4"),
                 value="reviews",
+            ),
+            discord.SelectOption(
+                label="Statuses",
+                description=f"View {user}'s last seen statuses",
+                emoji=discord.PartialEmoji(name="\U0001f7e2"),
+                value="statuses",
             ),
         ]
 
@@ -226,6 +241,44 @@ class UserDropdown(discord.ui.Select):
         self.bot_cache = embed
         return embed
 
+    async def statuses_response(self) -> discord.Embed:
+        if self.statuses_cache:
+            return self.statuses_cache
+
+        ctx = self.ctx
+        user = self.user
+
+        rows: list[asyncpg.Record] = []
+
+        if self._guild_id:
+            rows = await ctx.pool.fetch(
+                "SELECT status, last_seen FROM user_statuses WHERE user_id = $1 AND guild_id = $2 ORDER BY last_seen DESC",
+                user.id,
+                self._guild_id,
+            )
+
+        if not rows:
+            rows = await ctx.pool.fetch(
+                "SELECT status, last_seen FROM user_statuses WHERE user_id = $1 ORDER BY last_seen DESC",
+                user.id,
+            )
+
+        embed = discord.Embed(color=ctx.bot.embedcolor)
+        embed.set_author(name=f"{user}'s statuses", icon_url=user.display_avatar.url)
+
+        if not rows:
+            embed.description = "No status data recorded yet."
+        else:
+            value = "\n".join(
+                f"**{r['status'].title()}** — {discord.utils.format_dt(r['last_seen'], 'R')}"
+                for r in rows
+            )
+            embed.add_field(name="Last Seen", value=value)
+
+        self.statuses_cache = embed
+        return embed
+
+
     async def callback(self, interaction: Interaction):
         value = self.values[0]
 
@@ -234,6 +287,7 @@ class UserDropdown(discord.ui.Select):
             "avatar": self.avatar_response,
             "banner": self.banner_response,
             "bot": self.bot_response,
+            "statuses": self.statuses_response,
         }
 
         if value in options.keys():
@@ -550,6 +604,29 @@ class Info(Cog):
                 f"{reply} {discord.utils.format_dt(joined, 'R')}"
             )
             embed.add_field(name="Joined", value=pos_text)
+
+        guild_id = user.guild.id if isinstance(user, discord.Member) else (ctx.guild.id if ctx.guild else None)
+
+        row = None
+        if guild_id:
+            row = await self.bot.pool.fetchrow(
+                "SELECT status, last_seen FROM user_statuses WHERE user_id = $1 AND guild_id = $2 ORDER BY last_seen DESC LIMIT 1",
+                user.id,
+                guild_id,
+            )
+
+        if row is None:
+            row = await self.bot.pool.fetchrow(
+                "SELECT status, last_seen FROM user_statuses WHERE user_id = $1 ORDER BY last_seen DESC LIMIT 1",
+                user.id,
+            )
+
+        if row:
+            embed.add_field(
+                name="Last Seen",
+                value=f"**{row['status'].title()}** {discord.utils.format_dt(row['last_seen'], 'R')}",
+            )
+
 
         await ctx.send(embed=embed, view=UserView(ctx, user, embed, fuser))
 

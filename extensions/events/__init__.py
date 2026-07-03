@@ -11,6 +11,7 @@ from .command_error import CommandErrors
 from .command_logs import CommandLogs
 from .guilds import Guilds
 from .pokemon import Pokemon
+from .statuses import StatusCog
 from .tasks import Tasks
 from .xp import XPCog
 
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 
 
 class Events(
-    CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon, Reactions, Guilds, XPCog
+    CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon, Reactions, Guilds, XPCog, StatusCog
 ):
     emoji = discord.PartialEmoji(name="\U0001f3a7")
     hidden: bool = True

@@ -16,7 +16,9 @@ if TYPE_CHECKING:
 
 
 class Logging(Avatars, Guild, User, Commands):
-    """Google data tracking on discord!"""
+    """Google data tracking but on discord!
+     
+    (joke \U0001f644)"""
 
     emoji = discord.PartialEmoji(name="\U0001fab5")
 

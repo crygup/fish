@@ -64,7 +64,7 @@ class Keys(TypedDict):
     spotify_id: str
     spotify_secret: str
     dagpi: str
-
+    roblox: str
 
 class ConfigTokens(TypedDict):
     bot: str

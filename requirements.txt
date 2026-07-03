@@ -1,11 +1,12 @@
 git+https://github.com/gorialis/jishaku
 git+https://github.com/Rapptz/discord-ext-menus
+git+https://github.com/yt-dlp/yt-dlp
+git+https://github.com/yt-dlp/ejs
 discord.py
 isort
 black
 asyncpg
 asyncpg-stubs
-yt-dlp
 python-dateutil
 playwright
 lxml

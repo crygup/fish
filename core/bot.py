@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import pkgutil
 import re
 import sys
@@ -71,6 +72,8 @@ async def get_prefix(bot: Fishie, message: discord.Message) -> List[str]:
 class Fishie(commands.Bot):
     custom_emojis = Emojis()
     cached_covers: Dict[str, Tuple[str, bool]] = {}
+    cached_roblox_templates: dict[int, tuple[str, dict, datetime.datetime]] = {}
+    cached_mudae_consent: set[int] = set()
     pokemon: List[str]
     error_logs: discord.Webhook
 
@@ -94,6 +97,8 @@ class Fishie(commands.Bot):
         ]
         self.spotify_key: Optional[str] = None
         self.cached_covers: Dict[str, Tuple[str, bool]] = {}
+        self.cached_roblox_templates: dict[int, tuple[str, dict, datetime.datetime]] = {}
+        self.cached_mudae_consent: set[int] = set()
         self.testing: bool = testing
         self.current_downloads: List[str] = []
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(
@@ -324,6 +329,19 @@ class Fishie(commands.Bot):
 
             self.db_cache.add_account(user_id=user_id, last_fm=last_fm)
             self.logger.info(f'Added last.fm account "{last_fm}" to user "{user_id}"')
+
+        roblox_templates = await self.pool.fetch("SELECT asset_id, image_url, extra FROM roblox_templates")
+        for row in roblox_templates:
+            extra = json.loads(row["extra"]) if isinstance(row["extra"], str) else (row["extra"] or {})
+            self.cached_roblox_templates[row["asset_id"]] = (row["image_url"], extra, datetime.datetime.now(datetime.timezone.utc))
+            self.logger.info(
+                f'Cached Roblox template for asset {row["asset_id"]}'
+            )
+
+        consent_rows = await self.pool.fetch("SELECT user_id FROM mudae_dm_consent WHERE consented = TRUE")
+        for row in consent_rows:
+            self.cached_mudae_consent.add(row["user_id"])
+        self.logger.info(f"Cached {len(self.cached_mudae_consent)} Mudae DM consent(s)")
 
     async def add_reactions(
         self,

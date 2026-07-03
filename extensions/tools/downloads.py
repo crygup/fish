@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import secrets
 from typing import TYPE_CHECKING, Literal
 
@@ -23,13 +22,13 @@ class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
         description="The title of the video to save as.",
         default=secrets.token_urlsafe(8),
     )
+    twitter_gif: bool = commands.flag(
+        name="twitter_gif",
+        description="Convert Twitter/X videos to a .gif files.",
+        default=False,
+    )
     ignore_checks: bool = commands.flag(
         description="you cant use this lol", default=False
-    )
-    TwitterGif: bool = commands.flag(
-        name="twitter_gif",
-        description="Converts twitter GIFs into an actual .gif file.",
-        default=True,
     )
     hidden: bool = commands.flag(
         description="Hides the download (only for app commands)", default=True
@@ -60,8 +59,8 @@ class Downloads(Cog):
                 ctx,
                 url,
                 format=flags.format,
-                twitterGif=flags.TwitterGif,
                 filename=flags.title,
+                twitter_gif=flags.twitter_gif,
             )
 
             await dl.download()
