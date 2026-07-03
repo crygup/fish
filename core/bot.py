@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from extensions.settings import Settings
     from extensions.tools import Tools
     from extensions.lastfm import Lastfm
+    from extensions.moderation import Moderation
+    from extensions.mudae import Mudae
 
     # from extensions.fishing import Fishing
 
@@ -74,6 +76,7 @@ class Fishie(commands.Bot):
     cached_covers: Dict[str, Tuple[str, bool]] = {}
     cached_roblox_templates: dict[int, tuple[str, dict, datetime.datetime]] = {}
     cached_mudae_consent: set[int] = set()
+    cached_honeypots: set[int] = set()
     pokemon: List[str]
     error_logs: discord.Webhook
 
@@ -99,6 +102,7 @@ class Fishie(commands.Bot):
         self.cached_covers: Dict[str, Tuple[str, bool]] = {}
         self.cached_roblox_templates: dict[int, tuple[str, dict, datetime.datetime]] = {}
         self.cached_mudae_consent: set[int] = set()
+        self.cached_honeypots: set[int] = set()
         self.testing: bool = testing
         self.current_downloads: List[str] = []
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(
@@ -343,6 +347,11 @@ class Fishie(commands.Bot):
             self.cached_mudae_consent.add(row["user_id"])
         self.logger.info(f"Cached {len(self.cached_mudae_consent)} Mudae DM consent(s)")
 
+        honeypot_rows = await self.pool.fetch("SELECT channel_id FROM honeypot_channels")
+        for row in honeypot_rows:
+            self.cached_honeypots.add(row["channel_id"])
+        self.logger.info(f"Cached {len(self.cached_honeypots)} honeypot channel(s)")
+
     async def add_reactions(
         self,
         message: discord.Message,
@@ -394,6 +403,14 @@ class Fishie(commands.Bot):
     @property
     def discord(self) -> Optional[DiscordCog]:
         return self.get_cog("Discord")  # type: ignore
+
+    @property
+    def mudae(self) -> Optional[Mudae]:
+        return self.get_cog("Mudae")  # type: ignore
+
+    @property
+    def moderation(self) -> Optional[Moderation]:
+        return self.get_cog("Moderation")  # type: ignore
 
     @property
     def lastfm(self) -> Optional[Lastfm]:

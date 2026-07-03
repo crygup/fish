@@ -84,32 +84,62 @@ def _possible_red_positions(revealed: dict[int, str]) -> Set[int]:
 
 
 def _best_next_click(revealed: dict[int, str]) -> Optional[int]:
-    """Pick the unrevealed position that maximally narrows the red possibilities."""
+    """Pick the unrevealed position that maximally narrows red possibilities,
+    or after red is found, maximizes score from remaining high-value spheres."""
+    max_counts = {"orange": 2, "yellow": 3, "green": 4}
+    remaining: dict[str, int] = {}
+    for color, count in max_counts.items():
+        remaining[color] = count - sum(1 for c in revealed.values() if c == color)
+
+    unrevealed = [p for p in range(GRID_SIZE * GRID_SIZE) if p not in revealed and p != CENTER]
+    if not unrevealed:
+        return None
+
+    red_pos = next((p for p, c in revealed.items() if c == "red"), None)
+
+    if red_pos is not None:
+        # Red found — score unrevealed cells by their likely color value
+        # Priority: orange (adjacent) > yellow (diag, not adj) > green (row/col, not diag) > teal (row/col/diag) > blue (none)
+
+        def _score(pos: int) -> int:
+            adj = _adjacent(pos, red_pos)
+            diag = _same_diag(pos, red_pos)
+            rowcol = _same_row(pos, red_pos) or _same_col(pos, red_pos)
+
+            if adj and remaining.get("orange", 0) > 0:
+                return 50  # likely orange
+            if diag and not adj and remaining.get("yellow", 0) > 0:
+                return 40  # likely yellow
+            if rowcol and not diag and remaining.get("green", 0) > 0:
+                return 30  # likely green
+            if rowcol or diag:
+                return 20  # teal
+            return 10  # blue
+
+        return max(unrevealed, key=_score)
+
+    # Red not yet found — original minimax logic
     candidates = _possible_red_positions(revealed)
     if not candidates:
         return None
     if len(candidates) == 1:
         return next(iter(candidates))
 
-    unrevealed = [p for p in candidates if p not in revealed]
-    if not unrevealed:
+    unrevealed_candidates = [p for p in unrevealed if p in candidates]
+    if not unrevealed_candidates:
         return None
-
-    max_counts = {"red": 1, "orange": 2, "yellow": 3, "green": 4}
-    remaining = dict(max_counts)
-    for color in revealed.values():
-        if color in remaining:
-            remaining[color] -= 1
 
     possible_colors = ["teal", "blue"]
     for color, count in remaining.items():
         if count > 0:
             possible_colors.append(color)
+    if sum(1 for c in revealed.values() if c == "red") == 0:
+        possible_colors.append("red")
 
     best_pos = None
-    best_worst = len(candidates)  # minimise the worst-case remaining count
+    best_worst = len(candidates)
 
-    for pos in unrevealed:
+    for pos in unrevealed_candidates:
         max_remaining = 0
         for test_color in possible_colors:
             test = {**revealed, pos: test_color}
@@ -135,8 +165,15 @@ class SphereView(discord.ui.View):
         self.message = None
         self._build()
 
-    async def _noop(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
+    async def _recommendation_click(self, interaction: discord.Interaction) -> None:
+        if self.recommendation is None:
+            await interaction.response.defer()
+            return
+        row, col = _to_rc(self.recommendation)
+        await interaction.response.send_message(
+            f"Click button at **row {row + 1}, column {col + 1}** on the Mudae message above.",
+            ephemeral=True,
+        )
 
     def _build(self) -> None:
         self.clear_items()
@@ -161,6 +198,7 @@ class SphereView(discord.ui.View):
                     disabled=False,
                     row=row,
                 )
+                btn.callback = self._recommendation_click
             else:
                 btn = discord.ui.Button(
                     style=discord.ButtonStyle.grey,
@@ -168,7 +206,9 @@ class SphereView(discord.ui.View):
                     disabled=True,
                     row=row,
                 )
-            btn.callback = self._noop
+                btn.callback = self._recommendation_click
+            if not btn.callback:
+                btn.callback = self._recommendation_click
             self.add_item(btn)
 
 
@@ -178,8 +218,24 @@ OC_TEXT = "You can click **5** times on the buttons below"
 class SphereCog(Cog):
     """Mudae sphere chest solver."""
 
+    def _parse_sphere_components(self, components: list) -> Optional[dict[int, str]]:
+        """Parse revealed spheres from raw component data (gateway event)."""
+        revealed: dict[int, str] = {}
+        idx = 0
+        found_any = False
+        for action_row in components:
+            for child in action_row.get("components", []):
+                found_any = True
+                if child.get("emoji"):
+                    emoji_id = int(child["emoji"]["id"])
+                    color = SPHERE_MAP.get(emoji_id)
+                    if color:
+                        revealed[idx] = color
+                idx += 1
+        return revealed if found_any else None
+
     def _parse_sphere_message(self, message: discord.Message) -> Optional[dict[int, str]]:
-        """Parse a Mudae sphere chest message from its button components."""
+        """Parse a Mudae sphere chest message from its discord.Message components."""
         revealed: dict[int, str] = {}
         idx = 0
         found_any = False
@@ -190,12 +246,11 @@ class SphereCog(Cog):
                 if not isinstance(child, discord.Button):
                     continue
                 found_any = True
-                if child.style == discord.ButtonStyle.primary and child.emoji and child.emoji.id:
+                if child.emoji and child.emoji.id:
                     color = SPHERE_MAP.get(child.emoji.id)
                     if color:
                         revealed[idx] = color
                 idx += 1
-
         return revealed if found_any else None
 
     @commands.command(name="sphere")
@@ -225,6 +280,7 @@ class SphereCog(Cog):
         await self._show_sphere(ctx, revealed, mudae_msg)
 
     async def _show_sphere(self, ctx: Context, revealed: dict[int, str], mudae_msg: discord.Message):
+
         recommendation = _best_next_click(revealed)
         view = SphereView(ctx, revealed, recommendation)
         view.message = await ctx.send(view=view)
@@ -239,18 +295,30 @@ class SphereCog(Cog):
             except asyncio.TimeoutError:
                 break
 
-            if not isinstance(mudae_msg.channel, discord.abc.Messageable):
-                break
-            after = await mudae_msg.channel.fetch_message(mudae_msg.id)
-            new_revealed = self._parse_sphere_message(after)
-            if new_revealed is None:
+            components = event.data.get("components", [])
+            if not components:
+                continue
+            new_revealed = self._parse_sphere_components(components)  # type: ignore[arg-type]
+            if new_revealed is None or new_revealed == view.revealed:
+                continue
+
+            if len(new_revealed) >= 5:
+                view.revealed = new_revealed
+                view.recommendation = None
+                view._build()
+                try:
+                    await view.message.edit(view=view)
+                except discord.HTTPException:
+                    pass
                 break
 
-            recommendation = _best_next_click(new_revealed)
             view.revealed = new_revealed
-            view.recommendation = recommendation
+            view.recommendation = _best_next_click(new_revealed)
             view._build()
-            await view.message.edit(view=view)
+            try:
+                await view.message.edit(view=view)
+            except discord.HTTPException:
+                break
 
     @commands.command(name="simsphere")
     async def simsphere(self, ctx: Context):

@@ -88,8 +88,11 @@ class Server(Cog):
         if len(prefix) > 10:
             raise commands.BadArgument("Prefixes can only be 10 characters long.")
 
-        if prefix in bot.db_cache.prefixes[ctx.guild.id]:
-            raise commands.BadArgument("This prefix is already set.")
+        try:
+            if prefix in bot.db_cache.prefixes[ctx.guild.id]:
+                raise commands.BadArgument("This prefix is already set.")
+        except KeyError:
+            pass
 
         sql = """INSERT INTO guild_prefixes (guild_id, prefix, author_id, time) VALUES ($1, $2, $3, $4)"""
         await bot.pool.execute(sql, ctx.guild.id, prefix, ctx.author.id, now)

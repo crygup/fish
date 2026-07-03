@@ -312,3 +312,8 @@ CREATE TABLE IF NOT EXISTS mudae_dm_consent (
     user_id BIGINT PRIMARY KEY,
     consented BOOLEAN NOT NULL DEFAULT TRUE
 );
+
+CREATE TABLE IF NOT EXISTS honeypot_channels (
+    guild_id BIGINT PRIMARY KEY,
+    channel_id BIGINT NOT NULL
+);
