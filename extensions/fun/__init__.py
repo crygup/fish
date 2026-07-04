@@ -154,6 +154,19 @@ class Fun(About, Corn):
                 )
             )
 
+    @commands.command(name="quoteisifyouhaveaproblemwithmetextmeandifyoudonthavemynumberyoudontknowmewellenoughtohaveaproblemwithme", aliases=("QIIYHAPWMTMAIYDHMNYDKMWETHAPWM",))
+    @commands.cooldown(1, 5, commands.BucketType.channel)
+    async def QIIYHAPWMTMAIYDHMNYDKMWETHAPWM(self, ctx: Context):
+        """if you have a problem with me text me and if you dont have my number you dont know me well enough to have a problem with me"""
+
+        async with ctx.typing():
+            await ctx.send(
+                file=discord.File(
+                    "files/videos/QIIYHAPWMTMAIYDHMNYDKMWETHAPWM.mp4",
+                    filename=f"fishie_loves_{ctx.author.name}.mp4",
+                )
+            )
+
 
 
 async def setup(bot: Fishie):

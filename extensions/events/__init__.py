@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
+import random
 
 from .auto_download import AutoDownload
 from .auto_reactions import Reactions
@@ -15,6 +16,7 @@ from .statuses import StatusCog
 from .tasks import Tasks
 from .xp import XPCog
 from .corn import CornReacts
+
 if TYPE_CHECKING:
     from core import Fishie
 
@@ -38,6 +40,14 @@ class Events(
             bot.config["webhooks"]["error_logs"], session=bot.session
         )
 
+
+    @commands.Cog.listener("on_message")
+    async def on_monark_message(self, message: discord.Message) -> None:
+        if message.author.id == 1323759367371231263:
+            a = random.randint(0,500)
+
+            if a == 67:
+                await message.channel.send("22",reference=message.to_reference(fail_if_not_exists=False))
 
 async def setup(bot: Fishie):
     await bot.add_cog(Events(bot))

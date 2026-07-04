@@ -29,6 +29,7 @@ from utils import (
 from .command_stats import CommandStats
 from .downloads import Downloads
 from .google import Google
+from .letterboxd import Letterboxd
 from .purge import PurgeCog
 from .reminders import Reminder
 from .spotify import Spotify
@@ -45,7 +46,7 @@ class ScreenshotFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     full_page: bool = commands.flag(default=False, aliases=["fp"])
 
 
-class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats):
+class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats, Letterboxd):
     """Quality of life tools"""
 
     emoji = discord.PartialEmoji(name="\U0001f6e0")

@@ -17,8 +17,7 @@ CORN_EMOJI = "\U0001f33d"
 class CornReacts(Cog):
     """Track corn emoji reactions — one per giver per message."""
 
-    def __init__(self, bot: Fishie) -> None:
-        self.bot = bot
+    def __init__(self) -> None:
         self._seen: TTLCache[tuple[int, int], bool] = TTLCache[tuple[int, int], bool](
             maxsize=10_000, ttl=600.0
         )
@@ -51,4 +50,4 @@ class CornReacts(Cog):
 
 
 async def setup(bot: Fishie):
-    await bot.add_cog(CornReacts(bot))
+    await bot.add_cog(CornReacts())

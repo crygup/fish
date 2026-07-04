@@ -40,4 +40,7 @@ TENOR_PAGE_RE: Pattern = comp(r"https?://(www\.)?tenor\.com/view/\S+/?")
 TENOR_GIF_RE: Pattern = comp(r"https?://(www\.)?c\.tenor\.com/\S+/\S+\.gif/?")
 
 # websites
+LBD_URL_RE: Pattern[str] = comp(r"https?://(?:www\.)?letterboxd\.com/([a-zA-Z0-9_\-]+)/?")
+STEAM_URL_RE: Pattern[str] = comp(r"https?://(?:www\.)?steamcommunity\.com/(?:profiles/(\d+)|id/([a-zA-Z0-9_\-]+))/?")
+STEAM_ID64_RE: Pattern[str] = comp(r"^7656119\d{10}$")
 LASTFM_USERNAME: Pattern = comp(r"[a-zA-Z\_\-]{2,15}")

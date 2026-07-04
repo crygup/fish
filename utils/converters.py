@@ -180,3 +180,93 @@ class TenorUrlConverter(commands.Converter):
         url = await self.get_url(text)
 
         return re.sub("AAAAd", "AAAAC", url)
+
+
+
+class _AccountConverter(commands.Converter[str]):
+    """Base: try to resolve as Discord user → linked account, else validate raw."""
+    column: str = ""
+    site_name: str = ""
+    regex: re.Pattern[str] | None = None
+    regex_error: str = "Invalid username."
+
+    async def convert(self, ctx: Context, argument: str) -> str:
+        # Try to resolve as a Discord user mention/ID.
+        try:
+            user = await commands.UserConverter().convert(ctx, argument)
+            row = await ctx.bot.pool.fetchrow(
+                f'SELECT "{self.column}" FROM accounts WHERE user_id = $1',
+                user.id)
+            if row and row[self.column]:
+                return row[self.column]
+            raise commands.BadArgument(
+                f"**{user.display_name}** has no linked {self.site_name} account."
+            )
+        except commands.UserNotFound:
+            pass
+
+        # Not a user — validate as raw username.
+        value = argument.strip().lower().rstrip("/")
+        if self.regex and not self.regex.match(value):
+            raise commands.BadArgument(self.regex_error)
+        return value
+
+
+class LastfmConverter(_AccountConverter):
+    column = "lastfm"
+    site_name = "last.fm"
+    regex = re.compile(r"^[a-zA-Z\_\-]{2,15}$")
+    regex_error = "Invalid last.fm username. Must be 2-15 characters (letters, underscores, hyphens)."
+
+
+class LetterboxdConverter(_AccountConverter):
+    column = "letterboxd"
+    site_name = "Letterboxd"
+    regex = re.compile(r"^[a-zA-Z0-9_\-]{2,30}$")
+    regex_error = "Invalid Letterboxd username. Must be 2-30 characters (letters, numbers, underscores, hyphens)."
+
+
+class SteamConverter(_AccountConverter):
+    column = "steam"
+    site_name = "Steam"
+    regex = re.compile(r"^\d{17}$|^[a-zA-Z0-9_\-]{2,32}$")
+    regex_error = "Invalid Steam ID. Provide a SteamID64, profile URL, or custom URL name."
+
+    async def convert(self, ctx: Context, argument: str) -> str:
+        try:
+            user = await commands.UserConverter().convert(ctx, argument)
+            row = await ctx.bot.pool.fetchrow(
+                'SELECT steam FROM accounts WHERE user_id = $1', user.id)
+            if row and row["steam"]:
+                return row["steam"]
+            raise commands.BadArgument(
+                f"**{user.display_name}** has no linked Steam account."
+            )
+        except commands.UserNotFound:
+            pass
+
+        # Resolve the raw input to a SteamID64.
+        from .regexes import STEAM_URL_RE, STEAM_ID64_RE
+        argument = argument.strip().rstrip("/")
+        if m := STEAM_URL_RE.match(argument):
+            if sid := m.group(1): return sid
+            if vanity := m.group(2): return await self._resolve_vanity(ctx, vanity)
+        if STEAM_ID64_RE.match(argument):
+            return argument
+        if re.match(r"^[a-zA-Z0-9_\-]{2,32}$", argument):
+            return await self._resolve_vanity(ctx, argument)
+        raise commands.BadArgument(
+            "Invalid Steam profile. Provide a profile URL, SteamID64, or custom URL name."
+        )
+
+    @staticmethod
+    async def _resolve_vanity(ctx: Context, vanity: str) -> str:
+        key = ctx.bot.config["keys"]["steam"]
+        url = f"https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/?key={key}&vanityurl={vanity}"
+        async with ctx.bot.session.get(url) as resp:
+            data = await resp.json()
+            if sid := data.get("response", {}).get("steamid"):
+                return sid
+            raise commands.BadArgument(
+                f"No Steam profile found for **{vanity}**."
+            )

@@ -4,8 +4,11 @@ CREATE TABLE IF NOT EXISTS accounts (
     steam TEXT,
     roblox TEXT,
     genshin TEXT,
+    letterboxd TEXT,
     PRIMARY KEY (user_id)
 );
+
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS letterboxd TEXT;
 
 CREATE TABLE IF NOT EXISTS reminders (
     id SERIAL PRIMARY KEY,
