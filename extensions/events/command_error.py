@@ -49,6 +49,15 @@ class CommandErrors(Cog):
         #     await self.bot.log_error(error)
         #     return
 
-        error_str = self.bot.redact(str(error))
-        await ctx.send(error_str)
+        try:
+            error_str = self.bot.redact(str(error))
+            await ctx.send(error_str)
+        except Exception as e:
+            ctx.bot.logger.error(
+                f"on_command_error handler itself failed: {e.__class__.__name__}: {e}"
+            )
+            try:
+                await ctx.send("An unexpected error occurred.")
+            except Exception:
+                pass
         await self.bot.log_error(error)

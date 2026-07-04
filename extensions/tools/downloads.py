@@ -15,17 +15,12 @@ if TYPE_CHECKING:
 
 
 class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
-    format: Literal["mp4", "mp3", "webm"] = commands.flag(
-        description="What format the video should download as.", default="mp4"
+    format: Literal["mp4", "mp3", "webm", "gif"] = commands.flag(
+        description="What format to download as (gif auto-converts Twitter videos).", default="mp4"
     )
     title: str = commands.flag(
         description="The title of the video to save as.",
         default=secrets.token_urlsafe(8),
-    )
-    twitter_gif: bool = commands.flag(
-        name="twitter_gif",
-        description="Convert Twitter/X videos to a .gif files.",
-        default=False,
     )
     ignore_checks: bool = commands.flag(
         description="you cant use this lol", default=False
@@ -60,7 +55,6 @@ class Downloads(Cog):
                 url,
                 format=flags.format,
                 filename=flags.title,
-                twitter_gif=flags.twitter_gif,
             )
 
             await dl.download()

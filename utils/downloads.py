@@ -6,10 +6,11 @@ import secrets
 import subprocess
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+import asyncio
 import discord
-import yt_dlp
+import sys
 
-from .errors import DownloadError, InvalidWebsite, VideoIsLive
+from .errors import DownloadError, InvalidWebsite
 from .functions import to_thread, run, litterbox
 from .regexes import (
     INSTAGRAM_RE,
@@ -41,24 +42,6 @@ def _get_cookies(url: str) -> Optional[str]:
     return None
 
 
-class _YtDlpLogger:
-    """Routes yt-dlp log output to the bot's logger so failures are visible."""
-
-    def __init__(self, logger: Any) -> None:
-        self._logger = logger
-
-    def debug(self, msg: str) -> None:
-        self._logger.debug(msg)
-
-    def info(self, msg: str) -> None:
-        self._logger.info(msg)
-
-    def warning(self, msg: str) -> None:
-        self._logger.warning(msg)
-
-    def error(self, msg: str) -> None:
-        self._logger.error(msg)
-
 
 # ffmpeg filter for optimized GIF conversion:
 #   10 fps, 480px wide (AR preserved), lanczos scaling,
@@ -71,12 +54,6 @@ GIF_FILTER: str = (
     "[s1][p]paletteuse=dither=bayer:bayer_scale=5"
 )
 
-
-def match_filter(info: Dict[Any, Any]):
-    if info.get("live_status", None) == "is_live":
-        raise VideoIsLive()
-
-
 class Downloader:
     def __init__(
         self,
@@ -85,14 +62,13 @@ class Downloader:
         format: str = "mp4",
         filename: Optional[str] = None,
         hidden: Optional[bool] = False,
-        twitter_gif: bool = False,
     ) -> None:
         self.ctx = ctx
         self.url = url
         self.format = format
         self.filename = filename or secrets.token_urlsafe(8).strip("-")
         self.hidden = hidden
-        self.twitter_gif = twitter_gif
+        self._duration = 0
 
     def _output_glob(self) -> str:
         return f"files/downloads/{self.filename}.*"
@@ -111,107 +87,74 @@ class Downloader:
                 pass
 
 
-    @to_thread
-    def _yt_dlp_download(self, video: str, *, res_target: int) -> str:
-        """Download via yt-dlp; return the output *path* on disk.
-
-        ``res_target`` is the smaller-dimension target (1080 or 720);
-        yt-dlp's ``res`` sort key handles both landscape and portrait.
-        """
-        audio = SOUNDCLOUD_RE.search(video) or self.format == "mp3"
-        has_cookies = bool(_get_cookies(video))
-
-        options: Dict[Any, Any] = {
-            "outtmpl": rf"files/downloads/{self.filename}.%(ext)s",
-            "quiet": False,
-            "match_filter": match_filter,
-            "logger": _YtDlpLogger(self.ctx.bot.logger),
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        }
-
-        if cookies := _get_cookies(video):
-            options["cookiefile"] = cookies
+    async def _yt_dlp_download(self, video: str, *, res_target: int) -> str:
+        """Download via yt-dlp CLI subprocess; return the output path on disk."""
 
         is_youtube = bool(YOUTUBE_RE.search(video) or YT_SHORT_RE.search(video))
+        is_audio = SOUNDCLOUD_RE.search(video) or self.format == "mp3"
+        is_twitter = bool(TWITTER_RE.search(video))
 
-        if is_youtube:
-            # Let yt-dlp fetch the EJS challenge solver from GitHub
-            # (first run downloads + caches; subsequent runs are instant).
-            options["remote_components"] = ["ejs:github"]
-            # Try deno/node for JS challenges; if deno isn't in the bot's
-            # PATH, set DENO_PATH in the environment.
-            _deno = os.environ.get("DENO_PATH", "deno")
-            options["js_runtimes"] = {"deno": {"path": _deno}, "node": {}}
+        args = [
+            sys.executable, "-m", "yt_dlp",
+            "-f", "bestaudio/best" if is_audio else "best",
+            "-o", f"files/downloads/{self.filename}.%(ext)s",
+            "--no-playlist",
+            "--js-runtimes", "deno",
+            "--print", "after_move:filepath",
+        ]
 
-        rc = 1
+        if cookies := _get_cookies(video):
+            args += ["--cookies", cookies]
 
-        if audio:
+        if not is_youtube:
+            args += [
+                "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "--add-header", "Accept-Language:en-US,en;q=0.9",
+            ]
+
+        if is_audio:
+            args += ["--extract-audio", "--audio-format", "mp3"]
             self.format = "mp3"
-            options["format"] = "bestaudio/best"
-            options.setdefault("postprocessors", []).append(
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
+
+        args.append(video)
+
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin") + ":/home/zil/.deno/bin",
+            "HOME": os.environ.get("HOME", "/home/zil"),
+        }
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, stderr_raw = await proc.communicate()
+        stderr_text = stderr_raw.decode().strip() if stderr_raw else ""
+
+        if proc.returncode != 0:
+            self.ctx.bot.logger.error(
+                f"yt-dlp failed (exit {proc.returncode}). Command: {' '.join(args)}"
             )
-
-            with yt_dlp.YoutubeDL(options) as ydl:  # type: ignore
-                try:
-                    ydl.download([video])
-                except Exception as e:
-                    raise DownloadError(str(e)) from e
-
-            rc = 0
-        else:
-            if is_youtube:
-                attempts: list[tuple[str, object, bool]] = []
-
-                if has_cookies:
-                    attempts.append(("best", ["web"], True))
-
-                attempts += [
-                    ("best", ["android"], False),
-                    ("best", None, False),
-                ]
-            else:
-                attempts = [("best", None, True)]
-                if has_cookies:
-                    attempts.append(("best", None, False))
-
-            rc = 1
-            for fmt, clients, use_cookies in attempts:
-                opts = dict(options)
-                opts["format"] = fmt
-                if clients is not None:
-                    opts.setdefault("extractor_args", {}).setdefault("youtube", {})[
-                        "player_client"
-                    ] = clients
-                else:
-                    opts.pop("extractor_args", None)
-                if not use_cookies:
-                    opts.pop("cookiefile", None)
-
-                with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore
-                    try:
-                        rc = ydl.download([video])
-                    except Exception:
-                        rc = 1
-
-                if rc == 0:
+            if stderr_text:
+                self.ctx.bot.logger.error(f"yt-dlp stderr:\n{stderr_text}")
+            err = stderr_text or "unknown error"
+            # Extract the last meaningful line for the user.
+            for line in reversed(err.splitlines()):
+                line = line.strip()
+                if line and not line.startswith("[") and "WARNING" not in line:
+                    err = line
                     break
-
-        if rc != 0:
+            raise DownloadError(
+                f"yt-dlp was unable to download this video: {err}"
+            )
+        output_path = stdout.decode().strip()
+        if not output_path or not os.path.isfile(output_path):
             raise DownloadError(
                 "yt-dlp was unable to download this video. "
                 "The site may be blocking the request, or the video is unavailable."
             )
 
-        output_path = self._find_output()
         self.ctx.bot.current_downloads.append(os.path.basename(output_path))
         return output_path
 
@@ -247,7 +190,39 @@ class Downloader:
 
         os.remove(input_path)
         return output_path
-    
+
+    async def _has_audio(self, path: str) -> bool:
+        """Return True if *path* contains an audio stream (ffprobe)."""
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        return proc.returncode == 0 and b"audio" in stdout
+
+    async def _get_duration(self, path: str) -> float:
+        """Return duration in seconds from ffprobe, or 0 on failure."""
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0 and stdout:
+            try:
+                return float(stdout.decode().strip())
+            except ValueError:
+                pass
+        return 0.0
+
     async def _download(self) -> discord.File:
         _ALLOWED = (
             YOUTUBE_RE,
@@ -277,15 +252,33 @@ class Downloader:
                     "This video exceeds 50 MB even at 720p. Try a shorter clip."
                 )
 
-        if self.twitter_gif and TWITTER_RE.search(self.url):
-            output_path = await self._convert_to_gif(output_path)
-            self.format = "gif"
+        # Twitter GIF conversion:
+        #   --format gif          → always convert (rejected if > 30s)
+        #   --format mp4 (default) → auto-convert if file has no audio track
+        if TWITTER_RE.search(self.url):
+            want_gif = self.format == "gif" or (
+                self.format == "mp4" and not await self._has_audio(output_path)
+            )
+            if want_gif:
+                if self.format == "gif" and self._duration > 30:
+                    raise DownloadError(
+                        "GIF conversion is limited to videos 30 seconds or shorter. "
+                        "This video is {:.0f} seconds.".format(self._duration)
+                    )
+                dur = self._duration or await self._get_duration(output_path)
+                if dur > 30:
+                    raise DownloadError(
+                        "GIF conversion is limited to videos 30 seconds or shorter. "
+                        "This video is {:.0f} seconds.".format(dur)
+                    )
+                output_path = await self._convert_to_gif(output_path)
+                self.format = "gif"
 
-            if os.path.getsize(output_path) > MAX_FILESIZE:
-                self._cleanup_output()
-                raise DownloadError(
-                    "GIF conversion exceeded 50 MB. Try a shorter clip or omit `--gif`."
-                )
+                if os.path.getsize(output_path) > MAX_FILESIZE:
+                    self._cleanup_output()
+                    raise DownloadError(
+                        "GIF conversion exceeded 50 MB. Try a shorter clip or omit `--gif`."
+                    )
 
         return discord.File(output_path, filename=os.path.basename(output_path))
 

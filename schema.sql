@@ -308,3 +308,17 @@ CREATE TABLE IF NOT EXISTS honeypot_channels (
     guild_id BIGINT PRIMARY KEY,
     channel_id BIGINT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS corn_reacts (
+    id SERIAL PRIMARY KEY,
+    receiver_id BIGINT NOT NULL,
+    giver_id BIGINT NOT NULL,
+    guild_id BIGINT,
+    message_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT (now() at time zone 'utc')
+);
+
+CREATE INDEX IF NOT EXISTS corn_reacts_receiver_idx ON corn_reacts (receiver_id);
+CREATE INDEX IF NOT EXISTS corn_reacts_giver_idx ON corn_reacts (giver_id);
+CREATE INDEX IF NOT EXISTS corn_reacts_guild_idx ON corn_reacts (guild_id);

@@ -69,17 +69,17 @@ class About(Cog):
     @commands.command(name="hello", hidden=True)
     async def hello(self, ctx: Context):
         """Displays my hello message"""
-        liz = await get_or_fetch_user(self.bot, self.bot.config["ids"]["owner_id"])
-        msg = f"Hello! I'm a robot! {liz} made me."
+        zil = await get_or_fetch_user(self.bot, self.bot.config["ids"]["owner_id"])
+        msg = f"Hello! I'm a robot! {zil} made me."
 
         if ctx.bot.testing:
             msg += "\nThis is the testing version of the bot."
 
         await ctx.send(msg)
 
-    @commands.command(name="stats", hidden=True)
+    @commands.command(name="usage", hidden=True)
     @commands.cooldown(1, 30)
-    async def stats(self, ctx: Context):
+    async def usage(self, ctx: Context):
         """This shows a bit more info than about
 
         Can be hard to read for mobile users, sorry."""

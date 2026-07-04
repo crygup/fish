@@ -13,6 +13,7 @@ from core import Cog
 from utils import to_image
 
 from .about import About
+from .corn import Corn
 from .helpers import RPSView, WTPView, dagpi
 
 if TYPE_CHECKING:
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
     from extensions.context import Context
 
 
-class Fun(About):
+class Fun(About, Corn):
     """Fun miscellaneous commands"""
 
     emoji = discord.PartialEmoji(name="\U0001f604")

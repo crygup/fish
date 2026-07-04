@@ -14,13 +14,13 @@ from .pokemon import Pokemon
 from .statuses import StatusCog
 from .tasks import Tasks
 from .xp import XPCog
-
+from .corn import CornReacts
 if TYPE_CHECKING:
     from core import Fishie
 
 
 class Events(
-    CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon, Reactions, Guilds, XPCog, StatusCog
+    CommandErrors, CommandLogs, Tasks, AutoDownload, Pokemon, Reactions, Guilds, XPCog, StatusCog, CornReacts
 ):
     emoji = discord.PartialEmoji(name="\U0001f3a7")
     hidden: bool = True
