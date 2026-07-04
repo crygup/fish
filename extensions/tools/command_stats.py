@@ -60,6 +60,34 @@ class CommandStats(Cog):
 
         await self._guild_stats(ctx, guild)
 
+
+    @stats.command(name="global")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_global(self, ctx: Context):
+        """See the most-used commands and top users globally."""
+        cmd_rows = await ctx.bot.pool.fetch(
+            "SELECT command, COUNT(*) AS total FROM command_logs "
+            "GROUP BY command ORDER BY total DESC LIMIT 10")
+        user_rows = await ctx.bot.pool.fetch(
+            "SELECT user_id, COUNT(*) AS total FROM command_logs "
+            "GROUP BY user_id ORDER BY total DESC LIMIT 10")
+        if not cmd_rows and not user_rows:
+            await ctx.send("No command data yet!"); return
+        embed = discord.Embed(color=ctx.bot.embedcolor)
+        embed.set_author(name="Command Stats")
+        if cmd_rows:
+            embed.add_field(name="Top Commands",
+                            value="\n".join(f"**{r['total']:,}** {r['command']}" for r in cmd_rows),
+                            inline=True)
+        if user_rows:
+            lines = []
+            for r in user_rows:
+                user = await get_or_fetch_user(ctx.bot, r["user_id"])
+                lines.append(f"**{r['total']:,}** {user.display_name if user else r['user_id']}")
+            embed.add_field(name="Top Users", value="\n".join(lines), inline=True)
+        await ctx.send(embed=embed)
+
     @stats.command(name="command")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -68,31 +96,50 @@ class CommandStats(Cog):
         ctx: Context,
         command_name: str,
         *,
-        user: discord.User = commands.param(
-            default=commands.Author, description="User to check stats for (defaults to you)."
-        ),
+        user: Optional[discord.User] = None,
     ):
-        """See how many times a command has been used by you or another user."""
+        """See how many times a command has been used (global by default, or per user)."""
         await self._command_count(ctx, user, command_name.strip().lower())
 
-    # ------------------------------------------------------------------
-    # helpers
-    # ------------------------------------------------------------------
-
     async def _command_count(
-        self, ctx: Context, user: discord.User | discord.Member, command_name: str
+        self, ctx: Context, user: discord.User | discord.Member | None, command_name: str
     ) -> None:
-        row = await ctx.bot.pool.fetchrow(
-            "SELECT COUNT(*) AS total FROM command_logs "
-            "WHERE user_id = $1 AND LOWER(command) = $2",
-            user.id,
-            command_name,
-        )
-        total = row["total"] if row else 0
-        await ctx.send(
-            f"**{user.display_name}** has used **{command_name}** "
-            f"{total:,} time{'s' if total != 1 else ''}."
-        )
+        if user:
+            row = await ctx.bot.pool.fetchrow(
+                "SELECT COUNT(*) AS total FROM command_logs "
+                "WHERE user_id = $1 AND LOWER(command) = $2",
+                user.id, command_name)
+            total = row["total"] if row else 0
+            await ctx.send(f"**{user.display_name}** has used **{command_name}** {total:,} time{'s' if total != 1 else ''}.")
+        else:
+            global_rows = await ctx.bot.pool.fetch(
+                "SELECT user_id, COUNT(*) AS total FROM command_logs "
+                "WHERE LOWER(command) = $1 "
+                "GROUP BY user_id ORDER BY total DESC LIMIT 10",
+                command_name)
+            if not global_rows:
+                await ctx.send(f"No one has used **{command_name}** yet!"); return
+            embed = discord.Embed(color=ctx.bot.embedcolor)
+            embed.set_author(name=f"Top users of {command_name}")
+            g_lines = []
+            for r in global_rows:
+                u = await get_or_fetch_user(ctx.bot, r["user_id"])
+                g_lines.append(f"**{r['total']:,}** {u.display_name if u else r['user_id']}")
+            embed.add_field(name="Global", value="\n".join(g_lines), inline=True)
+            if ctx.guild:
+                guild_rows = await ctx.bot.pool.fetch(
+                    "SELECT user_id, COUNT(*) AS total FROM command_logs "
+                    "WHERE LOWER(command) = $1 AND guild_id = $2 "
+                    "GROUP BY user_id ORDER BY total DESC LIMIT 10",
+                    command_name, ctx.guild.id)
+                if guild_rows:
+                    s_lines = []
+                    for r in guild_rows:
+                        m = ctx.guild.get_member(r["user_id"])
+                        name = m.display_name if m else str(r["user_id"])
+                        s_lines.append(f"**{r['total']:,}** {name}")
+                    embed.add_field(name=ctx.guild.name, value="\n".join(s_lines), inline=True)
+            await ctx.send(embed=embed)
 
     async def _user_top(
         self, ctx: Context, user: discord.User | discord.Member
