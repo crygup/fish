@@ -40,9 +40,13 @@ def _check_target(ctx: GuildContext, target: discord.Member) -> None:
     if target.id == ctx.author.id:
         raise commands.BadArgument(f"You cannot {cmd_name} yourself.")
     if target.top_role >= ctx.author.top_role and ctx.author.id != ctx.guild.owner_id:
-        raise commands.BadArgument(f"You cannot {cmd_name} someone with a higher or equal role.")
+        raise commands.BadArgument(
+            f"You cannot {cmd_name} someone with a higher or equal role."
+        )
     if target.top_role >= ctx.guild.me.top_role:  # type: ignore[union-attr]
-        raise commands.BadArgument("I cannot target someone with a higher or equal role.")
+        raise commands.BadArgument(
+            "I cannot target someone with a higher or equal role."
+        )
 
 
 def _parse_duration(until: datetime.datetime) -> int:
@@ -54,6 +58,7 @@ def _parse_duration(until: datetime.datetime) -> int:
     if minutes > MAX_MUTE_MINUTES:
         raise commands.BadArgument("Duration cannot exceed 2 weeks.")
     return int(minutes)
+
 
 class Moderation(Honeypot, Cog):
     """Server moderation commands."""
@@ -74,7 +79,11 @@ class Moderation(Honeypot, Cog):
     ):
         """Ban someone."""
         _check_target(ctx, member)
-        await ctx.guild.ban(member, reason=f"{str(ctx.author)} (ID: {ctx.author.id}): {reason}", delete_message_seconds=604800)
+        await ctx.guild.ban(
+            member,
+            reason=f"{str(ctx.author)} (ID: {ctx.author.id}): {reason}",
+            delete_message_seconds=604800,
+        )
         await ctx.send(f"Banned **{member}**.")
 
     @commands.hybrid_command(name="softban")
@@ -87,9 +96,13 @@ class Moderation(Honeypot, Cog):
         reason: Optional[str] = None,
     ):
         """Ban then immediately unban a member to delete their messages."""
-        
+
         _check_target(ctx, member)
-        reason = f"{str(ctx.author)} (ID: {ctx.author.id}): {reason}" if reason else f"{str(ctx.author)} (ID: {ctx.author.id})"
+        reason = (
+            f"{str(ctx.author)} (ID: {ctx.author.id}): {reason}"
+            if reason
+            else f"{str(ctx.author)} (ID: {ctx.author.id})"
+        )
 
         await ctx.guild.ban(member, reason=reason, delete_message_seconds=604800)
         await ctx.guild.unban(member, reason=reason)
@@ -114,7 +127,11 @@ class Moderation(Honeypot, Cog):
 
         minutes = _parse_duration(when.dt)
         until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
-        reason = f"{str(ctx.author)} (ID: {ctx.author.id}): {when.arg}" if bool(when.arg) else f"{str(ctx.author)} (ID: {ctx.author.id})"
+        reason = (
+            f"{str(ctx.author)} (ID: {ctx.author.id}): {when.arg}"
+            if bool(when.arg)
+            else f"{str(ctx.author)} (ID: {ctx.author.id})"
+        )
         await member.timeout(until, reason=reason)
         await ctx.send(
             f"Muted **{member}** for {time_utils.human_timedelta(until, suffix=False)}."
@@ -141,7 +158,11 @@ class Moderation(Honeypot, Cog):
     ):
         """Kick someone."""
         _check_target(ctx, member)
-        reason = f"{str(ctx.author)} (ID: {ctx.author.id}): {reason}" if reason else f"{str(ctx.author)} (ID: {ctx.author.id})"
+        reason = (
+            f"{str(ctx.author)} (ID: {ctx.author.id}): {reason}"
+            if reason
+            else f"{str(ctx.author)} (ID: {ctx.author.id})"
+        )
         await ctx.guild.kick(member, reason=reason)
         await ctx.send(f"Kicked **{member}**.")
 
@@ -155,9 +176,14 @@ class Moderation(Honeypot, Cog):
         reason: Optional[str] = None,
     ):
         """Unban someone."""
-        reason = f"{str(ctx.author)} (ID: {ctx.author.id}): {reason}" if reason else f"{str(ctx.author)} (ID: {ctx.author.id})"
+        reason = (
+            f"{str(ctx.author)} (ID: {ctx.author.id}): {reason}"
+            if reason
+            else f"{str(ctx.author)} (ID: {ctx.author.id})"
+        )
         await ctx.guild.unban(user, reason=reason)
         await ctx.send(f"Unbanned **{user}**.")
+
 
 async def setup(bot: Fishie):
     await bot.add_cog(Moderation(bot))

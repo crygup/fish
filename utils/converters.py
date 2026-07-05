@@ -6,8 +6,8 @@ from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
 
 from bs4 import BeautifulSoup
+import discord
 from discord.ext import commands
-
 from .functions import response_checker, to_thread
 from .regexes import TENOR_PAGE_RE
 from .vars import base_header
@@ -182,9 +182,9 @@ class TenorUrlConverter(commands.Converter):
         return re.sub("AAAAd", "AAAAC", url)
 
 
-
 class _AccountConverter(commands.Converter[str]):
     """Base: try to resolve as Discord user → linked account, else validate raw."""
+
     column: str = ""
     site_name: str = ""
     regex: re.Pattern[str] | None = None
@@ -195,8 +195,8 @@ class _AccountConverter(commands.Converter[str]):
         try:
             user = await commands.UserConverter().convert(ctx, argument)
             row = await ctx.bot.pool.fetchrow(
-                f'SELECT "{self.column}" FROM accounts WHERE user_id = $1',
-                user.id)
+                f'SELECT "{self.column}" FROM accounts WHERE user_id = $1', user.id
+            )
             if row and row[self.column]:
                 return row[self.column]
             raise commands.BadArgument(
@@ -230,13 +230,28 @@ class SteamConverter(_AccountConverter):
     column = "steam"
     site_name = "Steam"
     regex = re.compile(r"^\d{17}$|^[a-zA-Z0-9_\-]{2,32}$")
-    regex_error = "Invalid Steam ID. Provide a SteamID64, profile URL, or custom URL name."
+    regex_error = (
+        "Invalid Steam ID. Provide a SteamID64, profile URL, or custom URL name."
+    )
 
     async def convert(self, ctx: Context, argument: str) -> str:
+        # If argument is already a User/Member (slash command pre-conversion).
+        if isinstance(argument, (discord.User, discord.Member)):
+            row = await ctx.bot.pool.fetchrow(
+                "SELECT steam FROM accounts WHERE user_id = $1", argument.id
+            )
+            if row and row["steam"]:
+                return row["steam"]
+            raise commands.BadArgument(
+                f"**{argument.display_name}** has no linked Steam account."
+            )
+
+        # Try to parse as Discord user mention/ID.
         try:
             user = await commands.UserConverter().convert(ctx, argument)
             row = await ctx.bot.pool.fetchrow(
-                'SELECT steam FROM accounts WHERE user_id = $1', user.id)
+                "SELECT steam FROM accounts WHERE user_id = $1", user.id
+            )
             if row and row["steam"]:
                 return row["steam"]
             raise commands.BadArgument(
@@ -245,12 +260,15 @@ class SteamConverter(_AccountConverter):
         except commands.UserNotFound:
             pass
 
-        # Resolve the raw input to a SteamID64.
+        # Not a Discord user — resolve raw input to SteamID64.
         from .regexes import STEAM_URL_RE, STEAM_ID64_RE
+
         argument = argument.strip().rstrip("/")
         if m := STEAM_URL_RE.match(argument):
-            if sid := m.group(1): return sid
-            if vanity := m.group(2): return await self._resolve_vanity(ctx, vanity)
+            if sid := m.group(1):
+                return sid
+            if vanity := m.group(2):
+                return await self._resolve_vanity(ctx, vanity)
         if STEAM_ID64_RE.match(argument):
             return argument
         if re.match(r"^[a-zA-Z0-9_\-]{2,32}$", argument):
@@ -267,6 +285,32 @@ class SteamConverter(_AccountConverter):
             data = await resp.json()
             if sid := data.get("response", {}).get("steamid"):
                 return sid
+            raise commands.BadArgument(f"No Steam profile found for **{vanity}**.")
+
+
+class SteamGroupConverter(commands.Converter[str]):
+    """Resolves a Discord user (for linked account) or raw Steam group input."""
+
+    async def convert(self, ctx: Context, argument: str) -> str:
+        from .regexes import STEAM_GROUP_URL_RE
+
+        argument = argument.strip().rstrip("/")
+        name = None
+        if m := STEAM_GROUP_URL_RE.match(argument):
+            name = m.group(1)
+        elif re.match(r"^[a-zA-Z0-9_\-]{2,32}$", argument):
+            name = argument
+        if not name:
             raise commands.BadArgument(
-                f"No Steam profile found for **{vanity}**."
+                "Invalid Steam group. Provide a group URL or custom name."
             )
+
+        # Verify the group exists.
+        url = f"https://steamcommunity.com/groups/{name}/memberslistxml/?xml=1"
+        async with ctx.bot.session.get(url) as resp:
+            if resp.status != 200:
+                raise commands.BadArgument(f"No Steam group found for **{name}**.")
+            text = await resp.text()
+        if "<groupID64>" not in text:
+            raise commands.BadArgument(f"No Steam group found for **{name}**.")
+        return name

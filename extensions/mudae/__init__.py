@@ -10,6 +10,7 @@ from core import Cog
 # from .reminders import MudaeReminders
 from .sphere import SphereCog
 from utils import mudae_circle
+
 if TYPE_CHECKING:
     from core import Fishie
 

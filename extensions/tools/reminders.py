@@ -14,7 +14,7 @@ import discord
 from dateutil.zoneinfo import get_zonefile_instance
 from discord import app_commands
 from discord.ext import commands
-from lxml import etree # type: ignore
+from lxml import etree  # type: ignore
 from typing_extensions import Annotated
 
 from core import Cog

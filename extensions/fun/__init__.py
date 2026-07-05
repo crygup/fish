@@ -73,7 +73,14 @@ class Fun(About, Corn):
     @commands.hybrid_command(name="8ball")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def _8ball(self, ctx: Context, *, question: str = commands.param(displayed_name="question", description="What shall you ask?")):
+    async def _8ball(
+        self,
+        ctx: Context,
+        *,
+        question: str = commands.param(
+            displayed_name="question", description="What shall you ask?"
+        ),
+    ):
         """Ask the magic 8-ball a question.
 
         tony wanted this command"""
@@ -108,13 +115,13 @@ class Fun(About, Corn):
             "ur a beast",
             "ur him",
             "BANG",
-            "sure man"
+            "sure man",
         )
 
         msg = random.choice(answers)
         if ctx.interaction:
             msg += f"\n-# {ctx.author.display_name} asked: *{question}*"
-        
+
         await ctx.send(msg)
 
     @commands.command(name="wtp", hidden=True, enabled=False)
@@ -154,7 +161,10 @@ class Fun(About, Corn):
                 )
             )
 
-    @commands.command(name="quoteisifyouhaveaproblemwithmetextmeandifyoudonthavemynumberyoudontknowmewellenoughtohaveaproblemwithme", aliases=("QIIYHAPWMTMAIYDHMNYDKMWETHAPWM",))
+    @commands.command(
+        name="quoteisifyouhaveaproblemwithmetextmeandifyoudonthavemynumberyoudontknowmewellenoughtohaveaproblemwithme",
+        aliases=("QIIYHAPWMTMAIYDHMNYDKMWETHAPWM",),
+    )
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def QIIYHAPWMTMAIYDHMNYDKMWETHAPWM(self, ctx: Context):
         """if you have a problem with me text me and if you dont have my number you dont know me well enough to have a problem with me"""
@@ -166,7 +176,6 @@ class Fun(About, Corn):
                     filename=f"fishie_loves_{ctx.author.name}.mp4",
                 )
             )
-
 
 
 async def setup(bot: Fishie):

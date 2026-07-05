@@ -87,7 +87,10 @@ class Guilds(Cog):
 
     @commands.Cog.listener("on_guild_join")
     async def on_guild_join(self, guild: discord.Guild):
-        if sum(not m.bot for m in guild.members) <= 5 and guild.id not in self.allowed_guilds:
+        if (
+            sum(not m.bot for m in guild.members) <= 5
+            and guild.id not in self.allowed_guilds
+        ):
             await self.guild_too_small(guild)
             return
 

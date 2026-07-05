@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from extensions.context import Context
 
 
-
 class Owner(Cog):
     emoji = fish_owner
     hidden: bool = True
@@ -113,7 +112,9 @@ class Owner(Cog):
             return
 
         for name in found:
-            await events._log_solve(ctx.author.id, name, "command", ctx.guild.id if ctx.guild else None)
+            await events._log_solve(
+                ctx.author.id, name, "command", ctx.guild.id if ctx.guild else None
+            )
 
         await ctx.send("\n".join(found))
 

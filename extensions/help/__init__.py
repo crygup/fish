@@ -131,10 +131,16 @@ class HelpCommand(commands.HelpCommand):
 
         embed.add_field(
             name="Commands",
-            value=human_join([f"`{c.name}`" for c in cmds], final="and") if cmds else "No commands",
+            value=(
+                human_join([f"`{c.name}`" for c in cmds], final="and")
+                if cmds
+                else "No commands"
+            ),
         )
 
-        filtered = await self.filter_commands([c for c in cog.get_commands()], sort=True)
+        filtered = await self.filter_commands(
+            [c for c in cog.get_commands()], sort=True
+        )
         view = CogHelpView(self.context, [c for _, c in bot.cogs.items()])
         if filtered:
             view.add_item(CommandHelpDropdown(ctx, filtered))
@@ -244,7 +250,9 @@ class CommandHelpDropdown(discord.ui.Select):
             )
 
         if not options:
-            options.append(discord.SelectOption(label="No commands to show.", value="none"))
+            options.append(
+                discord.SelectOption(label="No commands to show.", value="none")
+            )
         super().__init__(
             placeholder="Choose a command", min_values=1, max_values=1, options=options
         )
@@ -291,6 +299,7 @@ class CommandHelpDropdown(discord.ui.Select):
                 view = CogHelpView(ctx, all_cogs)
                 view.add_item(CommandHelpDropdown(ctx, subcmds))
         await interaction.message.edit(embed=embed, view=view)
+
 
 class CommandHelpView(AuthorView):
     def __init__(self, ctx: Context, cmds: List[commands.Command[Cog, ..., Any]]):

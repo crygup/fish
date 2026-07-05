@@ -278,7 +278,6 @@ class UserDropdown(discord.ui.Select):
         self.statuses_cache = embed
         return embed
 
-
     async def callback(self, interaction: Interaction):
         value = self.values[0]
 
@@ -579,6 +578,7 @@ class Info(Cog):
             member.guild.members, key=lambda m: m.joined_at or discord.utils.utcnow()
         )
         return members.index(member) + 1
+
     async def user_info(self, ctx: Context, user: Union[discord.Member, discord.User]):
         fuser = await self.bot.fetch_user(user.id)
 
@@ -605,7 +605,11 @@ class Info(Cog):
             )
             embed.add_field(name="Joined", value=pos_text)
 
-        guild_id = user.guild.id if isinstance(user, discord.Member) else (ctx.guild.id if ctx.guild else None)
+        guild_id = (
+            user.guild.id
+            if isinstance(user, discord.Member)
+            else (ctx.guild.id if ctx.guild else None)
+        )
 
         row = None
         if guild_id:
@@ -626,7 +630,6 @@ class Info(Cog):
                 name="Last Seen",
                 value=f"**{row['status'].title()}** {discord.utils.format_dt(row['last_seen'], 'R')}",
             )
-
 
         await ctx.send(embed=embed, view=UserView(ctx, user, embed, fuser))
 

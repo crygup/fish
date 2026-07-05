@@ -67,6 +67,7 @@ class Keys(TypedDict):
     roblox: str
     steam: str
 
+
 class ConfigTokens(TypedDict):
     bot: str
     testing_bot: str

@@ -16,7 +16,8 @@ if TYPE_CHECKING:
 
 class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     format: Literal["mp4", "mp3", "webm", "gif"] = commands.flag(
-        description="What format to download as (gif auto-converts Twitter videos).", default="mp4"
+        description="What format to download as (gif auto-converts Twitter videos).",
+        default="mp4",
     )
     title: str = commands.flag(
         description="The title of the video to save as.",

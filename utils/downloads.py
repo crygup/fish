@@ -42,7 +42,6 @@ def _get_cookies(url: str) -> Optional[str]:
     return None
 
 
-
 # ffmpeg filter for optimized GIF conversion:
 #   10 fps, 480px wide (AR preserved), lanczos scaling,
 #   palettegen with diff mode + 128 colors,
@@ -53,6 +52,7 @@ GIF_FILTER: str = (
     "[s0]palettegen=max_colors=128:stats_mode=diff[p];"
     "[s1][p]paletteuse=dither=bayer:bayer_scale=5"
 )
+
 
 class Downloader:
     def __init__(
@@ -86,7 +86,6 @@ class Downloader:
             except OSError:
                 pass
 
-
     async def _yt_dlp_download(self, video: str, *, res_target: int) -> str:
         """Download via yt-dlp CLI subprocess; return the output path on disk."""
 
@@ -95,12 +94,18 @@ class Downloader:
         is_twitter = bool(TWITTER_RE.search(video))
 
         args = [
-            sys.executable, "-m", "yt_dlp",
-            "-f", "bestaudio/best" if is_audio else "best",
-            "-o", f"files/downloads/{self.filename}.%(ext)s",
+            sys.executable,
+            "-m",
+            "yt_dlp",
+            "-f",
+            "bestaudio/best" if is_audio else "best",
+            "-o",
+            f"files/downloads/{self.filename}.%(ext)s",
             "--no-playlist",
-            "--js-runtimes", "deno",
-            "--print", "after_move:filepath",
+            "--js-runtimes",
+            "deno",
+            "--print",
+            "after_move:filepath",
         ]
 
         if cookies := _get_cookies(video):
@@ -108,9 +113,12 @@ class Downloader:
 
         if not is_youtube:
             args += [
-                "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                "--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "--add-header", "Accept-Language:en-US,en;q=0.9",
+                "--add-header",
+                "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "--add-header",
+                "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "--add-header",
+                "Accept-Language:en-US,en;q=0.9",
             ]
 
         if is_audio:
@@ -120,7 +128,8 @@ class Downloader:
         args.append(video)
 
         env = {
-            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin") + ":/home/zil/.deno/bin",
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+            + ":/home/zil/.deno/bin",
             "HOME": os.environ.get("HOME", "/home/zil"),
         }
         proc = await asyncio.create_subprocess_exec(
@@ -145,9 +154,7 @@ class Downloader:
                 if line and not line.startswith("[") and "WARNING" not in line:
                     err = line
                     break
-            raise DownloadError(
-                f"yt-dlp was unable to download this video: {err}"
-            )
+            raise DownloadError(f"yt-dlp was unable to download this video: {err}")
         output_path = stdout.decode().strip()
         if not output_path or not os.path.isfile(output_path):
             raise DownloadError(
@@ -194,10 +201,15 @@ class Downloader:
     async def _has_audio(self, path: str) -> bool:
         """Return True if *path* contains an audio stream (ffprobe)."""
         proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "error",
-            "-select_streams", "a:0",
-            "-show_entries", "stream=codec_type",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
@@ -208,9 +220,13 @@ class Downloader:
     async def _get_duration(self, path: str) -> float:
         """Return duration in seconds from ffprobe, or 0 on failure."""
         proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,

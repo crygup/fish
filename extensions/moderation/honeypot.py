@@ -20,7 +20,9 @@ class HoneypotSetupView(AuthorView):
         self.channel: discord.TextChannel | None = None
 
     @discord.ui.button(label="Use this channel", style=discord.ButtonStyle.blurple)
-    async def use_this(self, interaction: discord.Interaction, _button: discord.ui.Button):
+    async def use_this(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ):
         self.value = True
         self.channel = self.ctx.channel  # type: ignore[assignment]
         self.disable_all()
@@ -28,7 +30,9 @@ class HoneypotSetupView(AuthorView):
         self.stop()
 
     @discord.ui.button(label="Create new channel", style=discord.ButtonStyle.green)
-    async def create_new(self, interaction: discord.Interaction, _button: discord.ui.Button):
+    async def create_new(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ):
         self.value = False
         self.disable_all()
         await interaction.response.edit_message(view=self)
@@ -71,18 +75,24 @@ class Honeypot(Cog):
 
         await self.bot.pool.execute(
             "INSERT INTO honeypot_channels (guild_id, channel_id) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2",
-            ctx.guild.id, channel.id,
+            ctx.guild.id,
+            channel.id,
         )
         self.bot.cached_honeypots.add(channel.id)
 
-        embed = discord.Embed(color=self.bot.embedcolor,)
+        embed = discord.Embed(
+            color=self.bot.embedcolor,
+        )
         embed.add_field(
             name="Watch your step!",
             value="This channel was made to catch people who spam in every channel, if you type here there will be no coming back.",
             inline=False,
         )
         await channel.send(embed=embed)  # type: ignore[union-attr]
-        await ctx.send(f"Honeypot set up in {channel.mention}. We recommend changing the channel name since bots have started to check the names of channels to ignore them.", delete_after=10)
+        await ctx.send(
+            f"Honeypot set up in {channel.mention}. We recommend changing the channel name since bots have started to check the names of channels to ignore them.",
+            delete_after=10,
+        )
 
     @honeypot.command(name="remove")
     @commands.has_guild_permissions(manage_channels=True)

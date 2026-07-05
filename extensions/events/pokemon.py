@@ -87,6 +87,8 @@ class Pokemon(Cog):
 
         if requester:
             for name in found:
-                await self._log_solve(requester.id, name, "auto_solve", message.guild.id)
+                await self._log_solve(
+                    requester.id, name, "auto_solve", message.guild.id
+                )
 
         await message.channel.send("\n".join(found))

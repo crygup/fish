@@ -16,6 +16,7 @@ from core import Cog
 from utils import to_thread
 from utils.converters import LetterboxdConverter
 from utils.regexes import LBD_URL_RE
+
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context
@@ -33,30 +34,36 @@ class Letterboxd(Cog):
     async def letterboxd(self, ctx: Context, username: str):
         converter = LetterboxdConverter()
         username = await converter.convert(ctx, username)
-        if m := LBD_URL_RE.match(username): username = m.group(1)
+        if m := LBD_URL_RE.match(username):
+            username = m.group(1)
         url = f"{self.BASE}/{username}/"
         async with ctx.typing():
             data = await self._scrape_profile(username, url)
-            if not data: return
+            if not data:
+                return
             fav_urls, recent_urls, av, stats, dn, bio, rr, pr = data
             if not fav_urls:
-                await ctx.send(f"**{username}** has no favourites on Letterboxd."); return
+                await ctx.send(f"**{username}** has no favourites on Letterboxd.")
+                return
             fav_imgs = await self._download_posters(ctx.session, fav_urls)
             if not fav_imgs:
-                await ctx.send("Could not load poster images."); return
+                await ctx.send("Could not load poster images.")
+                return
             fav_buf = await self._stitch_row(fav_imgs)
             fav_file = discord.File(fav_buf, filename="favs.png")
             embed = self._make_embed(ctx, dn or username, av, url, stats, bio)
             embed.set_image(url="attachment://favs.png")
-            view = ToggleView(ctx, username, url, dn, av, stats, bio,
-                              fav_file, recent_urls, rr, pr)
+            view = ToggleView(
+                ctx, username, url, dn, av, stats, bio, fav_file, recent_urls, rr, pr
+            )
             await ctx.send(embed=embed, view=view, file=fav_file)
 
     async def _scrape_profile(self, username, url):
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
             context = await browser.new_context()
-            if os.path.isfile(COOKIE_FILE): await self._load_cookies(context, COOKIE_FILE)
+            if os.path.isfile(COOKIE_FILE):
+                await self._load_cookies(context, COOKIE_FILE)
             page = await context.new_page()
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=20000)
@@ -65,14 +72,21 @@ class Letterboxd(Cog):
                     await page.wait_for_function(
                         """() => Array.from(
                             document.querySelectorAll('section#favourites li.griditem img')
-                        ).every(img => !img.src.includes('empty-poster'))""", timeout=15000)
-                except Exception: pass
+                        ).every(img => !img.src.includes('empty-poster'))""",
+                        timeout=15000,
+                    )
+                except Exception:
+                    pass
             except Exception:
                 await browser.close()
-                raise commands.BadArgument(f"Could not load profile for **{username}**.")
+                raise commands.BadArgument(
+                    f"Could not load profile for **{username}**."
+                )
             if await page.query_selector(".error-message"):
                 await browser.close()
-                raise commands.BadArgument(f"No Letterboxd user found for **{username}**.")
+                raise commands.BadArgument(
+                    f"No Letterboxd user found for **{username}**."
+                )
             fav = await self._scrape_posters(page, "section#favourites")
             recent = await self._scrape_posters(page, "section#recent-activity")
             av = await self._scrape_avatar(page)
@@ -85,26 +99,36 @@ class Letterboxd(Cog):
 
     async def _scrape_posters(self, page, selector):
         section = await page.query_selector(selector)
-        if not section: return []
+        if not section:
+            return []
         urls = []
         for li in (await section.query_selector_all("li.griditem"))[:4]:
             img = await li.query_selector("img")
             if img:
                 ss = await img.get_attribute("srcset")
-                if ss: urls.append(ss.split(",")[-1].strip().split()[0]); continue
+                if ss:
+                    urls.append(ss.split(",")[-1].strip().split()[0])
+                    continue
                 s = await img.get_attribute("src") or ""
-                if s and "empty-poster" not in s: urls.append(s); continue
+                if s and "empty-poster" not in s:
+                    urls.append(s)
+                    continue
             rd = await li.query_selector("div.react-component")
             if rd:
                 ident = await rd.get_attribute("data-postered-identifier")
                 sv = await rd.get_attribute("data-item-slug")
-                fid = None; slug = str(sv) if sv else None
+                fid = None
+                slug = str(sv) if sv else None
                 if ident:
                     m = re.search(r'"uid":"film:(\d+)"', str(ident))
-                    if m: fid = m.group(1)
+                    if m:
+                        fid = m.group(1)
                 if fid and slug:
-                    us = re.sub(r"-\d{4}$", "-", slug); d = "/".join(fid)
-                    urls.append(f"https://a.ltrbxd.com/resized/film-poster/{d}/{fid}-{us}-0-300-0-450-crop.jpg")
+                    us = re.sub(r"-\d{4}$", "-", slug)
+                    d = "/".join(fid)
+                    urls.append(
+                        f"https://a.ltrbxd.com/resized/film-poster/{d}/{fid}-{us}-0-300-0-450-crop.jpg"
+                    )
                     continue
             urls.append("")
         return urls
@@ -116,63 +140,97 @@ class Letterboxd(Cog):
     async def _scrape_display_name(self, page):
         el = await page.query_selector(".person-display-name .label")
         if el:
-            try: return (await el.inner_text()).strip()
-            except Exception: return None
+            try:
+                return (await el.inner_text()).strip()
+            except Exception:
+                return None
         return None
 
     async def _scrape_bio(self, page):
         el = await page.query_selector(".bio .js-bio-content p")
         if el:
-            try: return (await el.inner_text()).strip()
-            except Exception: pass
+            try:
+                return (await el.inner_text()).strip()
+            except Exception:
+                pass
         return ""
 
     async def _scrape_stats(self, page):
         r = {}
         for el in await page.query_selector_all(".profile-stats .statistic a"):
-            ve = await el.query_selector(".value"); de = await el.query_selector(".definition")
+            ve = await el.query_selector(".value")
+            de = await el.query_selector(".definition")
             if ve and de:
-                try: r[(await de.inner_text()).strip().lower()] = (await ve.inner_text()).strip()
-                except Exception: pass
+                try:
+                    r[(await de.inner_text()).strip().lower()] = (
+                        await ve.inner_text()
+                    ).strip()
+                except Exception:
+                    pass
         return r
 
     async def _scrape_reviews(self, page):
-        recent = []; popular = []
+        recent = []
+        popular = []
         for sec in await page.query_selector_all("section"):
             h2 = await sec.query_selector("h2")
-            if not h2: continue
-            try: t = ((await h2.inner_text()) or "").lower()
-            except Exception: continue
-            if "recent review" in t: target = recent
-            elif "popular review" in t: target = popular
-            else: continue
+            if not h2:
+                continue
+            try:
+                t = ((await h2.inner_text()) or "").lower()
+            except Exception:
+                continue
+            if "recent review" in t:
+                target = recent
+            elif "popular review" in t:
+                target = popular
+            else:
+                continue
             for art in await sec.query_selector_all("article"):
                 try:
-                    title = ""; fu = ""
+                    title = ""
+                    fu = ""
                     for sel in ("h2 a", ".primaryname a", "a[href*='/film/']"):
                         el = await art.query_selector(sel)
                         if el:
-                            try: title = (await el.inner_text()).strip()
-                            except Exception: pass
+                            try:
+                                title = (await el.inner_text()).strip()
+                            except Exception:
+                                pass
                             h = await el.get_attribute("href")
-                            if h: fu = f"https://letterboxd.com{h}" if h.startswith("/") else h
+                            if h:
+                                fu = (
+                                    f"https://letterboxd.com{h}"
+                                    if h.startswith("/")
+                                    else h
+                                )
                             break
                     rating = ""
                     svg = await art.query_selector("svg[aria-label]")
-                    if svg: rating = (await svg.get_attribute("aria-label") or "").strip()
+                    if svg:
+                        rating = (await svg.get_attribute("aria-label") or "").strip()
                     txt = ""
-                    for be in await art.query_selector_all(".body-text p, .js-review-body p"):
+                    for be in await art.query_selector_all(
+                        ".body-text p, .js-review-body p"
+                    ):
                         try:
                             t2 = (await be.inner_text()).strip()
-                            if t2: txt = t2; break
-                        except Exception: pass
+                            if t2:
+                                txt = t2
+                                break
+                        except Exception:
+                            pass
                     ds = ""
                     te = await art.query_selector("time")
                     if te:
-                        try: ds = (await te.inner_text()).strip()
-                        except Exception: pass
-                    if title: target.append(_RE(title, fu, rating, txt, ds))
-                except Exception: pass
+                        try:
+                            ds = (await te.inner_text()).strip()
+                        except Exception:
+                            pass
+                    if title:
+                        target.append(_RE(title, fu, rating, txt, ds))
+                except Exception:
+                    pass
         return recent, popular
 
     @staticmethod
@@ -181,18 +239,29 @@ class Letterboxd(Cog):
         with open(path) as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith("#"): continue
+                if not line or line.startswith("#"):
+                    continue
                 p = line.split("\t")
                 if len(p) >= 7:
-                    cookies.append(dict(name=p[5], value=p[6], domain=p[0], path=p[2],
-                                        secure=p[3]=="TRUE", httpOnly=False))
-        if cookies: await context.add_cookies(cookies)
+                    cookies.append(
+                        dict(
+                            name=p[5],
+                            value=p[6],
+                            domain=p[0],
+                            path=p[2],
+                            secure=p[3] == "TRUE",
+                            httpOnly=False,
+                        )
+                    )
+        if cookies:
+            await context.add_cookies(cookies)
 
     @staticmethod
     def _make_embed(ctx, dn, av, url, stats, bio=""):
         e = discord.Embed(color=ctx.bot.embedcolor, url=url, description=bio or None)
         e.set_author(name=f"{dn}'s profile", url=url, icon_url=av or LBD_LOGO)
-        _add_stats(e, stats); e.set_footer(text="Letterboxd", icon_url=LBD_LOGO)
+        _add_stats(e, stats)
+        e.set_footer(text="Letterboxd", icon_url=LBD_LOGO)
         return e
 
     @staticmethod
@@ -205,7 +274,8 @@ class Letterboxd(Cog):
             for r in recent:
                 s = f" {r.rating}" if r.rating else ""
                 line = f"[**{r.title}**]({r.film_url}){s}"
-                if r.text: line += f"\n> {r.text[:150]}{'...' if len(r.text)>150 else ''}"
+                if r.text:
+                    line += f"\n> {r.text[:150]}{'...' if len(r.text)>150 else ''}"
                 lines.append(line)
             e.add_field(name="Recent Reviews", value="\n".join(lines), inline=False)
         if popular:
@@ -213,7 +283,8 @@ class Letterboxd(Cog):
             for r in popular:
                 s = f" {r.rating}" if r.rating else ""
                 line = f"[**{r.title}**]({r.film_url}){s}"
-                if r.text: line += f"\n> {r.text[:150]}{'...' if len(r.text)>150 else ''}"
+                if r.text:
+                    line += f"\n> {r.text[:150]}{'...' if len(r.text)>150 else ''}"
                 lines.append(line)
             e.add_field(name="Popular Reviews", value="\n".join(lines), inline=False)
         e.set_footer(text="Letterboxd", icon_url=LBD_LOGO)
@@ -224,106 +295,169 @@ class Letterboxd(Cog):
         images = []
         for u in urls:
             try:
-                async with session.get(u, headers={"Referer": "https://letterboxd.com/"}) as resp:
+                async with session.get(
+                    u, headers={"Referer": "https://letterboxd.com/"}
+                ) as resp:
                     if resp.status == 200:
                         d = await resp.read()
-                        img = Image.open(BytesIO(d)).convert("RGB"); img.load(); images.append(img)
-            except Exception: pass
+                        img = Image.open(BytesIO(d)).convert("RGB")
+                        img.load()
+                        images.append(img)
+            except Exception:
+                pass
         return images
 
     @staticmethod
     @to_thread
     def _stitch_row(images):
-        h = POSTER_HEIGHT; resized = []; tw = 0
+        h = POSTER_HEIGHT
+        resized = []
+        tw = 0
         for img in images:
-            r = h / img.height; w = int(img.width * r)
-            resized.append(img.resize((w, h), Image.Resampling.LANCZOS)); tw += w
-        c = Image.new("RGB", (tw, h), (255, 255, 255)); x = 0
-        for img in resized: c.paste(img, (x, 0)); x += img.width
-        b = BytesIO(); c.save(b, format="PNG"); b.seek(0); return b
+            r = h / img.height
+            w = int(img.width * r)
+            resized.append(img.resize((w, h), Image.Resampling.LANCZOS))
+            tw += w
+        c = Image.new("RGB", (tw, h), (255, 255, 255))
+        x = 0
+        for img in resized:
+            c.paste(img, (x, 0))
+            x += img.width
+        b = BytesIO()
+        c.save(b, format="PNG")
+        b.seek(0)
+        return b
 
 
 class _RE:
     __slots__ = ("title", "film_url", "rating", "text", "date")
+
     def __init__(self, t, fu, r, tx, d):
-        self.title=t; self.film_url=fu; self.rating=r; self.text=tx; self.date=d
+        self.title = t
+        self.film_url = fu
+        self.rating = r
+        self.text = tx
+        self.date = d
 
 
 def _add_stats(embed, stats):
     p = []
-    if "films" in stats: p.append(f"**{stats['films']}** total")
-    if "this year" in stats: p.append(f"**{stats['this year']}** this year")
-    if p: embed.add_field(name="Films", value="\n".join(p), inline=True)
+    if "films" in stats:
+        p.append(f"**{stats['films']}** total")
+    if "this year" in stats:
+        p.append(f"**{stats['this year']}** this year")
+    if p:
+        embed.add_field(name="Films", value="\n".join(p), inline=True)
     p = []
-    if "followers" in stats: p.append(f"**{stats['followers']}** Followers")
-    if "following" in stats: p.append(f"**{stats['following']}** Following")
-    if p: embed.add_field(name="Network", value="\n".join(p), inline=True)
+    if "followers" in stats:
+        p.append(f"**{stats['followers']}** Followers")
+    if "following" in stats:
+        p.append(f"**{stats['following']}** Following")
+    if p:
+        embed.add_field(name="Network", value="\n".join(p), inline=True)
 
 
 class ToggleView(discord.ui.View):
     message: discord.Message
-    def __init__(self, ctx, username, url, dn, av, stats, bio, fav_file, recent_urls, rr, pr):
+
+    def __init__(
+        self, ctx, username, url, dn, av, stats, bio, fav_file, recent_urls, rr, pr
+    ):
         super().__init__(timeout=600)
-        self.ctx=ctx; self.username=username; self.url=url
-        self.dn=dn; self.av=av; self.stats=stats; self.bio=bio; self.recent_urls=recent_urls
-        self._files={"favs": fav_file}
+        self.ctx = ctx
+        self.username = username
+        self.url = url
+        self.dn = dn
+        self.av = av
+        self.stats = stats
+        self.bio = bio
+        self.recent_urls = recent_urls
+        self._files = {"favs": fav_file}
         name = dn or username
         base = self._base_embed(name)
         self._fav_embed = base.copy().set_image(url="attachment://favs.png")
         self._recent_embed = None
-        self._reviews_embed = Letterboxd._make_reviews_embed(ctx, name, av, url, stats, bio, rr, pr)
-        if not rr and not pr: self.reviews_btn.disabled = True
+        self._reviews_embed = Letterboxd._make_reviews_embed(
+            ctx, name, av, url, stats, bio, rr, pr
+        )
+        if not rr and not pr:
+            self.reviews_btn.disabled = True
         self._update_buttons("favs")
 
     def _base_embed(self, name):
-        return Letterboxd._make_embed(self.ctx, name, self.av, self.url, self.stats, self.bio)
+        return Letterboxd._make_embed(
+            self.ctx, name, self.av, self.url, self.stats, self.bio
+        )
 
     def _update_buttons(self, active):
-        self.favs_btn.disabled = (active == "favs")
-        self.recent_btn.disabled = (active == "recent")
-        self.reviews_btn.disabled = (active == "reviews")
+        self.favs_btn.disabled = active == "favs"
+        self.recent_btn.disabled = active == "recent"
+        self.reviews_btn.disabled = active == "reviews"
 
     async def _load_recent(self, interaction):
-        if self._recent_embed: return True
+        if self._recent_embed:
+            return True
         if not self.recent_urls:
-            await interaction.followup.send("No recent activity.", ephemeral=True); return False
-        imgs = await Letterboxd._download_posters(self.ctx.bot.session, self.recent_urls)
+            await interaction.followup.send("No recent activity.", ephemeral=True)
+            return False
+        imgs = await Letterboxd._download_posters(
+            self.ctx.bot.session, self.recent_urls
+        )
         if not imgs:
-            await interaction.followup.send("Could not load recent posters.", ephemeral=True); return False
+            await interaction.followup.send(
+                "Could not load recent posters.", ephemeral=True
+            )
+            return False
         buf = await Letterboxd._stitch_row(imgs)
         self._files["recent"] = discord.File(buf, filename="recent.png")
-        self._recent_embed = self._base_embed(self.dn or self.username
-            ).copy().set_image(url="attachment://recent.png")
+        self._recent_embed = (
+            self._base_embed(self.dn or self.username)
+            .copy()
+            .set_image(url="attachment://recent.png")
+        )
         return True
 
     @discord.ui.button(label="Favorites", style=discord.ButtonStyle.blurple, row=0)
     async def favs_btn(self, interaction, button):
         await interaction.response.defer()
         f = self._files["favs"]
-        if hasattr(f.fp, "seek"): f.fp.seek(0)
+        if hasattr(f.fp, "seek"):
+            f.fp.seek(0)
         self._update_buttons("favs")
-        await interaction.edit_original_response(embed=self._fav_embed, view=self, attachments=[f])
+        await interaction.edit_original_response(
+            embed=self._fav_embed, view=self, attachments=[f]
+        )
 
     @discord.ui.button(label="Recent", style=discord.ButtonStyle.blurple, row=0)
     async def recent_btn(self, interaction, button):
         await interaction.response.defer()
-        if not await self._load_recent(interaction): return
+        if not await self._load_recent(interaction):
+            return
         f = self._files["recent"]
-        if hasattr(f.fp, "seek"): f.fp.seek(0)
+        if hasattr(f.fp, "seek"):
+            f.fp.seek(0)
         self._update_buttons("recent")
-        await interaction.edit_original_response(embed=self._recent_embed, view=self, attachments=[f])
+        await interaction.edit_original_response(
+            embed=self._recent_embed, view=self, attachments=[f]
+        )
 
     @discord.ui.button(label="Reviews", style=discord.ButtonStyle.green, row=0)
     async def reviews_btn(self, interaction, button):
         await interaction.response.defer()
         self._update_buttons("reviews")
-        await interaction.edit_original_response(embed=self._reviews_embed, view=self, attachments=[])
+        await interaction.edit_original_response(
+            embed=self._reviews_embed, view=self, attachments=[]
+        )
 
     async def on_timeout(self):
         for c in self.children:
-            if isinstance(c, discord.ui.Button): c.disabled = True
-        try: await self.message.edit(view=self)
-        except Exception: pass
+            if isinstance(c, discord.ui.Button):
+                c.disabled = True
+        try:
+            await self.message.edit(view=self)
+        except Exception:
+            pass
 
 
-async def setup(bot: Fishie): await bot.add_cog(Letterboxd())
+async def setup(bot: Fishie):
+    await bot.add_cog(Letterboxd())

@@ -51,11 +51,20 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats, Letter
 
     emoji = discord.PartialEmoji(name="\U0001f6e0")
 
-    async def self_send_asset(self, ctx: Context, url: str, extra: dict, *, cached_at: Optional[datetime.datetime] = None) -> None:
+    async def self_send_asset(
+        self,
+        ctx: Context,
+        url: str,
+        extra: dict,
+        *,
+        cached_at: Optional[datetime.datetime] = None,
+    ) -> None:
         image = await to_image(self.bot.session, url)
         file = discord.File(image, filename=f"{extra.get('name', 'template')[:32]}.png")
 
-        e = discord.Embed(title=str(extra.get("name", "Unknown")).title(), color=self.bot.embedcolor)
+        e = discord.Embed(
+            title=str(extra.get("name", "Unknown")).title(), color=self.bot.embedcolor
+        )
         e.set_image(url=f"attachment://{file.filename}")
 
         creator_name = extra.get("creator", "Unknown")
@@ -268,7 +277,9 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats, Letter
             return
 
         for name in found:
-            await events._log_solve(ctx.author.id, name, "command", ctx.guild.id if ctx.guild else None)
+            await events._log_solve(
+                ctx.author.id, name, "command", ctx.guild.id if ctx.guild else None
+            )
 
         await ctx.send("\n".join(found))
 
@@ -293,23 +304,39 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats, Letter
 
             cached = self.bot.cached_roblox_templates.get(aid)
             if cached and len(cached) == 3:
-                await self.self_send_asset(ctx, cached[0], cached[1], cached_at=cached[2])
+                await self.self_send_asset(
+                    ctx, cached[0], cached[1], cached_at=cached[2]
+                )
                 return
             elif cached:
                 del self.bot.cached_roblox_templates[aid]
 
             row = await self.bot.pool.fetchrow(
-                "SELECT image_url, extra, cached_at FROM roblox_templates WHERE asset_id = $1", aid
+                "SELECT image_url, extra, cached_at FROM roblox_templates WHERE asset_id = $1",
+                aid,
             )
             if row:
-                extra = json.loads(row["extra"]) if isinstance(row["extra"], str) else (row["extra"] or {})
+                extra = (
+                    json.loads(row["extra"])
+                    if isinstance(row["extra"], str)
+                    else (row["extra"] or {})
+                )
                 extra.setdefault("name", "Unknown")
-                self.bot.cached_roblox_templates[aid] = (row["image_url"], extra, row["cached_at"])
-                await self.self_send_asset(ctx, row["image_url"], extra, cached_at=row["cached_at"])
+                self.bot.cached_roblox_templates[aid] = (
+                    row["image_url"],
+                    extra,
+                    row["cached_at"],
+                )
+                await self.self_send_asset(
+                    ctx, row["image_url"], extra, cached_at=row["cached_at"]
+                )
                 return
 
             proc = await asyncio.create_subprocess_exec(
-                "curl", "-s", "--max-time", "10",
+                "curl",
+                "-s",
+                "--max-time",
+                "10",
                 f"https://economy.roblox.com/v2/assets/{aid}/details",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -345,7 +372,12 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats, Letter
             cookie = self.bot.config["keys"].get("roblox", "")
             cookie_header = f"Cookie: .ROBLOSECURITY={cookie}" if cookie else ""
             curl_args = [
-                "curl", "-s", "--compressed", "--max-time", "10", "-L",
+                "curl",
+                "-s",
+                "--compressed",
+                "--max-time",
+                "10",
+                "-L",
                 f"https://assetdelivery.roblox.com/v1/asset?id={aid}",
             ]
             if cookie_header:
@@ -391,7 +423,10 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats, Letter
             texture_id = texture_match.group(1)
 
             proc = await asyncio.create_subprocess_exec(
-                "curl", "-s", "--max-time", "10",
+                "curl",
+                "-s",
+                "--max-time",
+                "10",
                 f"https://thumbnails.roblox.com/v1/assets?assetIds={texture_id}&size=420x420&format=Png",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -408,7 +443,10 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats, Letter
 
             await self.bot.pool.execute(
                 "INSERT INTO roblox_templates (asset_id, image_url, item_name, extra) VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (asset_id) DO UPDATE SET image_url = $2, item_name = $3, extra = $4::jsonb, cached_at = now() at time zone 'utc'",
-                aid, image_url, extra["name"], json.dumps(extra),
+                aid,
+                image_url,
+                extra["name"],
+                json.dumps(extra),
             )
             now = datetime.datetime.now(datetime.timezone.utc)
             self.bot.cached_roblox_templates[aid] = (image_url, extra, now)

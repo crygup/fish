@@ -363,12 +363,7 @@ class Commands(Cog):
             await pager.start(ctx)
 
     @commands.command(name="uptime")
-    async def uptime(
-        self,
-        ctx: GuildContext,
-        *,
-        user: Optional[discord.User] = None
-    ):
+    async def uptime(self, ctx: GuildContext, *, user: Optional[discord.User] = None):
         """Shows how long the bot has been online, or a user's last seen status"""
         if user is None:
             if self.bot.user:

@@ -100,7 +100,9 @@ class Fishie(commands.Bot):
         ]
         self.spotify_key: Optional[str] = None
         self.cached_covers: Dict[str, Tuple[str, bool]] = {}
-        self.cached_roblox_templates: dict[int, tuple[str, dict, datetime.datetime]] = {}
+        self.cached_roblox_templates: dict[int, tuple[str, dict, datetime.datetime]] = (
+            {}
+        )
         self.cached_mudae_consent: set[int] = set()
         self.cached_honeypots: set[int] = set()
         self.testing: bool = testing
@@ -367,20 +369,32 @@ class Fishie(commands.Bot):
             self.db_cache.add_account(user_id=user_id, last_fm=last_fm)
             self.logger.info(f'Added last.fm account "{last_fm}" to user "{user_id}"')
 
-        roblox_templates = await self.pool.fetch("SELECT asset_id, image_url, extra FROM roblox_templates")
+        roblox_templates = await self.pool.fetch(
+            "SELECT asset_id, image_url, extra FROM roblox_templates"
+        )
         for row in roblox_templates:
-            extra = json.loads(row["extra"]) if isinstance(row["extra"], str) else (row["extra"] or {})
-            self.cached_roblox_templates[row["asset_id"]] = (row["image_url"], extra, datetime.datetime.now(datetime.timezone.utc))
-            self.logger.info(
-                f'Cached Roblox template for asset {row["asset_id"]}'
+            extra = (
+                json.loads(row["extra"])
+                if isinstance(row["extra"], str)
+                else (row["extra"] or {})
             )
+            self.cached_roblox_templates[row["asset_id"]] = (
+                row["image_url"],
+                extra,
+                datetime.datetime.now(datetime.timezone.utc),
+            )
+            self.logger.info(f'Cached Roblox template for asset {row["asset_id"]}')
 
-        consent_rows = await self.pool.fetch("SELECT user_id FROM mudae_dm_consent WHERE consented = TRUE")
+        consent_rows = await self.pool.fetch(
+            "SELECT user_id FROM mudae_dm_consent WHERE consented = TRUE"
+        )
         for row in consent_rows:
             self.cached_mudae_consent.add(row["user_id"])
         self.logger.info(f"Cached {len(self.cached_mudae_consent)} Mudae DM consent(s)")
 
-        honeypot_rows = await self.pool.fetch("SELECT channel_id FROM honeypot_channels")
+        honeypot_rows = await self.pool.fetch(
+            "SELECT channel_id FROM honeypot_channels"
+        )
         for row in honeypot_rows:
             self.cached_honeypots.add(row["channel_id"])
         self.logger.info(f"Cached {len(self.cached_honeypots)} honeypot channel(s)")

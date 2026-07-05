@@ -11,8 +11,10 @@ from utils import AuthorView, FieldPageSource, Pager, get_or_fetch_user
 if TYPE_CHECKING:
     from extensions.context import GuildContext
 
+
 def to_lower(argument: str):
     return argument.lower()
+
 
 class Dropdown(discord.ui.ChannelSelect):
     def __init__(self, ctx: GuildContext):

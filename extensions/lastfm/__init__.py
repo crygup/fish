@@ -41,7 +41,9 @@ class Lastfm(Top, Charts):
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @lastfm_command()
-    async def justfmmealreadybruh(self, ctx: Context, user: discord.User = commands.Author):
+    async def justfmmealreadybruh(
+        self, ctx: Context, user: discord.User = commands.Author
+    ):
         """Get your currently playing or most recently listened to song from last.fm"""
         async with ctx.typing():
             try:
@@ -124,6 +126,7 @@ class Lastfm(Top, Charts):
             embed.title = f'{lt["name"]}{loved}'
 
             await ctx.send(embed=embed, files=files)
+
 
 async def setup(bot: Fishie):
     await bot.add_cog(Lastfm(bot))

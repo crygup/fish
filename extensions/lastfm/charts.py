@@ -18,7 +18,7 @@ from utils import (
     to_image,
     format_bytes,
     AuthorView,
-    response_checker
+    response_checker,
 )
 
 if TYPE_CHECKING:
@@ -61,6 +61,7 @@ class ChartEmbed(ui.LayoutView):
         )
         self.add_item(self.container)
 
+
 async def chart_cmd(
     ctx: Context,
     user: discord.User,
@@ -76,7 +77,15 @@ async def chart_cmd(
     except KeyError:
         raise commands.BadArgument("This user has not connected their last.fm account")
 
-    file = await make_image(ctx, lfm_user, mode, count, time_period=time_period, xbound=xbound, ybound=ybound)
+    file = await make_image(
+        ctx,
+        lfm_user,
+        mode,
+        count,
+        time_period=time_period,
+        xbound=xbound,
+        ybound=ybound,
+    )
 
     data = {"method": "user.getrecenttracks", "user": lfm_user}
     response = await ctx.bot.lfm_get(data)
@@ -118,7 +127,9 @@ async def search_spotify(
             raise commands.BadArgument(f"No Spotify results found for `{query}`.")
         images = items[0].get("images", [])
         if not images:
-            raise commands.BadArgument(f"No cover image found on Spotify for `{query}`.")
+            raise commands.BadArgument(
+                f"No cover image found on Spotify for `{query}`."
+            )
         return images[0]["url"]
 
 
@@ -163,7 +174,10 @@ async def make_image(
         bios.append(f"#{i + 1} {name}")
 
     if spotify_tasks:
-        async def _resolve_spotify(idx: int, s_mode: str, query: str) -> tuple[int, str]:
+
+        async def _resolve_spotify(
+            idx: int, s_mode: str, query: str
+        ) -> tuple[int, str]:
             try:
                 return idx, await search_spotify(ctx, s_mode, query)
             except Exception:
@@ -181,6 +195,7 @@ async def make_image(
             return await to_image(ctx.session, url, bytes=True)  # type: ignore[return-value]
         except Exception:
             return b""
+
     images = list(await asyncio.gather(*(_fetch_image(u) for u in image_urls)))
     fp = await format_bytes(
         filesize_limit=ctx.guild.filesize_limit if ctx.guild else 10485760,
@@ -191,6 +206,7 @@ async def make_image(
     file = discord.File(fp, "chart.png", description=" ".join(bios)[:1024])
 
     return file
+
 
 def _parse_format(raw: str) -> tuple[int, int, int]:
     """Parse a WxH format string like '6x4'. Returns (width, height, total).
@@ -220,7 +236,15 @@ class Charts(Cog):
 
         async with ctx.typing():
             xb, yb, n = _parse_format(size)
-            await chart_cmd(ctx, user, "gettopalbums", count=n, time_period=time_period, xbound=xb, ybound=yb)
+            await chart_cmd(
+                ctx,
+                user,
+                "gettopalbums",
+                count=n,
+                time_period=time_period,
+                xbound=xb,
+                ybound=yb,
+            )
 
     @chart.command(name="artists", aliases=("artist", "a"))
     @app_commands.allowed_installs(guilds=True, users=True)
@@ -238,7 +262,15 @@ class Charts(Cog):
 
         async with ctx.typing():
             xb, yb, n = _parse_format(size)
-            await chart_cmd(ctx, user, "gettopartists", count=n, time_period=time_period, xbound=xb, ybound=yb)
+            await chart_cmd(
+                ctx,
+                user,
+                "gettopartists",
+                count=n,
+                time_period=time_period,
+                xbound=xb,
+                ybound=yb,
+            )
 
     @chart.command(name="tracks", aliases=("track", "t"))
     @app_commands.allowed_installs(guilds=True, users=True)
@@ -256,4 +288,12 @@ class Charts(Cog):
 
         async with ctx.typing():
             xb, yb, n = _parse_format(size)
-            await chart_cmd(ctx, user, "gettoptracks", count=n, time_period=time_period, xbound=xb, ybound=yb)
+            await chart_cmd(
+                ctx,
+                user,
+                "gettoptracks",
+                count=n,
+                time_period=time_period,
+                xbound=xb,
+                ybound=yb,
+            )

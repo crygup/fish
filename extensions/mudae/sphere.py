@@ -72,11 +72,21 @@ def _possible_red_positions(revealed: dict[int, str]) -> Set[int]:
         elif color == "yellow":
             candidates &= {p for p in candidates if _same_diag(p, pos)}
         elif color == "green":
-            candidates &= {p for p in candidates if _same_row(p, pos) or _same_col(p, pos)}
+            candidates &= {
+                p for p in candidates if _same_row(p, pos) or _same_col(p, pos)
+            }
         elif color == "teal":
-            candidates &= {p for p in candidates if _same_row(p, pos) or _same_col(p, pos) or _same_diag(p, pos)}
+            candidates &= {
+                p
+                for p in candidates
+                if _same_row(p, pos) or _same_col(p, pos) or _same_diag(p, pos)
+            }
         elif color == "blue":
-            candidates -= {p for p in candidates if _same_row(p, pos) or _same_col(p, pos) or _same_diag(p, pos)}
+            candidates -= {
+                p
+                for p in candidates
+                if _same_row(p, pos) or _same_col(p, pos) or _same_diag(p, pos)
+            }
 
     # Remove already-revealed positions
     candidates -= set(revealed)
@@ -91,7 +101,9 @@ def _best_next_click(revealed: dict[int, str]) -> Optional[int]:
     for color, count in max_counts.items():
         remaining[color] = count - sum(1 for c in revealed.values() if c == color)
 
-    unrevealed = [p for p in range(GRID_SIZE * GRID_SIZE) if p not in revealed and p != CENTER]
+    unrevealed = [
+        p for p in range(GRID_SIZE * GRID_SIZE) if p not in revealed and p != CENTER
+    ]
     if not unrevealed:
         return None
 
@@ -119,6 +131,8 @@ def _best_next_click(revealed: dict[int, str]) -> Optional[int]:
         return max(unrevealed, key=_score)
 
     # Red not yet found — original minimax logic
+    if not revealed:
+        return 16  # optimal starting move: row 4, column 2
     candidates = _possible_red_positions(revealed)
     if not candidates:
         return None
@@ -157,7 +171,9 @@ class SphereView(discord.ui.View):
 
     message: Optional[discord.Message]
 
-    def __init__(self, ctx: Context, revealed: dict[int, str], recommendation: Optional[int]):
+    def __init__(
+        self, ctx: Context, revealed: dict[int, str], recommendation: Optional[int]
+    ):
         super().__init__(timeout=120)
         self.ctx = ctx
         self.revealed = revealed
@@ -178,8 +194,12 @@ class SphereView(discord.ui.View):
     def _build(self) -> None:
         self.clear_items()
         emoji_map = {
-            "red": sp, "orange": spO, "yellow": spY,
-            "green": spG, "teal": spT, "blue": spB,
+            "red": sp,
+            "orange": spO,
+            "yellow": spY,
+            "green": spG,
+            "teal": spT,
+            "blue": spB,
         }
         hidden = spU
         for idx in range(GRID_SIZE * GRID_SIZE):
@@ -234,7 +254,9 @@ class SphereCog(Cog):
                 idx += 1
         return revealed if found_any else None
 
-    def _parse_sphere_message(self, message: discord.Message) -> Optional[dict[int, str]]:
+    def _parse_sphere_message(
+        self, message: discord.Message
+    ) -> Optional[dict[int, str]]:
         """Parse a Mudae sphere chest message from its discord.Message components."""
         revealed: dict[int, str] = {}
         idx = 0
@@ -275,11 +297,15 @@ class SphereCog(Cog):
 
         revealed = self._parse_sphere_message(mudae_msg)
         if revealed is None:
-            raise commands.BadArgument("Could not parse the sphere chest grid from the message.")
+            raise commands.BadArgument(
+                "Could not parse the sphere chest grid from the message."
+            )
 
         await self._show_sphere(ctx, revealed, mudae_msg)
 
-    async def _show_sphere(self, ctx: Context, revealed: dict[int, str], mudae_msg: discord.Message):
+    async def _show_sphere(
+        self, ctx: Context, revealed: dict[int, str], mudae_msg: discord.Message
+    ):
 
         recommendation = _best_next_click(revealed)
         view = SphereView(ctx, revealed, recommendation)
@@ -329,21 +355,39 @@ class SphereCog(Cog):
         red_pos = random.choice(candidates)
         layout: dict[int, str] = {red_pos: "red"}
 
-        orange_candidates = [i for i in range(GRID_SIZE * GRID_SIZE) if i not in layout and _adjacent(i, red_pos)]
+        orange_candidates = [
+            i
+            for i in range(GRID_SIZE * GRID_SIZE)
+            if i not in layout and _adjacent(i, red_pos)
+        ]
         for pos in random.sample(orange_candidates, min(2, len(orange_candidates))):
             layout[pos] = "orange"
 
-        yellow_candidates = [i for i in range(GRID_SIZE * GRID_SIZE) if i not in layout and _same_diag(i, red_pos) and not _adjacent(i, red_pos)]
+        yellow_candidates = [
+            i
+            for i in range(GRID_SIZE * GRID_SIZE)
+            if i not in layout and _same_diag(i, red_pos) and not _adjacent(i, red_pos)
+        ]
         for pos in random.sample(yellow_candidates, min(3, len(yellow_candidates))):
             layout[pos] = "yellow"
 
-        green_candidates = [i for i in range(GRID_SIZE * GRID_SIZE) if i not in layout and (_same_row(i, red_pos) or _same_col(i, red_pos)) and not _same_diag(i, red_pos)]
+        green_candidates = [
+            i
+            for i in range(GRID_SIZE * GRID_SIZE)
+            if i not in layout
+            and (_same_row(i, red_pos) or _same_col(i, red_pos))
+            and not _same_diag(i, red_pos)
+        ]
         for pos in random.sample(green_candidates, min(4, len(green_candidates))):
             layout[pos] = "green"
 
         for i in range(GRID_SIZE * GRID_SIZE):
             if i not in layout:
-                if _same_row(i, red_pos) or _same_col(i, red_pos) or _same_diag(i, red_pos):
+                if (
+                    _same_row(i, red_pos)
+                    or _same_col(i, red_pos)
+                    or _same_diag(i, red_pos)
+                ):
                     layout[i] = "teal"
                 else:
                     layout[i] = "blue"
@@ -360,8 +404,12 @@ class SimSphereView(discord.ui.View):
         self.revealed: dict[int, str] = {}
         self.clicks = 0
         self._emoji_map = {
-            "red": sp, "orange": spO, "yellow": spY,
-            "green": spG, "teal": spT, "blue": spB,
+            "red": sp,
+            "orange": spO,
+            "yellow": spY,
+            "green": spG,
+            "teal": spT,
+            "blue": spB,
         }
         self._hidden = spU
         self._build()
@@ -397,4 +445,5 @@ class SimSphereView(discord.ui.View):
             self.clicks += 1
             self._build()
             await interaction.response.edit_message(view=self)
+
         return callback
