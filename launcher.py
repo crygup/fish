@@ -13,6 +13,8 @@ from utils import Config, base_header, create_pool, identify_mobile
 gateway.DiscordWebSocket.identify = identify_mobile
 
 
+import uvicorn
+from api import app as api_app, init as api_init
 async def start(testing: bool):
     logger = logging.getLogger("fishie")
     logger.setLevel(logging.INFO)
@@ -60,6 +62,11 @@ async def start(testing: bool):
             config=config, logger=logger, pool=pool, session=session, testing=testing
         ) as bot,
     ):
+        api_init(bot)
+        api_cfg = uvicorn.Config(api_app, host="127.0.0.1", port=8001, log_level="warning")
+        api_server = uvicorn.Server(api_cfg)
+        api_task = asyncio.create_task(api_server.serve())
+        logger.info("Fishie API running on http://127.0.0.1:8001")
         await bot.start(
             config["tokens"]["testing_bot"] if testing else config["tokens"]["bot"]
         )

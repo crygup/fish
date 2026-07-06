@@ -57,8 +57,11 @@ class Ids(TypedDict):
 
 class Keys(TypedDict):
     fishie_api: str
+    client_secret: str
     lastfm: str
     lastfm_secret: str
+    lastfm_cb: str
+    lastfm_cb_secret: str
     google: List[str]
     google_id: str
     spotify_id: str
@@ -66,7 +69,6 @@ class Keys(TypedDict):
     dagpi: str
     roblox: str
     steam: str
-
 
 class ConfigTokens(TypedDict):
     bot: str

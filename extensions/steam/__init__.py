@@ -295,8 +295,6 @@ class Steam(Cog):
             embed.add_field(name="Friends", value=f"{friends:,}", inline=True)
         if data.get("gameextrainfo"):
             embed.add_field(name="Playing", value=data["gameextrainfo"], inline=True)
-        if loc := data.get("loccountrycode"):
-            embed.add_field(name="Country", value=loc, inline=True)
         if lo := data.get("lastlogoff"):
             label = "Online since" if state != 0 else "Last Online"
             embed.add_field(name=label, value=f"<t:{lo}:R>", inline=True)
