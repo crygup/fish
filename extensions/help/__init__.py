@@ -165,6 +165,14 @@ class HelpCommand(commands.HelpCommand):
                 return await self.send_cog_help(cog)
 
 
+TRUNC = 100
+
+
+def _t(s: str) -> str:
+    """Truncate to Discord's 100-char limit for SelectOption fields."""
+    return s[:TRUNC]
+
+
 class CogHelpDropdown(discord.ui.Select):
     view: CogHelpView
 
@@ -180,9 +188,9 @@ class CogHelpDropdown(discord.ui.Select):
 
             options.append(
                 discord.SelectOption(
-                    label=cog.qualified_name,
+                    label=_t(cog.qualified_name),
                     emoji=cog.emoji,
-                    description=(cog.description or "").split("\n")[0],
+                    description=_t((cog.description or "").split("\n")[0]),
                 )
             )
 
@@ -240,11 +248,11 @@ class CommandHelpDropdown(discord.ui.Select):
         for cmd in cmds:
             if cmd.hidden:
                 continue
-            desc = (cmd.help or cmd.description or "").split("\n")[0]
+            desc = _t((cmd.help or cmd.description or "").split("\n")[0])
             options.append(
                 discord.SelectOption(
-                    label=cmd.name.capitalize(),
-                    value=cmd.name.lower(),
+                    label=_t(cmd.name.capitalize()),
+                    value=_t(cmd.name.lower()),
                     description=desc,
                 )
             )
@@ -273,19 +281,19 @@ class CommandHelpDropdown(discord.ui.Select):
 
         if not interaction.message:
             raise commands.BadArgument("Somehow no message was found.")
-        view = None
-        if isinstance(self.view, CogHelpView):
+        view_ref = self.view
+        if isinstance(view_ref, CogHelpView):
             if isinstance(command, commands.Group):
                 try:
                     raw = list(command.commands)
                 except Exception:
                     raw = []
                 subcmds = [c for c in raw if not c.hidden]
-                if subcmds:
-                    if len(self.view.children) > 1:
-                        self.view.remove_item(self.view.children[-1])
-                    self.view.add_item(CommandHelpDropdown(ctx, subcmds))
-            await interaction.message.edit(embed=embed, view=self.view)
+                if subcmds and view_ref is not None:
+                    if len(view_ref.children) > 1:
+                        view_ref.remove_item(view_ref.children[-1])
+                    view_ref.add_item(CommandHelpDropdown(ctx, subcmds))
+            await interaction.message.edit(embed=embed, view=view_ref)
             return
 
         if isinstance(command, commands.Group):
@@ -296,9 +304,9 @@ class CommandHelpDropdown(discord.ui.Select):
             subcmds = [c for c in raw if not c.hidden]
             if subcmds and command.cog:
                 all_cogs = [c for _, c in ctx.bot.cogs.items() if c]
-                view = CogHelpView(ctx, all_cogs)
-                view.add_item(CommandHelpDropdown(ctx, subcmds))
-        await interaction.message.edit(embed=embed, view=view)
+                view_ref = CogHelpView(ctx, all_cogs)
+                view_ref.add_item(CommandHelpDropdown(ctx, subcmds))
+        await interaction.message.edit(embed=embed, view=view_ref)
 
 
 class CommandHelpView(AuthorView):

@@ -16,6 +16,7 @@ from typing import (
 
 import asyncpg
 import discord
+from discord import app_commands
 from discord.ext import commands
 from discord.interactions import Interaction
 
@@ -660,7 +661,9 @@ class Info(Cog):
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx, e=hidden)
 
-    @commands.command(name="userinfo", aliases=("ui", "user"))
+    @commands.hybrid_command(name="userinfo", aliases=("ui", "user"))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def userinfo(
         self,
         ctx: Context,
@@ -800,6 +803,8 @@ class Info(Cog):
     @commands.hybrid_group(
         name="avatar", aliases=("pfp", "av", "avy", "avi"), fallback="get"
     )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def avatar(
         self,
         ctx: Context,
@@ -826,6 +831,8 @@ class Info(Cog):
         await ctx.send(embed=embed, view=AvatarView(ctx, user, embed, fuser))
 
     @avatar.command(name="history", aliases=("h",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def avatar_history(
         self,
         ctx: Context,
@@ -840,7 +847,9 @@ class Info(Cog):
 
         await logging.avatars_func(ctx, user)
 
-    @commands.command(name="banner")
+    @commands.hybrid_command(name="banner")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def user_banner(
         self,
         ctx: Context,
@@ -1009,6 +1018,8 @@ class Info(Cog):
         await self.server_splash(ctx, guild)
 
     @commands.hybrid_command(name="reviews")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def reviews(
         self, ctx: Context, user: discord.User = commands.Author, hidden: bool = False
     ):

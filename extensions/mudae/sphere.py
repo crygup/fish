@@ -4,6 +4,7 @@ import asyncio
 from typing import TYPE_CHECKING, List, Optional, Set, Tuple
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
@@ -275,7 +276,9 @@ class SphereCog(Cog):
                 idx += 1
         return revealed if found_any else None
 
-    @commands.command(name="sphere")
+    @commands.hybrid_command(name="sphere")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def sphere(self, ctx: Context):
         """Show the best next move for a Mudae sphere chest game."""
         if not self.bot.user:

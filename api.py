@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import aiohttp
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 if TYPE_CHECKING:
@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 app = FastAPI(title="Fishie API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "DELETE", "OPTIONS"], allow_headers=["*"])
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "DELETE"])
 
 bot_ref: "Fishie | None" = None
 TABLE_MAP = {
@@ -23,8 +22,10 @@ TABLE_MAP = {
     "display_name_logs": "display_name_logs",
     "discrim_logs": "discrim_logs",
     "nickname_logs": "nickname_logs",
+    "guild_icons": "guild_icons",
+    "guild_name_logs": "guild_name_logs",
 }
-
+GUILD_TABLES = {"guild_icons", "guild_name_logs"}
 
 
 def init(bot: "Fishie") -> None:
@@ -43,6 +44,192 @@ async def _check_opted_out(user_id: int) -> bool:
     pool = _check_pool()
     r = await pool.fetchval("SELECT 1 FROM opted_out WHERE user_id = $1 AND cardinality(items) > 0", user_id)
     return r is not None
+
+VALID_OPTOUTS = {"avatar", "username", "display", "nickname", "discrim", "joins"}
+
+
+@app.get("/user/{user_id}/opted-out")
+async def get_opted_out(user_id: int):
+    """Get the list of tracking methods this user has opted out of."""
+    pool = _check_pool()
+    row = await pool.fetchrow("SELECT items FROM opted_out WHERE user_id = $1", user_id)
+    items = row["items"] if row else []
+    return {"items": items}
+
+
+@app.post("/user/{user_id}/opted-out")
+async def set_opted_out(user_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+    """Set the opted-out tracking methods. Requires OAuth bearer token."""
+    import aiohttp
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Missing access token")
+    token = authorization[7:]
+    async with aiohttp.ClientSession() as session:
+        headers = {"Authorization": f"Bearer {token}"}
+        async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
+            if resp.status != 200:
+                raise HTTPException(401, "Invalid access token")
+            me = await resp.json()
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "You can only manage your own settings")
+
+    items = [i for i in payload.get("items", []) if i in VALID_OPTOUTS]
+    pool = _check_pool()
+    await pool.execute(
+        "INSERT INTO opted_out (user_id, items) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET items = $2",
+        user_id, items,
+    )
+
+    if bot_ref:
+        if items:
+            bot_ref.db_cache.opted_out[user_id] = items
+        else:
+            bot_ref.db_cache.opted_out.pop(user_id, None)
+
+    return {"items": items}
+
+
+async def _verify_token(authorization: str | None) -> dict:
+    import aiohttp
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Missing access token")
+    token = authorization[7:]
+    async with aiohttp.ClientSession() as session:
+        headers = {"Authorization": f"Bearer {token}"}
+        async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
+            if resp.status != 200:
+                raise HTTPException(401, "Invalid access token")
+            return await resp.json()
+
+
+VALID_GUILD_OPTOUTS = {"name", "icon"}
+
+
+@app.get("/user/{user_id}/guilds")
+async def get_user_guilds(user_id: int, authorization: str = Header(None)):
+    """Get guilds where the user has Manage Server. Requires OAuth."""
+    me = await _verify_token(authorization)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "You can only view your own guilds")
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+
+    pool = _check_pool()
+    guilds = []
+    for guild in bot_ref.guilds:
+        member = guild.get_member(user_id)
+        if member and member.guild_permissions.manage_guild:
+            row = await pool.fetchrow(
+                "SELECT items FROM guild_opted_out WHERE guild_id = $1", guild.id
+            )
+            guilds.append({
+                "id": str(guild.id),
+                "name": guild.name,
+                "icon": str(guild.icon) if guild.icon else None,
+                "opted_out": row["items"] if row else [],
+            })
+
+    guilds.sort(key=lambda g: g["name"].lower())
+    return {"guilds": guilds}
+
+
+@app.get("/guild/{guild_id}/opted-out")
+async def get_guild_opted_out(guild_id: int):
+    """Get opted-out tracking items for a guild."""
+    pool = _check_pool()
+    row = await pool.fetchrow("SELECT items FROM guild_opted_out WHERE guild_id = $1", guild_id)
+    return {"items": row["items"] if row else []}
+
+
+@app.post("/guild/{guild_id}/opted-out")
+async def set_guild_opted_out(guild_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+    """Set opted-out tracking for a guild. Requires OAuth + Manage Server."""
+    me = await _verify_token(authorization)
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+
+    guild = bot_ref.get_guild(guild_id)
+    if not guild:
+        raise HTTPException(404, "Guild not found")
+    member = guild.get_member(int(me["id"]))
+    if not member or not member.guild_permissions.manage_guild:
+        raise HTTPException(403, "You need Manage Server permission in this guild")
+
+    items = [i for i in payload.get("items", []) if i in VALID_GUILD_OPTOUTS]
+    pool = _check_pool()
+    await pool.execute(
+        "INSERT INTO guild_opted_out (guild_id, items) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET items = $2",
+        guild_id, items,
+    )
+
+    if bot_ref:
+        if items:
+            bot_ref.db_cache.opted_out[guild_id] = items
+        else:
+            bot_ref.db_cache.opted_out.pop(guild_id, None)
+
+    return {"items": items}
+
+
+async def _refresh_urls(urls: list[str]) -> list[str]:
+    """Call Discord's refresh-urls endpoint to get fresh CDN links."""
+    if not urls or not bot_ref:
+        return urls
+    clean = list({u.split("?")[0] for u in urls if u})
+    if not clean:
+        return urls
+    mapping: dict[str, str] = {}
+    BATCH_SIZE = 50
+    for i in range(0, len(clean), BATCH_SIZE):
+        batch = clean[i : i + BATCH_SIZE]
+        try:
+            req = await bot_ref.http.request(
+                __import__("discord").http.Route("POST", "/attachments/refresh-urls"),
+                json={"attachment_urls": batch},
+            )
+            for item in req.get("refreshed_urls", []):
+                orig = item.get("original", "")
+                refreshed = item.get("refreshed", "")
+                if orig and refreshed:
+                    mapping[orig] = refreshed
+        except Exception:
+            continue
+    return [mapping.get(u.split("?")[0], u) for u in urls]
+
+
+@app.get("/guild/{guild_id}/icons")
+async def get_guild_icons(guild_id: int, page: int = Query(1, ge=1), per_page: int = Query(80, ge=1, le=100)):
+    """Get guild icon history."""
+    pool = _check_pool()
+    count = await pool.fetchval("SELECT COUNT(*) FROM guild_icons WHERE guild_id = $1", guild_id)
+    pages = max((count + per_page - 1) // per_page, 1)
+    offset = (page - 1) * per_page
+    rows = await pool.fetch(
+        "SELECT icon_key, icon, created_at FROM guild_icons WHERE guild_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        guild_id, per_page, offset,
+    )
+    urls = [r["icon"] for r in rows if r["icon"]]
+    refreshed = await _refresh_urls(urls)
+    url_map = dict(zip(urls, refreshed))
+    icons = [{"icon_key": r["icon_key"], "url": url_map.get(r["icon"], r["icon"]), "created_at": r["created_at"].isoformat()} for r in rows]
+    return {"items": icons, "total": count, "page": page, "pages": pages}
+
+
+
+@app.get("/guild/{guild_id}/names")
+async def get_guild_names(guild_id: int, page: int = Query(1, ge=1), per_page: int = Query(80, ge=1, le=100)):
+    """Get guild name history."""
+    pool = _check_pool()
+    count = await pool.fetchval("SELECT COUNT(*) FROM guild_name_logs WHERE guild_id = $1", guild_id)
+    pages = max((count + per_page - 1) // per_page, 1)
+    offset = (page - 1) * per_page
+    rows = await pool.fetch(
+        "SELECT id, name, created_at FROM guild_name_logs WHERE guild_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        guild_id, per_page, offset,
+    )
+    names = [{"id": r["id"], "value": r["name"], "created_at": r["created_at"].isoformat()} for r in rows]
+    return {"items": names, "total": count, "page": page, "pages": pages}
+
 
 
 
@@ -172,8 +359,6 @@ async def get_user_data(user_id: int):
 
 @app.get("/usernames/{user_id}")
 async def get_usernames(user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)):
-    if await _check_opted_out(user_id):
-        raise HTTPException(403, "This user has opted out of data collection")
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval("SELECT COUNT(*) FROM username_logs WHERE user_id = $1", user_id)
@@ -187,8 +372,6 @@ async def get_usernames(user_id: int, page: int = Query(1, ge=1), per_page: int 
 
 @app.get("/display-names/{user_id}")
 async def get_display_names(user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)):
-    if await _check_opted_out(user_id):
-        raise HTTPException(403, "This user has opted out of data collection")
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval("SELECT COUNT(*) FROM display_name_logs WHERE user_id = $1", user_id)
@@ -202,8 +385,6 @@ async def get_display_names(user_id: int, page: int = Query(1, ge=1), per_page: 
 
 @app.get("/discrims/{user_id}")
 async def get_discrims(user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)):
-    if await _check_opted_out(user_id):
-        raise HTTPException(403, "This user has opted out of data collection")
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval("SELECT COUNT(*) FROM discrim_logs WHERE user_id = $1", user_id)
@@ -213,12 +394,8 @@ async def get_discrims(user_id: int, page: int = Query(1, ge=1), per_page: int =
             user_id, per_page, (page - 1) * per_page,
         )
     return {"items": [{"id": r["id"], "value": r["discrim"], "created_at": r["created_at"].isoformat()} for r in rows], "total": count, "page": page, "pages": pages}
-
-
 @app.delete("/user/{user_id}")
 async def delete_user_data(user_id: int, table: str = Query(None), authorization: str = Header(None)):
-    if not bot_ref:
-        raise HTTPException(503, "Bot not ready")
     import aiohttp
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing access token")
@@ -229,18 +406,30 @@ async def delete_user_data(user_id: int, table: str = Query(None), authorization
             if resp.status != 200:
                 raise HTTPException(401, "Invalid access token")
             me = await resp.json()
-    if int(me["id"]) != user_id:
-        raise HTTPException(403, "You can only delete your own data")
-    pool = _check_pool()
+
     tables = [table] if table else list(TABLE_MAP.keys())
     deleted = 0
+    pool = _check_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             for t in tables:
                 db_table = TABLE_MAP.get(t)
                 if not db_table:
                     raise HTTPException(400, f"Invalid table: {t}")
-                r = await conn.execute(f"DELETE FROM {db_table} WHERE user_id = $1", user_id)
+                if t in GUILD_TABLES:
+                    if not bot_ref:
+                        raise HTTPException(503, "Bot not ready")
+                    guild = bot_ref.get_guild(user_id)
+                    if not guild:
+                        raise HTTPException(404, "Guild not found")
+                    member = guild.get_member(int(me["id"]))
+                    if not member or not member.guild_permissions.manage_guild:
+                        raise HTTPException(403, "You need Manage Server in this guild")
+                    r = await conn.execute(f"DELETE FROM {db_table} WHERE guild_id = $1", user_id)
+                else:
+                    if int(me["id"]) != user_id:
+                        raise HTTPException(403, "You can only delete your own data")
+                    r = await conn.execute(f"DELETE FROM {db_table} WHERE user_id = $1", user_id)
                 deleted += int(r.split()[-1])
     return {"user_id": user_id, "deleted_rows": deleted}
 
@@ -275,28 +464,39 @@ async def delete_item(table: str, user_id: int, key: str = Query(...), authoriza
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing access token")
     token = authorization[7:]
-    # Verify token belongs to this user
     async with aiohttp.ClientSession() as session:
         headers = {"Authorization": f"Bearer {token}"}
         async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
             if resp.status != 200:
                 raise HTTPException(401, "Invalid access token")
             me = await resp.json()
-    if int(me["id"]) != user_id:
-        raise HTTPException(403, "You can only delete your own data")
+
     pool = _check_pool()
     async with pool.acquire() as conn:
         db_table = TABLE_MAP.get(table)
         if not db_table:
             raise HTTPException(400, f"Invalid table: {table}")
-        if table == "avatars":
+        if table in GUILD_TABLES:
+            if not bot_ref:
+                raise HTTPException(503, "Bot not ready")
+            guild = bot_ref.get_guild(user_id)
+            if not guild:
+                raise HTTPException(404, "Guild not found")
+            member = guild.get_member(int(me["id"]))
+            if not member or not member.guild_permissions.manage_guild:
+                raise HTTPException(403, "You need Manage Server in this guild")
+            if table == "guild_icons":
+                r = await conn.execute(f"DELETE FROM {db_table} WHERE guild_id = $1 AND icon_key = $2", user_id, key)
+            else:
+                r = await conn.execute(f"DELETE FROM {db_table} WHERE guild_id = $1 AND id = $2", user_id, int(key))
+        elif table == "avatars":
+            if int(me["id"]) != user_id:
+                raise HTTPException(403, "You can only delete your own data")
             r = await conn.execute(f"DELETE FROM {db_table} WHERE user_id = $1 AND avatar_key = $2", user_id, key)
         else:
-            try:
-                row_id = int(key)
-            except ValueError:
-                raise HTTPException(400, "Invalid key — must be a numeric ID")
-            r = await conn.execute(f"DELETE FROM {db_table} WHERE user_id = $1 AND id = $2", user_id, row_id)
+            if int(me["id"]) != user_id:
+                raise HTTPException(403, "You can only delete your own data")
+            r = await conn.execute(f"DELETE FROM {db_table} WHERE user_id = $1 AND id = $2", user_id, int(key))
     return {"deleted": True}
 
 

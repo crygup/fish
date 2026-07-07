@@ -56,7 +56,10 @@ class Dropdown(discord.ui.Select):
         value = self.values[0]
         ctx = self.ctx
 
-        results = ctx.bot.db_cache.opted_out[ctx.author.id]
+        try:
+            results = ctx.bot.db_cache.opted_out[ctx.author.id]
+        except KeyError:
+            results = []
 
         if value in results:
             sql = """UPDATE opted_out SET items = array_remove(opted_out.items, $1) WHERE user_id = $2"""
@@ -85,7 +88,10 @@ class Dropdown(discord.ui.Select):
         if self.guild_id is None:
             raise ValueError("Not in a guild")
 
-        results = ctx.bot.db_cache.opted_out[self.guild_id]
+        try:
+            results = ctx.bot.db_cache.opted_out[self.guild_id]
+        except KeyError:
+            results = []
 
         if value in results:
             sql = """UPDATE guild_opted_out SET items = array_remove(guild_opted_out.items, $1) WHERE guild_id = $2"""
@@ -427,3 +433,55 @@ class Logging(Cog):
             for discrim in discrims
             if current.lower() in str(discrim["discrim"]).lower()
         ]
+
+    @logging_delete.command(name="joins", hidden=True)
+    @interaction_only()
+    async def ldelete_join(
+        self,
+        ctx: GuildContext,
+        id: int = commands.param(displayed_name="join"),
+    ):
+        """Delete a saved join record."""
+
+        record = await self.bot.pool.fetchrow(
+            "SELECT guild_id, time FROM member_join_logs WHERE member_id = $1 AND id = $2",
+            ctx.author.id,
+            id,
+        )
+
+        if not record:
+            return await ctx.send("No join record found with that ID.", ephemeral=True)
+
+        guild = self.bot.get_guild(record["guild_id"])
+        guild_name = guild.name if guild else f"guild {record['guild_id']}"
+        joined = discord.utils.format_dt(record["time"], "R")
+
+        message = await ctx.prompt(
+            f"You joined **{guild_name}** {joined}. Are you sure you want to delete this record? (ID `{id}`)",
+            ephemeral=True,
+            delete_after=False,
+        )
+
+        if not message:
+            return await ctx.send("Good choice.", ephemeral=True)
+
+        await self.easy_delete(message, "member_join_logs", id, ctx.author.id)
+
+    @ldelete_join.autocomplete("id")
+    async def ldj_ac(
+        self, interaction: discord.Interaction, current: str
+    ) -> List[app_commands.Choice[int]]:
+        joins = await self.bot.pool.fetch(
+            "SELECT * FROM member_join_logs WHERE member_id = $1 ORDER BY time DESC LIMIT 25",
+            interaction.user.id,
+        )
+
+        choices: List[app_commands.Choice[int]] = []
+        for join in joins:
+            guild = self.bot.get_guild(join["guild_id"])
+            guild_label = guild.name if guild else str(join["guild_id"])
+            label = f"{guild_label} — {discord.utils.format_dt(join['time'], 'R')}"
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label[:100], value=join["id"]))
+
+        return choices
