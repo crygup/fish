@@ -22,7 +22,7 @@ class CommandLogs(Cog):
         )
 
     @commands.Cog.listener("on_command_completion")
-    async def on_command_comletion(self, ctx: Context):
+    async def on_command_completion(self, ctx: Context):
         if ctx.command is None:
             return
 
