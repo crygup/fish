@@ -561,7 +561,7 @@ async def send_message(payload: MessagePayload, request: Request):
         raise HTTPException(500, "Webhook not configured")
 
     # rate limit: 1 per minute per IP
-    ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Real-IP") or (request.client.host if request.client else "unknown")
     ip = ip.split(",")[0].strip()
 
     if ip in bot_ref.cached_banned_ips:
