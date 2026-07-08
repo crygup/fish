@@ -1,6 +1,7 @@
 """
 Fishie bot API — commands, stats, OAuth, and user data history.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -15,7 +16,12 @@ if TYPE_CHECKING:
     from core import Fishie
 
 app = FastAPI(title="Fishie API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "DELETE", "OPTIONS"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 bot_ref: "Fishie | None" = None
 TABLE_MAP = {
@@ -42,10 +48,15 @@ def _check_pool():
     if not pool:
         raise HTTPException(503, "Database not connected")
     return pool
+
+
 async def _check_opted_out(user_id: int) -> bool:
     pool = _check_pool()
-    r = await pool.fetchval("SELECT 1 FROM opted_out WHERE user_id = $1 AND cardinality(items) > 0", user_id)
+    r = await pool.fetchval(
+        "SELECT 1 FROM opted_out WHERE user_id = $1 AND cardinality(items) > 0", user_id
+    )
     return r is not None
+
 
 VALID_OPTOUTS = {"avatar", "username", "display", "nickname", "discrim", "joins"}
 
@@ -60,15 +71,20 @@ async def get_opted_out(user_id: int):
 
 
 @app.post("/user/{user_id}/opted-out")
-async def set_opted_out(user_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+async def set_opted_out(
+    user_id: int, payload: dict = Body(...), authorization: str = Header(None)
+):
     """Set the opted-out tracking methods. Requires OAuth bearer token."""
     import aiohttp
+
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing access token")
     token = authorization[7:]
     async with aiohttp.ClientSession() as session:
         headers = {"Authorization": f"Bearer {token}"}
-        async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
+        async with session.get(
+            "https://discord.com/api/users/@me", headers=headers
+        ) as resp:
             if resp.status != 200:
                 raise HTTPException(401, "Invalid access token")
             me = await resp.json()
@@ -79,7 +95,8 @@ async def set_opted_out(user_id: int, payload: dict = Body(...), authorization: 
     pool = _check_pool()
     await pool.execute(
         "INSERT INTO opted_out (user_id, items) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET items = $2",
-        user_id, items,
+        user_id,
+        items,
     )
 
     if bot_ref:
@@ -93,12 +110,15 @@ async def set_opted_out(user_id: int, payload: dict = Body(...), authorization: 
 
 async def _verify_token(authorization: str | None) -> dict:
     import aiohttp
+
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing access token")
     token = authorization[7:]
     async with aiohttp.ClientSession() as session:
         headers = {"Authorization": f"Bearer {token}"}
-        async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
+        async with session.get(
+            "https://discord.com/api/users/@me", headers=headers
+        ) as resp:
             if resp.status != 200:
                 raise HTTPException(401, "Invalid access token")
             return await resp.json()
@@ -124,12 +144,14 @@ async def get_user_guilds(user_id: int, authorization: str = Header(None)):
             row = await pool.fetchrow(
                 "SELECT items FROM guild_opted_out WHERE guild_id = $1", guild.id
             )
-            guilds.append({
-                "id": str(guild.id),
-                "name": guild.name,
-                "icon": str(guild.icon) if guild.icon else None,
-                "opted_out": row["items"] if row else [],
-            })
+            guilds.append(
+                {
+                    "id": str(guild.id),
+                    "name": guild.name,
+                    "icon": str(guild.icon) if guild.icon else None,
+                    "opted_out": row["items"] if row else [],
+                }
+            )
 
     guilds.sort(key=lambda g: g["name"].lower())
     return {"guilds": guilds}
@@ -139,12 +161,16 @@ async def get_user_guilds(user_id: int, authorization: str = Header(None)):
 async def get_guild_opted_out(guild_id: int):
     """Get opted-out tracking items for a guild."""
     pool = _check_pool()
-    row = await pool.fetchrow("SELECT items FROM guild_opted_out WHERE guild_id = $1", guild_id)
+    row = await pool.fetchrow(
+        "SELECT items FROM guild_opted_out WHERE guild_id = $1", guild_id
+    )
     return {"items": row["items"] if row else []}
 
 
 @app.post("/guild/{guild_id}/opted-out")
-async def set_guild_opted_out(guild_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+async def set_guild_opted_out(
+    guild_id: int, payload: dict = Body(...), authorization: str = Header(None)
+):
     """Set opted-out tracking for a guild. Requires OAuth + Manage Server."""
     me = await _verify_token(authorization)
     if not bot_ref:
@@ -161,7 +187,8 @@ async def set_guild_opted_out(guild_id: int, payload: dict = Body(...), authoriz
     pool = _check_pool()
     await pool.execute(
         "INSERT INTO guild_opted_out (guild_id, items) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET items = $2",
-        guild_id, items,
+        guild_id,
+        items,
     )
 
     if bot_ref:
@@ -200,39 +227,58 @@ async def _refresh_urls(urls: list[str]) -> list[str]:
 
 
 @app.get("/guild/{guild_id}/icons")
-async def get_guild_icons(guild_id: int, page: int = Query(1, ge=1), per_page: int = Query(80, ge=1, le=100)):
+async def get_guild_icons(
+    guild_id: int, page: int = Query(1, ge=1), per_page: int = Query(80, ge=1, le=100)
+):
     """Get guild icon history."""
     pool = _check_pool()
-    count = await pool.fetchval("SELECT COUNT(*) FROM guild_icons WHERE guild_id = $1", guild_id)
+    count = await pool.fetchval(
+        "SELECT COUNT(*) FROM guild_icons WHERE guild_id = $1", guild_id
+    )
     pages = max((count + per_page - 1) // per_page, 1)
     offset = (page - 1) * per_page
     rows = await pool.fetch(
         "SELECT icon_key, icon, created_at FROM guild_icons WHERE guild_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-        guild_id, per_page, offset,
+        guild_id,
+        per_page,
+        offset,
     )
     urls = [r["icon"] for r in rows if r["icon"]]
     refreshed = await _refresh_urls(urls)
     url_map = dict(zip(urls, refreshed))
-    icons = [{"icon_key": r["icon_key"], "url": url_map.get(r["icon"], r["icon"]), "created_at": r["created_at"].isoformat()} for r in rows]
+    icons = [
+        {
+            "icon_key": r["icon_key"],
+            "url": url_map.get(r["icon"], r["icon"]),
+            "created_at": r["created_at"].isoformat(),
+        }
+        for r in rows
+    ]
     return {"items": icons, "total": count, "page": page, "pages": pages}
 
 
-
 @app.get("/guild/{guild_id}/names")
-async def get_guild_names(guild_id: int, page: int = Query(1, ge=1), per_page: int = Query(80, ge=1, le=100)):
+async def get_guild_names(
+    guild_id: int, page: int = Query(1, ge=1), per_page: int = Query(80, ge=1, le=100)
+):
     """Get guild name history."""
     pool = _check_pool()
-    count = await pool.fetchval("SELECT COUNT(*) FROM guild_name_logs WHERE guild_id = $1", guild_id)
+    count = await pool.fetchval(
+        "SELECT COUNT(*) FROM guild_name_logs WHERE guild_id = $1", guild_id
+    )
     pages = max((count + per_page - 1) // per_page, 1)
     offset = (page - 1) * per_page
     rows = await pool.fetch(
         "SELECT id, name, created_at FROM guild_name_logs WHERE guild_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-        guild_id, per_page, offset,
+        guild_id,
+        per_page,
+        offset,
     )
-    names = [{"id": r["id"], "value": r["name"], "created_at": r["created_at"].isoformat()} for r in rows]
+    names = [
+        {"id": r["id"], "value": r["name"], "created_at": r["created_at"].isoformat()}
+        for r in rows
+    ]
     return {"items": names, "total": count, "page": page, "pages": pages}
-
-
 
 
 @app.get("/commands")
@@ -251,14 +297,16 @@ async def list_commands():
         for name, param in cmd.clean_params.items():
             req = "required" if param.default is param.empty else "optional"
             params.append({"name": name, "required": req})
-        cmds.append({
-            "name": cmd.qualified_name,
-            "description": cmd.description or cmd.short_doc or "",
-            "category": cmd.cog_name or "Uncategorized",
-            "usage": cmd.usage or "",
-            "aliases": aliases,
-            "params": params,
-        })
+        cmds.append(
+            {
+                "name": cmd.qualified_name,
+                "description": cmd.description or cmd.short_doc or "",
+                "category": cmd.cog_name or "Uncategorized",
+                "usage": cmd.usage or "",
+                "aliases": aliases,
+                "params": params,
+            }
+        )
     return {"commands": sorted(cmds, key=lambda c: (c["category"], c["name"]))}
 
 
@@ -267,34 +315,58 @@ async def bot_stats():
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
     import datetime
+
     pool = _check_pool()
     async with pool.acquire() as conn:
-        start = datetime.datetime.now(datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = datetime.datetime.now(datetime.timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         avatars_total = await conn.fetchval("SELECT COUNT(*) FROM avatars")
-        avatars_today = await conn.fetchval("SELECT COUNT(*) FROM avatars WHERE created_at >= $1", start)
+        avatars_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM avatars WHERE created_at >= $1", start
+        )
         commands_total = await conn.fetchval("SELECT COUNT(*) FROM command_logs")
-        commands_today = await conn.fetchval("SELECT COUNT(*) FROM command_logs WHERE created_at >= $1", start)
+        commands_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM command_logs WHERE created_at >= $1", start
+        )
         usernames_total = await conn.fetchval("SELECT COUNT(*) FROM username_logs")
-        usernames_today = await conn.fetchval("SELECT COUNT(*) FROM username_logs WHERE created_at >= $1", start)
+        usernames_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM username_logs WHERE created_at >= $1", start
+        )
         discrims_total = await conn.fetchval("SELECT COUNT(*) FROM discrim_logs")
-        discrims_today = await conn.fetchval("SELECT COUNT(*) FROM discrim_logs WHERE created_at >= $1", start)
+        discrims_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM discrim_logs WHERE created_at >= $1", start
+        )
         nicknames_total = await conn.fetchval("SELECT COUNT(*) FROM nickname_logs")
-        nicknames_today = await conn.fetchval("SELECT COUNT(*) FROM nickname_logs WHERE created_at >= $1", start)
+        nicknames_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM nickname_logs WHERE created_at >= $1", start
+        )
         guild_names_total = await conn.fetchval("SELECT COUNT(*) FROM guild_name_logs")
-        guild_names_today = await conn.fetchval("SELECT COUNT(*) FROM guild_name_logs WHERE created_at >= $1", start)
-        member_joins_total = await conn.fetchval("SELECT COUNT(*) FROM member_join_logs")
-        member_joins_today = await conn.fetchval("SELECT COUNT(*) FROM member_join_logs WHERE time >= $1", start)
+        guild_names_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM guild_name_logs WHERE created_at >= $1", start
+        )
+        member_joins_total = await conn.fetchval(
+            "SELECT COUNT(*) FROM member_join_logs"
+        )
+        member_joins_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM member_join_logs WHERE time >= $1", start
+        )
         guild_icons_total = await conn.fetchval("SELECT COUNT(*) FROM guild_icons")
-        guild_icons_today = await conn.fetchval("SELECT COUNT(*) FROM guild_icons WHERE created_at >= $1", start)
+        guild_icons_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM guild_icons WHERE created_at >= $1", start
+        )
         guild_avatars_total = await conn.fetchval("SELECT COUNT(*) FROM guild_avatars")
-        guild_avatars_today = await conn.fetchval("SELECT COUNT(*) FROM guild_avatars WHERE created_at >= $1", start)
+        guild_avatars_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM guild_avatars WHERE created_at >= $1", start
+        )
     return {
         "guilds": len(bot_ref.guilds),
         "users": sum(g.member_count or 0 for g in bot_ref.guilds),
         "commands": len(bot_ref.commands),
         "uptime_seconds": (
             (datetime.datetime.now().astimezone() - bot_ref.start_time).total_seconds()
-            if hasattr(bot_ref, "start_time") else 0
+            if hasattr(bot_ref, "start_time")
+            else 0
         ),
         "today": {
             "avatars": avatars_today,
@@ -333,13 +405,17 @@ async def oauth_exchange(code: str = Query(...)):
         "grant_type": "authorization_code",
     }
     async with aiohttp.ClientSession() as session:
-        async with session.post("https://discord.com/api/oauth2/token", data=data) as resp:
+        async with session.post(
+            "https://discord.com/api/oauth2/token", data=data
+        ) as resp:
             if resp.status != 200:
                 err = await resp.text()
                 raise HTTPException(400, f"OAuth exchange failed: {err}")
             token_data = await resp.json()
         headers = {"Authorization": f"Bearer {token_data['access_token']}"}
-        async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
+        async with session.get(
+            "https://discord.com/api/users/@me", headers=headers
+        ) as resp:
             user_data = await resp.json()
     return {"user": user_data, "access_token": token_data["access_token"]}
 
@@ -351,60 +427,129 @@ async def get_user_data(user_id: int):
         return {
             "user_id": user_id,
             "counts": {
-                "avatars": await conn.fetchval("SELECT COUNT(*) FROM avatars WHERE user_id = $1", user_id),
-                "usernames": await conn.fetchval("SELECT COUNT(*) FROM username_logs WHERE user_id = $1", user_id),
-                "display_names": await conn.fetchval("SELECT COUNT(*) FROM display_name_logs WHERE user_id = $1", user_id),
-                "discrims": await conn.fetchval("SELECT COUNT(*) FROM discrim_logs WHERE user_id = $1", user_id),
-            }
+                "avatars": await conn.fetchval(
+                    "SELECT COUNT(*) FROM avatars WHERE user_id = $1", user_id
+                ),
+                "usernames": await conn.fetchval(
+                    "SELECT COUNT(*) FROM username_logs WHERE user_id = $1", user_id
+                ),
+                "display_names": await conn.fetchval(
+                    "SELECT COUNT(*) FROM display_name_logs WHERE user_id = $1", user_id
+                ),
+                "discrims": await conn.fetchval(
+                    "SELECT COUNT(*) FROM discrim_logs WHERE user_id = $1", user_id
+                ),
+            },
         }
 
 
 @app.get("/usernames/{user_id}")
-async def get_usernames(user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)):
+async def get_usernames(
+    user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)
+):
     pool = _check_pool()
     async with pool.acquire() as conn:
-        count = await conn.fetchval("SELECT COUNT(*) FROM username_logs WHERE user_id = $1", user_id)
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM username_logs WHERE user_id = $1", user_id
+        )
         pages = max(1, (count + per_page - 1) // per_page)
         rows = await conn.fetch(
             "SELECT id, username, created_at FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            user_id, per_page, (page - 1) * per_page,
+            user_id,
+            per_page,
+            (page - 1) * per_page,
         )
-    return {"items": [{"id": r["id"], "value": r["username"], "created_at": r["created_at"].isoformat()} for r in rows], "total": count, "page": page, "pages": pages}
+    return {
+        "items": [
+            {
+                "id": r["id"],
+                "value": r["username"],
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in rows
+        ],
+        "total": count,
+        "page": page,
+        "pages": pages,
+    }
 
 
 @app.get("/display-names/{user_id}")
-async def get_display_names(user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)):
+async def get_display_names(
+    user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)
+):
     pool = _check_pool()
     async with pool.acquire() as conn:
-        count = await conn.fetchval("SELECT COUNT(*) FROM display_name_logs WHERE user_id = $1", user_id)
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM display_name_logs WHERE user_id = $1", user_id
+        )
         pages = max(1, (count + per_page - 1) // per_page)
         rows = await conn.fetch(
             "SELECT id, display_name, created_at FROM display_name_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            user_id, per_page, (page - 1) * per_page,
+            user_id,
+            per_page,
+            (page - 1) * per_page,
         )
-    return {"items": [{"id": r["id"], "value": r["display_name"], "created_at": r["created_at"].isoformat()} for r in rows], "total": count, "page": page, "pages": pages}
+    return {
+        "items": [
+            {
+                "id": r["id"],
+                "value": r["display_name"],
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in rows
+        ],
+        "total": count,
+        "page": page,
+        "pages": pages,
+    }
 
 
 @app.get("/discrims/{user_id}")
-async def get_discrims(user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)):
+async def get_discrims(
+    user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)
+):
     pool = _check_pool()
     async with pool.acquire() as conn:
-        count = await conn.fetchval("SELECT COUNT(*) FROM discrim_logs WHERE user_id = $1", user_id)
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM discrim_logs WHERE user_id = $1", user_id
+        )
         pages = max(1, (count + per_page - 1) // per_page)
         rows = await conn.fetch(
             "SELECT id, discrim, created_at FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            user_id, per_page, (page - 1) * per_page,
+            user_id,
+            per_page,
+            (page - 1) * per_page,
         )
-    return {"items": [{"id": r["id"], "value": r["discrim"], "created_at": r["created_at"].isoformat()} for r in rows], "total": count, "page": page, "pages": pages}
+    return {
+        "items": [
+            {
+                "id": r["id"],
+                "value": r["discrim"],
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in rows
+        ],
+        "total": count,
+        "page": page,
+        "pages": pages,
+    }
+
+
 @app.delete("/user/{user_id}")
-async def delete_user_data(user_id: int, table: str = Query(None), authorization: str = Header(None)):
+async def delete_user_data(
+    user_id: int, table: str = Query(None), authorization: str = Header(None)
+):
     import aiohttp
+
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing access token")
     token = authorization[7:]
     async with aiohttp.ClientSession() as session:
         headers = {"Authorization": f"Bearer {token}"}
-        async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
+        async with session.get(
+            "https://discord.com/api/users/@me", headers=headers
+        ) as resp:
             if resp.status != 200:
                 raise HTTPException(401, "Invalid access token")
             me = await resp.json()
@@ -427,11 +572,15 @@ async def delete_user_data(user_id: int, table: str = Query(None), authorization
                     member = guild.get_member(int(me["id"]))
                     if not member or not member.guild_permissions.manage_guild:
                         raise HTTPException(403, "You need Manage Server in this guild")
-                    r = await conn.execute(f"DELETE FROM {db_table} WHERE guild_id = $1", user_id)
+                    r = await conn.execute(
+                        f"DELETE FROM {db_table} WHERE guild_id = $1", user_id
+                    )
                 else:
                     if int(me["id"]) != user_id:
                         raise HTTPException(403, "You can only delete your own data")
-                    r = await conn.execute(f"DELETE FROM {db_table} WHERE user_id = $1", user_id)
+                    r = await conn.execute(
+                        f"DELETE FROM {db_table} WHERE user_id = $1", user_id
+                    )
                 deleted += int(r.split()[-1])
     return {"user_id": user_id, "deleted_rows": deleted}
 
@@ -452,23 +601,32 @@ async def resolve_user(q: str = Query(...)):
         raise HTTPException(502, "Bot is not in the configured guild")
     members = await guild.query_members(q, limit=5)
     for m in members:
-        if m.name.lower() == q.lower() or (m.global_name and m.global_name.lower() == q.lower()):
+        if m.name.lower() == q.lower() or (
+            m.global_name and m.global_name.lower() == q.lower()
+        ):
             return {"user_id": str(m.id)}
     if members:
         return {"user_id": str(members[0].id)}
-    raise HTTPException(404, f'No guild member matched "{q}". Try a Discord ID instead.')
+    raise HTTPException(
+        404, f'No guild member matched "{q}". Try a Discord ID instead.'
+    )
 
 
 @app.delete("/item/{table}/{user_id}")
-async def delete_item(table: str, user_id: int, key: str = Query(...), authorization: str = Header(None)):
+async def delete_item(
+    table: str, user_id: int, key: str = Query(...), authorization: str = Header(None)
+):
     """Delete a specific logged item. Token is the OAuth access token from login."""
     import aiohttp
+
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing access token")
     token = authorization[7:]
     async with aiohttp.ClientSession() as session:
         headers = {"Authorization": f"Bearer {token}"}
-        async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
+        async with session.get(
+            "https://discord.com/api/users/@me", headers=headers
+        ) as resp:
             if resp.status != 200:
                 raise HTTPException(401, "Invalid access token")
             me = await resp.json()
@@ -488,17 +646,33 @@ async def delete_item(table: str, user_id: int, key: str = Query(...), authoriza
             if not member or not member.guild_permissions.manage_guild:
                 raise HTTPException(403, "You need Manage Server in this guild")
             if table == "guild_icons":
-                r = await conn.execute(f"DELETE FROM {db_table} WHERE guild_id = $1 AND icon_key = $2", user_id, key)
+                r = await conn.execute(
+                    f"DELETE FROM {db_table} WHERE guild_id = $1 AND icon_key = $2",
+                    user_id,
+                    key,
+                )
             else:
-                r = await conn.execute(f"DELETE FROM {db_table} WHERE guild_id = $1 AND id = $2", user_id, int(key))
+                r = await conn.execute(
+                    f"DELETE FROM {db_table} WHERE guild_id = $1 AND id = $2",
+                    user_id,
+                    int(key),
+                )
         elif table == "avatars":
             if int(me["id"]) != user_id:
                 raise HTTPException(403, "You can only delete your own data")
-            r = await conn.execute(f"DELETE FROM {db_table} WHERE user_id = $1 AND avatar_key = $2", user_id, key)
+            r = await conn.execute(
+                f"DELETE FROM {db_table} WHERE user_id = $1 AND avatar_key = $2",
+                user_id,
+                key,
+            )
         else:
             if int(me["id"]) != user_id:
                 raise HTTPException(403, "You can only delete your own data")
-            r = await conn.execute(f"DELETE FROM {db_table} WHERE user_id = $1 AND id = $2", user_id, int(key))
+            r = await conn.execute(
+                f"DELETE FROM {db_table} WHERE user_id = $1 AND id = $2",
+                user_id,
+                int(key),
+            )
     return {"deleted": True}
 
 
@@ -506,6 +680,7 @@ async def delete_item(table: str, user_id: int, key: str = Query(...), authoriza
 async def spotify_cover(artist: str = Query(...), track: str = Query(...)):
     """Search Spotify for a track cover image. Falls back if Last.fm has no cover."""
     import base64
+
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
     sid = bot_ref.config["keys"]["spotify_id"]
@@ -516,7 +691,10 @@ async def spotify_cover(artist: str = Query(...), track: str = Query(...)):
         async with session.post(
             "https://accounts.spotify.com/api/token",
             data={"grant_type": "client_credentials"},
-            headers={"Authorization": f"Basic {encoded}", "Content-Type": "application/x-www-form-urlencoded"},
+            headers={
+                "Authorization": f"Basic {encoded}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
         ) as resp:
             if resp.status != 200:
                 raise HTTPException(502, "Spotify auth failed")
@@ -561,7 +739,11 @@ async def send_message(payload: MessagePayload, request: Request):
         raise HTTPException(500, "Webhook not configured")
 
     # rate limit: 1 per minute per IP
-    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Real-IP") or (request.client.host if request.client else "unknown")
+    ip = (
+        request.headers.get("CF-Connecting-IP")
+        or request.headers.get("X-Real-IP")
+        or (request.client.host if request.client else "unknown")
+    )
     ip = ip.split(",")[0].strip()
 
     if ip in bot_ref.cached_banned_ips:
@@ -578,7 +760,11 @@ async def send_message(payload: MessagePayload, request: Request):
     content = payload.content.replace("discord.com/api/webhooks", "[redacted]")
 
     embed = {
-        "author": {"name": name, "icon_url": payload.avatar_url} if payload.avatar_url else {"name": name},
+        "author": (
+            {"name": name, "icon_url": payload.avatar_url}
+            if payload.avatar_url
+            else {"name": name}
+        ),
         "description": content,
         "footer": {"text": f"IP: {ip}"},
         "color": 0xFAA0C1,

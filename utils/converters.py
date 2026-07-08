@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 import discord
 from discord.ext import commands
 from .functions import response_checker, to_thread
-from .regexes import TENOR_PAGE_RE
+from .regexes import TENOR_PAGE_RE, KLIPY_RE
 from .vars import base_header
 
 if TYPE_CHECKING:
@@ -182,6 +182,25 @@ class TenorUrlConverter(commands.Converter):
         return re.sub("AAAAd", "AAAAC", url)
 
 
+class KlipyUrlConverter(commands.Converter):
+    @to_thread
+    def get_url(self, text: str) -> str:
+        scraper = BeautifulSoup(text, "html.parser")
+        video = scraper.find("video", class_="w-full h-full object-contain")
+        if not video:
+            raise commands.BadArgument("Couldn't find video on that page.")
+        src = video.get("src")
+        if not src:
+            raise commands.BadArgument("Video element has no src attribute.")
+        return src if src.startswith("http") else f"https:{src}"
+
+    async def convert(self, ctx: Context, url: str) -> str:
+        if not KLIPY_RE.search(url):
+            raise commands.BadArgument("Invalid Klipy URL.")
+        async with ctx.session.get(url) as r:
+            text = await r.text()
+        return await self.get_url(text)
+
 
 class MediaConverter(commands.Converter[str]):
     """Converts user input into a media URL.
@@ -197,7 +216,10 @@ class MediaConverter(commands.Converter[str]):
     async def convert(self, ctx: Context, argument: str = "") -> str:
         if ctx.message.attachments:
             att = ctx.message.attachments[0]
-            if att.content_type and (att.content_type.startswith("image/") or att.content_type.startswith("video/")):
+            if att.content_type and (
+                att.content_type.startswith("image/")
+                or att.content_type.startswith("video/")
+            ):
                 return att.url
 
         # 2. replied message
@@ -210,7 +232,10 @@ class MediaConverter(commands.Converter[str]):
             if replied:
                 if replied.attachments:
                     att = replied.attachments[0]
-                    if att.content_type and (att.content_type.startswith("image/") or att.content_type.startswith("video/")):
+                    if att.content_type and (
+                        att.content_type.startswith("image/")
+                        or att.content_type.startswith("video/")
+                    ):
                         return att.url
                 if replied.embeds:
                     emb = replied.embeds[0]
@@ -226,7 +251,10 @@ class MediaConverter(commands.Converter[str]):
                         continue
                     if msg.attachments:
                         att = msg.attachments[0]
-                        if att.content_type and (att.content_type.startswith("image/") or att.content_type.startswith("video/")):
+                        if att.content_type and (
+                            att.content_type.startswith("image/")
+                            or att.content_type.startswith("video/")
+                        ):
                             return att.url
                     if msg.embeds:
                         emb = msg.embeds[0]
@@ -234,6 +262,39 @@ class MediaConverter(commands.Converter[str]):
                             return emb.image.url
                         if emb.thumbnail and emb.thumbnail.url:
                             return emb.thumbnail.url
+                    # also check message content for direct media URLs
+                    lowered = msg.content.lower()
+                    if any(
+                        ext in lowered
+                        for ext in (
+                            ".png",
+                            ".jpg",
+                            ".jpeg",
+                            ".gif",
+                            ".webp",
+                            ".mp4",
+                            ".webm",
+                            ".mov",
+                        )
+                    ):
+                        # find the actual URL
+                        for word in msg.content.split():
+                            if word.startswith(("http://", "https://")):
+                                base = word.lower().split("?")[0]
+                                if any(
+                                    base.endswith(e)
+                                    for e in (
+                                        ".png",
+                                        ".jpg",
+                                        ".jpeg",
+                                        ".gif",
+                                        ".webp",
+                                        ".mp4",
+                                        ".webm",
+                                        ".mov",
+                                    )
+                                ):
+                                    return word
             except discord.HTTPException:
                 pass
 
@@ -244,12 +305,29 @@ class MediaConverter(commands.Converter[str]):
             except commands.BadArgument:
                 pass
 
+        # 4b. klipy link
+        if argument:
+            try:
+                return await KlipyUrlConverter().convert(ctx, argument)
+            except commands.BadArgument:
+                pass
+
         # 5. direct image/video URL — only trust known extensions
         if argument:
-            lowered = argument.lower()
-            for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".webm", ".mov"):
-                if lowered.endswith(ext) or f"{ext}?" in lowered:
+            base = argument.lower().split("?")[0]
+            for ext in (
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".webp",
+                ".mp4",
+                ".webm",
+                ".mov",
+            ):
+                if base.endswith(ext):
                     return argument
+
 
 class _AccountConverter(commands.Converter[str]):
     """Base: try to resolve as Discord user → linked account, else validate raw."""

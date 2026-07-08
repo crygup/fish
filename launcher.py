@@ -15,6 +15,8 @@ gateway.DiscordWebSocket.identify = identify_mobile
 
 import uvicorn
 from api import app as api_app, init as api_init
+
+
 async def start(testing: bool):
     logger = logging.getLogger("fishie")
     logger.setLevel(logging.INFO)
@@ -63,7 +65,9 @@ async def start(testing: bool):
         ) as bot,
     ):
         api_init(bot)
-        api_cfg = uvicorn.Config(api_app, host="127.0.0.1", port=8001, log_level="warning")
+        api_cfg = uvicorn.Config(
+            api_app, host="127.0.0.1", port=8001, log_level="warning"
+        )
         api_server = uvicorn.Server(api_cfg)
         api_task = asyncio.create_task(api_server.serve())
         logger.info("Fishie API running on http://127.0.0.1:8001")

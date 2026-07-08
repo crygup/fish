@@ -133,7 +133,10 @@ class Commands(Cog):
             embed = discord.Embed(color=self.bot.embedcolor, timestamp=first_avatar)
 
             embed.set_image(url=f"attachment://{user.id}_avatar_history.png")
-            embed.set_author(name=f"{user.display_name}'s avatar in a grid view.", icon_url=user.display_avatar.url)
+            embed.set_author(
+                name=f"{user.display_name}'s avatar in a grid view.",
+                icon_url=user.display_avatar.url,
+            )
             embed.set_footer(text="First avatar saved")
             embed.description = f"-# View all avatars [here](https://crygup.com/discord?tab=user&subtab=avatars&q={user.id})"
             await ctx.send(file=file, embed=embed)

@@ -39,6 +39,8 @@ EMOJI_RE: Pattern[str] = comp(r"<a?:[a-zA-Z0-9\_]{1,}:[0-9]{1,}>")
 TENOR_PAGE_RE: Pattern = comp(r"https?://(www\.)?tenor\.com/view/\S+/?")
 TENOR_GIF_RE: Pattern = comp(r"https?://(www\.)?c\.tenor\.com/\S+/\S+\.gif/?")
 
+# klipy
+KLIPY_RE: Pattern[str] = comp(r"https?://(www\.)?klipy\.com/[a-zA-Z0-9_-]+/?")
 # websites
 LBD_URL_RE: Pattern[str] = comp(r"https?://(?:www\.)?letterboxd\.com/([a-zA-Z0-9_\-]+)/?")
 STEAM_URL_RE: Pattern[str] = comp(r"https?://(?:www\.)?steamcommunity\.com/(?:profiles/(\d+)|id/([a-zA-Z0-9_\-]+))/?")

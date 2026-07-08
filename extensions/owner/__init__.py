@@ -31,6 +31,7 @@ class Owner(Cog):
         super().__init__()
         self.bot = bot
         self._last_reload: float = time.time()
+
     async def _add_reaction(
         self, ctx: Context, msg: discord.Message, check: bool = True
     ):
@@ -164,8 +165,9 @@ class Owner(Cog):
                 results.append(f"\u274c `{ext}` \n```{e}```")
 
         self._last_reload = time.time()
-        e=discord.Embed(color=self.bot.embedcolor,description="\n".join(results))
+        e = discord.Embed(color=self.bot.embedcolor, description="\n".join(results))
         await ctx.send(embed=e)
+
     async def cog_check(self, ctx: commands.Context[Fishie]) -> bool:
         if await ctx.bot.is_owner(ctx.author):
             return True

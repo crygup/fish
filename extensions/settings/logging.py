@@ -158,7 +158,7 @@ class Logging(Cog):
 
         await ctx.send(
             "-# Manage your tracking settings on the [website](https://crygup.com/discord?tab=settings)",
-            view=DropdownView(ctx, data)
+            view=DropdownView(ctx, data),
         )
 
     @logging.command(name="guild", aliases=("server",))
@@ -180,7 +180,7 @@ class Logging(Cog):
 
         await ctx.send(
             "-# Manage server tracking settings on the [website](https://crygup.com/discord?tab=settings)",
-            view=DropdownView(ctx, data, guild_id=ctx.guild.id)
+            view=DropdownView(ctx, data, guild_id=ctx.guild.id),
         )
 
     @commands.hybrid_group(name="logging-delete", fallback="all", hidden=True)

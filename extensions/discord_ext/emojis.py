@@ -7,10 +7,29 @@ import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import EMOJI_RE, SimplePages, TwemojiConverter, human_join, plural, to_image
+from utils import (
+    EMOJI_RE,
+    SimplePages,
+    TwemojiConverter,
+    human_join,
+    plural,
+    to_image,
+    reply,
+    to_thread,
+)
+import zipfile
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
+
+
+@to_thread
+def _create_emoji_zip(emoji_data: list[tuple[str, bytes]]) -> bytes:
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in emoji_data:
+            zf.writestr(name, data)
+    return buf.getvalue()
 
 
 class Emojis(Cog):
@@ -194,15 +213,72 @@ class Emojis(Cog):
 
         await self.steal_emojis(ctx, emoji_results)
 
-    @commands.command(name="emojis")
-    async def emojis(self, ctx: Context, guild: discord.Guild = commands.CurrentGuild):
+    @commands.hybrid_group(name="emojis", fallback="get")
+    async def emojis(
+        self,
+        ctx: Context,
+        guild: discord.Guild = commands.CurrentGuild,
+        name: Optional[bool] = commands.param(
+            default=False, description="Shows the name rather than emoji"
+        ),
+        ids: Optional[bool] = commands.param(
+            default=False, description="Shows IDs next to the emoji"
+        ),
+    ):
         """Get the server emojis."""
         if not guild.emojis:
             raise commands.GuildNotFound("Guild has no emojis")
 
         order = sorted(guild.emojis, key=lambda e: e.created_at)
 
-        data = [f"{str(e)} `<:{e.name}\u200b:{e.id}>`" for e in order]
+        data = [
+            f"{f"`{e.name}`" if name else str(e)} {f"`{e.id}`" if ids else ""} *{discord.utils.format_dt(e.created_at, 'd')}*"
+            for e in order
+        ]
         pages = SimplePages(entries=data, per_page=10, ctx=ctx)
         pages.embed.title = f"Emojis for {guild.name}"
         await pages.start(ctx)
+
+    @emojis.command(name="download")
+    @commands.has_permissions(manage_emojis=True)
+    @commands.bot_has_permissions(manage_emojis=True)
+    async def emoji_download(
+        self,
+        ctx: GuildContext,
+        disabled: Optional[bool] = commands.param(
+            default=True, description="Download includes disabled emojis"
+        ),
+    ):
+        """Download all server emojis as a zip file."""
+
+        async with ctx.typing():
+            emojis = [e for e in ctx.guild.emojis if disabled or e.available]
+
+            if not emojis:
+                raise commands.BadArgument("No emojis found in this server.")
+
+            emoji_data: list[tuple[str, bytes]] = []
+            for emoji in emojis:
+                ext = "gif" if emoji.animated else "png"
+                try:
+                    data = await emoji.read()
+                    emoji_data.append((f"{emoji.name}.{ext}", data))
+                except:
+                    continue
+
+            if not emoji_data:
+                raise commands.BadArgument("Failed to download any emoji data.")
+
+            zip_bytes = await _create_emoji_zip(emoji_data)
+
+            max_size = ctx.guild.filesize_limit if ctx.guild else 25 * 1024 * 1024
+
+            if len(zip_bytes) > max_size:
+                from utils import litterbox
+
+                url = await litterbox(ctx.session, zip_bytes, "emojis.zip")
+                await ctx.send(
+                    f"Emoji zip was too large for Discord, uploaded [here]({url})."
+                )
+            else:
+                await ctx.send(file=discord.File(BytesIO(zip_bytes), "emojis.zip"))

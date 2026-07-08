@@ -15,7 +15,9 @@ from playwright.async_api import async_playwright
 from discord import app_commands
 from extensions.context import Context
 from utils import (
+    plural,
     Pager,
+    FieldPageSource,
     SimplePages,
     TenorUrlConverter,
     UrbanPageSource,
@@ -44,6 +46,42 @@ param = commands.param
 class ScreenshotFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     delay: int = commands.flag(default=0, aliases=["d"])
     full_page: bool = commands.flag(default=False, aliases=["fp"])
+
+
+class EndView(discord.ui.View):
+    def __init__(self, cog, original_ctx):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.ctx = original_ctx
+
+    @discord.ui.button(label="Play Again", style=discord.ButtonStyle.blurple)
+    async def play_again(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if interaction.user.id != self.ctx.author.id:
+            return await interaction.response.send_message(
+                "This isn't your game.", ephemeral=True
+            )
+        await interaction.response.defer()
+        await self.cog.pokepractice(self.ctx)
+
+
+class GameView(discord.ui.View):
+    def __init__(self, ctx: Context, give_up_flag: asyncio.Event):
+        super().__init__(timeout=None)
+        self.ctx = ctx
+        self.give_up_flag = give_up_flag
+
+    @discord.ui.button(label="Give Up", style=discord.ButtonStyle.grey)
+    async def give_up(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if interaction.user.id != self.ctx.author.id:
+            return await interaction.response.send_message(
+                "This isn't your game.", ephemeral=True
+            )
+        await interaction.response.defer()
+        self.give_up_flag.set()
 
 
 class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats, Letterboxd):
@@ -452,6 +490,138 @@ class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats, Letter
             self.bot.cached_roblox_templates[aid] = (image_url, extra, now)
 
             await self.self_send_asset(ctx, image_url, extra, cached_at=now)
+
+    @commands.command(name="pokehelp")
+    async def pokehelp(self, ctx: Context):
+        """Shows which Pokémon you ask for help solving the most."""
+
+        rows = await self.bot.pool.fetch(
+            "SELECT pokemon_name, COUNT(*) as c FROM pokemon_solves WHERE user_id = $1 GROUP BY pokemon_name ORDER BY c DESC",
+            ctx.author.id,
+        )
+
+        if not rows:
+            raise commands.BadArgument(
+                f"No solve history found for {ctx.author}. Have you used fish to auto-solve Pokétwo spawns?"
+            )
+
+        entries = [
+            f"{r['pokemon_name'].capitalize()} (*{plural(int(r['c'])):time}*)"
+            for r in rows
+        ]
+
+        pages = SimplePages(entries=entries, ctx=ctx, per_page=15)
+        pages.embed.color = self.bot.embedcolor
+        pages.embed.title = f"Most helped Pokémon for {ctx.author.display_name}"
+        await pages.start(ctx)
+
+    @commands.command(name="pokepractice")
+    async def pokepractice(self, ctx: Context):
+        """Guess a random Pokémon from your solve history."""
+
+        row = await self.bot.pool.fetchrow(
+            "SELECT pokemon_name FROM pokemon_solves WHERE user_id = $1 ORDER BY RANDOM() LIMIT 1",
+            ctx.author.id,
+        )
+
+        if not row:
+            raise commands.BadArgument(
+                f"No solve history found for {ctx.author}. Have you used fish to auto-solve Pokétwo spawns?"
+            )
+
+        name = row["pokemon_name"]
+        display = name.capitalize()
+
+        url = f"https://img.pokemondb.net/artwork/large/{name}.jpg"
+
+        async with ctx.typing():
+            for attempt in range(3):
+                try:
+                    img_data = await to_image(ctx.session, url, bytes=True)
+                    break
+                except Exception:
+                    if attempt >= 2:
+                        raise commands.BadArgument(
+                            "Couldn't load an image, this may be a Pokétwo-specific Pokémon not found in standard databases."
+                        )
+                    row = await self.bot.pool.fetchrow(
+                        "SELECT pokemon_name FROM pokemon_solves WHERE user_id = $1 AND pokemon_name != $2 ORDER BY RANDOM() LIMIT 1",
+                        ctx.author.id,
+                        name,
+                    )
+                    if not row:
+                        raise commands.BadArgument(
+                            "Couldn't find an image for any of your Pokémon."
+                        )
+                    name = row["pokemon_name"]
+                    display = name.capitalize()
+                    url = f"https://img.pokemondb.net/artwork/large/{name}.jpg"
+
+        embed = discord.Embed(
+            color=self.bot.embedcolor, title="What Pokémon is this? You have 5 guesses."
+        )
+        embed.set_image(url="attachment://pokemon.png")
+
+        give_up_flag = asyncio.Event()
+        game_view = GameView(ctx, give_up_flag)
+
+        msg = await ctx.send(
+            embed=embed,
+            file=discord.File(BytesIO(img_data), "pokemon.png"),
+            view=game_view,
+        )
+
+        attempts = 0
+        correct = False
+        while attempts < 5 and not correct and not give_up_flag.is_set():
+            tasks = [
+                asyncio.create_task(
+                    ctx.bot.wait_for(
+                        "message",
+                        timeout=30.0,
+                        check=lambda m: m.author == ctx.author
+                        and m.channel == ctx.channel,
+                    )
+                ),
+                asyncio.create_task(give_up_flag.wait()),
+            ]
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            for t in pending:
+                t.cancel()
+
+            if give_up_flag.is_set():
+                embed.color = 0xE74C3C
+                embed.title = f"You gave up! It was {display}."
+                await msg.edit(embed=embed, view=EndView(self, ctx))
+                return
+
+            guess_msg = done.pop().result()
+            guess = guess_msg.content.strip().lower()
+            attempts += 1
+
+            if guess == name:
+                correct = True
+                embed.color = 0x2ECC71
+                embed.title = f"Correct! It's {display}."
+                try:
+                    await guess_msg.add_reaction("✅")
+                except:
+                    pass
+            else:
+                try:
+                    await guess_msg.add_reaction("❌")
+                except:
+                    pass
+                if attempts >= 5:
+                    embed.color = 0xE74C3C
+                    embed.title = f"❌ Out of guesses! It was {display}."
+                else:
+                    embed.title = f"What Pokémon is this? ({5 - attempts} guesses left)"
+            await msg.edit(embed=embed)
+
+        await msg.edit(embed=embed, view=EndView(self, ctx))
 
 
 async def setup(bot: Fishie):

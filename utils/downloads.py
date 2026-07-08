@@ -4,10 +4,12 @@ import glob
 import os
 import secrets
 import subprocess
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import asyncio
 import discord
+from discord import ui, MediaGalleryItem
 import sys
 
 from .errors import DownloadError, InvalidWebsite
@@ -16,8 +18,10 @@ from .regexes import (
     INSTAGRAM_RE,
     SOUNDCLOUD_RE,
     TIKTOK_RE,
+    TWITCH_RE,
     TWITTER_RE,
     YOUTUBE_RE,
+    YT_CLIP_RE,
     YT_SHORT_RE,
 )
 from io import BufferedReader, BytesIO
@@ -30,6 +34,7 @@ MAX_FILESIZE: int = 50_000_000  # 50 MB
 _COOKIE_MAP: list[tuple[Any, str]] = [
     (YOUTUBE_RE, "files/cookies/youtube-cookies.txt"),
     (YT_SHORT_RE, "files/cookies/youtube-cookies.txt"),
+    (YT_CLIP_RE, "files/cookies/youtube-cookies.txt"),
     (TWITTER_RE, "files/cookies/twitter-cookies.txt"),
     (INSTAGRAM_RE, "files/cookies/instagram-cookies.txt"),
 ]
@@ -243,13 +248,13 @@ class Downloader:
         _ALLOWED = (
             YOUTUBE_RE,
             YT_SHORT_RE,
+            YT_CLIP_RE,
             INSTAGRAM_RE,
             TIKTOK_RE,
             SOUNDCLOUD_RE,
             TWITTER_RE,
+            TWITCH_RE,
         )
-        if not any(p.search(self.url) for p in _ALLOWED):
-            raise InvalidWebsite()
 
         is_audio = SOUNDCLOUD_RE.search(self.url) or self.format == "mp3"
 
@@ -301,33 +306,60 @@ class Downloader:
     async def download(self):
         files: List[discord.File] = []
 
+        started = time.time()
+
         try:
             files.append(await self._download())
         except DownloadError as e:
             await self.ctx.send(str(e), ephemeral=self.hidden)
             return
 
+        elapsed = time.time() - started
+        info_text = f"-# Invoked by {self.ctx.author.mention}\n-# Took {elapsed:.1f}s"
+
+        file = files[0]
+        filename = file.filename.lower()
+
         try:
-            await self.ctx.send(
-                files=files,
-                mention_author=True,
-                reference=self.ctx.message.to_reference(fail_if_not_exists=False),
-                ephemeral=self.hidden,
-            )
+            if filename.endswith((".mp4", ".webm", ".mov")):
+                gallery = ui.MediaGallery(
+                    MediaGalleryItem(f"attachment://{file.filename}")
+                )
+                container = ui.Container(
+                    gallery,
+                    ui.TextDisplay(info_text),
+                    accent_color=self.ctx.bot.embedcolor,
+                )
+                view_type = type("DownloadView", (ui.LayoutView,), {})
+                v = view_type(timeout=None)
+                v.add_item(container)
+                await self.ctx.send(
+                    file=file,
+                    view=v,
+                    reference=self.ctx.message.to_reference(fail_if_not_exists=False),
+                    ephemeral=self.hidden,
+                )
+            else:
+                await self.ctx.send(
+                    files=files,
+                    mention_author=True,
+                    reference=self.ctx.message.to_reference(fail_if_not_exists=False),
+                    ephemeral=self.hidden,
+                )
         except discord.HTTPException:
             text = (
                 "Files were too big for Discord. "
                 "**These will delete after 72 hours**\n\n"
             )
-            for file in files:
-                file_bytes = await self._file_to_bytes(file)
-                url = await litterbox(self.ctx.session, file_bytes, file.filename)
+            for f in files:
+                file_bytes = await self._file_to_bytes(f)
+                url = await litterbox(self.ctx.session, file_bytes, f.filename)
                 text += f"{url}\n"
             await self.ctx.send(text, ephemeral=self.hidden)
 
-        for file in files:
+        for f in files:
             try:
-                await run(f'cd files/downloads && rm "{file.filename}"')
+                await run(f'cd files/downloads && rm "{f.filename}"')
             except Exception:
                 pass
 

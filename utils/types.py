@@ -37,6 +37,7 @@ class Webhooks(TypedDict):
     error_logs: str
     messages: str
 
+
 class Twitter(TypedDict):
     username: str
     password: str
@@ -69,6 +70,7 @@ class Keys(TypedDict):
     dagpi: str
     roblox: str
     steam: str
+
 
 class ConfigTokens(TypedDict):
     bot: str

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 from collections import Counter
+import random
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -34,6 +35,7 @@ from utils import (
     ReviewsPageSource,
     ReviewSender,
     Pager,
+    SimplePages,
 )
 
 if TYPE_CHECKING:
@@ -46,6 +48,152 @@ statuses: TypeAlias = Union[
 BURPLE = discord.ButtonStyle.blurple
 GREEN = discord.ButtonStyle.green
 
+_PERM_LABELS = {
+    "create_instant_invite": "Create Invite",
+    "kick_members": "Kick Members",
+    "ban_members": "Ban Members",
+    "administrator": "Administrator",
+    "manage_channels": "Manage Channels",
+    "manage_guild": "Manage Server",
+    "add_reactions": "Add Reactions",
+    "view_audit_log": "View Audit Log",
+    "priority_speaker": "Priority Speaker",
+    "stream": "Stream",
+    "read_messages": "Read Messages",
+    "send_messages": "Send Messages",
+    "send_tts_messages": "Send TTS",
+    "manage_messages": "Manage Messages",
+    "embed_links": "Embed Links",
+    "attach_files": "Attach Files",
+    "read_message_history": "Read History",
+    "mention_everyone": "Mention Everyone",
+    "external_emojis": "External Emojis",
+    "connect": "Connect",
+    "speak": "Speak",
+    "mute_members": "Mute Members",
+    "deafen_members": "Deafen Members",
+    "move_members": "Move Members",
+    "use_voice_activation": "Use VAD",
+    "change_nickname": "Change Nickname",
+    "manage_nicknames": "Manage Nicknames",
+    "manage_roles": "Manage Roles",
+    "manage_webhooks": "Manage Webhooks",
+    "manage_expressions": "Manage Expressions",
+    "use_application_commands": "Use Slash Commands",
+    "request_to_speak": "Request to Speak",
+    "manage_events": "Manage Events",
+    "manage_threads": "Manage Threads",
+    "create_public_threads": "Create Public Threads",
+    "create_private_threads": "Create Private Threads",
+    "external_stickers": "External Stickers",
+    "send_messages_in_threads": "Send in Threads",
+    "use_embedded_activities": "Use Activities",
+    "moderate_members": "Moderate Members",
+    "bypass_slowmode": "Bypass Slowmode",
+    "pin_messages": "Pin Messages",
+    "create_expressions": "Create Expressions"
+}
+
+
+_PERM_CATEGORIES = {
+    "Moderation": ("kick_members", "ban_members", "moderate_members", "manage_messages", "manage_roles", "manage_channels", "manage_guild", "manage_nicknames", "manage_webhooks", "manage_threads", "manage_events", "manage_expressions", "view_audit_log", "mention_everyone", "administrator"),
+    "Media": ("embed_links", "attach_files", "add_reactions", "external_emojis", "external_stickers", "send_messages_in_threads", "create_expressions", "use_embedded_activities", "stream"),
+    "General": ("send_messages", "read_messages", "read_message_history", "create_instant_invite", "change_nickname", "connect", "speak", "use_voice_activation", "priority_speaker", "request_to_speak", "mute_members", "deafen_members", "move_members", "use_application_commands", "bypass_slowmode", "pin_messages", "create_public_threads", "create_private_threads", "send_tts_messages"),
+}
+
+
+class RoleDropdown(discord.ui.Select):
+    def __init__(self, ctx: Context, role: discord.Role, index_embed: discord.Embed):
+        self.ctx = ctx
+        self.role = role
+        self.index_embed = index_embed
+
+        perms = list(_PERM_LABELS.get(perm, perm) for perm, val in role.permissions if val)
+
+        options = [
+            discord.SelectOption(label="Home", description="Back to role overview", emoji="\U0001f3e0", value="index"),
+            discord.SelectOption(label="Permissions", description=f"{len(perms)} permissions", emoji="\U0001f512", value="permissions"),
+            discord.SelectOption(label="Members", description=f"{len(role.members)} members", emoji="\U0001f465", value="members"),
+        ]
+        super().__init__(placeholder="Select a category", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            base_view = discord.ui.View(timeout=120)
+            base_view.add_item(RoleDropdown(self.ctx, self.role, self.index_embed))
+
+            if self.values[0] == "index":
+                await interaction.response.edit_message(embed=self.index_embed, view=base_view)
+            elif self.values[0] == "permissions":
+                embed = discord.Embed(color=self.role.color or self.ctx.bot.embedcolor, title=f"Permissions for {self.role.name}")
+                for cat, perm_names in _PERM_CATEGORIES.items():
+                    perms = list(_PERM_LABELS.get(p, p) for p in perm_names if getattr(self.role.permissions, p, False))
+                    if perms:
+                        embed.add_field(name=cat, value=human_join([f"`{p}`" for p in perms], final="and"), inline=False)
+                if not embed.fields:
+                    embed.description = "No permissions."
+                await interaction.response.edit_message(embed=embed, view=base_view)
+            elif self.values[0] == "members":
+                members = self.role.members
+                bots = [m for m in members if m.bot]
+                humans = [m for m in members if not m.bot]
+
+                embed = discord.Embed(color=self.role.color or self.ctx.bot.embedcolor, title=f"Members with {self.role.name}")
+                embed.add_field(name="Total", value=str(len(members)), inline=True)
+                embed.add_field(name="Humans", value=str(len(humans)), inline=True)
+                embed.add_field(name="Bots", value=str(len(bots)), inline=True)
+
+                if self.ctx.author.guild_permissions.manage_roles and self.ctx.guild.me.guild_permissions.manage_roles:
+                    for btn in RoleMemberButtons(self.ctx, self.role).children:
+                        base_view.add_item(btn)
+                await interaction.response.edit_message(embed=embed, view=base_view)
+        except Exception as e:
+            await interaction.response.send_message(f"Something went wrong: {e}", ephemeral=True)
+
+
+class RoleMemberButtons(discord.ui.View):
+    def __init__(self, ctx: Context, role: discord.Role):
+        super().__init__(timeout=120)
+        self.ctx = ctx
+        self.role = role
+
+    @discord.ui.button(label="Add Member", style=discord.ButtonStyle.green)
+    async def add_member(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_roles:
+            return await interaction.response.send_message("You need Manage Roles permission.", ephemeral=True)
+        modal = _RoleMemberModal(self.ctx, self.role, "add")
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Remove Member", style=discord.ButtonStyle.red)
+    async def remove_member(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_roles:
+            return await interaction.response.send_message("You need Manage Roles permission.", ephemeral=True)
+        modal = _RoleMemberModal(self.ctx, self.role, "remove")
+        await interaction.response.send_modal(modal)
+
+
+class _RoleMemberModal(discord.ui.Modal, title="Member ID"):
+    member_id = discord.ui.TextInput(label="Enter the member's ID", placeholder="Discord user ID…")
+
+    def __init__(self, ctx: Context, role: discord.Role, action: str):
+        super().__init__()
+        self.ctx = ctx
+        self.role = role
+        self.action = action
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            member = await interaction.guild.fetch_member(int(self.member_id.value.strip()))
+        except (ValueError, discord.HTTPException):
+            await interaction.response.send_message("Invalid member ID.", ephemeral=True)
+            return
+
+        if self.action == "add":
+            await member.add_roles(self.role, reason=f"Added by {interaction.user}")
+            await interaction.response.send_message(f"✅ Added {self.role.name} to {member.mention}.", ephemeral=True)
+        else:
+            await member.remove_roles(self.role, reason=f"Removed by {interaction.user}")
+            await interaction.response.send_message(f"✅ Removed {self.role.name} from {member.mention}.", ephemeral=True)
 
 class UserDropdown(discord.ui.Select):
     def __init__(
@@ -1029,3 +1177,30 @@ class Info(Cog):
         """
 
         await self.review_func(ctx, user, hidden)
+
+    @commands.command(name="roleinfo")
+    @commands.guild_only()
+    async def roleinfo(self, ctx: Context, *, role: discord.Role):
+        """Shows information about a role."""
+
+        color_rgb = role.color.to_rgb()
+
+        embed = discord.Embed(color=role.color or self.bot.embedcolor)
+        embed.set_author(
+            name=f"{role.name}  ·  {role.id}",
+            icon_url=ctx.guild.icon.url if ctx.guild.icon else ctx.author.display_avatar.url,
+        )
+        info = f"""
+        Colo{'' if random.randint(0,1) == 1 else "u"}r: `#{role.color.value:06X}` - `RGB({color_rgb[0]}, {color_rgb[1]}, {color_rgb[2]})`
+        Mentionable: {'Yes' if role.mentionable else 'No'}
+        Members: {len(role.members):,}
+        Bots: {sum(1 for b in role.members if b.bot):,}
+        """
+
+        embed.set_footer(text="Created at")
+        embed.timestamp = role.created_at
+        embed.description = info
+
+        view = discord.ui.View(timeout=120)
+        view.add_item(RoleDropdown(ctx, role, embed))
+        await ctx.send(embed=embed, view=view)
