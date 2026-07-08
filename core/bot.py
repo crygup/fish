@@ -108,6 +108,7 @@ class Fishie(commands.Bot):
         self.cached_honeypots: set[int] = set()
         self.cached_banned_ips: set[str] = set()
         self.testing: bool = testing
+        self.current_downloads: List[str] = []
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(
             60.0, 60.0, commands.BucketType.default
         )
