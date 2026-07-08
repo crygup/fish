@@ -156,7 +156,10 @@ class Logging(Cog):
                 if data.get(item):
                     data.update({item: [data[item][0], "\U0001f534"]})
 
-        await ctx.send(view=DropdownView(ctx, data))
+        await ctx.send(
+            "-# Manage your tracking settings on the [website](https://crygup.com/discord?tab=settings)",
+            view=DropdownView(ctx, data)
+        )
 
     @logging.command(name="guild", aliases=("server",))
     @commands.guild_only()
@@ -175,7 +178,10 @@ class Logging(Cog):
                 if data.get(item):
                     data.update({item: [data[item][0], "\U0001f534"]})
 
-        await ctx.send(view=DropdownView(ctx, data, guild_id=ctx.guild.id))
+        await ctx.send(
+            "-# Manage server tracking settings on the [website](https://crygup.com/discord?tab=settings)",
+            view=DropdownView(ctx, data, guild_id=ctx.guild.id)
+        )
 
     @commands.hybrid_group(name="logging-delete", fallback="all", hidden=True)
     @interaction_only()

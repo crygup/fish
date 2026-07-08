@@ -182,6 +182,75 @@ class TenorUrlConverter(commands.Converter):
         return re.sub("AAAAd", "AAAAC", url)
 
 
+
+class MediaConverter(commands.Converter[str]):
+    """Converts user input into a media URL.
+
+    Checks in order:
+    1. Attachments on the command message
+    2. Replied message (attachments, embeds, stickers)
+    3. Mentioned user → display avatar
+    4. Tenor link
+    5. Direct image/video URL
+    """
+
+    async def convert(self, ctx: Context, argument: str = "") -> str:
+        if ctx.message.attachments:
+            att = ctx.message.attachments[0]
+            if att.content_type and (att.content_type.startswith("image/") or att.content_type.startswith("video/")):
+                return att.url
+
+        # 2. replied message
+        ref = ctx.message.reference
+        if ref and ref.message_id:
+            try:
+                replied = await ctx.fetch_message(ref.message_id)
+            except discord.HTTPException:
+                replied = None
+            if replied:
+                if replied.attachments:
+                    att = replied.attachments[0]
+                    if att.content_type and (att.content_type.startswith("image/") or att.content_type.startswith("video/")):
+                        return att.url
+                if replied.embeds:
+                    emb = replied.embeds[0]
+                    if emb.image and emb.image.url:
+                        return emb.image.url
+                    if emb.thumbnail and emb.thumbnail.url:
+                        return emb.thumbnail.url
+        # 2.5. scan recent messages for media
+        if not argument:
+            try:
+                async for msg in ctx.history(limit=6):
+                    if msg.id == ctx.message.id:
+                        continue
+                    if msg.attachments:
+                        att = msg.attachments[0]
+                        if att.content_type and (att.content_type.startswith("image/") or att.content_type.startswith("video/")):
+                            return att.url
+                    if msg.embeds:
+                        emb = msg.embeds[0]
+                        if emb.image and emb.image.url:
+                            return emb.image.url
+                        if emb.thumbnail and emb.thumbnail.url:
+                            return emb.thumbnail.url
+            except discord.HTTPException:
+                pass
+
+        # 4. tenor link
+        if argument:
+            try:
+                return await TenorUrlConverter().convert(ctx, argument)
+            except commands.BadArgument:
+                pass
+
+        # 5. direct image/video URL — only trust known extensions
+        if argument:
+            lowered = argument.lower()
+            for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".webm", ".mov"):
+                if lowered.endswith(ext) or f"{ext}?" in lowered:
+                    return argument
+
 class _AccountConverter(commands.Converter[str]):
     """Base: try to resolve as Discord user → linked account, else validate raw."""
 

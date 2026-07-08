@@ -16,7 +16,6 @@ from utils import (
     FieldPageSource,
     Pager,
     format_bytes,
-    format_status,
     human_timedelta,
     plural,
     to_image,
@@ -76,6 +75,7 @@ class Commands(Cog):
             source.embed.title = (
                 f"{['Avatars', 'Guild avatars'][bool(guild_id)]} for {user}"
             )
+            source.embed.description = f"-# View all avatars [here](https://crygup.com/discord?tab=user&subtab=avatars&q={user.id})"
             pager = Pager(source, ctx=ctx)
             await pager.start(ctx)
 
@@ -133,11 +133,10 @@ class Commands(Cog):
             embed = discord.Embed(color=self.bot.embedcolor, timestamp=first_avatar)
 
             embed.set_image(url=f"attachment://{user.id}_avatar_history.png")
+            embed.set_author(name=f"{user.display_name}'s avatar in a grid view.", icon_url=user.display_avatar.url)
             embed.set_footer(text="First avatar saved")
-
-            await ctx.send(
-                f"Viewing avatars in a grid view for {user}", file=file, embed=embed
-            )
+            embed.description = f"-# View all avatars [here](https://crygup.com/discord?tab=user&subtab=avatars&q={user.id})"
+            await ctx.send(file=file, embed=embed)
 
     @commands.hybrid_group(
         name="avatars", aliases=("pfps", "avis", "avs"), fallback="profile"
@@ -205,6 +204,7 @@ class Commands(Cog):
         source = FieldPageSource(entries=entries)
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Usernames for {user}"
+        source.embed.description = f"-# View all usernames [here](https://crygup.com/discord?tab=user&subtab=usernames&q={user.id})"
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
@@ -235,6 +235,7 @@ class Commands(Cog):
         source = FieldPageSource(entries=entries)
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Display names for {user}"
+        source.embed.description = f"-# View all display names [here](https://crygup.com/discord?tab=user&subtab=display-names&q={user.id})"
         pager = Pager(source, ctx=ctx)
 
         await pager.start(ctx)
@@ -268,6 +269,7 @@ class Commands(Cog):
         source = FieldPageSource(entries=entries)
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Nicknames names for {member}"
+        # source.embed.description = f"-# View all nicknames [here](https://crygup.com/discord?tab=user&q={member.id})"
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
@@ -298,6 +300,7 @@ class Commands(Cog):
         source = FieldPageSource(entries=entries)
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Discriminators names for {member}"
+        source.embed.description = f"-# View all discriminators [here](https://crygup.com/discord?tab=user&subtab=discrims&q={member.id})"
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
@@ -326,6 +329,7 @@ class Commands(Cog):
 
         source = FieldPageSource(entries=entries)
         source.embed.color = self.bot.embedcolor
+        source.embed.description = f"-# View all server names [here](https://crygup.com/discord?tab=guild&subtab=names&q={guild.id})"
         source.embed.title = f"Names for {guild}"
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
@@ -359,6 +363,7 @@ class Commands(Cog):
             source = AvatarsPageSource(entries=entries)
             source.embed.color = self.bot.embedcolor
             source.embed.title = f"Icons for {guild}"
+            source.embed.description = f"-# View all icons [here](https://crygup.com/discord?tab=guild&subtab=icons&q={guild.id})"
             pager = Pager(source, ctx=ctx)
             await pager.start(ctx)
 
@@ -394,8 +399,8 @@ class Commands(Cog):
         status = row["status"]
         last_seen = row["last_seen"]
         delta = human_timedelta(last_seen, suffix=False)
-        status_nice = status if status != "dnd" else f"on Do Not Disturb"
-        await ctx.send(f"{user} was last seen ***{status_nice}*** {delta} ago.")
+        status_nice = status if status != "***dnd***" else f"on ***Do Not Disturb***"
+        await ctx.send(f"{user} was last seen {status_nice} {delta} ago.")
 
     @commands.command(name="joins")
     @commands.guild_only()

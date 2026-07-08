@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
-
+import time
+from pathlib import Path
 import discord
+from typing import TYPE_CHECKING, List, Literal, Optional, Union
 from discord.abc import Messageable
 from discord.ext import commands
 
@@ -28,7 +30,7 @@ class Owner(Cog):
     def __init__(self, bot: Fishie):
         super().__init__()
         self.bot = bot
-
+        self._last_reload: float = time.time()
     async def _add_reaction(
         self, ctx: Context, msg: discord.Message, check: bool = True
     ):
@@ -126,6 +128,44 @@ class Owner(Cog):
         self.bot.cached_banned_ips.add(ip)
         await self._add_reaction(ctx, ctx.message)
 
+    @commands.command(name="reload")
+    async def reload(self, ctx: Context, *extensions: str):
+        """Reload extensions. '~' reloads all. No args reloads recently modified."""
+
+        if extensions == ("~",):
+            extensions = tuple(self.bot._extensions)
+
+        if not extensions:
+            modified = []
+            for ext in self.bot._extensions:
+                pkg_dir = Path("extensions") / ext.split(".", 1)[1]
+                if not pkg_dir.is_dir():
+                    continue
+                for py_file in pkg_dir.rglob("*.py"):
+                    if py_file.stat().st_mtime > self._last_reload:
+                        modified.append(ext)
+                        break
+
+            if not modified:
+                await ctx.send("No extensions modified since last reload.")
+                return
+
+            extensions = tuple(modified)
+
+        results = []
+        for ext in extensions:
+            if ext not in self.bot.extensions:
+                results.append(f"\u274c `{ext}` not loaded")
+                continue
+            try:
+                await self.bot.reload_extension(ext)
+                results.append(f"\U0001f504 `{ext}`")
+            except Exception as e:
+                results.append(f"\u274c `{ext}` \n```{e}```")
+
+        self._last_reload = time.time()
+        e=discord.Embed(color=self.bot.embedcolor,description="\n".join(results))
+        await ctx.send(embed=e)
     async def cog_check(self, ctx: commands.Context[Fishie]) -> bool:
         if await ctx.bot.is_owner(ctx.author):
             return True
