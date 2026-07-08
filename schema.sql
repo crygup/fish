@@ -325,3 +325,8 @@ CREATE TABLE IF NOT EXISTS corn_reacts (
 CREATE INDEX IF NOT EXISTS corn_reacts_receiver_idx ON corn_reacts (receiver_id);
 CREATE INDEX IF NOT EXISTS corn_reacts_giver_idx ON corn_reacts (giver_id);
 CREATE INDEX IF NOT EXISTS corn_reacts_guild_idx ON corn_reacts (guild_id);
+
+CREATE TABLE IF NOT EXISTS banned_ips (
+    ip TEXT PRIMARY KEY,
+    banned_at TIMESTAMP WITH TIME ZONE DEFAULT (now() at time zone 'utc')
+);

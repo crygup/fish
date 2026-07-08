@@ -3,18 +3,21 @@ bot = ""
 testing_bot = ""
 
 [keys]
+client_secret = ""
 fishie_api = ""
 lastfm = ""
 lastfm_secret = ""
+lastfm_cb = ""
+lastfm_cb_secret = ""
 google = [
-    "",
-    "",
     "",
 ]
 google_id = ""
 spotify_id = ""
 spotify_secret = ""
 dagpi = ""
+roblox = ""
+steam = ""
 
 [databases]
 psql = ""
@@ -29,8 +32,12 @@ owner_id = 1
 bot_id = 1
 poketwo_id = 1
 mudae_id = 1
+guild_id = 1
 join_logs_id = 1
 
 [webhooks]
-images = []
+images = [
+    "",
+]
 error_logs = ""
+messages = ""

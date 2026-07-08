@@ -118,6 +118,14 @@ class Owner(Cog):
 
         await ctx.send("\n".join(found))
 
+    @commands.command(name="banip")
+    async def banip(self, ctx: Context, ip: str):
+        """Ban an IP from sending messages through the website."""
+        sql = "INSERT INTO banned_ips (ip) VALUES ($1) ON CONFLICT DO NOTHING"
+        await self.bot.pool.execute(sql, ip)
+        self.bot.cached_banned_ips.add(ip)
+        await self._add_reaction(ctx, ctx.message)
+
     async def cog_check(self, ctx: commands.Context[Fishie]) -> bool:
         if await ctx.bot.is_owner(ctx.author):
             return True

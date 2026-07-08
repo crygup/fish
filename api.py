@@ -6,8 +6,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import aiohttp
-from fastapi import Body, FastAPI, Header, HTTPException, Query
+from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+import time
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -327,7 +329,7 @@ async def oauth_exchange(code: str = Query(...)):
         "client_id": str(bot_ref.config["ids"]["bot_id"]),
         "client_secret": bot_ref.config["keys"]["client_secret"],
         "code": code,
-        "redirect_uri": "https://crygup.com/discord",
+        "redirect_uri": "https://crygup.com",
         "grant_type": "authorization_code",
     }
     async with aiohttp.ClientSession() as session:
@@ -537,3 +539,56 @@ async def spotify_cover(artist: str = Query(...), track: str = Query(...)):
     if not images:
         raise HTTPException(404, "No cover found")
     return {"url": images[0]["url"]}
+
+
+class MessagePayload(BaseModel):
+    name: str = Field(..., min_length=1, max_length=50)
+    content: str = Field(..., min_length=1, max_length=2000)
+    avatar_url: str | None = None
+    discord_id: str | None = None
+
+
+_msg_rate_limit: dict[str, float] = {}
+
+
+@app.post("/send-message")
+async def send_message(payload: MessagePayload, request: Request):
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+
+    webhook_url = bot_ref.config["webhooks"].get("messages", "")
+    if not webhook_url:
+        raise HTTPException(500, "Webhook not configured")
+
+    # rate limit: 1 per minute per IP
+    ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+    ip = ip.split(",")[0].strip()
+
+    if ip in bot_ref.cached_banned_ips:
+        raise HTTPException(403, "You are banned from sending messages")
+
+    now = time.time()
+    last = _msg_rate_limit.get(ip, 0)
+    if now - last < 60:
+        raise HTTPException(429, "Please wait before sending another message")
+    _msg_rate_limit[ip] = now
+
+    # sanitize
+    name = payload.name.replace("discord.com/api/webhooks", "[redacted]")
+    content = payload.content.replace("discord.com/api/webhooks", "[redacted]")
+
+    embed = {
+        "author": {"name": name, "icon_url": payload.avatar_url} if payload.avatar_url else {"name": name},
+        "description": content,
+        "footer": {"text": f"IP: {ip}"},
+        "color": 0xFAA0C1,
+    }
+    if payload.discord_id:
+        embed["footer"]["text"] += f" · ID: {payload.discord_id}"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(webhook_url, json={"embeds": [embed]}) as resp:
+            if resp.status not in (200, 204):
+                raise HTTPException(500, f"Webhook returned {resp.status}")
+
+    return {"ok": True}

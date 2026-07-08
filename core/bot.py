@@ -77,6 +77,7 @@ class Fishie(commands.Bot):
     cached_roblox_templates: dict[int, tuple[str, dict, datetime.datetime]] = {}
     cached_mudae_consent: set[int] = set()
     cached_honeypots: set[int] = set()
+    cached_banned_ips: set[str] = set()
     pokemon: List[str]
     error_logs: discord.Webhook
 
@@ -105,8 +106,8 @@ class Fishie(commands.Bot):
         )
         self.cached_mudae_consent: set[int] = set()
         self.cached_honeypots: set[int] = set()
+        self.cached_banned_ips: set[str] = set()
         self.testing: bool = testing
-        self.current_downloads: List[str] = []
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(
             60.0, 60.0, commands.BucketType.default
         )
@@ -398,6 +399,11 @@ class Fishie(commands.Bot):
         for row in honeypot_rows:
             self.cached_honeypots.add(row["channel_id"])
         self.logger.info(f"Cached {len(self.cached_honeypots)} honeypot channel(s)")
+
+        banned_rows = await self.pool.fetch("SELECT ip FROM banned_ips")
+        for row in banned_rows:
+            self.cached_banned_ips.add(row["ip"])
+        self.logger.info(f"Cached {len(self.cached_banned_ips)} banned IP(s)")
 
     async def add_reactions(
         self,

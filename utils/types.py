@@ -35,7 +35,7 @@ DiscordObjects: TypeAlias = Optional[
 class Webhooks(TypedDict):
     images: List[str]
     error_logs: str
-
+    messages: str
 
 class Twitter(TypedDict):
     username: str
