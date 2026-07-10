@@ -19,6 +19,7 @@ from utils import (
     human_timedelta,
     plural,
     to_image,
+    get_or_fetch_user,
 )
 
 if TYPE_CHECKING:
@@ -405,23 +406,91 @@ class Commands(Cog):
         status_nice = status if status != "***dnd***" else f"on ***Do Not Disturb***"
         await ctx.send(f"{user} was last seen {status_nice} {delta} ago.")
 
-    @commands.command(name="joins")
-    @commands.guild_only()
-    async def joins(self, ctx: GuildContext, member: discord.Member = commands.Author):
-        if "joins" in self.bot.db_cache.get_opted_out(member.id):
-            return await ctx.send(f"{member} has opted out of join logs.")
+    @commands.hybrid_group(name="joins", invoke_without_command=True, fallback="user")
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True, private_channels=True)
+    async def joins(self, ctx: Context, *, user: discord.User = commands.Author):
+        """See your or another user's join stats."""
+        await self._joins_user_stats(ctx, user)
 
-        results: int = (
-            await ctx.pool.fetchval(
-                "SELECT COUNT(*) FROM member_join_logs WHERE member_id = $1 AND guild_id = $2",
-                member.id,
-                member.guild.id,
-            )
-            or 0
+    @joins.command(name="leaderboard", aliases=["lb", "top"])
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True, private_channels=True)
+    async def joins_leaderboard(
+        self, ctx: Context, *, server: Optional[discord.Guild] = commands.CurrentGuild
+    ):
+        """Join leaderboard for this or another server."""
+        if server is None:
+            raise commands.BadArgument("No server specified and not in a server.")
+        await self._joins_server_leaderboard(ctx, server)
+
+    @joins.command(name="global")
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True, private_channels=True)
+    async def joins_global(self, ctx: Context):
+        """Global join leaderboard across all servers."""
+        rows = await ctx.bot.pool.fetch(
+            "SELECT member_id, COUNT(*) AS total FROM member_join_logs "
+            "GROUP BY member_id ORDER BY total DESC LIMIT 10"
         )
+        if not rows:
+            await ctx.send("No join data yet!")
+            return
+        embed = discord.Embed(color=ctx.bot.embedcolor)
+        embed.set_author(name="Join Leaderboard  •  Global")
+        lines = []
+        for r in rows:
+            user = await get_or_fetch_user(ctx.bot, r["member_id"])
+            name = user.display_name if user else str(r["member_id"])
+            lines.append(f"**{r['total']:,}** {name}")
+        embed.description = "\n".join(lines)
+        await ctx.send(embed=embed)
 
-        if results == 0 and self.bot.logging:
-            await self.bot.logging.add_join(member)
-            results = 1
+    async def _joins_server_leaderboard(self, ctx: Context, guild: discord.Guild) -> None:
+        rows = await ctx.bot.pool.fetch(
+            "SELECT member_id, COUNT(*) AS total FROM member_join_logs "
+            "WHERE guild_id = $1 GROUP BY member_id ORDER BY total DESC LIMIT 10",
+            guild.id,
+        )
+        if not rows:
+            await ctx.send(f"No join data for **{guild.name}** yet!")
+            return
+        embed = discord.Embed(color=ctx.bot.embedcolor)
+        embed.set_author(
+            name=f"Join Leaderboard  •  {guild.name}",
+            icon_url=guild.icon.url if guild.icon else None,
+        )
+        lines = []
+        for r in rows:
+            user = guild.get_member(r["member_id"]) or await get_or_fetch_user(
+                ctx.bot, r["member_id"]
+            )
+            name = user.name if user else str(r["member_id"])
+            lines.append(f"**{r['total']:,}** {name}")
+        embed.description = "\n".join(lines)
+        await ctx.send(embed=embed)
 
-        await ctx.send(f"{member} has joined {ctx.guild} {plural(results):time}.")
+    async def _joins_user_stats(self, ctx: Context, user: discord.User) -> None:
+        if "joins" in ctx.bot.db_cache.get_opted_out(user.id):
+            await ctx.send(f"{user} has opted out of join logs.")
+            return
+
+        guild_total = await ctx.bot.pool.fetchval(
+            "SELECT COUNT(*) FROM member_join_logs WHERE member_id = $1 AND guild_id = $2",
+            user.id, ctx.guild.id,
+        ) if ctx.guild else 0
+        global_total = await ctx.bot.pool.fetchval(
+            "SELECT COUNT(*) FROM member_join_logs WHERE member_id = $1",
+            user.id,
+        ) or 0
+
+        if not guild_total and not global_total:
+            if ctx.guild and self.bot.logging:
+                await self.bot.logging.add_join(user)
+                guild_total = 1
+                global_total = 1
+            else:
+                await ctx.send(f"**{user.display_name}** has no join records yet!")
+                return
+
+        await ctx.send(f"You've joined {ctx.guild.name} {plural(int(guild_total)):time}.\n-# \- *{plural(int(global_total)):join} across all servers*")

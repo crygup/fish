@@ -778,3 +778,32 @@ async def send_message(payload: MessagePayload, request: Request):
                 raise HTTPException(500, f"Webhook returned {resp.status}")
 
     return {"ok": True}
+
+
+@app.get("/ror2-items")
+async def get_ror2_items():
+    """Return all RoR2 items from the database."""
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    pool = bot_ref.pool
+    if not pool:
+        raise HTTPException(503, "Database not connected")
+    rows = await pool.fetch("SELECT * FROM ror2_items ORDER BY name")
+    items = []
+    for r in rows:
+        items.append(
+            {
+                "internal_name": r["internal_name"],
+                "name": r["name"],
+                "desc_short": r.get("desc_short", ""),
+                "desc_full": r.get("desc_full", ""),
+                "rarity": r.get("rarity", ""),
+                "categories": r.get("categories", []),
+                "achievement_locked": r.get("achievement_locked", ""),
+                "stats": r.get("stats") or {},
+                "lore": r.get("lore", ""),
+                "corrupted_iname": r.get("corrupted_iname", ""),
+                "extra": r.get("extra") or {},
+            }
+        )
+    return {"items": items, "count": len(items)}

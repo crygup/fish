@@ -330,3 +330,30 @@ CREATE TABLE IF NOT EXISTS banned_ips (
     ip TEXT PRIMARY KEY,
     banned_at TIMESTAMP WITH TIME ZONE DEFAULT (now() at time zone 'utc')
 );
+
+CREATE TABLE IF NOT EXISTS ror2_items (
+    id SERIAL,
+    internal_name TEXT PRIMARY KEY,
+    name TEXT,
+    desc_short TEXT,
+    desc_full TEXT,
+    rarity TEXT,
+    categories TEXT[] DEFAULT '{}',
+    achievement_locked TEXT,
+    stats JSONB DEFAULT ('{}'::jsonb),
+    lore TEXT,
+    desc_full_info TEXT,
+    corrupted_iname TEXT,
+    extra JSONB DEFAULT ('{}'::jsonb)
+);
+
+CREATE TABLE IF NOT EXISTS ror2_enemies (
+    id SERIAL,
+    internal_name TEXT PRIMARY KEY,
+    name TEXT,
+    type TEXT,
+    lore TEXT,
+    stats JSONB DEFAULT ('{}'::jsonb),
+    extra JSONB DEFAULT ('{}'::jsonb),
+    img_url TEXT
+);
