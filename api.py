@@ -885,8 +885,11 @@ async def get_guild_settings(guild_id: int, authorization: str = Header(None)):
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
     guild = bot_ref.get_guild(guild_id)
-    if not guild or not guild.get_member(int(me["id"])):
-        raise HTTPException(403, "You must be a member of this guild")
+    if not guild:
+        raise HTTPException(404, "Guild not found")
+    member = guild.get_member(int(me["id"]))
+    if not member or not member.guild_permissions.manage_guild:
+        raise HTTPException(403, "Need Manage Server permission")
     pool = _check_pool()
     row = await pool.fetchrow("SELECT * FROM guild_settings WHERE guild_id = $1", guild_id)
     hp = await pool.fetchrow("SELECT channel_id FROM honeypot_channels WHERE guild_id = $1", guild_id)
