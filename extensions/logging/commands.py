@@ -493,4 +493,4 @@ class Commands(Cog):
                 await ctx.send(f"**{user.display_name}** has no join records yet!")
                 return
 
-        await ctx.send(f"You've joined {ctx.guild.name} {plural(int(guild_total)):time}.\n-# \- *{plural(int(global_total)):join} across all servers*")
+        await ctx.send(f"**{utils.escape_markdown(user.display_name)}** has joined {ctx.guild.name} {plural(int(guild_total)):time}.\n-# \- *{plural(int(global_total)):join} across all servers*")
