@@ -84,8 +84,8 @@ class Timer:
         self.args: Sequence[Any] = extra.get("args", [])
         self.kwargs: dict[str, Any] = extra.get("kwargs", {})
         self.event: str = record["event"]
-        self.created_at: datetime.datetime = record["created"]
-        self.expires: datetime.datetime = record["expires"]
+        self.created_at: datetime.datetime = record["created"].replace(tzinfo=datetime.timezone.utc)
+        self.expires: datetime.datetime = record["expires"].replace(tzinfo=datetime.timezone.utc)
         self.timezone: str = record["timezone"]
 
     @classmethod
@@ -657,7 +657,7 @@ class Reminder(Cog):
 
         entries = [
             (
-                f"{_id}: {discord.utils.format_dt(expires,'R')}",
+                f"{_id}: {discord.utils.format_dt(expires.replace(tzinfo=datetime.timezone.utc),'R')}",
                 textwrap.shorten(message, width=512),
             )
             for _id, expires, message in records
@@ -701,7 +701,8 @@ class Reminder(Cog):
         such as tempblock, tempmute, etc.
         """
 
-        await ctx.bot.pool.execute(
+        pool = self.bot.pool
+        await pool.execute(
             """INSERT INTO user_settings (user_id, timezone)
                VALUES ($1, $2)
                ON CONFLICT (user_id) DO UPDATE SET timezone = $2;

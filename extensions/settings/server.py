@@ -59,16 +59,16 @@ class Server(Cog):
         """Manage the server prefixes"""
         format_dt = discord.utils.format_dt
 
-        sql = """SELECT * FROM guild_prefixes WHERE guild_id = $1 ORDER BY time DESC"""
+        sql = """SELECT * FROM guild_prefixes WHERE guild_id = $1 AND time IS NOT NULL ORDER BY time DESC"""
         records = await ctx.bot.pool.fetch(sql, ctx.guild.id)
 
         if not bool(records):
             raise commands.BadArgument("This server has no prefixes set.")
-
+        
         entries = [
             (
                 record["prefix"],
-                f'{format_dt(record["time"], "R")}  |  {format_dt(record["time"], "d")} | {(await get_or_fetch_user(self.bot, record["author_id"])).mention}',
+                f'{format_dt(record["time"], "R")}  |  {format_dt(record["time"], "d")} | <@{record["author_id"]}>',
             )
             for record in records
         ]

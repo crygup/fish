@@ -286,27 +286,27 @@ async def list_commands():
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
     cmds = []
-    for cmd in bot_ref.commands:
-        if cmd.hidden:
-            continue
-        if cmd.cog_name == "Owner":
-            continue
-        aliases = ", ".join(cmd.aliases) if cmd.aliases else ""
-        sig = ""
+    def add_cmd(c):
+        if c.hidden or c.cog_name in ("Owner", "Jishaku"):
+            return
+        aliases = ", ".join(c.aliases) if c.aliases else ""
         params = []
-        for name, param in cmd.clean_params.items():
+        for name, param in c.clean_params.items():
             req = "required" if param.default is param.empty else "optional"
             params.append({"name": name, "required": req})
-        cmds.append(
-            {
-                "name": cmd.qualified_name,
-                "description": cmd.description or cmd.short_doc or "",
-                "category": cmd.cog_name or "Uncategorized",
-                "usage": cmd.usage or "",
-                "aliases": aliases,
-                "params": params,
-            }
-        )
+        cmds.append({
+            "name": c.qualified_name,
+            "description": c.description or c.short_doc or "",
+            "category": c.cog_name or "Uncategorized",
+            "usage": c.usage or "",
+            "aliases": aliases,
+            "params": params,
+        })
+    for cmd in bot_ref.commands:
+        add_cmd(cmd)
+        if hasattr(cmd, 'walk_commands'):
+            for sub in cmd.walk_commands():
+                add_cmd(sub)
     return {"commands": sorted(cmds, key=lambda c: (c["category"], c["name"]))}
 
 
@@ -393,7 +393,7 @@ async def bot_stats():
     }
 
 
-@app.post("/oauth/exchange")
+@app.get("/oauth/exchange")
 async def oauth_exchange(code: str = Query(...)):
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
@@ -401,7 +401,7 @@ async def oauth_exchange(code: str = Query(...)):
         "client_id": str(bot_ref.config["ids"]["bot_id"]),
         "client_secret": bot_ref.config["keys"]["client_secret"],
         "code": code,
-        "redirect_uri": "https://crygup.com",
+        "redirect_uri": "https://crygup.com/dashboard",
         "grant_type": "authorization_code",
     }
     async with aiohttp.ClientSession() as session:
@@ -443,6 +443,17 @@ async def get_user_data(user_id: int):
         }
 
 
+@app.get("/user/{user_id}/xp")
+async def get_user_xp(user_id: int, authorization: str = Header(None)):
+    """Get XP and message count for a user. Requires OAuth."""
+    me = await _verify_token(authorization)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "You can only view your own XP")
+    pool = _check_pool()
+    row = await pool.fetchrow("SELECT messages, xp FROM message_xp WHERE user_id = $1", user_id)
+    if not row:
+        return {"messages": 0, "xp": 0}
+    return {"messages": row["messages"], "xp": row["xp"]}
 @app.get("/usernames/{user_id}")
 async def get_usernames(
     user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)
@@ -807,3 +818,201 @@ async def get_ror2_items():
             }
         )
     return {"items": items, "count": len(items)}
+
+@app.get("/user/{user_id}/reminders")
+async def get_user_reminders(user_id: int, authorization: str = Header(None)):
+    """Get reminders for a user. Requires OAuth."""
+    me = await _verify_token(authorization)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "You can only view your own reminders")
+    pool = _check_pool()
+    rows = await pool.fetch(
+        "SELECT id, expires, created, event, timezone, extra #>> '{args,2}' AS content "
+        "FROM reminders WHERE event = 'reminder' AND extra #>> '{args,0}' = $1 ORDER BY expires",
+        str(user_id)
+    )
+    return {"reminders": [{"id": r["id"], "expires": str(r["expires"]), "content": r["content"],
+                           "timezone": r["timezone"]} for r in rows]}
+
+
+@app.get("/user/{user_id}/first-command")
+async def get_user_first_command(user_id: int):
+    """Get the date of a user's first command use."""
+    pool = _check_pool()
+    row = await pool.fetchrow(
+        "SELECT created_at FROM command_logs WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1",
+        user_id
+    )
+    return {"first_command": str(row["created_at"]) if row else None}
+
+@app.get("/user/{user_id}/accounts")
+async def get_user_accounts(user_id: int, authorization: str = Header(None)):
+    """Get connected accounts for a user. Requires OAuth."""
+    me = await _verify_token(authorization)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "You can only view your own accounts")
+    pool = _check_pool()
+    row = await pool.fetchrow("SELECT * FROM accounts WHERE user_id = $1", user_id)
+    if not row:
+        return {"accounts": {}}
+    return {"accounts": {k: v for k, v in dict(row).items() if k != "user_id" and v}}
+
+
+@app.post("/user/{user_id}/accounts")
+async def set_user_accounts(user_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+    """Set connected accounts. Requires OAuth."""
+    me = await _verify_token(authorization)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "Not your account")
+    allowed = {"osu", "lastfm", "steam", "roblox", "genshin", "letterboxd"}
+    accounts = {k: v for k, v in payload.get("accounts", {}).items() if k in allowed}
+    pool = _check_pool()
+    if accounts:
+        keys = ", ".join(accounts.keys())
+        vals = ", ".join(f"${i+1}" for i in range(len(accounts)))
+        placeholders = list(accounts.values())
+        await pool.execute(
+            f"INSERT INTO accounts (user_id, {keys}) VALUES ($1, {vals}) ON CONFLICT (user_id) DO UPDATE SET {', '.join(f'{k}=EXCLUDED.{k}' for k in accounts)}",
+            user_id, *placeholders
+        )
+    return {"accounts": accounts}
+
+
+@app.get("/guild/{guild_id}/settings")
+async def get_guild_settings(guild_id: int, authorization: str = Header(None)):
+    """Get guild settings. Requires OAuth."""
+    me = await _verify_token(authorization)
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    guild = bot_ref.get_guild(guild_id)
+    if not guild or not guild.get_member(int(me["id"])):
+        raise HTTPException(403, "You must be a member of this guild")
+    pool = _check_pool()
+    row = await pool.fetchrow("SELECT * FROM guild_settings WHERE guild_id = $1", guild_id)
+    hp = await pool.fetchrow("SELECT channel_id FROM honeypot_channels WHERE guild_id = $1", guild_id)
+    settings = {"auto_download": None, "poketwo": False, "auto_reactions": False, "pinboard": None, "honeypot": None}
+    if row:
+        for k in ("auto_download", "poketwo", "auto_reactions", "pinboard"):
+            settings[k] = row[k]
+    if hp:
+        settings["honeypot"] = hp["channel_id"]
+    return settings
+
+
+@app.post("/guild/{guild_id}/settings")
+async def set_guild_settings(guild_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+    me = await _verify_token(authorization)
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    guild = bot_ref.get_guild(guild_id)
+    if not guild:
+        raise HTTPException(404, "Guild not found")
+    member = guild.get_member(int(me["id"]))
+    if not member or not member.guild_permissions.manage_guild:
+        raise HTTPException(403, "Need Manage Server permission")
+    allowed = {"auto_download", "poketwo", "auto_reactions", "pinboard", "honeypot"}
+    updates = {}
+    pool = _check_pool()
+    if "honeypot" in payload:
+        hp_val = payload["honeypot"]
+        if hp_val:
+            await pool.execute(
+                "INSERT INTO honeypot_channels (guild_id, channel_id) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2",
+                guild_id, int(hp_val)
+            )
+        else:
+            await pool.execute("DELETE FROM honeypot_channels WHERE guild_id = $1", guild_id)
+        updates["honeypot"] = hp_val
+    gs_updates = {k: v for k, v in payload.items() if k in allowed and k != "honeypot"}
+    if gs_updates:
+        keys = ", ".join(gs_updates.keys())
+        placeholders = ", ".join(f"${i+2}" for i in range(len(gs_updates)))
+        set_clause = ", ".join(f"{k} = EXCLUDED.{k}" for k in gs_updates)
+        await pool.execute(
+            f"INSERT INTO guild_settings (guild_id, {keys}) VALUES ($1, {placeholders}) ON CONFLICT (guild_id) DO UPDATE SET {set_clause}",
+            guild_id, *list(gs_updates.values())
+        )
+        for k, v in gs_updates.items():
+            updates[k] = v
+    return {"settings": updates}
+
+
+@app.get("/guild/{guild_id}/prefixes")
+async def get_guild_prefixes(guild_id: int):
+    """Get custom prefixes for a guild."""
+    pool = _check_pool()
+    rows = await pool.fetch("SELECT prefix, author_id, time FROM guild_prefixes WHERE guild_id = $1 ORDER BY time", guild_id)
+    return {"prefixes": [{"prefix": r["prefix"], "author_id": r["author_id"], "time": str(r["time"])} for r in rows]}
+
+
+@app.post("/guild/{guild_id}/prefixes")
+async def add_guild_prefix(guild_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+    """Add a custom prefix. Requires OAuth + Manage Server."""
+    try:
+        me = await _verify_token(authorization)
+        if not bot_ref:
+            raise HTTPException(503, "Bot not ready")
+        guild = bot_ref.get_guild(guild_id)
+        if not guild:
+            raise HTTPException(404, "Guild not found")
+        member = guild.get_member(int(me["id"]))
+        if not member or not member.guild_permissions.manage_guild:
+            raise HTTPException(403, "Need Manage Server permission")
+        prefix = payload.get("prefix", "").strip()
+        if not prefix or len(prefix) > 10:
+            raise HTTPException(400, "Prefix must be 1-10 characters")
+        pool = _check_pool()
+        await pool.execute(
+            "INSERT INTO guild_prefixes (guild_id, prefix, author_id, time) VALUES ($1, $2, $3, NOW()) ON CONFLICT (guild_id, prefix) DO UPDATE SET author_id = EXCLUDED.author_id, time = NOW()",
+            guild_id, prefix, int(payload.get("author_id", me["id"]))
+        )
+        if bot_ref:
+            bot_ref.db_cache.add_prefix(guild_id, prefix)
+        return {"prefix": prefix}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[API ERROR] add_guild_prefix: {e}", flush=True)
+        traceback.print_exc()
+        raise HTTPException(500, str(e))
+
+@app.delete("/guild/{guild_id}/prefixes")
+async def remove_guild_prefix(guild_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+    """Remove a custom prefix. Requires OAuth + Manage Server."""
+    me = await _verify_token(authorization)
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    guild = bot_ref.get_guild(guild_id)
+    if not guild:
+        raise HTTPException(404, "Guild not found")
+    member = guild.get_member(int(me["id"]))
+    if not member or not member.guild_permissions.manage_guild:
+        raise HTTPException(403, "Need Manage Server permission")
+    prefix = payload.get("prefix", "").strip()
+    pool = _check_pool()
+    await pool.execute(
+        "DELETE FROM guild_prefixes WHERE guild_id = $1 AND prefix = $2", guild_id, prefix
+    )
+    if bot_ref:
+        bot_ref.db_cache.remove_prefix(guild_id, prefix)
+    return {"prefix": prefix}
+
+@app.delete("/guild/{guild_id}/data")
+async def delete_guild_data(guild_id: int, authorization: str = Header(None)):
+    """Delete all tracking data for a guild. Requires OAuth + Manage Server."""
+    me = await _verify_token(authorization)
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    guild = bot_ref.get_guild(guild_id)
+    if not guild:
+        raise HTTPException(404, "Guild not found")
+    member = guild.get_member(int(me["id"]))
+    if not member or not member.guild_permissions.manage_guild:
+        raise HTTPException(403, "Need Manage Server permission")
+    pool = _check_pool()
+    for table in ("guild_icons", "guild_name_logs", "guild_avatars"):
+        await pool.execute(f"DELETE FROM {table} WHERE guild_id = $1", guild_id)
+    for table in ("guild_settings", "honeypot_channels", "guild_prefixes", "guild_opted_out"):
+        await pool.execute(f"DELETE FROM {table} WHERE guild_id = $1", guild_id)
+    return {"deleted": True}
