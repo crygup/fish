@@ -5,11 +5,13 @@ Fishie bot API | commands, stats, OAuth, and user data history.
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import hmac
 import json
 import re
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
@@ -17,6 +19,7 @@ from urllib.parse import urlencode
 import aiohttp
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
@@ -45,6 +48,7 @@ LASTFM_CALLBACK_URL = "https://crygup.com/fishie"
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 LASTFM_STATE_TTL = 10 * 60
 LASTFM_ACCOUNT_FIELDS = ("lastfm", "steam", "roblox", "genshin", "letterboxd")
+TWITCH_EVENTSUB_MAX_AGE = 10 * 60
 
 
 def _lastfm_state(user_id: int, source: str) -> str:
@@ -157,6 +161,128 @@ def _check_pool():
     if not pool:
         raise HTTPException(503, "Database not connected")
     return pool
+
+
+def _verify_twitch_eventsub(request: Request, body: bytes) -> None:
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    keys = bot_ref.config["keys"]
+    secret = keys.get("twitch_eventsub_secret") or keys.get("twitch_secret")
+    if not secret:
+        raise HTTPException(503, "Twitch EventSub is not configured")
+
+    message_id = request.headers.get("Twitch-Eventsub-Message-Id")
+    timestamp = request.headers.get("Twitch-Eventsub-Message-Timestamp")
+    supplied_signature = request.headers.get("Twitch-Eventsub-Message-Signature")
+    if not message_id or not timestamp or not supplied_signature:
+        raise HTTPException(403, "Missing Twitch EventSub signature headers")
+
+    try:
+        message_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(403, "Invalid Twitch EventSub timestamp")
+    if message_time.tzinfo is None:
+        message_time = message_time.replace(tzinfo=timezone.utc)
+    if abs(time.time() - message_time.timestamp()) > TWITCH_EVENTSUB_MAX_AGE:
+        raise HTTPException(403, "Expired Twitch EventSub message")
+
+    expected_signature = (
+        "sha256="
+        + hmac.new(
+            secret.encode(),
+            message_id.encode() + timestamp.encode() + body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+    if not hmac.compare_digest(supplied_signature, expected_signature):
+        raise HTTPException(403, "Invalid Twitch EventSub signature")
+
+
+@app.post("/twitch/eventsub")
+async def twitch_eventsub(request: Request):
+    """Receive verified Twitch EventSub stream notifications."""
+    body = await request.body()
+    _verify_twitch_eventsub(request, body)
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "Invalid Twitch EventSub payload")
+
+    message_type = request.headers.get("Twitch-Eventsub-Message-Type")
+    bot_ref.logger.info(
+        "Received Twitch EventSub message type=%s", message_type or "unknown"
+    )
+    if message_type == "webhook_callback_verification":
+        challenge = payload.get("challenge")
+        if not isinstance(challenge, str):
+            raise HTTPException(400, "Missing Twitch EventSub challenge")
+        subscription = payload.get("subscription")
+        if isinstance(subscription, dict) and subscription.get("id"):
+            await bot_ref.pool.execute(
+                "UPDATE twitch_eventsub_subscriptions "
+                "SET status = 'enabled', updated_at = now() "
+                "WHERE subscription_id = $1",
+                subscription["id"],
+            )
+        return PlainTextResponse(challenge)
+
+    subscription = payload.get("subscription")
+    if not isinstance(subscription, dict):
+        raise HTTPException(400, "Missing Twitch EventSub subscription")
+
+    if message_type == "revocation":
+        if bot_ref:
+            await bot_ref.pool.execute(
+                "UPDATE twitch_eventsub_subscriptions "
+                "SET status = $2, updated_at = now() WHERE subscription_id = $1",
+                subscription.get("id"),
+                subscription.get("status", "revoked"),
+            )
+        return {"ok": True}
+
+    if message_type != "notification":
+        raise HTTPException(400, "Unsupported Twitch EventSub message type")
+
+    event = payload.get("event")
+    message_id = request.headers.get("Twitch-Eventsub-Message-Id")
+    if not isinstance(event, dict) or not message_id:
+        raise HTTPException(400, "Missing Twitch EventSub event")
+    event = dict(event)
+    event["type"] = subscription.get("type")
+
+    events_cog = bot_ref.get_cog("Events") if bot_ref else None
+    if events_cog is None or not hasattr(events_cog, "handle_twitch_event"):
+        raise HTTPException(503, "Twitch event handler is not ready")
+
+    pool = _check_pool()
+    result = await pool.execute(
+        "INSERT INTO twitch_eventsub_events (message_id) VALUES ($1) "
+        "ON CONFLICT (message_id) DO NOTHING",
+        message_id,
+    )
+    if result == "INSERT 0 0":
+        return {"ok": True, "duplicate": True}
+
+    async def process_event():
+        try:
+            await events_cog.handle_twitch_event(event)
+        except Exception as error:
+            try:
+                await pool.execute(
+                    "DELETE FROM twitch_eventsub_events WHERE message_id = $1",
+                    message_id,
+                )
+            except Exception as cleanup_error:
+                bot_ref.logger.warning(
+                    "Could not requeue failed Twitch EventSub event %s: %s",
+                    message_id,
+                    cleanup_error,
+                )
+            bot_ref.logger.warning("Twitch EventSub event processing failed: %s", error)
+
+    asyncio.create_task(process_event())
+    return {"ok": True}
 
 
 async def _check_opted_out(user_id: int) -> bool:

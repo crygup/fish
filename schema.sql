@@ -163,6 +163,31 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     PRIMARY KEY (guild_id)
 );
 
+CREATE TABLE IF NOT EXISTS twitch_follows (
+    guild_id BIGINT NOT NULL,
+    channel_name TEXT NOT NULL,
+    announce_channel_id BIGINT NOT NULL,
+    message_template TEXT,
+    broadcaster_id TEXT,
+    last_stream_id TEXT,
+    PRIMARY KEY (guild_id, channel_name)
+);
+
+CREATE TABLE IF NOT EXISTS twitch_eventsub_subscriptions (
+    broadcaster_id TEXT PRIMARY KEY,
+    subscription_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS twitch_eventsub_events (
+    message_id TEXT PRIMARY KEY,
+    received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS twitch_follows_guild_idx
+    ON twitch_follows (guild_id);
+
 CREATE TABLE IF NOT EXISTS pokemon_guesses (
     pokemon_name TEXT,
     author_id BIGINT,

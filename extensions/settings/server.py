@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Optional
 
 import discord
@@ -10,10 +11,14 @@ from utils import AuthorView, FieldPageSource, Pager, get_or_fetch_user
 
 if TYPE_CHECKING:
     from extensions.context import GuildContext
+    from extensions.context import Context
 
 
 def to_lower(argument: str):
     return argument.lower()
+
+
+TWITCH_CHANNEL_RE = re.compile(r"^[A-Za-z0-9_]{1,25}$")
 
 
 class Dropdown(discord.ui.ChannelSelect):
@@ -50,6 +55,90 @@ class DropdownView(AuthorView):
         super().__init__(ctx)
 
         self.add_item(Dropdown(ctx))
+
+
+class TwitchMessageModal(discord.ui.Modal, title="Twitch Live Message"):
+    message = discord.ui.TextInput(
+        label="Announcement text",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=2000,
+        placeholder="Leave blank to post only the embed.",
+    )
+
+    def __init__(self, bot, author_id: int, guild_id: int, channel_name: str):
+        super().__init__()
+        self.bot = bot
+        self.author_id = author_id
+        self.guild_id = guild_id
+        self.channel_name = channel_name
+
+    async def on_submit(self, interaction: discord.Interaction):
+        message_template = (self.message.value or "").strip() or None
+        result = await self.bot.pool.execute(
+            "UPDATE twitch_follows SET message_template = $3 "
+            "WHERE guild_id = $1 AND channel_name = $2",
+            self.guild_id,
+            self.channel_name,
+            message_template,
+        )
+        if result == "UPDATE 0":
+            await interaction.response.send_message(
+                "That Twitch channel is no longer being followed.", ephemeral=True
+            )
+            return
+
+        if message_template:
+            await interaction.response.send_message(
+                "The custom Twitch announcement text was saved. Mentions will be allowed when it posts.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                "The custom Twitch announcement text was cleared; only the embed will post.",
+                ephemeral=True,
+            )
+
+
+class TwitchFollowView(AuthorView):
+    def __init__(
+        self,
+        ctx: Context,
+        bot: commands.Bot,
+        author_id: int,
+        guild_id: int,
+        channel_name: str,
+    ):
+        super().__init__(ctx, timeout=300)
+        self.bot = bot
+        self.ctx = ctx
+        self.author_id = author_id
+        self.guild_id = guild_id
+        self.channel_name = channel_name
+
+    @discord.ui.button(
+        label="Customize announcement", style=discord.ButtonStyle.blurple
+    )
+    async def customize(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ):
+        row = await self.bot.pool.fetchrow(
+            "SELECT message_template FROM twitch_follows "
+            "WHERE guild_id = $1 AND channel_name = $2",
+            self.guild_id,
+            self.channel_name,
+        )
+        if not row:
+            await interaction.response.send_message(
+                "That Twitch channel is no longer being followed.", ephemeral=True
+            )
+            return
+
+        modal = TwitchMessageModal(
+            self.bot, self.author_id, self.guild_id, self.channel_name
+        )
+        modal.message.default = row["message_template"] or ""
+        await interaction.response.send_modal(modal)
 
 
 class Server(Cog):
@@ -252,6 +341,163 @@ class Server(Cog):
             f"{['Disabled', 'Enabled'][value]} auto media reactions for this server."
         )
 
-    # @commands.hybrid_group(name="honeypot")
-    # async def honeypot(self, ctx: GuildContext):
-    #     ...
+    @commands.hybrid_group(name="twitch", fallback="list")
+    @commands.has_guild_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def twitch(self, ctx: GuildContext):
+        """Manage Twitch live announcements for this server."""
+        rows = await self.bot.pool.fetch(
+            "SELECT channel_name, announce_channel_id, message_template "
+            "FROM twitch_follows "
+            "WHERE guild_id = $1 ORDER BY channel_name",
+            ctx.guild.id,
+        )
+        if not rows:
+            return await ctx.send("No Twitch channels are being followed.")
+
+        lines = [
+            f"**{row['channel_name']}** → <#{row['announce_channel_id']}>"
+            f" ({'custom text' if row['message_template'] else 'embed only'})"
+            for row in rows
+        ]
+        await ctx.send("Twitch live announcements:\n" + "\n".join(lines))
+
+    @twitch.command(name="follow")
+    @commands.has_guild_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def twitch_follow(
+        self,
+        ctx: GuildContext,
+        channel_name: str,
+        announcement_channel: Optional[discord.TextChannel] = None,
+    ):
+        """Follow a Twitch channel and announce live streams here or elsewhere."""
+        channel_name = channel_name.strip().lstrip("@").lower()
+        if not TWITCH_CHANNEL_RE.fullmatch(channel_name):
+            raise commands.BadArgument(
+                "Enter a valid Twitch channel name (letters, numbers, and underscores only)."
+            )
+
+        events = self.bot.get_cog("Events")
+        if events is None or not hasattr(events, "_get_twitch_user"):
+            raise commands.BadArgument("Twitch monitoring is not available right now.")
+        twitch_user = await events._get_twitch_user(channel_name)
+        if not twitch_user or not twitch_user.get("id"):
+            raise commands.BadArgument(
+                f"Could not find a Twitch channel named **{channel_name}**."
+            )
+        broadcaster_id = str(twitch_user["id"])
+
+        target = announcement_channel or ctx.channel
+        if not hasattr(target, "send"):
+            raise commands.BadArgument(
+                "Choose a text channel for Twitch announcements."
+            )
+
+        async with self.bot.pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    f"fishie:twitch:{ctx.guild.id}",
+                )
+                existing = await connection.fetchval(
+                    "SELECT 1 FROM twitch_follows "
+                    "WHERE guild_id = $1 AND channel_name = $2",
+                    ctx.guild.id,
+                    channel_name,
+                )
+                if not existing:
+                    count = await connection.fetchval(
+                        "SELECT COUNT(*) FROM twitch_follows WHERE guild_id = $1",
+                        ctx.guild.id,
+                    )
+                    if count >= 3:
+                        raise commands.BadArgument(
+                            "You can follow up to 3 Twitch channels per server."
+                        )
+
+                await connection.execute(
+                    """INSERT INTO twitch_follows
+                       (guild_id, channel_name, announce_channel_id, broadcaster_id)
+                       VALUES ($1, $2, $3, $4)
+                       ON CONFLICT (guild_id, channel_name) DO UPDATE
+                       SET announce_channel_id = EXCLUDED.announce_channel_id,
+                           broadcaster_id = EXCLUDED.broadcaster_id""",
+                    ctx.guild.id,
+                    channel_name,
+                    target.id,
+                    broadcaster_id,
+                )
+
+        try:
+            await events.ensure_twitch_eventsub_subscription(broadcaster_id)
+        except Exception as error:
+            self.bot.logger.warning(
+                "Could not enable Twitch EventSub for %s: %s",
+                channel_name,
+                error,
+            )
+
+        if ctx.interaction and not ctx.interaction.response.is_done():
+            await ctx.interaction.response.send_modal(
+                TwitchMessageModal(self.bot, ctx.author.id, ctx.guild.id, channel_name)
+            )
+            return
+
+        await ctx.send(
+            f"Now following **{channel_name}**; live announcements will be posted in {target.mention}.",
+            view=TwitchFollowView(
+                ctx, ctx.bot, ctx.author.id, ctx.guild.id, channel_name
+            ),
+        )
+
+    @twitch.command(name="message", aliases=("customize", "text"))
+    @commands.has_guild_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def twitch_message(self, ctx: GuildContext, channel_name: str):
+        """Customize the text sent above a Twitch live embed."""
+        channel_name = channel_name.strip().lstrip("@").lower()
+        exists = await self.bot.pool.fetchval(
+            "SELECT 1 FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
+            ctx.guild.id,
+            channel_name,
+        )
+        if not exists:
+            raise commands.BadArgument(
+                f"This server is not following **{channel_name}**."
+            )
+        await ctx.send(
+            f"Customize the announcement text for **{channel_name}**:",
+            view=TwitchFollowView(
+                ctx, ctx.bot, ctx.author.id, ctx.guild.id, channel_name
+            ),
+        )
+
+    @twitch.command(name="unfollow", aliases=("remove", "delete"))
+    @commands.has_guild_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def twitch_unfollow(self, ctx: GuildContext, channel_name: str):
+        """Stop following a Twitch channel in this server."""
+        channel_name = channel_name.strip().lstrip("@").lower()
+        broadcaster_id = await self.bot.pool.fetchval(
+            "SELECT broadcaster_id FROM twitch_follows "
+            "WHERE guild_id = $1 AND channel_name = $2",
+            ctx.guild.id,
+            channel_name,
+        )
+        result = await self.bot.pool.execute(
+            "DELETE FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
+            ctx.guild.id,
+            channel_name,
+        )
+        if result == "DELETE 0":
+            raise commands.BadArgument(
+                f"This server is not following **{channel_name}**."
+            )
+        if broadcaster_id:
+            events = self.bot.get_cog("Events")
+            if events is not None and hasattr(
+                events, "remove_twitch_eventsub_subscription"
+            ):
+                await events.remove_twitch_eventsub_subscription(str(broadcaster_id))
+        await ctx.send(f"Stopped following **{channel_name}**.")

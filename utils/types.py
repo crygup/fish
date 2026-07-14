@@ -63,6 +63,9 @@ class Keys(TypedDict):
     lastfm_secret: str
     lastfm_cb: str
     lastfm_cb_secret: str
+    twitch_id: str
+    twitch_secret: str
+    twitch_eventsub_secret: str
     google: List[str]
     google_id: str
     spotify_id: str
