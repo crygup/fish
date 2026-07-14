@@ -325,7 +325,7 @@ class Images(Cog):
         try:
             speed_val = float(speed_str.strip())
         except ValueError:
-            # first word isn't a number — treat it as an image source
+            # first word isn't a number, treat it as an image source
             try:
                 image_str = await converter.convert(ctx, speed_str)
             except commands.BadArgument:

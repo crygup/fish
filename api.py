@@ -1,5 +1,5 @@
 """
-Fishie bot API — commands, stats, OAuth, and user data history.
+Fishie bot API | commands, stats, OAuth, and user data history.
 """
 
 from __future__ import annotations
@@ -787,7 +787,7 @@ async def resolve_user(q: str = Query(...)):
         raise HTTPException(503, "Bot not ready")
     guild_id = int(bot_ref.config.get("ids", {}).get("guild_id", "0") or "0")
     if not guild_id:
-        raise HTTPException(400, "Username lookup not available — use a Discord ID")
+        raise HTTPException(400, "Username lookup not available, use a Discord ID")
     guild = bot_ref.get_guild(guild_id)
     if not guild:
         raise HTTPException(502, "Bot is not in the configured guild")

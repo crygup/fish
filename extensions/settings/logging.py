@@ -486,7 +486,7 @@ class Logging(Cog):
         for join in joins:
             guild = self.bot.get_guild(join["guild_id"])
             guild_label = guild.name if guild else str(join["guild_id"])
-            label = f"{guild_label} — {discord.utils.format_dt(join['time'], 'R')}"
+            label = f"{guild_label} • {discord.utils.format_dt(join['time'], 'R')}"
             if current.lower() in label.lower():
                 choices.append(app_commands.Choice(name=label[:100], value=join["id"]))
 

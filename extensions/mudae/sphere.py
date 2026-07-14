@@ -111,7 +111,7 @@ def _best_next_click(revealed: dict[int, str]) -> Optional[int]:
     red_pos = next((p for p, c in revealed.items() if c == "red"), None)
 
     if red_pos is not None:
-        # Red found — score unrevealed cells by their likely color value
+        # Red found, score unrevealed cells by their likely color value
         # Priority: orange (adjacent) > yellow (diag, not adj) > green (row/col, not diag) > teal (row/col/diag) > blue (none)
 
         def _score(pos: int) -> int:
@@ -131,7 +131,7 @@ def _best_next_click(revealed: dict[int, str]) -> Optional[int]:
 
         return max(unrevealed, key=_score)
 
-    # Red not yet found — original minimax logic
+    # Red not yet found, original minimax logic
     if not revealed:
         return 16  # optimal starting move: row 4, column 2
     candidates = _possible_red_positions(revealed)

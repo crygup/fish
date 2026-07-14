@@ -524,7 +524,7 @@ class UserDropdown(discord.ui.Select):
             embed.description = "No status data recorded yet."
         else:
             value = "\n".join(
-                f"**{r['status'].title()}** — {discord.utils.format_dt(r['last_seen'], 'R')}"
+                f"**{r['status'].title()}** • {discord.utils.format_dt(r['last_seen'], 'R')}"
                 for r in rows
             )
             embed.add_field(name="Last Seen", value=value)

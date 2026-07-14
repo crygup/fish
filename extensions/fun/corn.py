@@ -53,7 +53,7 @@ class Corn(Cog):
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def corn_global(self, ctx: Context):
-        """Global corn leaderboard — totals across all servers."""
+        """Global corn leaderboard, totals across all servers."""
         givers = await ctx.bot.pool.fetch(
             "SELECT giver_id, COUNT(*) AS total FROM corn_reacts "
             "GROUP BY giver_id ORDER BY total DESC LIMIT 5"

@@ -312,7 +312,7 @@ class MediaConverter(commands.Converter[str]):
             except commands.BadArgument:
                 pass
 
-        # 5. direct image/video URL — only trust known extensions
+        # 5. direct image/video URL, only trust known extensions
         if argument:
             base = argument.lower().split("?")[0]
             for ext in (
@@ -352,7 +352,7 @@ class _AccountConverter(commands.Converter[str]):
         except commands.UserNotFound:
             pass
 
-        # Not a user — validate as raw username.
+        # Not a user, validate as raw username.
         value = argument.strip().lower().rstrip("/")
         if self.regex and not self.regex.match(value):
             raise commands.BadArgument(self.regex_error)
@@ -407,7 +407,6 @@ class SteamConverter(_AccountConverter):
         except commands.UserNotFound:
             pass
 
-        # Not a Discord user — resolve raw input to SteamID64.
         from .regexes import STEAM_URL_RE, STEAM_ID64_RE
 
         argument = argument.strip().rstrip("/")
