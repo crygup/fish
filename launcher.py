@@ -78,7 +78,7 @@ async def start(testing: bool):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--testing", "-t", required=False, default=False, type=bool)
+    parser.add_argument("--testing", "-t", action="store_true")
 
     parsed = parser.parse_args()
 
