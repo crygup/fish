@@ -129,6 +129,25 @@ class Owner(Cog):
         self.bot.cached_banned_ips.add(ip)
         await self._add_reaction(ctx, ctx.message)
 
+    @commands.command(name="botstatus")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def status(self, ctx: Context, *, text: str):
+        """Updates the bot's custom status."""
+        text = text.strip()
+        if not text:
+            raise commands.BadArgument("The custom status cannot be empty.")
+        if len(text) > 128:
+            raise commands.BadArgument(
+                "The custom status cannot be longer than 128 characters."
+            )
+        if self.bot.user is None:
+            raise commands.BadArgument("The bot user is not available.")
+
+        activity = discord.CustomActivity(name=text)
+        self.bot.activity = activity
+        await self.bot.change_presence(activity=activity)
+        await ctx.send(f"Custom status updated to: {text}")
+
     @commands.command(name="reload")
     async def reload(self, ctx: Context, *extensions: str):
         """Reload extensions. '~' reloads all. No args reloads recently modified."""

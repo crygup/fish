@@ -28,7 +28,7 @@ from cachetools import TTLCache
 from discord.abc import Messageable
 from discord.ext import commands
 
-from utils import MESSAGE_RE, Config, EmojiInputType, Emojis, update_pokemon
+from utils import MESSAGE_RE, Config, EmojiInputType, Emojis, update_pokemon, drpepper
 from .cache import db_cache
 
 if TYPE_CHECKING:
@@ -147,10 +147,6 @@ class Fishie(commands.Bot):
             except KeyError:
                 pass
 
-    # ------------------------------------------------------------------
-    # secret redaction
-    # ------------------------------------------------------------------
-
     _secrets: set[str] | None = None
 
     def _build_secrets(self) -> set[str]:
@@ -251,6 +247,8 @@ class Fishie(commands.Bot):
     async def setup_hook(self) -> None:
         with open("schema.sql") as fp:
             await self.pool.execute(fp.read())
+
+        self.activity = discord.CustomActivity(name="fish help")
 
         await self.load_extensions()
         await self.populate_cache()
@@ -365,11 +363,14 @@ class Fishie(commands.Bot):
 
         accounts = await self.pool.fetch("SELECT * FROM accounts")
         for row in accounts:
-            last_fm: str = row["lastfm"]
+            last_fm: Optional[str] = row["lastfm"]
             user_id: int = row["user_id"]
 
-            self.db_cache.add_account(user_id=user_id, last_fm=last_fm)
-            self.logger.info(f'Added last.fm account "{last_fm}" to user "{user_id}"')
+            if last_fm:
+                self.db_cache.add_account(user_id=user_id, last_fm=last_fm)
+                self.logger.info(
+                    f'Added last.fm account "{last_fm}" to user "{user_id}"'
+                )
 
         roblox_templates = await self.pool.fetch(
             "SELECT asset_id, image_url, extra FROM roblox_templates"
