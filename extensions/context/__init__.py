@@ -29,9 +29,18 @@ VALID_EDIT_KWARGS: Dict[str, Any] = {
 
 class ConfirmationView(discord.ui.View):
     def __init__(
-        self, *, timeout: float, author_id: int, ctx: Context, delete_after: bool
+        self,
+        *,
+        timeout: float,
+        author_id: int,
+        ctx: Context,
+        delete_after: bool,
+        confirm_label: str = "Confirm",
+        cancel_label: str = "Cancel",
     ) -> None:
         super().__init__(timeout=timeout)
+        self.confirm.label = confirm_label
+        self.cancel.label = cancel_label
         self.value: Optional[bool] = None
         self.delete_after: bool = delete_after
         self.author_id: int = author_id
@@ -129,6 +138,8 @@ class Context(commands.Context["Fishie"]):
         timeout: float = 60.0,
         delete_after: bool = True,
         author_id: Optional[int] = None,
+        confirm_label: str = "Confirm",
+        cancel_label: str = "Cancel",
         **kwargs,
     ) -> Optional[discord.Message]:
         author_id = author_id or self.author.id
@@ -137,6 +148,8 @@ class Context(commands.Context["Fishie"]):
             delete_after=delete_after,
             ctx=self,
             author_id=author_id,
+            confirm_label=confirm_label,
+            cancel_label=cancel_label,
         )
         view.message = await self.send(message, view=view, **kwargs)
         await view.wait()
