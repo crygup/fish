@@ -45,7 +45,10 @@ def make_command_embed(
 
     if isinstance(command, commands.Group):
         text = "\n".join(
-            [f"{ctx.get_prefix}{c.name} {c.signature}" for c in command.commands]
+            [
+                f"{ctx.get_prefix}{c.parent.name} {c.name} {c.signature}"
+                for c in command.commands
+            ]
         )
         embed.add_field(name="Subcommands", value=f"```{text}```", inline=False)
 
