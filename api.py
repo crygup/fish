@@ -4,13 +4,20 @@ Fishie bot API — commands, stats, OAuth, and user data history.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import re
+import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from urllib.parse import urlencode
 
 import aiohttp
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-import time
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -34,6 +41,108 @@ TABLE_MAP = {
     "guild_name_logs": "guild_name_logs",
 }
 GUILD_TABLES = {"guild_icons", "guild_name_logs"}
+LASTFM_CALLBACK_URL = "https://crygup.com/fishie"
+LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
+LASTFM_STATE_TTL = 10 * 60
+LASTFM_ACCOUNT_FIELDS = ("lastfm", "steam", "roblox", "genshin", "letterboxd")
+
+
+def _lastfm_state(user_id: int, source: str) -> str:
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    payload = json.dumps(
+        {
+            "user_id": str(user_id),
+            "source": source,
+            "expires": int(time.time()) + LASTFM_STATE_TTL,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    signature = hmac.new(
+        bot_ref.config["keys"]["lastfm_secret"].encode(),
+        encoded.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _lastfm_authorization_url(user_id: int, source: str) -> str:
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    state = _lastfm_state(user_id, source)
+    callback = f"{LASTFM_CALLBACK_URL}?{urlencode({'lastfm_state': state})}"
+    return "https://www.last.fm/api/auth/?" + urlencode(
+        {"api_key": bot_ref.config["keys"]["lastfm_cb"], "cb": callback}
+    )
+
+
+def _decode_lastfm_state(
+    state: str,
+) -> tuple[int, str, int | None, int | None]:
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    try:
+        encoded, supplied_signature = state.split(".", 1)
+        expected_signature = hmac.new(
+            bot_ref.config["keys"]["lastfm_secret"].encode(),
+            encoded.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(supplied_signature, expected_signature):
+            raise ValueError("invalid signature")
+        padding = "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(encoded + padding))
+        user_id = int(payload["user_id"])
+        source = payload["source"]
+        expires = int(payload["expires"])
+        channel_id = int(payload["channel_id"]) if payload.get("channel_id") else None
+        message_id = int(payload["message_id"]) if payload.get("message_id") else None
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        raise HTTPException(400, "Invalid Last.fm connection state")
+    if source not in {"discord", "website"}:
+        raise HTTPException(400, "Invalid Last.fm connection source")
+    if expires < int(time.time()):
+        raise HTTPException(400, "The Last.fm connection link has expired")
+    if (channel_id is None) != (message_id is None):
+        raise HTTPException(400, "Invalid Discord message state")
+    return user_id, source, channel_id, message_id
+
+
+def _lastfm_api_signature(api_key: str, token: str, secret: str) -> str:
+    signature = f"api_key{api_key}methodauth.getSessiontoken{token}{secret}"
+    return hashlib.md5(signature.encode()).hexdigest()
+
+
+async def _refresh_discord_accounts_message(
+    user_id: int, channel_id: int | None, message_id: int | None
+) -> None:
+    if not bot_ref or channel_id is None or message_id is None:
+        return
+    try:
+        from extensions.settings import ManageAccountsView, _accounts_embed
+
+        channel = bot_ref.get_channel(channel_id)
+        if channel is None:
+            channel = await bot_ref.fetch_channel(channel_id)
+        message = await channel.fetch_message(message_id)
+        row = await bot_ref.pool.fetchrow(
+            "SELECT lastfm, steam, roblox, genshin, letterboxd FROM accounts "
+            "WHERE user_id = $1",
+            user_id,
+        )
+        author = bot_ref.get_user(user_id) or SimpleNamespace(id=user_id)
+        ctx = SimpleNamespace(bot=bot_ref, author=author)
+        await message.edit(
+            embed=_accounts_embed(ctx, row),
+            view=ManageAccountsView(ctx, lastfm_connected=True),
+        )
+    except Exception as error:
+        bot_ref.logger.warning(
+            "Could not refresh Discord accounts message after Last.fm OAuth: %s",
+            error,
+        )
 
 
 def init(bot: "Fishie") -> None:
@@ -286,6 +395,7 @@ async def list_commands():
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
     cmds = []
+
     def add_cmd(c):
         if c.hidden or c.cog_name in ("Owner", "Jishaku"):
             return
@@ -294,17 +404,20 @@ async def list_commands():
         for name, param in c.clean_params.items():
             req = "required" if param.default is param.empty else "optional"
             params.append({"name": name, "required": req})
-        cmds.append({
-            "name": c.qualified_name,
-            "description": c.description or c.short_doc or "",
-            "category": c.cog_name or "Uncategorized",
-            "usage": c.usage or "",
-            "aliases": aliases,
-            "params": params,
-        })
+        cmds.append(
+            {
+                "name": c.qualified_name,
+                "description": c.description or c.short_doc or "",
+                "category": c.cog_name or "Uncategorized",
+                "usage": c.usage or "",
+                "aliases": aliases,
+                "params": params,
+            }
+        )
+
     for cmd in bot_ref.commands:
         add_cmd(cmd)
-        if hasattr(cmd, 'walk_commands'):
+        if hasattr(cmd, "walk_commands"):
             for sub in cmd.walk_commands():
                 add_cmd(sub)
     return {"commands": sorted(cmds, key=lambda c: (c["category"], c["name"]))}
@@ -394,14 +507,20 @@ async def bot_stats():
 
 
 @app.get("/oauth/exchange")
-async def oauth_exchange(code: str = Query(...)):
+@app.post("/oauth/exchange")
+async def oauth_exchange(
+    code: str = Query(...),
+    redirect_uri: str = Query("https://crygup.com/dashboard"),
+):
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
+    if redirect_uri not in {"https://crygup.com", "https://crygup.com/dashboard"}:
+        raise HTTPException(400, "Invalid OAuth redirect URI")
     data = {
         "client_id": str(bot_ref.config["ids"]["bot_id"]),
         "client_secret": bot_ref.config["keys"]["client_secret"],
         "code": code,
-        "redirect_uri": "https://crygup.com/dashboard",
+        "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
     }
     async with aiohttp.ClientSession() as session:
@@ -418,6 +537,64 @@ async def oauth_exchange(code: str = Query(...)):
         ) as resp:
             user_data = await resp.json()
     return {"user": user_data, "access_token": token_data["access_token"]}
+
+
+@app.get("/lastfm/connect")
+async def lastfm_connect(authorization: str = Header(None)):
+    """Create a Last.fm authorization URL for the authenticated Discord user."""
+    me = await _verify_token(authorization)
+    return {"url": _lastfm_authorization_url(int(me["id"]), "website")}
+
+
+@app.get("/lastfm/callback")
+async def lastfm_callback(token: str = Query(...), state: str = Query(...)):
+    """Exchange a Last.fm callback token and persist the verified account."""
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32}", token):
+        raise HTTPException(400, "Invalid Last.fm authentication token")
+
+    user_id, source, channel_id, message_id = _decode_lastfm_state(state)
+    api_key = bot_ref.config["keys"]["lastfm_cb"]
+    api_secret = bot_ref.config["keys"]["lastfm_cb_secret"]
+    payload = {
+        "method": "auth.getSession",
+        "api_key": api_key,
+        "token": token,
+        "api_sig": _lastfm_api_signature(api_key, token, api_secret),
+        "format": "json",
+    }
+    async with bot_ref.session.post(LASTFM_API_URL, data=payload) as resp:
+        try:
+            result = await resp.json(content_type=None)
+        except (ValueError, aiohttp.ContentTypeError):
+            raise HTTPException(502, "Last.fm returned an invalid response")
+
+    session = result.get("session") if isinstance(result, dict) else None
+    if resp.status != 200 or not isinstance(session, dict):
+        message = (
+            result.get("message", "Last.fm authorization failed")
+            if isinstance(result, dict)
+            else "Last.fm authorization failed"
+        )
+        raise HTTPException(400, str(message))
+    username = session.get("name")
+    if not username:
+        raise HTTPException(502, "Last.fm did not return a username")
+
+    pool = _check_pool()
+    await pool.execute(
+        """INSERT INTO accounts (user_id, lastfm)
+           VALUES ($1, $2)
+           ON CONFLICT (user_id) DO UPDATE
+           SET lastfm = EXCLUDED.lastfm;
+        """,
+        user_id,
+        username,
+    )
+    bot_ref.db_cache.add_account(user_id, username)
+    await _refresh_discord_accounts_message(user_id, channel_id, message_id)
+    return {"username": username, "source": source}
 
 
 @app.get("/user/{user_id}")
@@ -450,10 +627,14 @@ async def get_user_xp(user_id: int, authorization: str = Header(None)):
     if int(me["id"]) != user_id:
         raise HTTPException(403, "You can only view your own XP")
     pool = _check_pool()
-    row = await pool.fetchrow("SELECT messages, xp FROM message_xp WHERE user_id = $1", user_id)
+    row = await pool.fetchrow(
+        "SELECT messages, xp FROM message_xp WHERE user_id = $1", user_id
+    )
     if not row:
         return {"messages": 0, "xp": 0}
     return {"messages": row["messages"], "xp": row["xp"]}
+
+
 @app.get("/usernames/{user_id}")
 async def get_usernames(
     user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)
@@ -819,6 +1000,7 @@ async def get_ror2_items():
         )
     return {"items": items, "count": len(items)}
 
+
 @app.get("/user/{user_id}/reminders")
 async def get_user_reminders(user_id: int, authorization: str = Header(None)):
     """Get reminders for a user. Requires OAuth."""
@@ -829,10 +1011,19 @@ async def get_user_reminders(user_id: int, authorization: str = Header(None)):
     rows = await pool.fetch(
         "SELECT id, expires, created, event, timezone, extra #>> '{args,2}' AS content "
         "FROM reminders WHERE event = 'reminder' AND extra #>> '{args,0}' = $1 ORDER BY expires",
-        str(user_id)
+        str(user_id),
     )
-    return {"reminders": [{"id": r["id"], "expires": str(r["expires"]), "content": r["content"],
-                           "timezone": r["timezone"]} for r in rows]}
+    return {
+        "reminders": [
+            {
+                "id": r["id"],
+                "expires": str(r["expires"]),
+                "content": r["content"],
+                "timezone": r["timezone"],
+            }
+            for r in rows
+        ]
+    }
 
 
 @app.get("/user/{user_id}/first-command")
@@ -841,9 +1032,10 @@ async def get_user_first_command(user_id: int):
     pool = _check_pool()
     row = await pool.fetchrow(
         "SELECT created_at FROM command_logs WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1",
-        user_id
+        user_id,
     )
     return {"first_command": str(row["created_at"]) if row else None}
+
 
 @app.get("/user/{user_id}/accounts")
 async def get_user_accounts(user_id: int, authorization: str = Header(None)):
@@ -855,27 +1047,49 @@ async def get_user_accounts(user_id: int, authorization: str = Header(None)):
     row = await pool.fetchrow("SELECT * FROM accounts WHERE user_id = $1", user_id)
     if not row:
         return {"accounts": {}}
-    return {"accounts": {k: v for k, v in dict(row).items() if k != "user_id" and v}}
+    return {
+        "accounts": {field: row[field] for field in LASTFM_ACCOUNT_FIELDS if row[field]}
+    }
 
 
 @app.post("/user/{user_id}/accounts")
-async def set_user_accounts(user_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+async def set_user_accounts(
+    user_id: int, payload: dict = Body(...), authorization: str = Header(None)
+):
     """Set connected accounts. Requires OAuth."""
     me = await _verify_token(authorization)
     if int(me["id"]) != user_id:
         raise HTTPException(403, "Not your account")
-    allowed = {"osu", "lastfm", "steam", "roblox", "genshin", "letterboxd"}
+    # Last.fm can only be changed through its authorization flow.
+    allowed = {"steam", "roblox", "genshin", "letterboxd"}
     accounts = {k: v for k, v in payload.get("accounts", {}).items() if k in allowed}
     pool = _check_pool()
     if accounts:
         keys = ", ".join(accounts.keys())
-        vals = ", ".join(f"${i+1}" for i in range(len(accounts)))
+        vals = ", ".join(f"${i+2}" for i in range(len(accounts)))
         placeholders = list(accounts.values())
         await pool.execute(
             f"INSERT INTO accounts (user_id, {keys}) VALUES ($1, {vals}) ON CONFLICT (user_id) DO UPDATE SET {', '.join(f'{k}=EXCLUDED.{k}' for k in accounts)}",
-            user_id, *placeholders
+            user_id,
+            *placeholders,
         )
     return {"accounts": accounts}
+
+
+@app.delete("/user/{user_id}/lastfm")
+async def disconnect_lastfm(user_id: int, authorization: str = Header(None)):
+    """Disconnect Last.fm for the authenticated Discord user."""
+    me = await _verify_token(authorization)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "Not your account")
+    pool = _check_pool()
+    await pool.execute(
+        "UPDATE accounts SET lastfm = NULL WHERE user_id = $1",
+        user_id,
+    )
+    if bot_ref:
+        bot_ref.db_cache.lastfm.pop(user_id, None)
+    return {"disconnected": True}
 
 
 @app.get("/guild/{guild_id}/settings")
@@ -891,9 +1105,19 @@ async def get_guild_settings(guild_id: int, authorization: str = Header(None)):
     if not member or not member.guild_permissions.manage_guild:
         raise HTTPException(403, "Need Manage Server permission")
     pool = _check_pool()
-    row = await pool.fetchrow("SELECT * FROM guild_settings WHERE guild_id = $1", guild_id)
-    hp = await pool.fetchrow("SELECT channel_id FROM honeypot_channels WHERE guild_id = $1", guild_id)
-    settings = {"auto_download": None, "poketwo": False, "auto_reactions": False, "pinboard": None, "honeypot": None}
+    row = await pool.fetchrow(
+        "SELECT * FROM guild_settings WHERE guild_id = $1", guild_id
+    )
+    hp = await pool.fetchrow(
+        "SELECT channel_id FROM honeypot_channels WHERE guild_id = $1", guild_id
+    )
+    settings = {
+        "auto_download": None,
+        "poketwo": False,
+        "auto_reactions": False,
+        "pinboard": None,
+        "honeypot": None,
+    }
     if row:
         for k in ("auto_download", "poketwo", "auto_reactions", "pinboard"):
             settings[k] = row[k]
@@ -903,7 +1127,9 @@ async def get_guild_settings(guild_id: int, authorization: str = Header(None)):
 
 
 @app.post("/guild/{guild_id}/settings")
-async def set_guild_settings(guild_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+async def set_guild_settings(
+    guild_id: int, payload: dict = Body(...), authorization: str = Header(None)
+):
     me = await _verify_token(authorization)
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
@@ -916,27 +1142,97 @@ async def set_guild_settings(guild_id: int, payload: dict = Body(...), authoriza
     allowed = {"auto_download", "poketwo", "auto_reactions", "pinboard", "honeypot"}
     updates = {}
     pool = _check_pool()
+
+    current = await pool.fetchrow(
+        "SELECT auto_download, poketwo, auto_reactions, pinboard "
+        "FROM guild_settings WHERE guild_id = $1",
+        guild_id,
+    )
+    current_honeypot = await pool.fetchval(
+        "SELECT channel_id FROM honeypot_channels WHERE guild_id = $1", guild_id
+    )
+
     if "honeypot" in payload:
         hp_val = payload["honeypot"]
         if hp_val:
+            try:
+                hp_val = int(hp_val)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "honeypot must be a channel ID")
             await pool.execute(
-                "INSERT INTO honeypot_channels (guild_id, channel_id) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2",
-                guild_id, int(hp_val)
+                "INSERT INTO honeypot_channels (guild_id, channel_id) VALUES ($1, $2) "
+                "ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2",
+                guild_id,
+                hp_val,
             )
         else:
-            await pool.execute("DELETE FROM honeypot_channels WHERE guild_id = $1", guild_id)
+            await pool.execute(
+                "DELETE FROM honeypot_channels WHERE guild_id = $1", guild_id
+            )
         updates["honeypot"] = hp_val
-    gs_updates = {k: v for k, v in payload.items() if k in allowed and k != "honeypot"}
+
+    gs_updates = {}
+    for key, value in payload.items():
+        if key not in allowed or key == "honeypot":
+            continue
+        if key in {"auto_download", "pinboard"}:
+            if value in (None, ""):
+                value = None
+            else:
+                try:
+                    value = int(value)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"{key} must be a channel ID")
+        elif key in {"poketwo", "auto_reactions"}:
+            if isinstance(value, str):
+                value = value.strip().lower() in {"1", "true", "yes", "on"}
+            else:
+                value = bool(value)
+        gs_updates[key] = value
+
     if gs_updates:
         keys = ", ".join(gs_updates.keys())
         placeholders = ", ".join(f"${i+2}" for i in range(len(gs_updates)))
         set_clause = ", ".join(f"{k} = EXCLUDED.{k}" for k in gs_updates)
         await pool.execute(
             f"INSERT INTO guild_settings (guild_id, {keys}) VALUES ($1, {placeholders}) ON CONFLICT (guild_id) DO UPDATE SET {set_clause}",
-            guild_id, *list(gs_updates.values())
+            guild_id,
+            *list(gs_updates.values()),
         )
         for k, v in gs_updates.items():
             updates[k] = v
+
+    # Keep the running bot in sync with dashboard changes.  These values are
+    # read from db_cache by the event cogs and are otherwise stale until restart.
+    cache = bot_ref.db_cache
+    if "auto_download" in gs_updates:
+        old = current["auto_download"] if current else None
+        if old:
+            cache.remove_adl(old)
+        if gs_updates["auto_download"]:
+            cache.add_adl(gs_updates["auto_download"])
+    if "poketwo" in gs_updates:
+        if gs_updates["poketwo"]:
+            if guild_id not in cache.poketwo_guilds:
+                cache.add_poketwo(guild_id)
+        else:
+            cache.remove_poketwo(guild_id)
+    if "auto_reactions" in gs_updates:
+        if gs_updates["auto_reactions"]:
+            if guild_id not in cache.auto_reaction_guilds:
+                cache.add_reaction_guilds(guild_id)
+        else:
+            cache.remove_reaction_guilds(guild_id)
+    if "pinboard" in gs_updates:
+        cache.pinboard.pop(guild_id, None)
+        if gs_updates["pinboard"]:
+            cache.add_pinboard(guild_id, gs_updates["pinboard"])
+    if "honeypot" in updates:
+        if current_honeypot:
+            bot_ref.cached_honeypots.discard(current_honeypot)
+        if updates["honeypot"]:
+            bot_ref.cached_honeypots.add(updates["honeypot"])
+
     return {"settings": updates}
 
 
@@ -944,12 +1240,22 @@ async def set_guild_settings(guild_id: int, payload: dict = Body(...), authoriza
 async def get_guild_prefixes(guild_id: int):
     """Get custom prefixes for a guild."""
     pool = _check_pool()
-    rows = await pool.fetch("SELECT prefix, author_id, time FROM guild_prefixes WHERE guild_id = $1 ORDER BY time", guild_id)
-    return {"prefixes": [{"prefix": r["prefix"], "author_id": r["author_id"], "time": str(r["time"])} for r in rows]}
+    rows = await pool.fetch(
+        "SELECT prefix, author_id, time FROM guild_prefixes WHERE guild_id = $1 ORDER BY time",
+        guild_id,
+    )
+    return {
+        "prefixes": [
+            {"prefix": r["prefix"], "author_id": r["author_id"], "time": str(r["time"])}
+            for r in rows
+        ]
+    }
 
 
 @app.post("/guild/{guild_id}/prefixes")
-async def add_guild_prefix(guild_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+async def add_guild_prefix(
+    guild_id: int, payload: dict = Body(...), authorization: str = Header(None)
+):
     """Add a custom prefix. Requires OAuth + Manage Server."""
     try:
         me = await _verify_token(authorization)
@@ -967,7 +1273,9 @@ async def add_guild_prefix(guild_id: int, payload: dict = Body(...), authorizati
         pool = _check_pool()
         await pool.execute(
             "INSERT INTO guild_prefixes (guild_id, prefix, author_id, time) VALUES ($1, $2, $3, NOW()) ON CONFLICT (guild_id, prefix) DO UPDATE SET author_id = EXCLUDED.author_id, time = NOW()",
-            guild_id, prefix, int(payload.get("author_id", me["id"]))
+            guild_id,
+            prefix,
+            int(payload.get("author_id", me["id"])),
         )
         if bot_ref:
             bot_ref.db_cache.add_prefix(guild_id, prefix)
@@ -976,12 +1284,16 @@ async def add_guild_prefix(guild_id: int, payload: dict = Body(...), authorizati
         raise
     except Exception as e:
         import traceback
+
         print(f"[API ERROR] add_guild_prefix: {e}", flush=True)
         traceback.print_exc()
         raise HTTPException(500, str(e))
 
+
 @app.delete("/guild/{guild_id}/prefixes")
-async def remove_guild_prefix(guild_id: int, payload: dict = Body(...), authorization: str = Header(None)):
+async def remove_guild_prefix(
+    guild_id: int, payload: dict = Body(...), authorization: str = Header(None)
+):
     """Remove a custom prefix. Requires OAuth + Manage Server."""
     me = await _verify_token(authorization)
     if not bot_ref:
@@ -995,11 +1307,14 @@ async def remove_guild_prefix(guild_id: int, payload: dict = Body(...), authoriz
     prefix = payload.get("prefix", "").strip()
     pool = _check_pool()
     await pool.execute(
-        "DELETE FROM guild_prefixes WHERE guild_id = $1 AND prefix = $2", guild_id, prefix
+        "DELETE FROM guild_prefixes WHERE guild_id = $1 AND prefix = $2",
+        guild_id,
+        prefix,
     )
     if bot_ref:
         bot_ref.db_cache.remove_prefix(guild_id, prefix)
     return {"prefix": prefix}
+
 
 @app.delete("/guild/{guild_id}/data")
 async def delete_guild_data(guild_id: int, authorization: str = Header(None)):
@@ -1016,6 +1331,11 @@ async def delete_guild_data(guild_id: int, authorization: str = Header(None)):
     pool = _check_pool()
     for table in ("guild_icons", "guild_name_logs", "guild_avatars"):
         await pool.execute(f"DELETE FROM {table} WHERE guild_id = $1", guild_id)
-    for table in ("guild_settings", "honeypot_channels", "guild_prefixes", "guild_opted_out"):
+    for table in (
+        "guild_settings",
+        "honeypot_channels",
+        "guild_prefixes",
+        "guild_opted_out",
+    ):
         await pool.execute(f"DELETE FROM {table} WHERE guild_id = $1", guild_id)
     return {"deleted": True}
