@@ -34,6 +34,7 @@ lfm_emoji = PartialEmoji(id=1006848047923351612, name="lastfm")
 steam = PartialEmoji(id=1095791386999132231, name="steam")
 roblox = PartialEmoji(id=1095791384893603840, name="roblox")
 mudae_circle = PartialEmoji(id=1522435062765715526, name="mudae_circle")
+drpepper = PartialEmoji(id=1526345518119125164, name="drpepper")
 
 # discord
 balance = PartialEmoji(id=949147429733793832, name="balance")
@@ -56,7 +57,7 @@ system = PartialEmoji(id=949147469357387817, name="system")
 active_developer = PartialEmoji(id=1095204617752686605, name="active_developer")
 moderator_programs_alumni = PartialEmoji(id=1095204621397524571, name="moderator_programs_alumni")
 
-# other
+# people
 bfr = PartialEmoji(id=1132056779279302716, name="bfr", animated=True)
 razy = PartialEmoji(id=1132056914365264036, name="razy", animated=True)
 jpj = PartialEmoji(id=1132056944308400220, name="jpj", animated=True)
@@ -79,9 +80,18 @@ jawn_emojis = [PartialEmoji(name="\U0001f32d"), PartialEmoji(name="\U0001f354"),
 jawn = " ".join([str(e) for e in jawn_emojis])
 sybel = PartialEmoji(name="sybel", id=1210053787385856040)
 drew = PartialEmoji(name="\U0001f41d")
-nathan = PartialEmoji(name="\U0001f97a")
+fart_n = PartialEmoji(name="\U0001f97a")
 dochi = PartialEmoji(name="\U0001f9a7")
 tony = PartialEmoji(name="mariSparkle", id=1390265426008604703)
+ori = PartialEmoji(name="\U0001f4ab")
+sac = PartialEmoji(id=1526354302241865799, name="sac")
+smuckers_emojis = [PartialEmoji(name="\U0001f983"), PartialEmoji(name="\U0001f9b7"), PartialEmoji(name="\U0001f476")]
+smuckers = " ".join([str(e) for e in smuckers_emojis])
+aikuri = PartialEmoji(name="\U0001f639")
+jane = PartialEmoji(name="\U00002728")
+starla = PartialEmoji(name="\U0001f98a")
+cm_emojis = [PartialEmoji(name="\U0001fad7"), PartialEmoji(name="\U0001f49d"), PartialEmoji(name="\U0001f52e")]
+cm = " ".join([str(e) for e in cm_emojis])
 
 # mudae
 spB = PartialEmoji(name="spB", id=1437140639987929108)
@@ -96,6 +106,37 @@ spP = PartialEmoji(name="SpP", id=1437140625844867244)
 
 
 class Emojis:
+    starla = starla
+    ori = ori
+    sac = sac
+    smuckers = smuckers
+    aikuri = aikuri
+    jane = jane
+    drpepper = drpepper
+    bfr = bfr
+    razy = razy
+    jpj = jpj
+    kaylynn = kaylynn
+    regor = regor
+    kami = kami
+    lunachup = lunachup
+    mv = mv
+    skeezr = skeezr
+    spike = spike
+    eli = eli
+    tuco = tuco
+    cola = cola
+    yaz = yaz
+    leo = leo
+    leog = leog
+    monark = monark
+    samir = samir
+    jawn = jawn
+    sybel = sybel
+    drew = drew
+    fart_n = fart_n
+    tony = tony
+    dochi = dochi
     sp = sp
     sp = spB
     sp = spT
@@ -151,33 +192,40 @@ class Emojis:
     system = system
     active_developer = active_developer
     moderator_programs_alumni = moderator_programs_alumni
-    bfr = bfr
-    razy = razy
-    jpj = jpj
-    kaylynn = kaylynn
-    regor = regor
-    kami = kami
-    lunachup = lunachup
-    mv = mv
-    skeezr = skeezr
-    spike = spike
-    eli = eli
-    tuco = tuco
-    cola = cola
-    yaz = yaz
-    leo = leo
-    leog = leog
-    monark = monark
-    samir = samir
-    jawn = jawn
-    sybel = sybel
-    drew = drew
-    nathan = nathan
-    tony = tony
-    dochi = dochi
 
 
 emoji_list = [
+    starla,
+    ori,
+    sac,
+    smuckers,
+    aikuri,
+    jane,
+    drpepper,
+    bfr,
+    razy,
+    jpj,
+    kaylynn,
+    regor,
+    kami,
+    lunachup,
+    mv,
+    skeezr,
+    spike,
+    eli,
+    tuco,
+    cola,
+    yaz,
+    leo,
+    leog,
+    monark,
+    samir,
+    jawn,
+    sybel,
+    drew,
+    fart_n,
+    dochi,
+    tony,
     sp,
     spB,
     spT,
@@ -233,28 +281,4 @@ emoji_list = [
     system,
     active_developer,
     moderator_programs_alumni,
-    bfr,
-    razy,
-    jpj,
-    kaylynn,
-    regor,
-    kami,
-    lunachup,
-    mv,
-    skeezr,
-    spike,
-    eli,
-    tuco,
-    cola,
-    yaz,
-    leo,
-    leog,
-    monark,
-    samir,
-    jawn,
-    sybel,
-    drew,
-    nathan,
-    dochi,
-    tony,
 ]
