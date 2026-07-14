@@ -84,8 +84,11 @@ class Timer:
         self.args: Sequence[Any] = extra.get("args", [])
         self.kwargs: dict[str, Any] = extra.get("kwargs", {})
         self.event: str = record["event"]
-        self.created_at: datetime.datetime = record["created"].replace(tzinfo=datetime.timezone.utc)
-        self.expires: datetime.datetime = record["expires"].replace(tzinfo=datetime.timezone.utc)
+        # Reminder timestamps are stored as naive UTC values in PostgreSQL.
+        # Keep them naive internally so timer comparisons and arithmetic use a
+        # consistent datetime type.
+        self.created_at: datetime.datetime = record["created"]
+        self.expires: datetime.datetime = record["expires"]
         self.timezone: str = record["timezone"]
 
     @classmethod
@@ -120,7 +123,10 @@ class Timer:
 
     @property
     def human_delta(self) -> str:
-        return discord.utils.format_dt(self.created_at, "R")
+        # Discord formatting needs an aware datetime even though reminder
+        # scheduling deliberately uses naive UTC internally.
+        created_at = self.created_at.replace(tzinfo=datetime.timezone.utc)
+        return discord.utils.format_dt(created_at, "R")
 
     @property
     def author_id(self) -> Optional[int]:
@@ -781,10 +787,12 @@ class Reminder(Cog):
     async def timezone_clear(self, ctx: Context):
         """Clears your timezone."""
         await ctx.bot.pool.execute(
-            "UPDATE user_settings SET timezone = NULL WHERE user_id=$1", ctx.author.id
+            "UPDATE user_settings SET timezone = 'UTC' WHERE user_id=$1", ctx.author.id
         )
         self.get_timezone.invalidate(self, ctx.author.id)
-        await ctx.send("Your timezone has been cleared.", ephemeral=True)
+        await ctx.send(
+            "Your timezone has been cleared and reset to UTC.", ephemeral=True
+        )
 
     @commands.Cog.listener()
     async def on_reminder_timer_complete(self, timer: Timer):
