@@ -446,7 +446,9 @@ class Commands(Cog):
         embed.description = "\n".join(lines)
         await ctx.send(embed=embed)
 
-    async def _joins_server_leaderboard(self, ctx: Context, guild: discord.Guild) -> None:
+    async def _joins_server_leaderboard(
+        self, ctx: Context, guild: discord.Guild
+    ) -> None:
         rows = await ctx.bot.pool.fetch(
             "SELECT member_id, COUNT(*) AS total FROM member_join_logs "
             "WHERE guild_id = $1 GROUP BY member_id ORDER BY total DESC LIMIT 10",
@@ -475,14 +477,22 @@ class Commands(Cog):
             await ctx.send(f"{user} has opted out of join logs.")
             return
 
-        guild_total = await ctx.bot.pool.fetchval(
-            "SELECT COUNT(*) FROM member_join_logs WHERE member_id = $1 AND guild_id = $2",
-            user.id, ctx.guild.id,
-        ) if ctx.guild else 0
-        global_total = await ctx.bot.pool.fetchval(
-            "SELECT COUNT(*) FROM member_join_logs WHERE member_id = $1",
-            user.id,
-        ) or 0
+        guild_total = (
+            await ctx.bot.pool.fetchval(
+                "SELECT COUNT(*) FROM member_join_logs WHERE member_id = $1 AND guild_id = $2",
+                user.id,
+                ctx.guild.id,
+            )
+            if ctx.guild
+            else 0
+        )
+        global_total = (
+            await ctx.bot.pool.fetchval(
+                "SELECT COUNT(*) FROM member_join_logs WHERE member_id = $1",
+                user.id,
+            )
+            or 0
+        )
 
         if not guild_total and not global_total:
             if ctx.guild and self.bot.logging:
@@ -493,4 +503,6 @@ class Commands(Cog):
                 await ctx.send(f"**{user.display_name}** has no join records yet!")
                 return
 
-        await ctx.send(f"**{utils.escape_markdown(user.display_name)}** has joined {ctx.guild.name} {plural(int(guild_total)):time}.\n-# \- *{plural(int(global_total)):join} across all servers*")
+        await ctx.send(
+            f"**{utils.escape_markdown(user.display_name)}** has joined {ctx.guild.name} {plural(int(guild_total)):time}.\n-# \- *{plural(int(global_total)):join} across all servers*"
+        )

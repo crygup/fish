@@ -64,7 +64,7 @@ class Server(Cog):
 
         if not bool(records):
             raise commands.BadArgument("This server has no prefixes set.")
-        
+
         entries = [
             (
                 record["prefix"],
