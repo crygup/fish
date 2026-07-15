@@ -33,7 +33,7 @@ def make_command_embed(
     )
     embed.add_field(
         name="Usage",
-        value=f"`{ctx.get_prefix}{command.name} {command.signature}`",
+        value=f"`{ctx.get_prefix}{command.name}{f' {command.signature}' if command.signature else ''}`",
         inline=False,
     )
     if command.aliases:
@@ -106,13 +106,25 @@ class HelpCommand(commands.HelpCommand):
         ctx = self.context
         embed = make_command_embed(ctx, command)
         cmds = await self.filter_commands(command.cog.get_commands(), sort=True)
-        await ctx.send(embed=embed, view=CommandHelpView(ctx, cmds))
+        if command.cog:
+            all_cogs = [c for _, c in ctx.bot.cogs.items() if c]
+            view = CogHelpView(ctx, all_cogs, selected_cog=command.cog)
+            _add_command_help_dropdowns(view, ctx, cmds)
+        else:
+            view = CommandHelpView(ctx, cmds)
+        await ctx.send(embed=embed, view=view)
 
     async def send_group_help(self, group: commands.Group[Cog, ..., commands.Command]):
         ctx = self.context
         embed = make_command_embed(ctx, group)
         cmds = await self.filter_commands(group.commands, sort=True)
-        await ctx.send(embed=embed, view=CommandHelpView(ctx, cmds))
+        if group.cog:
+            all_cogs = [c for _, c in ctx.bot.cogs.items() if c]
+            view = CogHelpView(ctx, all_cogs, selected_cog=group.cog)
+            _add_command_help_dropdowns(view, ctx, cmds)
+        else:
+            view = CommandHelpView(ctx, cmds)
+        await ctx.send(embed=embed, view=view)
 
     # fish help <cog>
     async def send_cog_help(self, cog: Cog):
@@ -146,7 +158,7 @@ class HelpCommand(commands.HelpCommand):
         )
         view = CogHelpView(self.context, [c for _, c in bot.cogs.items()])
         if filtered:
-            view.add_item(CommandHelpDropdown(ctx, filtered))
+            _add_command_help_dropdowns(view, ctx, filtered)
         await ctx.send(embed=embed, view=view)
 
     async def send_error_message(self, error: commands.CommandError):
@@ -176,10 +188,17 @@ def _t(s: str) -> str:
     return s[:TRUNC]
 
 
+def _add_command_help_dropdowns(
+    view: discord.ui.View, ctx: Context, cmds: List[commands.Command[Cog, ..., Any]]
+):
+    for cmd_list in (cmds[i : i + 25] for i in range(0, len(cmds), 25)):
+        view.add_item(CommandHelpDropdown(ctx, cmd_list))
+
+
 class CogHelpDropdown(discord.ui.Select):
     view: CogHelpView
 
-    def __init__(self, ctx: Context, cogs: List[Cog]):
+    def __init__(self, ctx: Context, cogs: List[Cog], selected_cog: Cog | None = None):
         self.cogs = cogs
         self.ctx = ctx
 
@@ -194,6 +213,7 @@ class CogHelpDropdown(discord.ui.Select):
                     label=_t(cog.qualified_name),
                     emoji=cog.emoji,
                     description=_t((cog.description or "").split("\n")[0]),
+                    default=cog is selected_cog,
                 )
             )
 
@@ -208,6 +228,9 @@ class CogHelpDropdown(discord.ui.Select):
 
         if cog is None:
             raise commands.BadArgument("Somehow I could not find that category.")
+
+        for option in self.options:
+            option.default = option.value == _t(cog.qualified_name)
 
         cmds = cog.get_commands()
 
@@ -224,19 +247,19 @@ class CogHelpDropdown(discord.ui.Select):
         if not interaction.message:
             raise commands.BadArgument("Somehow no message was found.")
 
-        if len(self.view.children) >= 2:
+        while len(self.view.children) > 1:
             self.view.remove_item(self.view.children[-1])
 
-        self.view.add_item(CommandHelpDropdown(ctx, cmds))
+        _add_command_help_dropdowns(self.view, ctx, cmds)
 
         await interaction.message.edit(embed=embed, view=self.view)
         await interaction.response.defer()
 
 
 class CogHelpView(AuthorView):
-    def __init__(self, ctx: Context, cogs: List[Cog]):
+    def __init__(self, ctx: Context, cogs: List[Cog], selected_cog: Cog | None = None):
         super().__init__(ctx)
-        self.add_item(CogHelpDropdown(ctx, cogs))
+        self.add_item(CogHelpDropdown(ctx, cogs, selected_cog=selected_cog))
 
 
 class CommandHelpDropdown(discord.ui.Select):
@@ -293,9 +316,9 @@ class CommandHelpDropdown(discord.ui.Select):
                     raw = []
                 subcmds = [c for c in raw if not c.hidden]
                 if subcmds and view_ref is not None:
-                    if len(view_ref.children) > 1:
+                    while len(view_ref.children) > 1:
                         view_ref.remove_item(view_ref.children[-1])
-                    view_ref.add_item(CommandHelpDropdown(ctx, subcmds))
+                    _add_command_help_dropdowns(view_ref, ctx, subcmds)
             await interaction.message.edit(embed=embed, view=view_ref)
             return
 
@@ -308,7 +331,7 @@ class CommandHelpDropdown(discord.ui.Select):
             if subcmds and command.cog:
                 all_cogs = [c for _, c in ctx.bot.cogs.items() if c]
                 view_ref = CogHelpView(ctx, all_cogs)
-                view_ref.add_item(CommandHelpDropdown(ctx, subcmds))
+                _add_command_help_dropdowns(view_ref, ctx, subcmds)
         await interaction.message.edit(embed=embed, view=view_ref)
 
 
@@ -317,9 +340,7 @@ class CommandHelpView(AuthorView):
         super().__init__(ctx)
         if not cmds:
             return
-        new_cmds = [cmds[i : i + 25] for i in range(0, len(cmds), 25)]
-        for cmd_list in new_cmds:
-            self.add_item(CommandHelpDropdown(ctx, cmd_list))
+        _add_command_help_dropdowns(self, ctx, cmds)
 
 
 class Help(Cog):
