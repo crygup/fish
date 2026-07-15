@@ -10,11 +10,12 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import aiohttp
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
@@ -47,7 +48,17 @@ GUILD_TABLES = {"guild_icons", "guild_name_logs"}
 LASTFM_CALLBACK_URL = "https://crygup.com/fishie"
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 LASTFM_STATE_TTL = 10 * 60
-LASTFM_ACCOUNT_FIELDS = ("lastfm", "steam", "roblox", "genshin", "letterboxd")
+LASTFM_ACCOUNT_FIELDS = ("lastfm", "steam", "roblox", "letterboxd", "spotify")
+STEAM_CALLBACK_URL = "https://crygup.com/fishie"
+STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
+STEAM_STATE_TTL = 10 * 60
+SPOTIFY_CALLBACK_URL = "https://crygup.com/fishie"
+SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_STATE_TTL = 10 * 60
+SPOTIFY_SCOPES = (
+    "user-read-private user-read-playback-state user-modify-playback-state "
+    "user-library-modify user-library-read"
+)
 TWITCH_EVENTSUB_MAX_AGE = 10 * 60
 
 
@@ -80,6 +91,143 @@ def _lastfm_authorization_url(user_id: int, source: str) -> str:
     return "https://www.last.fm/api/auth/?" + urlencode(
         {"api_key": bot_ref.config["keys"]["lastfm_cb"], "cb": callback}
     )
+
+
+def _steam_state(
+    user_id: int,
+    source: str,
+    channel_id: int | None = None,
+    message_id: int | None = None,
+) -> str:
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    now = int(time.time())
+    states = getattr(bot_ref, "_steam_oauth_states", None)
+    if states is None:
+        states = bot_ref._steam_oauth_states = {}
+    for token, state_data in list(states.items()):
+        if int(state_data.get("expires", 0)) < now:
+            states.pop(token, None)
+    token = secrets.token_urlsafe(24)
+    states[token] = {
+        "user_id": int(user_id),
+        "source": source,
+        "expires": now + STEAM_STATE_TTL,
+    }
+    if channel_id is not None and message_id is not None:
+        states[token]["channel_id"] = int(channel_id)
+        states[token]["message_id"] = int(message_id)
+    return token
+
+
+def _steam_authorization_url(user_id: int, source: str) -> str:
+    state = _steam_state(user_id, source)
+    callback = f"{STEAM_CALLBACK_URL}?{urlencode({'steam_state': state})}"
+    return (
+        STEAM_OPENID_URL
+        + "?"
+        + urlencode(
+            {
+                "openid.ns": "http://specs.openid.net/auth/2.0",
+                "openid.mode": "checkid_setup",
+                "openid.return_to": callback,
+                "openid.realm": "https://crygup.com/",
+                "openid.identity": "http://specs.openid.net/auth/2.0/identifier_select",
+                "openid.claimed_id": "http://specs.openid.net/auth/2.0/identifier_select",
+            }
+        )
+    )
+
+
+def _decode_steam_state(state: str) -> tuple[int, str, int | None, int | None]:
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    states = getattr(bot_ref, "_steam_oauth_states", None) or {}
+    payload = states.pop(state, None)
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Invalid Steam connection state")
+    try:
+        user_id = int(payload["user_id"])
+        source = payload["source"]
+        expires = int(payload["expires"])
+        channel_id = int(payload["channel_id"]) if payload.get("channel_id") else None
+        message_id = int(payload["message_id"]) if payload.get("message_id") else None
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "Invalid Steam connection state")
+    if source not in {"discord", "website"}:
+        raise HTTPException(400, "Invalid Steam connection source")
+    if expires < int(time.time()):
+        raise HTTPException(400, "The Steam connection link has expired")
+    if (channel_id is None) != (message_id is None):
+        raise HTTPException(400, "Invalid Discord message state")
+    return user_id, source, channel_id, message_id
+
+
+def _spotify_state(
+    user_id: int,
+    source: str,
+    channel_id: int | None = None,
+    message_id: int | None = None,
+) -> str:
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    now = int(time.time())
+    states = getattr(bot_ref, "_spotify_oauth_states", None)
+    if states is None:
+        states = bot_ref._spotify_oauth_states = {}
+    for token, state_data in list(states.items()):
+        if int(state_data.get("expires", 0)) < now:
+            states.pop(token, None)
+    token = secrets.token_urlsafe(24)
+    states[token] = {
+        "user_id": int(user_id),
+        "source": source,
+        "expires": now + SPOTIFY_STATE_TTL,
+    }
+    if channel_id is not None and message_id is not None:
+        states[token]["channel_id"] = int(channel_id)
+        states[token]["message_id"] = int(message_id)
+    return token
+
+
+def _spotify_authorization_url(user_id: int, source: str) -> str:
+    state = _spotify_state(user_id, source)
+    return "https://accounts.spotify.com/authorize?" + urlencode(
+        {
+            "client_id": bot_ref.config["keys"]["spotify_id"],
+            "response_type": "code",
+            "redirect_uri": SPOTIFY_CALLBACK_URL,
+            "scope": SPOTIFY_SCOPES,
+            "state": f"spotify_{state}",
+            "show_dialog": "true",
+        }
+    )
+
+
+def _decode_spotify_state(state: str) -> tuple[int, str, int | None, int | None]:
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    if not state.startswith("spotify_"):
+        raise HTTPException(400, "Invalid Spotify connection state")
+    states = getattr(bot_ref, "_spotify_oauth_states", None) or {}
+    payload = states.pop(state.removeprefix("spotify_"), None)
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Invalid Spotify connection state")
+    try:
+        user_id = int(payload["user_id"])
+        source = payload["source"]
+        expires = int(payload["expires"])
+        channel_id = int(payload["channel_id"]) if payload.get("channel_id") else None
+        message_id = int(payload["message_id"]) if payload.get("message_id") else None
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "Invalid Spotify connection state")
+    if source not in {"discord", "website"}:
+        raise HTTPException(400, "Invalid Spotify connection source")
+    if expires < int(time.time()):
+        raise HTTPException(400, "The Spotify connection link has expired")
+    if (channel_id is None) != (message_id is None):
+        raise HTTPException(400, "Invalid Discord message state")
+    return user_id, source, channel_id, message_id
 
 
 def _decode_lastfm_state(
@@ -119,6 +267,30 @@ def _lastfm_api_signature(api_key: str, token: str, secret: str) -> str:
     return hashlib.md5(signature.encode()).hexdigest()
 
 
+async def _steam_display_name(steam_id: str) -> str | None:
+    if not bot_ref:
+        return None
+    api_key = bot_ref.config["keys"].get("steam")
+    if not api_key:
+        return None
+    try:
+        async with bot_ref.session.get(
+            "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/",
+            params={"key": api_key, "steamids": steam_id, "format": "json"},
+        ) as response:
+            profile = await response.json(content_type=None)
+        response_data = profile.get("response") if isinstance(profile, dict) else None
+        players = (
+            response_data.get("players", []) if isinstance(response_data, dict) else []
+        )
+        if isinstance(players, list) and players and isinstance(players[0], dict):
+            name = players[0].get("personaname")
+            return str(name) if name else None
+    except (aiohttp.ClientError, ValueError, TypeError):
+        pass
+    return None
+
+
 async def _refresh_discord_accounts_message(
     user_id: int, channel_id: int | None, message_id: int | None
 ) -> None:
@@ -132,7 +304,7 @@ async def _refresh_discord_accounts_message(
             channel = await bot_ref.fetch_channel(channel_id)
         message = await channel.fetch_message(message_id)
         row = await bot_ref.pool.fetchrow(
-            "SELECT lastfm, steam, roblox, genshin, letterboxd FROM accounts "
+            "SELECT lastfm, steam, roblox, letterboxd, spotify FROM accounts "
             "WHERE user_id = $1",
             user_id,
         )
@@ -140,11 +312,16 @@ async def _refresh_discord_accounts_message(
         ctx = SimpleNamespace(bot=bot_ref, author=author)
         await message.edit(
             embed=_accounts_embed(ctx, row),
-            view=ManageAccountsView(ctx, lastfm_connected=True),
+            view=ManageAccountsView(
+                ctx,
+                lastfm_connected=bool(row and row["lastfm"]),
+                steam_connected=bool(row and row["steam"]),
+                spotify_connected=bool(row and row["spotify"]),
+            ),
         )
     except Exception as error:
         bot_ref.logger.warning(
-            "Could not refresh Discord accounts message after Last.fm OAuth: %s",
+            "Could not refresh Discord accounts message after account OAuth: %s",
             error,
         )
 
@@ -705,22 +882,173 @@ async def lastfm_callback(token: str = Query(...), state: str = Query(...)):
         )
         raise HTTPException(400, str(message))
     username = session.get("name")
-    if not username:
-        raise HTTPException(502, "Last.fm did not return a username")
+    session_key = session.get("key")
+    if not username or not session_key:
+        raise HTTPException(502, "Last.fm did not return account credentials")
 
     pool = _check_pool()
     await pool.execute(
-        """INSERT INTO accounts (user_id, lastfm)
-           VALUES ($1, $2)
+        """INSERT INTO accounts (user_id, lastfm, lastfm_session_key)
+           VALUES ($1, $2, $3)
            ON CONFLICT (user_id) DO UPDATE
-           SET lastfm = EXCLUDED.lastfm;
+           SET lastfm = EXCLUDED.lastfm,
+               lastfm_session_key = EXCLUDED.lastfm_session_key;
         """,
         user_id,
         username,
+        session_key,
     )
     bot_ref.db_cache.add_account(user_id, username)
     await _refresh_discord_accounts_message(user_id, channel_id, message_id)
     return {"username": username, "source": source}
+
+
+@app.get("/steam/connect")
+async def steam_connect(authorization: str = Header(None)):
+    """Create a Steam OpenID URL for the authenticated Discord user."""
+    me = await _verify_token(authorization)
+    return {"url": _steam_authorization_url(int(me["id"]), "website")}
+
+
+@app.get("/steam/callback")
+async def steam_callback(request: Request, steam_state: str = Query(...)):
+    """Verify a Steam OpenID response and persist the user's SteamID64."""
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    user_id, source, channel_id, message_id = _decode_steam_state(steam_state)
+    openid = {
+        key: value
+        for key, value in request.query_params.items()
+        if key.startswith("openid.")
+    }
+    if openid.get("openid.mode") != "id_res":
+        raise HTTPException(400, "Steam authorization was cancelled")
+    return_to = openid.get("openid.return_to")
+    if not return_to:
+        raise HTTPException(400, "Steam did not return a callback URL")
+    parsed_return_to = urlsplit(return_to)
+    if (
+        parsed_return_to.scheme != "https"
+        or parsed_return_to.netloc != "crygup.com"
+        or parsed_return_to.path != "/fishie"
+        or parse_qs(parsed_return_to.query).get("steam_state") != [steam_state]
+    ):
+        raise HTTPException(400, "Invalid Steam callback URL")
+    claimed_id = openid.get("openid.claimed_id", "")
+    identity = openid.get("openid.identity", "")
+    match = re.fullmatch(r"https://steamcommunity\.com/openid/id/(\d{17})", claimed_id)
+    if not match or identity != claimed_id:
+        raise HTTPException(400, "Steam returned an invalid account identifier")
+
+    verify_payload = dict(openid)
+    verify_payload["openid.mode"] = "check_authentication"
+    async with bot_ref.session.post(STEAM_OPENID_URL, data=verify_payload) as resp:
+        verification = await resp.text()
+    if resp.status != 200 or not re.search(
+        r"(?:^|\n)is_valid:true(?:\r?\n|$)", verification
+    ):
+        raise HTTPException(400, "Steam authorization could not be verified")
+
+    steam_id = match.group(1)
+    persona_name = None
+    api_key = bot_ref.config["keys"].get("steam")
+    if api_key:
+        try:
+            async with bot_ref.session.get(
+                "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/",
+                params={"key": api_key, "steamids": steam_id, "format": "json"},
+            ) as profile_resp:
+                profile = await profile_resp.json(content_type=None)
+            response_data = (
+                profile.get("response") if isinstance(profile, dict) else None
+            )
+            players = (
+                response_data.get("players", [])
+                if isinstance(response_data, dict)
+                else []
+            )
+            if isinstance(players, list) and players and isinstance(players[0], dict):
+                persona_name = players[0].get("personaname")
+        except (aiohttp.ClientError, ValueError, TypeError):
+            bot_ref.logger.warning("Steam profile lookup failed for linked account")
+
+    pool = _check_pool()
+    await pool.execute(
+        """INSERT INTO accounts (user_id, steam)
+           VALUES ($1, $2)
+           ON CONFLICT (user_id) DO UPDATE
+           SET steam = EXCLUDED.steam;""",
+        user_id,
+        steam_id,
+    )
+    await _refresh_discord_accounts_message(user_id, channel_id, message_id)
+    return {"steamid": steam_id, "personaname": persona_name, "source": source}
+
+
+@app.get("/spotify/connect")
+async def spotify_connect(authorization: str = Header(None)):
+    """Create a Spotify authorization URL for the authenticated Discord user."""
+    me = await _verify_token(authorization)
+    return {"url": _spotify_authorization_url(int(me["id"]), "website")}
+
+
+@app.get("/spotify/callback")
+async def spotify_callback(code: str = Query(...), state: str = Query(...)):
+    """Exchange a Spotify authorization code and persist the user's account."""
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    user_id, source, channel_id, message_id = _decode_spotify_state(state)
+    auth = aiohttp.BasicAuth(
+        bot_ref.config["keys"]["spotify_id"],
+        bot_ref.config["keys"]["spotify_secret"],
+    )
+    async with bot_ref.session.post(
+        SPOTIFY_TOKEN_URL,
+        auth=auth,
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": SPOTIFY_CALLBACK_URL,
+        },
+    ) as response:
+        try:
+            token_data = await response.json(content_type=None)
+        except (ValueError, aiohttp.ContentTypeError):
+            raise HTTPException(502, "Spotify returned an invalid response")
+    if response.status != 200 or not isinstance(token_data, dict):
+        raise HTTPException(400, "Spotify authorization failed")
+    refresh_token = token_data.get("refresh_token")
+    access_token = token_data.get("access_token")
+    if not refresh_token or not access_token:
+        raise HTTPException(502, "Spotify did not return account credentials")
+
+    async with bot_ref.session.get(
+        "https://api.spotify.com/v1/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    ) as profile_response:
+        try:
+            profile = await profile_response.json(content_type=None)
+        except (ValueError, aiohttp.ContentTypeError):
+            raise HTTPException(502, "Spotify returned an invalid profile")
+    if profile_response.status != 200 or not isinstance(profile, dict):
+        raise HTTPException(400, "Spotify profile lookup failed")
+    display_name = profile.get("display_name") or profile.get("id")
+    if not display_name:
+        raise HTTPException(502, "Spotify did not return a display name")
+
+    pool = _check_pool()
+    await pool.execute(
+        """INSERT INTO accounts (user_id, spotify, spotify_refresh_token)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id) DO UPDATE
+           SET spotify = EXCLUDED.spotify,
+               spotify_refresh_token = EXCLUDED.spotify_refresh_token;""",
+        user_id,
+        display_name,
+        refresh_token,
+    )
+    await _refresh_discord_accounts_message(user_id, channel_id, message_id)
+    return {"display_name": display_name, "source": source}
 
 
 @app.get("/user/{user_id}")
@@ -1173,9 +1501,12 @@ async def get_user_accounts(user_id: int, authorization: str = Header(None)):
     row = await pool.fetchrow("SELECT * FROM accounts WHERE user_id = $1", user_id)
     if not row:
         return {"accounts": {}}
-    return {
-        "accounts": {field: row[field] for field in LASTFM_ACCOUNT_FIELDS if row[field]}
-    }
+    accounts = {field: row[field] for field in LASTFM_ACCOUNT_FIELDS if row[field]}
+    if row["steam"]:
+        display_name = await _steam_display_name(row["steam"])
+        if display_name:
+            accounts["steam_display_name"] = display_name
+    return {"accounts": accounts}
 
 
 @app.post("/user/{user_id}/accounts")
@@ -1186,8 +1517,8 @@ async def set_user_accounts(
     me = await _verify_token(authorization)
     if int(me["id"]) != user_id:
         raise HTTPException(403, "Not your account")
-    # Last.fm can only be changed through its authorization flow.
-    allowed = {"steam", "roblox", "genshin", "letterboxd"}
+    # Last.fm and Steam can only be changed through their authorization flows.
+    allowed = {"roblox", "letterboxd"}
     accounts = {k: v for k, v in payload.get("accounts", {}).items() if k in allowed}
     pool = _check_pool()
     if accounts:
@@ -1210,11 +1541,37 @@ async def disconnect_lastfm(user_id: int, authorization: str = Header(None)):
         raise HTTPException(403, "Not your account")
     pool = _check_pool()
     await pool.execute(
-        "UPDATE accounts SET lastfm = NULL WHERE user_id = $1",
+        "UPDATE accounts SET lastfm = NULL, lastfm_session_key = NULL WHERE user_id = $1",
         user_id,
     )
     if bot_ref:
         bot_ref.db_cache.lastfm.pop(user_id, None)
+    return {"disconnected": True}
+
+
+@app.delete("/user/{user_id}/steam")
+async def disconnect_steam(user_id: int, authorization: str = Header(None)):
+    """Disconnect Steam for the authenticated Discord user."""
+    me = await _verify_token(authorization)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "Not your account")
+    pool = _check_pool()
+    await pool.execute("UPDATE accounts SET steam = NULL WHERE user_id = $1", user_id)
+    return {"disconnected": True}
+
+
+@app.delete("/user/{user_id}/spotify")
+async def disconnect_spotify(user_id: int, authorization: str = Header(None)):
+    """Disconnect Spotify for the authenticated Discord user."""
+    me = await _verify_token(authorization)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "Not your account")
+    pool = _check_pool()
+    await pool.execute(
+        "UPDATE accounts SET spotify = NULL, spotify_refresh_token = NULL "
+        "WHERE user_id = $1",
+        user_id,
+    )
     return {"disconnected": True}
 
 

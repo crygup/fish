@@ -1,14 +1,20 @@
 CREATE TABLE IF NOT EXISTS accounts (
     user_id BIGINT NOT NULL,
     lastfm TEXT,
+    lastfm_session_key TEXT,
     steam TEXT,
     roblox TEXT,
     genshin TEXT,
     letterboxd TEXT,
+    spotify TEXT,
+    spotify_refresh_token TEXT,
     PRIMARY KEY (user_id)
 );
 
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS letterboxd TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS lastfm_session_key TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS spotify TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS spotify_refresh_token TEXT;
 
 CREATE TABLE IF NOT EXISTS reminders (
     id SERIAL PRIMARY KEY,
