@@ -17,6 +17,7 @@ fish_upvote = PartialEmoji(id=1095204137894948864, name="fish_upvote")
 fish_warning = PartialEmoji(id=1095791383509487656, name="fish_warning")
 fish_x = PartialEmoji(id=1095204162121248778, name="fish_x")
 fish_discord = PartialEmoji(id=1095791378627313776, name="fish_discord")
+fish_discord2 = PartialEmoji(id=1006848754944593921, name="discord")
 fish_star = PartialEmoji(id=1095791380850290841, name="fish_star")
 fish_edit = PartialEmoji(id=1132527701014609991, name="fish_edit")
 fish_download = PartialEmoji(id=1132532062344204390, name="fish_download")
@@ -34,7 +35,8 @@ lfm_emoji = PartialEmoji(id=1006848047923351612, name="lastfm")
 steam = PartialEmoji(id=1095791386999132231, name="steam")
 roblox = PartialEmoji(id=1095791384893603840, name="roblox")
 mudae_circle = PartialEmoji(id=1522435062765715526, name="mudae_circle")
-drpepper = PartialEmoji(id=1526345518119125164, name="drpepper")
+drpepper = PartialEmoji(id=1526723524587421778, name="drpepper", animated=True)
+spotify = PartialEmoji(id=1526723506631479377, name="Spotify")
 
 # discord
 balance = PartialEmoji(id=949147429733793832, name="balance")
@@ -84,7 +86,7 @@ fart_n = PartialEmoji(name="\U0001f97a")
 dochi = PartialEmoji(name="\U0001f9a7")
 tony = PartialEmoji(name="mariSparkle", id=1390265426008604703)
 ori = PartialEmoji(name="\U0001f4ab")
-sac = PartialEmoji(id=1526354302241865799, name="sac")
+sac = PartialEmoji(id=1526723466760421406, name="sac")
 smuckers_emojis = [PartialEmoji(name="\U0001f983"), PartialEmoji(name="\U0001f9b7"), PartialEmoji(name="\U0001f476")]
 smuckers = " ".join([str(e) for e in smuckers_emojis])
 aikuri = PartialEmoji(name="\U0001f639")
@@ -106,6 +108,7 @@ spP = PartialEmoji(name="SpP", id=1437140625844867244)
 
 
 class Emojis:
+    spotify = spotify
     starla = starla
     ori = ori
     sac = sac
@@ -195,6 +198,7 @@ class Emojis:
 
 
 emoji_list = [
+    spotify,
     starla,
     ori,
     sac,
