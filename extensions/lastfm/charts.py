@@ -10,6 +10,7 @@ import discord
 from discord.ext import commands
 from discord import MediaGalleryItem, app_commands
 from discord import ui
+from cachetools import TTLCache
 from core import Cog
 from utils import (
     lastfm_command,
@@ -31,6 +32,7 @@ topMode: TypeAlias = Union[
     Literal["gettopartists"], Literal["gettopalbums"], Literal["gettoptracks"]
 ]
 modeName = {"gettopartists": "artist", "gettopalbums": "album", "gettoptracks": "track"}
+SPOTIFY_COVER_CACHE: TTLCache[tuple[str, str], str] = TTLCache(maxsize=512, ttl=3600)
 
 
 class ChartEmbed(ui.LayoutView):
@@ -77,18 +79,20 @@ async def chart_cmd(
     except KeyError:
         raise commands.BadArgument("This user has not connected their last.fm account")
 
-    file = await make_image(
-        ctx,
-        lfm_user,
-        mode,
-        count,
-        time_period=time_period,
-        xbound=xbound,
-        ybound=ybound,
-    )
-
     data = {"method": "user.getrecenttracks", "user": lfm_user}
-    response = await ctx.bot.lfm_get(data)
+    image_task = asyncio.create_task(
+        make_image(
+            ctx,
+            lfm_user,
+            mode,
+            count,
+            time_period=time_period,
+            xbound=xbound,
+            ybound=ybound,
+        )
+    )
+    total_task = asyncio.create_task(ctx.bot.lfm_get(data))
+    file, response = await asyncio.gather(image_task, total_task)
     attr = response.get("recenttracks", {}).get("@attr", {})
     total = int(attr.get("total", 0))
     view = ChartEmbed(
@@ -109,6 +113,12 @@ async def search_spotify(
     mode: str,
     query: str,
 ) -> str:
+    cache_key = (mode, " ".join(query.casefold().split()))
+    try:
+        return SPOTIFY_COVER_CACHE[cache_key]
+    except KeyError:
+        pass
+
     url = "https://api.spotify.com/v1/search"
 
     headers = {
@@ -130,7 +140,9 @@ async def search_spotify(
             raise commands.BadArgument(
                 f"No cover image found on Spotify for `{query}`."
             )
-        return images[0]["url"]
+        cover_url = images[0]["url"]
+        SPOTIFY_COVER_CACHE[cache_key] = cover_url
+        return cover_url
 
 
 async def make_image(
@@ -146,7 +158,7 @@ async def make_image(
     data = {
         "method": f"user.{mode}",
         "user": lfm_user,
-        "limit": 200,
+        "limit": max(count, 1),
         "period": time_period,
     }
     response = (await ctx.bot.lfm_get(data))[f"top{modeName[mode]}s"]

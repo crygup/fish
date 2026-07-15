@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 from typing import TYPE_CHECKING
 
 import discord
@@ -14,12 +16,12 @@ from utils import (
     to_image,
     format_millis,
     plural,
-    fish_discord,
     lfm_emoji,
 )
-from typing import Dict, Any
 from .top import Top
 from .charts import Charts
+
+LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -34,6 +36,89 @@ class Lastfm(Top, Charts):
     def __init__(self, bot: Fishie):
         super().__init__()
         self.bot = bot
+
+    async def _lastfm_account(self, user_id: int) -> tuple[str, str]:
+        row = await self.bot.pool.fetchrow(
+            "SELECT lastfm, lastfm_session_key FROM accounts WHERE user_id = $1",
+            user_id,
+        )
+        username = row["lastfm"] if row else None
+        session_key = row["lastfm_session_key"] if row else None
+        if not username:
+            raise commands.BadArgument(
+                "Connect your Last.fm account first with `fish link lastfm`."
+            )
+        if not session_key:
+            raise commands.BadArgument(
+                "Reconnect your Last.fm account to enable loving tracks."
+            )
+        return str(username), str(session_key)
+
+    async def _lastfm_current_track(self, username: str) -> tuple[str, str]:
+        response = await self.bot.lfm_get(
+            {"method": "user.getrecenttracks", "user": username, "limit": 1}
+        )
+        tracks = response.get("recenttracks", {}).get("track")
+        if not tracks:
+            raise commands.BadArgument(f"No recent tracks found for **{username}**.")
+        track = tracks[0] if isinstance(tracks, list) else tracks
+        artist_data = track.get("artist") if isinstance(track, dict) else None
+        artist = (
+            artist_data.get("#text") or artist_data.get("name")
+            if isinstance(artist_data, dict)
+            else artist_data
+        )
+        title = track.get("name") if isinstance(track, dict) else None
+        if not artist or not title:
+            raise commands.BadArgument("Last.fm did not provide a usable track.")
+        return str(artist), str(title)
+
+    @staticmethod
+    def _lastfm_signature(params: dict[str, str], secret: str) -> str:
+        signature = "".join(
+            f"{key}{params[key]}" for key in sorted(params) if key != "format"
+        )
+        return hashlib.md5(f"{signature}{secret}".encode()).hexdigest()
+
+    async def _set_loved(
+        self, username: str, session_key: str, loved: bool
+    ) -> tuple[str, str]:
+        artist, title = await self._lastfm_current_track(username)
+        params = {
+            "api_key": self.bot.config["keys"]["lastfm_cb"],
+            "artist": artist,
+            "method": "track.love" if loved else "track.unlove",
+            "sk": session_key,
+            "track": title,
+        }
+        params["api_sig"] = self._lastfm_signature(
+            params, self.bot.config["keys"]["lastfm_cb_secret"]
+        )
+        params["format"] = "json"
+        async with self.bot.session.post(LASTFM_API_URL, data=params) as response:
+            try:
+                result = await response.json(content_type=None)
+            except (ValueError, TypeError):
+                result = None
+        if (
+            response.status != 200
+            or not isinstance(result, dict)
+            or result.get("error")
+        ):
+            raise commands.BadArgument(
+                f"Last.fm could not {'love' if loved else 'unlove'} the current track."
+            )
+        return artist, title
+
+    async def _toggle_love(self, ctx: Context, loved: bool) -> None:
+        username, session_key = await self._lastfm_account(ctx.author.id)
+        artist, title = await self._set_loved(username, session_key, loved)
+        verb = "Loved" if loved else "Unloved"
+        await ctx.send(
+            f"{verb} **{discord.utils.escape_markdown(title)}** by "
+            f"**{discord.utils.escape_markdown(artist)}** on Last.fm.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @commands.hybrid_command(
         name="fm", enabled=True, aliases=("np", "nowplaying", "fuckyoutony")
@@ -69,11 +154,9 @@ class Lastfm(Top, Charts):
 
             thumbnail_url = re.sub(r"/u/.*/", "/u/", lt["image"][-1]["#text"])
 
+            cover_task = None
             if not re.search("2a96cbd8b46e442fc41c2b86b821562f.png", thumbnail_url):
-                fp = await to_image(ctx.session, thumbnail_url)
-                file = discord.File(fp=fp, filename="cover.png")
-                files.append(file)
-                embed.set_thumbnail(url="attachment://cover.png")
+                cover_task = asyncio.create_task(to_image(ctx.session, thumbnail_url))
 
             embed.set_author(
                 name=f"{user.display_name} {author_name}"[:256],
@@ -97,11 +180,21 @@ class Lastfm(Top, Charts):
                 }
             )
 
-            try:
-                tResponse = await self.bot.lfm_get(tData)
-                t = tResponse.get("track")
-            except Exception:
-                t = None
+            async def _get_track_info():
+                try:
+                    t_response = await self.bot.lfm_get(tData)
+                except Exception:
+                    return None
+                return t_response.get("track") if isinstance(t_response, dict) else None
+
+            track_task = asyncio.create_task(_get_track_info())
+            if cover_task is not None:
+                fp, t = await asyncio.gather(cover_task, track_task)
+                file = discord.File(fp=fp, filename="cover.png")
+                files.append(file)
+                embed.set_thumbnail(url="attachment://cover.png")
+            else:
+                t = await track_task
 
             footer_text = ""
             if t:
@@ -126,6 +219,22 @@ class Lastfm(Top, Charts):
             embed.title = f'{lt["name"]}{loved}'
 
             await ctx.send(embed=embed, files=files)
+
+    @commands.hybrid_command(name="love", aliases=("loved",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @lastfm_command()
+    async def love(self, ctx: Context):
+        """Love the current or most recently listened to Last.fm track."""
+        await self._toggle_love(ctx, True)
+
+    @commands.hybrid_command(name="unlove", aliases=("unloved",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @lastfm_command()
+    async def unlove(self, ctx: Context):
+        """Remove the current or most recently listened to Last.fm track from loved tracks."""
+        await self._toggle_love(ctx, False)
 
 
 async def setup(bot: Fishie):

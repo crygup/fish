@@ -117,6 +117,9 @@ class Fishie(commands.Bot):
         )  # {repr(ctx): message(from ctx.send) }
         self.support_invite: str = f"https://discord.gg/Fct5UGadcb"
         self.lfm_api = f"http://ws.audioscrobbler.com/2.0/?api_key={self.config['keys']['lastfm']}&format=json"
+        self.lastfm_response_cache: TTLCache[tuple[tuple[str, str], ...], Any] = (
+            TTLCache(maxsize=512, ttl=30)
+        )
 
         super().__init__(
             command_prefix=get_prefix,
@@ -480,5 +483,16 @@ class Fishie(commands.Bot):
         return 0xFAA0C1
 
     async def lfm_get(self, data: Dict[Any, Any]):
+        cacheable = data.get("method") != "user.getrecenttracks"
+        cache_key = tuple(sorted((str(key), str(value)) for key, value in data.items()))
+        if cacheable:
+            try:
+                return self.lastfm_response_cache[cache_key]
+            except KeyError:
+                pass
+
         async with self.session.get(self.lfm_api, params=data) as resp:
-            return await resp.json()
+            result = await resp.json()
+        if cacheable and isinstance(result, dict) and not result.get("error"):
+            self.lastfm_response_cache[cache_key] = result
+        return result
