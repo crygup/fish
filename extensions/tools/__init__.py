@@ -34,7 +34,6 @@ from .google import Google
 from .letterboxd import Letterboxd
 from .purge import PurgeCog
 from .reminders import Reminder
-from .spotify import Spotify
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -84,7 +83,7 @@ class GameView(discord.ui.View):
         self.give_up_flag.set()
 
 
-class Tools(Downloads, Reminder, Google, Spotify, PurgeCog, CommandStats, Letterboxd):
+class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
     """Quality of life tools"""
 
     emoji = discord.PartialEmoji(name="\U0001f6e0")
