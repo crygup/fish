@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from io import BytesIO
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import discord
 from discord import ui, MediaGalleryItem, app_commands
@@ -106,21 +106,47 @@ def make_caption(img_bytes: bytes, caption_text: str) -> tuple[BytesIO, str]:
         buf.seek(0)
         return buf, "captioned.gif"
 
+    frame = _caption_frame(src.convert("RGBA"), caption_text)
+    buf = BytesIO()
+    frame.save(buf, format="PNG")
+    buf.seek(0)
+    return buf, "captioned.png"
+
 
 def _caption_frame(img: Image.Image, caption_text: str) -> Image.Image:
-    font_size = max(16, img.width // 10)
-    try:
-        font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size
-        )
-    except OSError:
-        font = ImageFont.load_default()
-
     padding = max(10, int(img.width * 0.04))
-    max_w = img.width - padding * 2
+    max_w = max(1, img.width - padding * 2)
+    words = caption_text.split() or [""]
+
+    def load_font(size: int):
+        try:
+            return ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size
+            )
+        except OSError:
+            return ImageFont.load_default()
+
+    font_size = max(12, min(96, img.width // 10))
+    font = load_font(font_size)
+    while font_size > 12 and any(font.getlength(word) > max_w for word in words):
+        font_size -= 1
+        font = load_font(font_size)
+
+    wrapped_words = []
+    for word in words:
+        chunk = ""
+        for character in word:
+            candidate = chunk + character
+            if chunk and font.getlength(candidate) > max_w:
+                wrapped_words.append(chunk)
+                chunk = character
+            else:
+                chunk = candidate
+        wrapped_words.append(chunk)
+
     lines = []
-    for word in caption_text.split():
-        if lines and font.getbbox(lines[-1] + " " + word)[2] <= max_w:
+    for word in wrapped_words:
+        if lines and font.getlength(lines[-1] + " " + word) <= max_w:
             lines[-1] += " " + word
         else:
             lines.append(word)
@@ -138,8 +164,14 @@ def _caption_frame(img: Image.Image, caption_text: str) -> Image.Image:
     draw = ImageDraw.Draw(new_img)
     y = padding
     for line in lines:
-        w = font.getbbox(line)[2]
-        draw.text(((new_img.width - w) // 2, y), line, fill="black", font=font)
+        bbox = font.getbbox(line)
+        w = bbox[2] - bbox[0]
+        draw.text(
+            ((new_img.width - w) // 2 - bbox[0], y),
+            line,
+            fill="black",
+            font=font,
+        )
         y += line_h + gap
 
     return new_img
@@ -198,31 +230,72 @@ class Images(Cog):
     @commands.hybrid_command(name="caption")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def caption(self, ctx: Context, *, text: str):
+    @app_commands.describe(
+        text="The caption text",
+        media_url="An image/video URL or custom emoji",
+        user="Use this user's avatar",
+        attachment="Attach an image or video",
+    )
+    async def caption(
+        self,
+        ctx: Context,
+        *,
+        text: str = "",
+        media_url: Optional[str] = None,
+        user: Optional[discord.User] = None,
+        attachment: Optional[discord.Attachment] = None,
+    ):
         """Add a caption to an image."""
 
         converter = MediaConverter()
         image_url = ""
         caption_text = text
 
-        parts = text.split(" ", 1)
-        if len(parts) == 2:
+        if media_url:
             try:
-                maybe_url = await converter.convert(ctx, parts[0])
-                image_url = maybe_url
-                caption_text = parts[1]
-            except commands.BadArgument:
-                pass
+                image_url = await converter.convert(
+                    ctx, media_url, include_message_media=False
+                )
+            except commands.BadArgument as error:
+                raise commands.BadArgument("Invalid media URL or emoji.") from error
+        elif user is not None:
+            image_url = user.display_avatar.url
+        elif attachment is not None:
+            image_url = attachment.url
 
         if not image_url:
-            parts = text.split(" ", 2)
-            if len(parts) >= 2:
+            parts = text.split(" ", 1)
+            if len(parts) == 2:
                 try:
-                    maybe_url = await converter.convert(ctx, " ".join(parts[:2]))
+                    maybe_url = await converter.convert(
+                        ctx, parts[0], include_message_media=False
+                    )
                     image_url = maybe_url
-                    caption_text = " ".join(parts[2:])
+                    caption_text = parts[1]
                 except commands.BadArgument:
                     pass
+
+            if not image_url:
+                parts = text.split(" ", 2)
+                if len(parts) >= 2:
+                    try:
+                        maybe_url = await converter.convert(
+                            ctx,
+                            " ".join(parts[:2]),
+                            include_message_media=False,
+                        )
+                        image_url = maybe_url
+                        caption_text = " ".join(parts[2:])
+                    except commands.BadArgument:
+                        pass
+
+        if not image_url:
+            try:
+                image_url = await converter.convert(ctx, "")
+            except commands.BadArgument as error:
+                raise commands.BadArgument(
+                    "No image or video found. Attach one, reply to media, or use a media URL."
+                ) from error
 
         async with ctx.typing():
             import time
@@ -304,6 +377,7 @@ class Images(Cog):
                 )
             else:
                 embed = discord.Embed(color=self.bot.embedcolor)
+                embed.description = info_text
                 embed.set_image(url=f"attachment://{filename}")
                 await ctx.send(
                     embed=embed,

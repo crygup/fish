@@ -18,6 +18,16 @@ if TYPE_CHECKING:
 SVG_URL = (
     "https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/{chars}.svg"
 )
+MEDIA_EXTENSIONS = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".mp4",
+    ".webm",
+    ".mov",
+)
 
 
 class LastfmTimeConverter(commands.Converter):
@@ -213,120 +223,147 @@ class MediaConverter(commands.Converter[str]):
     5. Direct image/video URL
     """
 
-    async def convert(self, ctx: Context, argument: str = "") -> str:
-        if ctx.message.attachments:
-            att = ctx.message.attachments[0]
-            if att.content_type and (
-                att.content_type.startswith("image/")
-                or att.content_type.startswith("video/")
-            ):
-                return att.url
+    @staticmethod
+    def _is_media_url(url: object) -> bool:
+        return isinstance(url, str) and url.startswith(("http://", "https://"))
+
+    @classmethod
+    def _attachment_url(cls, attachment: object) -> str | None:
+        url = getattr(attachment, "url", None)
+        content_type = getattr(attachment, "content_type", None)
+        if (
+            cls._is_media_url(url)
+            and isinstance(content_type, str)
+            and (content_type.startswith("image/") or content_type.startswith("video/"))
+        ):
+            return url
+
+        filename = str(getattr(attachment, "filename", "")).lower().split("?")[0]
+        if cls._is_media_url(url) and filename.endswith(MEDIA_EXTENSIONS):
+            return url
+        return None
+
+    @classmethod
+    def _component_media_url(cls, component: object) -> str | None:
+        if isinstance(component, dict):
+            media = component.get("media")
+            url = media.get("url") if isinstance(media, dict) else None
+            nested = component.get("components", ())
+            if not nested:
+                nested = component.get("items", ())
+            accessory = component.get("accessory")
+        else:
+            media = getattr(component, "media", None)
+            url = getattr(media, "url", None)
+            nested = getattr(component, "children", None)
+            if nested is None:
+                nested = getattr(component, "items", ())
+            accessory = getattr(component, "accessory", None)
+
+        if cls._is_media_url(url):
+            return url
+        for child in nested or ():
+            found = cls._component_media_url(child)
+            if found:
+                return found
+        if accessory is not None:
+            return cls._component_media_url(accessory)
+        return None
+
+    @classmethod
+    def _message_media_url(cls, message: discord.Message) -> str | None:
+        for attachment in message.attachments:
+            url = cls._attachment_url(attachment)
+            if url:
+                return url
+
+        for embed in message.embeds:
+            if embed.image and cls._is_media_url(embed.image.url):
+                return embed.image.url
+            if embed.thumbnail and cls._is_media_url(embed.thumbnail.url):
+                return embed.thumbnail.url
+
+        for component in getattr(message, "components", ()):
+            url = cls._component_media_url(component)
+            if url:
+                return url
+        return None
+
+    @staticmethod
+    def _direct_media_url(argument: str) -> str | None:
+        base = argument.lower().split("?")[0]
+        return argument if base.endswith(MEDIA_EXTENSIONS) else None
+
+    async def convert(
+        self,
+        ctx: Context,
+        argument: str = "",
+        *,
+        include_message_media: bool = True,
+    ) -> str:
+        if argument:
+            direct_url = self._direct_media_url(argument)
+            if direct_url:
+                return direct_url
+
+            for converter in (TenorUrlConverter(), KlipyUrlConverter()):
+                try:
+                    return await converter.convert(ctx, argument)
+                except commands.BadArgument:
+                    pass
+
+            try:
+                user = await commands.UserConverter().convert(ctx, argument)
+            except commands.UserNotFound:
+                pass
+            else:
+                return user.display_avatar.url
+
+            try:
+                emoji = await commands.PartialEmojiConverter().convert(ctx, argument)
+            except commands.BadArgument:
+                pass
+            else:
+                return emoji.url
+
+        if include_message_media and ctx.message.attachments:
+            url = self._attachment_url(ctx.message.attachments[0])
+            if url:
+                return url
 
         # 2. replied message
         ref = ctx.message.reference
-        if ref and ref.message_id:
+        if include_message_media and ref and ref.message_id:
             try:
                 replied = await ctx.fetch_message(ref.message_id)
             except discord.HTTPException:
                 replied = None
             if replied:
-                if replied.attachments:
-                    att = replied.attachments[0]
-                    if att.content_type and (
-                        att.content_type.startswith("image/")
-                        or att.content_type.startswith("video/")
-                    ):
-                        return att.url
-                if replied.embeds:
-                    emb = replied.embeds[0]
-                    if emb.image and emb.image.url:
-                        return emb.image.url
-                    if emb.thumbnail and emb.thumbnail.url:
-                        return emb.thumbnail.url
+                url = self._message_media_url(replied)
+                if url:
+                    return url
         # 2.5. scan recent messages for media
-        if not argument:
+        if include_message_media and not argument:
             try:
                 async for msg in ctx.history(limit=6):
                     if msg.id == ctx.message.id:
                         continue
-                    if msg.attachments:
-                        att = msg.attachments[0]
-                        if att.content_type and (
-                            att.content_type.startswith("image/")
-                            or att.content_type.startswith("video/")
-                        ):
-                            return att.url
-                    if msg.embeds:
-                        emb = msg.embeds[0]
-                        if emb.image and emb.image.url:
-                            return emb.image.url
-                        if emb.thumbnail and emb.thumbnail.url:
-                            return emb.thumbnail.url
+                    url = self._message_media_url(msg)
+                    if url:
+                        return url
                     # also check message content for direct media URLs
                     lowered = msg.content.lower()
-                    if any(
-                        ext in lowered
-                        for ext in (
-                            ".png",
-                            ".jpg",
-                            ".jpeg",
-                            ".gif",
-                            ".webp",
-                            ".mp4",
-                            ".webm",
-                            ".mov",
-                        )
-                    ):
+                    if any(ext in lowered for ext in MEDIA_EXTENSIONS):
                         # find the actual URL
                         for word in msg.content.split():
                             if word.startswith(("http://", "https://")):
                                 base = word.lower().split("?")[0]
-                                if any(
-                                    base.endswith(e)
-                                    for e in (
-                                        ".png",
-                                        ".jpg",
-                                        ".jpeg",
-                                        ".gif",
-                                        ".webp",
-                                        ".mp4",
-                                        ".webm",
-                                        ".mov",
-                                    )
-                                ):
+                                if any(base.endswith(e) for e in MEDIA_EXTENSIONS):
                                     return word
             except discord.HTTPException:
                 pass
 
-        # 4. tenor link
-        if argument:
-            try:
-                return await TenorUrlConverter().convert(ctx, argument)
-            except commands.BadArgument:
-                pass
-
-        # 4b. klipy link
-        if argument:
-            try:
-                return await KlipyUrlConverter().convert(ctx, argument)
-            except commands.BadArgument:
-                pass
-
-        # 5. direct image/video URL, only trust known extensions
-        if argument:
-            base = argument.lower().split("?")[0]
-            for ext in (
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".gif",
-                ".webp",
-                ".mp4",
-                ".webm",
-                ".mov",
-            ):
-                if base.endswith(ext):
-                    return argument
+        raise commands.BadArgument("No image or video found.")
 
 
 class _AccountConverter(commands.Converter[str]):
