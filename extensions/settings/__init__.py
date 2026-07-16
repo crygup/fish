@@ -29,6 +29,8 @@ STEAM_CALLBACK_URL = "https://crygup.com/fishie"
 STEAM_STATE_TTL = 10 * 60
 SPOTIFY_CALLBACK_URL = "https://crygup.com/fishie"
 SPOTIFY_STATE_TTL = 10 * 60
+ANILIST_CALLBACK_URL = "https://crygup.com/fishie"
+ANILIST_STATE_TTL = 10 * 60
 SPOTIFY_SCOPES = (
     "user-read-private user-read-playback-state user-modify-playback-state "
     "user-library-modify user-library-read"
@@ -184,6 +186,40 @@ def _spotify_authorization_url(
     )
 
 
+def _anilist_authorization_url(
+    bot: Fishie,
+    user_id: int,
+    *,
+    channel_id: int | None = None,
+    message_id: int | None = None,
+) -> str:
+    now = int(time.time())
+    states = getattr(bot, "_anilist_oauth_states", None)
+    if states is None:
+        states = bot._anilist_oauth_states = {}
+    for token, state_data in list(states.items()):
+        if int(state_data.get("expires", 0)) < now:
+            states.pop(token, None)
+    token = secrets.token_urlsafe(24)
+    state_data = {
+        "user_id": int(user_id),
+        "source": "discord",
+        "expires": now + ANILIST_STATE_TTL,
+    }
+    if channel_id is not None and message_id is not None:
+        state_data["channel_id"] = int(channel_id)
+        state_data["message_id"] = int(message_id)
+    states[token] = state_data
+    return "https://anilist.co/api/v2/oauth/authorize?" + urlencode(
+        {
+            "client_id": bot.config["keys"]["anilist_id"],
+            "redirect_uri": ANILIST_CALLBACK_URL,
+            "response_type": "code",
+            "state": f"anilist_{token}",
+        }
+    )
+
+
 async def _send_steam_link(ctx: Context, interaction: discord.Interaction) -> None:
     message = interaction.message
     can_refresh = bool(message and not message.flags.ephemeral)
@@ -212,35 +248,30 @@ def _spotify_link_view(url: str) -> discord.ui.View:
     return view
 
 
-async def _send_spotify_link(ctx: Context, interaction: discord.Interaction) -> None:
+def _anilist_link_view(url: str) -> discord.ui.View:
+    view = discord.ui.View(timeout=10 * 60)
+    view.add_item(
+        discord.ui.Button(
+            label="Authorize on AniList",
+            style=discord.ButtonStyle.link,
+            url=url,
+        )
+    )
+    return view
+
+
+async def _send_anilist_link(ctx: Context, interaction: discord.Interaction) -> None:
     message = interaction.message
     can_refresh = bool(message and not message.flags.ephemeral)
-    url = _spotify_authorization_url(
+    url = _anilist_authorization_url(
         ctx.bot,
         interaction.user.id,
         channel_id=message.channel.id if message and can_refresh else None,
         message_id=message.id if message and can_refresh else None,
     )
     await interaction.response.send_message(
-        "Authorize Fishie on Spotify to connect your account.",
-        view=_spotify_link_view(url),
-        ephemeral=True,
-    )
-
-
-async def _send_spotify_link_dm(ctx: Context) -> None:
-    url = _spotify_authorization_url(ctx.bot, ctx.author.id)
-    try:
-        await ctx.author.send("Use this link to authorize Fishie on Spotify:\n" + url)
-    except discord.HTTPException:
-        await ctx.send(
-            "I couldn't DM you, so use this button to connect your Spotify account.",
-            view=_spotify_link_view(url),
-            ephemeral=True,
-        )
-        return
-    await ctx.send(
-        "I sent you a DM with the link to connect your Spotify account.",
+        "Authorize Fishie on AniList to connect your account.",
+        view=_anilist_link_view(url),
         ephemeral=True,
     )
 
@@ -260,31 +291,27 @@ async def _disconnect_steam(bot: Fishie, user_id: int) -> None:
     )
 
 
-async def _disconnect_spotify(bot: Fishie, user_id: int) -> None:
+async def _disconnect_anilist(bot: Fishie, user_id: int) -> None:
     await bot.pool.execute(
-        "UPDATE accounts SET spotify = NULL, spotify_refresh_token = NULL "
+        "UPDATE accounts SET anilist = NULL, anilist_access_token = NULL "
         "WHERE user_id = $1",
         user_id,
     )
 
 
-def _accounts_embed(ctx: Context, row) -> discord.Embed:
+def _accounts_text(row) -> str:
     labels = {
         "lastfm": "Last.fm",
         "steam": "Steam",
         "roblox": "Roblox",
         "letterboxd": "Letterboxd",
-        "spotify": "Spotify",
+        "anilist": "AniList",
     }
     lines = []
     for col, label in labels.items():
         value = row[col] if row else None
         lines.append(f"{'✅' if value else '❌'} **{label}**")
-    return discord.Embed(
-        color=ctx.bot.embedcolor,
-        title="Connected Accounts",
-        description="\n".join(lines),
-    )
+    return "## Connected Accounts\n\n" + "\n".join(lines)
 
 
 class Settings(Logging, Server):
@@ -301,21 +328,21 @@ class Settings(Logging, Server):
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def accounts(self, ctx: Context):
         row = await self.bot.pool.fetchrow(
-            "SELECT lastfm, steam, roblox, letterboxd, spotify FROM accounts "
+            "SELECT lastfm, steam, roblox, letterboxd, anilist FROM accounts "
             "WHERE user_id = $1",
             ctx.author.id,
         )
         lastfm_connected = bool(row and row["lastfm"])
         steam_connected = bool(row and row["steam"])
-        spotify_connected = bool(row and row["spotify"])
-        embed = _accounts_embed(ctx, row)
+        anilist_connected = bool(row and row["anilist"])
         view = ManageAccountsView(
             ctx,
+            row=row,
             lastfm_connected=lastfm_connected,
             steam_connected=steam_connected,
-            spotify_connected=spotify_connected,
+            anilist_connected=anilist_connected,
         )
-        await ctx.send(embed=embed, view=view)
+        await ctx.send(view=view)
 
     @commands.hybrid_group(name="link", fallback="accounts")
     @app_commands.allowed_installs(guilds=True, users=True)
@@ -363,26 +390,26 @@ class Settings(Logging, Server):
             ephemeral=True,
         )
 
-    @link.command(name="spotify")
+    @link.command(name="anilist")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def link_spotify(self, ctx: Context):
+    async def link_anilist(self, ctx: Context):
         connected = bool(
             await self.bot.pool.fetchval(
-                "SELECT spotify FROM accounts WHERE user_id = $1",
+                "SELECT anilist FROM accounts WHERE user_id = $1",
                 ctx.author.id,
             )
         )
-        if not connected:
-            await _send_spotify_link_dm(ctx)
+        if connected:
+            await ctx.send(
+                "Use the button below to disconnect your AniList account.",
+                view=AnilistConnectView(ctx, connected=True),
+                ephemeral=True,
+            )
             return
         await ctx.send(
-            (
-                "Use the button below to disconnect your Spotify account."
-                if connected
-                else "Use the button below to connect your Spotify account."
-            ),
-            view=SpotifyConnectView(ctx, connected=connected),
+            "Use the button below to connect your AniList account.",
+            view=AnilistConnectView(ctx, connected=False),
             ephemeral=True,
         )
 
@@ -417,12 +444,12 @@ class Settings(Logging, Server):
         await _disconnect_steam(self.bot, ctx.author.id)
         await ctx.send("Unlinked Steam.", ephemeral=True)
 
-    @unlink.command(name="spotify")
+    @unlink.command(name="anilist")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def unlink_spotify(self, ctx: Context):
-        await _disconnect_spotify(self.bot, ctx.author.id)
-        await ctx.send("Unlinked Spotify.", ephemeral=True)
+    async def unlink_anilist(self, ctx: Context):
+        await _disconnect_anilist(self.bot, ctx.author.id)
+        await ctx.send("Unlinked AniList.", ephemeral=True)
 
     @unlink.command(name="letterboxd")
     @app_commands.allowed_installs(guilds=True, users=True)
@@ -479,29 +506,65 @@ class LastfmConnectView(discord.ui.View):
         await _send_lastfm_link(self.ctx, interaction)
 
 
-class ManageAccountsView(discord.ui.View):
+class ManageAccountsView(discord.ui.LayoutView):
     def __init__(
         self,
         ctx: Context,
         *,
+        row=None,
         lastfm_connected: bool,
         steam_connected: bool = False,
-        spotify_connected: bool = False,
+        anilist_connected: bool = False,
     ):
         super().__init__(timeout=120)
         self.ctx = ctx
+        self.row = row
         self.lastfm_connected = lastfm_connected
         self.steam_connected = steam_connected
-        self.spotify_connected = spotify_connected
-        if lastfm_connected:
-            self.connect_lastfm.label = "Disconnect Last.fm"
-            self.connect_lastfm.style = discord.ButtonStyle.red
-        if steam_connected:
-            self.connect_steam.label = "Disconnect Steam"
-            self.connect_steam.style = discord.ButtonStyle.red
-        if spotify_connected:
-            self.connect_spotify.label = "Disconnect Spotify"
-            self.connect_spotify.style = discord.ButtonStyle.red
+        self.anilist_connected = anilist_connected
+
+        self.status = discord.ui.TextDisplay(_accounts_text(row))
+        self.connect_lastfm = discord.ui.Button()
+        self.connect_steam = discord.ui.Button()
+        self.connect_anilist = discord.ui.Button()
+        self.manage = discord.ui.Button(label="Manage Other Accounts")
+        self.connect_lastfm.callback = self._on_lastfm
+        self.connect_steam.callback = self._on_steam
+        self.connect_anilist.callback = self._on_anilist
+        self.manage.callback = self._on_manage
+        self._update_buttons()
+
+        actions = discord.ui.ActionRow(
+            self.connect_lastfm,
+            self.connect_steam,
+            self.connect_anilist,
+            self.manage,
+        )
+        self.container = discord.ui.Container(
+            self.status,
+            actions,
+            accent_color=self.ctx.bot.embedcolor,
+        )
+        self.add_item(self.container)
+
+    def _update_buttons(self) -> None:
+        for button, label, connected in (
+            (self.connect_lastfm, "Last.fm", self.lastfm_connected),
+            (self.connect_steam, "Steam", self.steam_connected),
+            (self.connect_anilist, "AniList", self.anilist_connected),
+        ):
+            button.label = f"Disconnect {label}" if connected else f"Connect {label}"
+            button.style = (
+                discord.ButtonStyle.red if connected else discord.ButtonStyle.green
+            )
+
+    def update_accounts(self, row) -> None:
+        self.row = row
+        self.lastfm_connected = bool(row and row["lastfm"])
+        self.steam_connected = bool(row and row["steam"])
+        self.anilist_connected = bool(row and row["anilist"])
+        self.status.content = _accounts_text(row)
+        self._update_buttons()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.ctx.author.id:
@@ -512,86 +575,57 @@ class ManageAccountsView(discord.ui.View):
         )
         return False
 
-    @discord.ui.button(label="Connect Last.fm", style=discord.ButtonStyle.green)
-    async def connect_lastfm(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ):
+    async def _on_lastfm(self, interaction: discord.Interaction):
         if self.lastfm_connected:
             await _disconnect_lastfm(self.ctx.bot, interaction.user.id)
-            self.lastfm_connected = False
-            self.connect_lastfm.label = "Connect Last.fm"
-            self.connect_lastfm.style = discord.ButtonStyle.green
-            row = await self.ctx.bot.pool.fetchrow(
-                "SELECT lastfm, steam, roblox, letterboxd, spotify FROM accounts "
-                "WHERE user_id = $1",
-                interaction.user.id,
-            )
-            if interaction.message:
-                await interaction.message.edit(
-                    embed=_accounts_embed(self.ctx, row), view=self
-                )
-            await interaction.response.send_message(
+            row = await self._fetch_accounts(interaction.user.id)
+            self.update_accounts(row)
+            await interaction.response.edit_message(view=self)
+            await interaction.followup.send(
                 "Your Last.fm account has been disconnected.", ephemeral=True
             )
             return
         await _send_lastfm_link(self.ctx, interaction)
 
-    @discord.ui.button(label="Connect Steam", style=discord.ButtonStyle.green)
-    async def connect_steam(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ):
+    async def _on_steam(self, interaction: discord.Interaction):
         if self.steam_connected:
             await _disconnect_steam(self.ctx.bot, interaction.user.id)
-            self.steam_connected = False
-            self.connect_steam.label = "Connect Steam"
-            self.connect_steam.style = discord.ButtonStyle.green
-            row = await self.ctx.bot.pool.fetchrow(
-                "SELECT lastfm, steam, roblox, letterboxd, spotify FROM accounts "
-                "WHERE user_id = $1",
-                interaction.user.id,
-            )
-            if interaction.message:
-                await interaction.message.edit(
-                    embed=_accounts_embed(self.ctx, row), view=self
-                )
-            await interaction.response.send_message(
+            row = await self._fetch_accounts(interaction.user.id)
+            self.update_accounts(row)
+            await interaction.response.edit_message(view=self)
+            await interaction.followup.send(
                 "Your Steam account has been disconnected.", ephemeral=True
             )
             return
         await _send_steam_link(self.ctx, interaction)
 
-    @discord.ui.button(label="Connect Spotify", style=discord.ButtonStyle.green)
-    async def connect_spotify(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ):
-        if self.spotify_connected:
-            await _disconnect_spotify(self.ctx.bot, interaction.user.id)
-            self.spotify_connected = False
-            self.connect_spotify.label = "Connect Spotify"
-            self.connect_spotify.style = discord.ButtonStyle.green
-            row = await self.ctx.bot.pool.fetchrow(
-                "SELECT lastfm, steam, roblox, letterboxd, spotify FROM accounts "
-                "WHERE user_id = $1",
-                interaction.user.id,
-            )
-            if interaction.message:
-                await interaction.message.edit(
-                    embed=_accounts_embed(self.ctx, row), view=self
-                )
-            await interaction.response.send_message(
-                "Your Spotify account has been disconnected.", ephemeral=True
+    async def _on_anilist(self, interaction: discord.Interaction):
+        if self.anilist_connected:
+            await _disconnect_anilist(self.ctx.bot, interaction.user.id)
+            row = await self._fetch_accounts(interaction.user.id)
+            self.update_accounts(row)
+            await interaction.response.edit_message(view=self)
+            await interaction.followup.send(
+                "Your AniList account has been disconnected.", ephemeral=True
             )
             return
-        await _send_spotify_link(self.ctx, interaction)
+        await _send_anilist_link(self.ctx, interaction)
 
-    @discord.ui.button(label="Manage Accounts", style=discord.ButtonStyle.blurple)
-    async def manage(self, interaction, button):
+    async def _fetch_accounts(self, user_id: int):
+        return await self.ctx.bot.pool.fetchrow(
+            "SELECT lastfm, steam, roblox, letterboxd, anilist FROM accounts WHERE user_id = $1",
+            user_id,
+        )
+
+    async def _on_manage(self, interaction: discord.Interaction):
         row = await self.ctx.bot.pool.fetchrow(
             "SELECT roblox, letterboxd FROM accounts WHERE user_id = $1",
             interaction.user.id,
         )
         current = {col: row[col] for col in ("roblox", "letterboxd")} if row else {}
-        await interaction.response.send_modal(ManageAccountsModal(self.ctx, current))
+        await interaction.response.send_modal(
+            ManageAccountsModal(self.ctx, current, self)
+        )
 
 
 class ManageAccountsModal(discord.ui.Modal, title="Manage Other Accounts"):
@@ -605,10 +639,11 @@ class ManageAccountsModal(discord.ui.Modal, title="Manage Other Accounts"):
         placeholder="Clear to unlink",
     )
 
-    def __init__(self, ctx: Context, current: dict):
+    def __init__(self, ctx: Context, current: dict, view: ManageAccountsView):
         super().__init__()
         self.ctx = ctx
         self._current = current
+        self._view = view
         self.roblox.default = current.get("roblox", "")
         self.letterboxd.default = current.get("letterboxd", "")
 
@@ -646,15 +681,15 @@ class ManageAccountsModal(discord.ui.Modal, title="Manage Other Accounts"):
         if removed:
             msg.append("Unlinked: " + ", ".join(removed))
 
-        # Update the original message embed.
+        # Update the original Components V2 account panel.
         row = await self.ctx.bot.pool.fetchrow(
-            "SELECT lastfm, steam, roblox, letterboxd, spotify FROM accounts "
+            "SELECT lastfm, steam, roblox, letterboxd, anilist FROM accounts "
             "WHERE user_id = $1",
             interaction.user.id,
         )
-        embed = _accounts_embed(self.ctx, row)
+        self._view.update_accounts(row)
         if interaction.message:
-            await interaction.message.edit(embed=embed)
+            await interaction.message.edit(view=self._view)
 
         await interaction.response.send_message(
             "\n".join(msg) if msg else "No changes made.", ephemeral=True
@@ -695,38 +730,38 @@ class SteamConnectView(discord.ui.View):
         await _send_steam_link(self.ctx, interaction)
 
 
-class SpotifyConnectView(discord.ui.View):
+class AnilistConnectView(discord.ui.View):
     def __init__(self, ctx: Context, *, connected: bool):
         super().__init__(timeout=120)
         self.ctx = ctx
         self.connected = connected
         if connected:
-            self.connect_spotify.label = "Disconnect Spotify"
-            self.connect_spotify.style = discord.ButtonStyle.red
+            self.connect_anilist.label = "Disconnect AniList"
+            self.connect_anilist.style = discord.ButtonStyle.red
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.ctx.author.id:
             return True
         await interaction.response.send_message(
-            "Run the command yourself to connect your Spotify account.",
+            "Run the command yourself to connect your AniList account.",
             ephemeral=True,
         )
         return False
 
-    @discord.ui.button(label="Connect Spotify", style=discord.ButtonStyle.green)
-    async def connect_spotify(
+    @discord.ui.button(label="Connect AniList", style=discord.ButtonStyle.green)
+    async def connect_anilist(
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ):
         if self.connected:
-            await _disconnect_spotify(self.ctx.bot, interaction.user.id)
+            await _disconnect_anilist(self.ctx.bot, interaction.user.id)
             self.connected = False
-            self.connect_spotify.label = "Connect Spotify"
-            self.connect_spotify.style = discord.ButtonStyle.green
+            self.connect_anilist.label = "Connect AniList"
+            self.connect_anilist.style = discord.ButtonStyle.green
             await interaction.response.edit_message(
-                content="Your Spotify account has been disconnected.", view=self
+                content="Your AniList account has been disconnected.", view=self
             )
             return
-        await _send_spotify_link(self.ctx, interaction)
+        await _send_anilist_link(self.ctx, interaction)
 
 
 async def setup(bot: Fishie):

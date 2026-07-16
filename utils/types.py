@@ -70,6 +70,8 @@ class Keys(TypedDict):
     google_id: str
     spotify_id: str
     spotify_secret: str
+    anilist_id: str
+    anilist_secret: str
     dagpi: str
     roblox: str
     steam: str

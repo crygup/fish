@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 app = FastAPI(title="Fishie API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://crygup.com", "https://www.crygup.com"],
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -48,17 +48,22 @@ GUILD_TABLES = {"guild_icons", "guild_name_logs"}
 LASTFM_CALLBACK_URL = "https://crygup.com/fishie"
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 LASTFM_STATE_TTL = 10 * 60
-LASTFM_ACCOUNT_FIELDS = ("lastfm", "steam", "roblox", "letterboxd", "spotify")
+LASTFM_ACCOUNT_FIELDS = (
+    "lastfm",
+    "steam",
+    "roblox",
+    "letterboxd",
+    "anilist",
+)
 STEAM_CALLBACK_URL = "https://crygup.com/fishie"
 STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
 STEAM_STATE_TTL = 10 * 60
 SPOTIFY_CALLBACK_URL = "https://crygup.com/fishie"
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
-SPOTIFY_STATE_TTL = 10 * 60
-SPOTIFY_SCOPES = (
-    "user-read-private user-read-playback-state user-modify-playback-state "
-    "user-library-modify user-library-read"
-)
+ANILIST_CALLBACK_URL = "https://crygup.com/fishie"
+ANILIST_TOKEN_URL = "https://anilist.co/api/v2/oauth/token"
+ANILIST_GRAPHQL_URL = "https://graphql.anilist.co"
+ANILIST_STATE_TTL = 10 * 60
 TWITCH_EVENTSUB_MAX_AGE = 10 * 60
 
 
@@ -163,47 +168,6 @@ def _decode_steam_state(state: str) -> tuple[int, str, int | None, int | None]:
     return user_id, source, channel_id, message_id
 
 
-def _spotify_state(
-    user_id: int,
-    source: str,
-    channel_id: int | None = None,
-    message_id: int | None = None,
-) -> str:
-    if not bot_ref:
-        raise HTTPException(503, "Bot not ready")
-    now = int(time.time())
-    states = getattr(bot_ref, "_spotify_oauth_states", None)
-    if states is None:
-        states = bot_ref._spotify_oauth_states = {}
-    for token, state_data in list(states.items()):
-        if int(state_data.get("expires", 0)) < now:
-            states.pop(token, None)
-    token = secrets.token_urlsafe(24)
-    states[token] = {
-        "user_id": int(user_id),
-        "source": source,
-        "expires": now + SPOTIFY_STATE_TTL,
-    }
-    if channel_id is not None and message_id is not None:
-        states[token]["channel_id"] = int(channel_id)
-        states[token]["message_id"] = int(message_id)
-    return token
-
-
-def _spotify_authorization_url(user_id: int, source: str) -> str:
-    state = _spotify_state(user_id, source)
-    return "https://accounts.spotify.com/authorize?" + urlencode(
-        {
-            "client_id": bot_ref.config["keys"]["spotify_id"],
-            "response_type": "code",
-            "redirect_uri": SPOTIFY_CALLBACK_URL,
-            "scope": SPOTIFY_SCOPES,
-            "state": f"spotify_{state}",
-            "show_dialog": "true",
-        }
-    )
-
-
 def _decode_spotify_state(state: str) -> tuple[int, str, int | None, int | None]:
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
@@ -225,6 +189,69 @@ def _decode_spotify_state(state: str) -> tuple[int, str, int | None, int | None]
         raise HTTPException(400, "Invalid Spotify connection source")
     if expires < int(time.time()):
         raise HTTPException(400, "The Spotify connection link has expired")
+    if (channel_id is None) != (message_id is None):
+        raise HTTPException(400, "Invalid Discord message state")
+    return user_id, source, channel_id, message_id
+
+
+def _anilist_state(
+    user_id: int,
+    source: str,
+    channel_id: int | None = None,
+    message_id: int | None = None,
+) -> str:
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    now = int(time.time())
+    states = getattr(bot_ref, "_anilist_oauth_states", None)
+    if states is None:
+        states = bot_ref._anilist_oauth_states = {}
+    for token, state_data in list(states.items()):
+        if int(state_data.get("expires", 0)) < now:
+            states.pop(token, None)
+    token = secrets.token_urlsafe(24)
+    states[token] = {
+        "user_id": int(user_id),
+        "source": source,
+        "expires": now + ANILIST_STATE_TTL,
+    }
+    if channel_id is not None and message_id is not None:
+        states[token]["channel_id"] = int(channel_id)
+        states[token]["message_id"] = int(message_id)
+    return token
+
+
+def _anilist_authorization_url(user_id: int, source: str) -> str:
+    state = _anilist_state(user_id, source)
+    return "https://anilist.co/api/v2/oauth/authorize?" + urlencode(
+        {
+            "client_id": bot_ref.config["keys"]["anilist_id"],
+            "redirect_uri": ANILIST_CALLBACK_URL,
+            "response_type": "code",
+            "state": f"anilist_{state}",
+        }
+    )
+
+
+def _decode_anilist_state(state: str) -> tuple[int, str, int | None, int | None]:
+    if not bot_ref or not state.startswith("anilist_"):
+        raise HTTPException(400, "Invalid AniList connection state")
+    states = getattr(bot_ref, "_anilist_oauth_states", None) or {}
+    payload = states.pop(state.removeprefix("anilist_"), None)
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Invalid AniList connection state")
+    try:
+        user_id = int(payload["user_id"])
+        source = payload["source"]
+        expires = int(payload["expires"])
+        channel_id = int(payload["channel_id"]) if payload.get("channel_id") else None
+        message_id = int(payload["message_id"]) if payload.get("message_id") else None
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "Invalid AniList connection state")
+    if source not in {"discord", "website"}:
+        raise HTTPException(400, "Invalid AniList connection source")
+    if expires < int(time.time()):
+        raise HTTPException(400, "The AniList connection link has expired")
     if (channel_id is None) != (message_id is None):
         raise HTTPException(400, "Invalid Discord message state")
     return user_id, source, channel_id, message_id
@@ -297,26 +324,26 @@ async def _refresh_discord_accounts_message(
     if not bot_ref or channel_id is None or message_id is None:
         return
     try:
-        from extensions.settings import ManageAccountsView, _accounts_embed
+        from extensions.settings import ManageAccountsView
 
         channel = bot_ref.get_channel(channel_id)
         if channel is None:
             channel = await bot_ref.fetch_channel(channel_id)
         message = await channel.fetch_message(message_id)
         row = await bot_ref.pool.fetchrow(
-            "SELECT lastfm, steam, roblox, letterboxd, spotify FROM accounts "
+            "SELECT lastfm, steam, roblox, letterboxd, anilist FROM accounts "
             "WHERE user_id = $1",
             user_id,
         )
         author = bot_ref.get_user(user_id) or SimpleNamespace(id=user_id)
         ctx = SimpleNamespace(bot=bot_ref, author=author)
         await message.edit(
-            embed=_accounts_embed(ctx, row),
             view=ManageAccountsView(
                 ctx,
+                row=row,
                 lastfm_connected=bool(row and row["lastfm"]),
                 steam_connected=bool(row and row["steam"]),
-                spotify_connected=bool(row and row["spotify"]),
+                anilist_connected=bool(row and row["anilist"]),
             ),
         )
     except Exception as error:
@@ -324,6 +351,21 @@ async def _refresh_discord_accounts_message(
             "Could not refresh Discord accounts message after account OAuth: %s",
             error,
         )
+
+
+def _schedule_discord_accounts_refresh(
+    user_id: int, channel_id: int | None, message_id: int | None
+) -> None:
+    if not bot_ref or channel_id is None or message_id is None:
+        return
+    tasks = getattr(bot_ref, "_oauth_refresh_tasks", None)
+    if tasks is None:
+        tasks = bot_ref._oauth_refresh_tasks = set()
+    task = asyncio.create_task(
+        _refresh_discord_accounts_message(user_id, channel_id, message_id)
+    )
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
 
 
 def init(bot: "Fishie") -> None:
@@ -985,70 +1027,233 @@ async def steam_callback(request: Request, steam_state: str = Query(...)):
     return {"steamid": steam_id, "personaname": persona_name, "source": source}
 
 
-@app.get("/spotify/connect")
-async def spotify_connect(authorization: str = Header(None)):
-    """Create a Spotify authorization URL for the authenticated Discord user."""
-    me = await _verify_token(authorization)
-    return {"url": _spotify_authorization_url(int(me["id"]), "website")}
-
-
 @app.get("/spotify/callback")
 async def spotify_callback(code: str = Query(...), state: str = Query(...)):
     """Exchange a Spotify authorization code and persist the user's account."""
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
     user_id, source, channel_id, message_id = _decode_spotify_state(state)
+    bot_ref.logger.info(
+        "Spotify OAuth callback accepted source=%s user_id=%s", source, user_id
+    )
     auth = aiohttp.BasicAuth(
         bot_ref.config["keys"]["spotify_id"],
         bot_ref.config["keys"]["spotify_secret"],
     )
-    async with bot_ref.session.post(
-        SPOTIFY_TOKEN_URL,
-        auth=auth,
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": SPOTIFY_CALLBACK_URL,
-        },
-    ) as response:
-        try:
-            token_data = await response.json(content_type=None)
-        except (ValueError, aiohttp.ContentTypeError):
-            raise HTTPException(502, "Spotify returned an invalid response")
+    try:
+        async with bot_ref.session.post(
+            SPOTIFY_TOKEN_URL,
+            auth=auth,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": SPOTIFY_CALLBACK_URL,
+            },
+        ) as response:
+            try:
+                token_data = await response.json(content_type=None)
+            except (ValueError, aiohttp.ContentTypeError):
+                raise HTTPException(400, "Spotify returned an invalid token response")
+    except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+        bot_ref.logger.warning("Spotify token exchange unavailable: %s", error)
+        raise HTTPException(400, "Spotify authorization service unavailable") from error
+    bot_ref.logger.info(
+        "Spotify OAuth token exchange completed status=%s user_id=%s",
+        response.status,
+        user_id,
+    )
     if response.status != 200 or not isinstance(token_data, dict):
+        error_code = token_data.get("error") if isinstance(token_data, dict) else None
+        bot_ref.logger.warning(
+            "Spotify OAuth token exchange rejected status=%s error=%s user_id=%s",
+            response.status,
+            error_code or "unknown",
+            user_id,
+        )
         raise HTTPException(400, "Spotify authorization failed")
-    refresh_token = token_data.get("refresh_token")
     access_token = token_data.get("access_token")
-    if not refresh_token or not access_token:
-        raise HTTPException(502, "Spotify did not return account credentials")
+    issued_refresh_token = token_data.get("refresh_token")
+    bot_ref.logger.info(
+        "Spotify OAuth credentials received access=%s refresh=%s user_id=%s",
+        bool(access_token),
+        bool(issued_refresh_token),
+        user_id,
+    )
+    if not access_token:
+        raise HTTPException(400, "Spotify did not return an access token")
 
-    async with bot_ref.session.get(
-        "https://api.spotify.com/v1/me",
-        headers={"Authorization": f"Bearer {access_token}"},
-    ) as profile_response:
+    # Spotify may omit refresh_token when an account authorizes the app again.
+    # Keep the token already stored for that user instead of rejecting a valid
+    # access-token exchange.
+    pool = _check_pool()
+    refresh_token = issued_refresh_token
+    if not refresh_token:
         try:
-            profile = await profile_response.json(content_type=None)
-        except (ValueError, aiohttp.ContentTypeError):
-            raise HTTPException(502, "Spotify returned an invalid profile")
-    if profile_response.status != 200 or not isinstance(profile, dict):
+            refresh_token = await asyncio.wait_for(
+                pool.fetchval(
+                    "SELECT spotify_refresh_token FROM accounts WHERE user_id = $1",
+                    user_id,
+                ),
+                timeout=5,
+            )
+        except asyncio.TimeoutError:
+            bot_ref.logger.warning(
+                "Spotify stored refresh-token lookup timed out user_id=%s", user_id
+            )
+            raise HTTPException(400, "Spotify connection temporarily unavailable")
+    if not refresh_token:
+        bot_ref.logger.warning(
+            "Spotify OAuth returned no refresh token and none is stored user_id=%s",
+            user_id,
+        )
+        raise HTTPException(
+            400,
+            "Spotify did not issue a new refresh token. Remove Fishie from your "
+            "Spotify account's Apps page, then connect it again.",
+        )
+
+    # Persist the durable credential before any optional profile or Discord
+    # work. If a later step fails, the next authorization can reuse this token.
+    try:
+        await asyncio.wait_for(
+            pool.execute(
+                """INSERT INTO accounts (user_id, spotify_refresh_token)
+                   VALUES ($1, $2)
+                   ON CONFLICT (user_id) DO UPDATE
+                   SET spotify_refresh_token = EXCLUDED.spotify_refresh_token;""",
+                user_id,
+                refresh_token,
+            ),
+            timeout=5,
+        )
+    except asyncio.TimeoutError:
+        bot_ref.logger.warning(
+            "Spotify refresh-token persistence timed out user_id=%s", user_id
+        )
+        raise HTTPException(400, "Spotify connection temporarily unavailable")
+    bot_ref.logger.info("Spotify refresh token persisted user_id=%s", user_id)
+
+    try:
+        bot_ref.logger.info("Spotify OAuth profile lookup started user_id=%s", user_id)
+        async with bot_ref.session.get(
+            "https://api.spotify.com/v1/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as profile_response:
+            profile_status = profile_response.status
+            profile_content_type = profile_response.headers.get("Content-Type", "")
+            profile_body = await profile_response.text()
+    except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+        bot_ref.logger.warning("Spotify profile lookup unavailable: %s", error)
+        raise HTTPException(400, "Spotify profile service unavailable") from error
+    bot_ref.logger.info(
+        "Spotify OAuth profile response status=%s content_type=%s bytes=%s user_id=%s",
+        profile_status,
+        profile_content_type.split(";", 1)[0] or "unknown",
+        len(profile_body),
+        user_id,
+    )
+    try:
+        profile = json.loads(profile_body)
+    except (TypeError, ValueError):
+        bot_ref.logger.warning(
+            "Spotify profile response was not JSON status=%s user_id=%s",
+            profile_status,
+            user_id,
+        )
+        raise HTTPException(400, "Spotify returned an invalid profile response")
+    if profile_status != 200 or not isinstance(profile, dict):
         raise HTTPException(400, "Spotify profile lookup failed")
     display_name = profile.get("display_name") or profile.get("id")
     if not display_name:
-        raise HTTPException(502, "Spotify did not return a display name")
+        raise HTTPException(400, "Spotify did not return a display name")
+
+    try:
+        await asyncio.wait_for(
+            pool.execute(
+                """UPDATE accounts
+                   SET spotify = $2, spotify_refresh_token = $3
+                   WHERE user_id = $1;""",
+                user_id,
+                display_name,
+                refresh_token,
+            ),
+            timeout=5,
+        )
+    except asyncio.TimeoutError:
+        bot_ref.logger.warning(
+            "Spotify profile persistence timed out user_id=%s", user_id
+        )
+        raise HTTPException(400, "Spotify connection temporarily unavailable")
+    _schedule_discord_accounts_refresh(user_id, channel_id, message_id)
+    bot_ref.logger.info("Spotify account linked user_id=%s", user_id)
+    return {"display_name": display_name, "source": source}
+
+
+@app.get("/anilist/connect")
+async def anilist_connect(authorization: str = Header(None)):
+    """Create an AniList authorization URL for the authenticated Discord user."""
+    me = await _verify_token(authorization)
+    return {"url": _anilist_authorization_url(int(me["id"]), "website")}
+
+
+@app.get("/anilist/callback")
+async def anilist_callback(code: str = Query(...), state: str = Query(...)):
+    """Exchange an AniList code and persist the verified profile credentials."""
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    user_id, source, channel_id, message_id = _decode_anilist_state(state)
+    payload = {
+        "grant_type": "authorization_code",
+        "client_id": bot_ref.config["keys"]["anilist_id"],
+        "client_secret": bot_ref.config["keys"]["anilist_secret"],
+        "redirect_uri": ANILIST_CALLBACK_URL,
+        "code": code,
+    }
+    async with bot_ref.session.post(ANILIST_TOKEN_URL, json=payload) as response:
+        try:
+            token_data = await response.json(content_type=None)
+        except (ValueError, aiohttp.ContentTypeError):
+            raise HTTPException(502, "AniList returned an invalid token response")
+    access_token = (
+        token_data.get("access_token") if isinstance(token_data, dict) else None
+    )
+    if response.status != 200 or not access_token:
+        raise HTTPException(400, "AniList authorization failed")
+
+    query = {"query": "query { Viewer { id name } }"}
+    async with bot_ref.session.post(
+        ANILIST_GRAPHQL_URL,
+        json=query,
+        headers={"Authorization": f"Bearer {access_token}"},
+    ) as profile_response:
+        try:
+            profile_data = await profile_response.json(content_type=None)
+        except (ValueError, aiohttp.ContentTypeError):
+            raise HTTPException(502, "AniList returned an invalid profile response")
+    profile_payload = (
+        profile_data.get("data") if isinstance(profile_data, dict) else None
+    )
+    viewer = (
+        profile_payload.get("Viewer") if isinstance(profile_payload, dict) else None
+    )
+    username = viewer.get("name") if isinstance(viewer, dict) else None
+    if profile_response.status != 200 or not username:
+        raise HTTPException(400, "AniList profile lookup failed")
 
     pool = _check_pool()
     await pool.execute(
-        """INSERT INTO accounts (user_id, spotify, spotify_refresh_token)
+        """INSERT INTO accounts (user_id, anilist, anilist_access_token)
            VALUES ($1, $2, $3)
-           ON CONFLICT (user_id) DO UPDATE
-           SET spotify = EXCLUDED.spotify,
-               spotify_refresh_token = EXCLUDED.spotify_refresh_token;""",
+           ON CONFLICT (user_id) DO UPDATE SET
+               anilist = EXCLUDED.anilist,
+               anilist_access_token = EXCLUDED.anilist_access_token;""",
         user_id,
-        display_name,
-        refresh_token,
+        username,
+        access_token,
     )
     await _refresh_discord_accounts_message(user_id, channel_id, message_id)
-    return {"display_name": display_name, "source": source}
+    return {"username": username, "source": source}
 
 
 @app.get("/user/{user_id}")
@@ -1560,15 +1765,15 @@ async def disconnect_steam(user_id: int, authorization: str = Header(None)):
     return {"disconnected": True}
 
 
-@app.delete("/user/{user_id}/spotify")
-async def disconnect_spotify(user_id: int, authorization: str = Header(None)):
-    """Disconnect Spotify for the authenticated Discord user."""
+@app.delete("/user/{user_id}/anilist")
+async def disconnect_anilist(user_id: int, authorization: str = Header(None)):
+    """Disconnect AniList for the authenticated Discord user."""
     me = await _verify_token(authorization)
     if int(me["id"]) != user_id:
         raise HTTPException(403, "Not your account")
     pool = _check_pool()
     await pool.execute(
-        "UPDATE accounts SET spotify = NULL, spotify_refresh_token = NULL "
+        "UPDATE accounts SET anilist = NULL, anilist_access_token = NULL "
         "WHERE user_id = $1",
         user_id,
     )
