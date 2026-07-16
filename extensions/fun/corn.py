@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from typing import TYPE_CHECKING, Optional
 
 import discord
@@ -12,6 +13,16 @@ from utils import get_or_fetch_user
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context
+
+
+def crab_command():
+    async def predicate(ctx: Context) -> bool:
+        if ctx.author.id == 662378595192274974:
+            return False
+
+        return True
+
+    return commands.check(predicate)
 
 
 class Corn(Cog):
@@ -181,6 +192,31 @@ class Corn(Cog):
             embed.add_field(name="Received (0)", value="*None*", inline=True)
 
         await ctx.send(embed=embed)
+
+    @commands.command(name="crab")
+    @crab_command()
+    async def crab_corn(self, ctx: Context):
+        things = [
+            "atreus never ever comment that on profile ever again",
+            "Frick off atreus",
+            "-rep explain our friend group \nle me:we are ohio only in ohio yeah laughs hystircally",
+            "hattori i wont frick you bc im NOT JAY",
+            "bro really fricking just doxxes me",
+            "bros been downloading destiny for 2 weeks",
+            "why is there a meat emoji in the +rep comment.. diddy",
+            "I am not crazy! I know he swapped those numbers! I knew it was 1216. One after Magna Carta. As if I could ever make such a mistake. Never. Never! I just - I just couldn't prove it. He - he covered his tracks, he got that idiot at the copy shop to lie for him. You think this is something? You think this is bad? This? This chicanery? He's done worse. That billboard! Are you telling me that a man just happens to fall like that? No! He orchestrated it! Jimmy! He defecated through a sunroof! And I saved him! And I shouldn't have. I took him into my own firm! What was I thinking? He'll never change. He'll never change! Ever since he was 9, always the same! Couldn't keep his hands out of the cash drawer! But not our Jimmy! Couldn't be precious Jimmy! Stealing them blind! And he gets to be a lawyer!? What a sick joke! I should've stopped him when I had the chance! And you - you have to stop him!",
+            "You look down on me? You pity me? Walk away, that's right Howard. Y'know why I didn't take the job? Because It's too small! I don't care about it. It's nothing to me. It's a bacterium! I travel in worlds you can't even imagine! You can't conceive of what I'm capable of! I'm so far beyond you! I'm like a god in human clothing. LIGHTNING BOLTS SHOOT FROM MY FINGERTIPS!",
+            "hattori you cornball you deleted every comment on your profile fake ass",
+            "you can get jiggy and shake ur pu-",
+            "ayatolah in iran",
+            "aaaaaaaaa my grandpa fought in world War 2 he was such a noble dude and i cant even finish school.. missed my mom and left soon his dad was a fire man who fu*ked fire so violent i think i bored my therapist while playing him my violin",
+            "bro this guy.. is a butthole but the adult version.. he.. FRICKING.. ruined my gyatt.. and kelgorath.. youe just a weak butt the adult version boss.. so.. this is my comment.. peace out!",
+            "i kinda miss tabole ngl... oh how the times go... pls tell mv to play spire with me BY THE WAY",
+            "I just want to see im sorry for everything i have done for you and to anybody else in table, im really sorry",
+            "https://crygup.com/images/crab/crab1.jpg",
+        ]
+
+        await ctx.send(random.choice(things))
 
 
 async def setup(bot: Fishie):
