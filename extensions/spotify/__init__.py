@@ -292,7 +292,7 @@ class Spotify(Cog):
         refresh_token = row["spotify_refresh_token"] if row else None
         if not refresh_token:
             raise commands.BadArgument(
-                "Connect your Spotify account first with `fish link spotify`."
+                "Connect your Spotify account first with `fish refresh spotify login`."
             )
 
         auth = aiohttp.BasicAuth(
@@ -575,7 +575,7 @@ class Spotify(Cog):
 
         def count(value: object) -> int:
             try:
-                return int(value or 0)
+                return int(str(value)) if value is not None else 0
             except (TypeError, ValueError):
                 return 0
 
@@ -672,10 +672,6 @@ class Spotify(Cog):
         fp = await to_image(ctx.session, url)
         await ctx.send(file=discord.File(fp=fp, filename="cover.png", spoiler=nsfw))
 
-    @commands.hybrid_command(name="queue")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.describe(query="A song or album name, Spotify URL, or Spotify URI")
     async def queue(self, ctx: Context, *, query: str):
         """Add a Spotify song or album to your playback queue."""
 
@@ -709,10 +705,6 @@ class Spotify(Cog):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
-    @commands.hybrid_command(name="shuffle")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.describe(state="on, off, or leave blank to toggle shuffle")
     async def shuffle(self, ctx: Context, state: Optional[str] = None):
         """Enable, disable, or toggle Spotify shuffle."""
 
@@ -727,10 +719,6 @@ class Spotify(Cog):
             params={"state": str(shuffle_state).lower()},
         )
 
-    @commands.hybrid_command(name="repeat", aliases=("loop",))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.describe(mode="off, context, or track; leave blank to toggle repeat")
     async def repeat(self, ctx: Context, mode: Optional[str] = None):
         """Set, disable, or toggle Spotify repeat mode."""
 
@@ -747,9 +735,6 @@ class Spotify(Cog):
             params={"state": repeat_mode},
         )
 
-    @commands.hybrid_command(name="player")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def player(self, ctx: Context):
         """Show the current Spotify song and playback controls."""
 
@@ -764,9 +749,6 @@ class Spotify(Cog):
             view=PlayerView(self, ctx, playback, liked=liked),
         )
 
-    @commands.hybrid_command(name="skip")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def skip(self, ctx: Context):
         """Skip the current song on your active Spotify device."""
 
@@ -794,9 +776,6 @@ class Spotify(Cog):
             )
         raise commands.BadArgument("Spotify could not skip the current song.")
 
-    @commands.hybrid_command(name="pause", aliases=("stop",))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def pause(self, ctx: Context):
         """Pause your current Spotify playback."""
 
@@ -804,9 +783,6 @@ class Spotify(Cog):
         await self._current_playback(token)
         await self._player_command(ctx, token, "pause", "Paused your Spotify playback.")
 
-    @commands.hybrid_command(name="play", aliases=("resume",))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def play(self, ctx: Context):
         """Resume your current Spotify playback."""
 
@@ -814,9 +790,6 @@ class Spotify(Cog):
         await self._current_playback(token)
         await self._player_command(ctx, token, "play", "Resumed your Spotify playback.")
 
-    @commands.hybrid_command(name="restart")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def restart(self, ctx: Context):
         """Restart the current Spotify song."""
 
@@ -830,11 +803,6 @@ class Spotify(Cog):
             params={"position_ms": 0},
         )
 
-    @commands.hybrid_command(
-        name="previous", aliases=("rewind", "backwards", "back", "reverse", "prev")
-    )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def rewind(self, ctx: Context):
         """Go back to the previous Spotify song."""
 
@@ -854,9 +822,6 @@ class Spotify(Cog):
             f"Went back to **{self._track_label(playback['item'])}** on Spotify."
         )
 
-    @commands.hybrid_command(name="like", aliases=("favourite", "favorite"))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def like(self, ctx: Context):
         """Save the current Spotify song to your Liked Songs."""
 
@@ -881,9 +846,6 @@ class Spotify(Cog):
                 )
         raise commands.BadArgument("Spotify could not like the current song.")
 
-    @commands.hybrid_command(name="unlike", aliases=("unfavourite", "unfavorite"))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def unlike(self, ctx: Context):
         """Remove the current Spotify song from your Liked Songs."""
 

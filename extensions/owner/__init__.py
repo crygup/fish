@@ -10,6 +10,8 @@ from discord.abc import Messageable
 from discord.ext import commands
 
 from core import Cog
+from extensions.settings import _spotify_authorization_url, _spotify_link_view
+from extensions.spotify import Spotify
 from utils import (
     fish_owner,
     greenTick,
@@ -30,6 +32,7 @@ class Owner(Cog):
     def __init__(self, bot: Fishie):
         super().__init__()
         self.bot = bot
+        self.spotify = Spotify(bot)
         self._last_reload: float = time.time()
 
     async def _add_reaction(
@@ -147,6 +150,78 @@ class Owner(Cog):
         self.bot.activity = activity
         await self.bot.change_presence(activity=activity)
         await ctx.send(f"Custom status updated to: {text}")
+
+    async def _send_spotify_login(self, ctx: Context) -> None:
+        url = _spotify_authorization_url(
+            self.bot,
+            ctx.author.id,
+            channel_id=ctx.channel.id,
+            message_id=ctx.message.id,
+        )
+        await ctx.send(
+            "Authorize Fishie on Spotify to refresh your account login.",
+            view=_spotify_link_view(url),
+        )
+
+    @commands.group(name="refresh", invoke_without_command=True)
+    async def refresh(self, ctx: Context):
+        """Refresh an owner-only external account login."""
+        await ctx.send("Use `fish refresh spotify login` to refresh Spotify.")
+
+    @refresh.group(name="spotify", invoke_without_command=True)
+    async def refresh_spotify(self, ctx: Context):
+        await self._send_spotify_login(ctx)
+
+    @refresh_spotify.command(name="login")
+    async def refresh_spotify_login(self, ctx: Context):
+        await self._send_spotify_login(ctx)
+
+    @commands.command(name="queue")
+    async def spotify_queue(self, ctx: Context, *, query: str):
+        await self.spotify.queue(ctx, query=query)
+
+    @commands.command(name="shuffle")
+    async def spotify_shuffle(self, ctx: Context, state: Optional[str] = None):
+        await self.spotify.shuffle(ctx, state=state)
+
+    @commands.command(name="repeat", aliases=("loop",))
+    async def spotify_repeat(self, ctx: Context, mode: Optional[str] = None):
+        await self.spotify.repeat(ctx, mode=mode)
+
+    @commands.command(name="player")
+    @commands.cooldown(1, 30, commands.BucketType.user)
+    async def spotify_player(self, ctx: Context):
+        await self.spotify.player(ctx)
+
+    @commands.command(name="skip")
+    async def spotify_skip(self, ctx: Context):
+        await self.spotify.skip(ctx)
+
+    @commands.command(name="pause", aliases=("stop",))
+    async def spotify_pause(self, ctx: Context):
+        await self.spotify.pause(ctx)
+
+    @commands.command(name="play", aliases=("resume",))
+    async def spotify_play(self, ctx: Context):
+        await self.spotify.play(ctx)
+
+    @commands.command(name="restart")
+    async def spotify_restart(self, ctx: Context):
+        await self.spotify.restart(ctx)
+
+    @commands.command(
+        name="previous", aliases=("rewind", "backwards", "back", "reverse", "prev")
+    )
+    async def spotify_rewind(self, ctx: Context):
+        await self.spotify.rewind(ctx)
+
+    @commands.command(name="like", aliases=("favourite", "favorite"))
+    async def spotify_like(self, ctx: Context):
+        await self.spotify.like(ctx)
+
+    @commands.command(name="unlike", aliases=("unfavourite", "unfavorite"))
+    async def spotify_unlike(self, ctx: Context):
+        await self.spotify.unlike(ctx)
 
     @commands.command(name="reload")
     async def reload(self, ctx: Context, *extensions: str):
