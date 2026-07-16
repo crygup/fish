@@ -409,6 +409,19 @@ class LetterboxdConverter(_AccountConverter):
     regex = re.compile(r"^[a-zA-Z0-9_\-]{2,30}$")
     regex_error = "Invalid Letterboxd username. Must be 2-30 characters (letters, numbers, underscores, hyphens)."
 
+    async def convert(self, ctx: Context, argument: str) -> str:
+        if isinstance(argument, (discord.User, discord.Member)):
+            row = await ctx.bot.pool.fetchrow(
+                'SELECT "letterboxd" FROM accounts WHERE user_id = $1',
+                argument.id,
+            )
+            if row and row["letterboxd"]:
+                return row["letterboxd"]
+            raise commands.BadArgument(
+                f"**{argument.display_name}** has no linked Letterboxd account."
+            )
+        return await super().convert(ctx, argument)
+
 
 class SteamConverter(_AccountConverter):
     column = "steam"
