@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     letterboxd TEXT,
     spotify TEXT,
     spotify_refresh_token TEXT,
+    anilist TEXT,
+    anilist_access_token TEXT,
     PRIMARY KEY (user_id)
 );
 
@@ -15,6 +17,8 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS letterboxd TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS lastfm_session_key TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS spotify TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS spotify_refresh_token TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS anilist TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS anilist_access_token TEXT;
 
 CREATE TABLE IF NOT EXISTS reminders (
     id SERIAL PRIMARY KEY,
@@ -28,11 +32,13 @@ CREATE INDEX IF NOT EXISTS reminders_expires_idx ON reminders (expires);
 
 CREATE TABLE IF NOT EXISTS user_settings (
     user_id BIGINT PRIMARY KEY,
-    timezone TEXT 
+    timezone TEXT,
+    anilist_default_media TEXT NOT NULL DEFAULT 'anime'
 );
 
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS anilist_default_media TEXT NOT NULL DEFAULT 'anime';
 
 CREATE TABLE IF NOT EXISTS user_statuses (
     user_id BIGINT NOT NULL,
@@ -289,6 +295,41 @@ CREATE TABLE IF NOT EXISTS sold_fish (
     leviathan BIGINT,
     kraken BIGINT,
     PRIMARY KEY (user_id)
+);
+
+-- Fishing catalog data lives in files/data/fishing.json. These tables only
+-- contain player state and inventory so catalog balancing does not require a
+-- database migration.
+CREATE TABLE IF NOT EXISTS fishing_accounts (
+    user_id BIGINT PRIMARY KEY,
+    coins BIGINT NOT NULL DEFAULT 20 CHECK (coins >= 0),
+    equipped_rod_key TEXT,
+    equipped_rod_rarity_key TEXT,
+    equipped_bait_key TEXT,
+    total_catches BIGINT NOT NULL DEFAULT 0 CHECK (total_catches >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS fishing_rods (
+    user_id BIGINT NOT NULL,
+    rod_key TEXT NOT NULL,
+    rarity_key TEXT NOT NULL,
+    quantity BIGINT NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    PRIMARY KEY (user_id, rod_key, rarity_key)
+);
+
+CREATE TABLE IF NOT EXISTS fishing_bait (
+    user_id BIGINT NOT NULL,
+    bait_key TEXT NOT NULL,
+    quantity BIGINT NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+    PRIMARY KEY (user_id, bait_key)
+);
+
+CREATE TABLE IF NOT EXISTS fishing_catches (
+    user_id BIGINT NOT NULL,
+    creature_key TEXT NOT NULL,
+    rarity_key TEXT NOT NULL,
+    quantity BIGINT NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    PRIMARY KEY (user_id, creature_key, rarity_key)
 );
 
 CREATE TABLE IF NOT EXISTS added_pokemon (
