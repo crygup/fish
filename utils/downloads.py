@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import secrets
-import subprocess
+import signal
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import asyncio
 import discord
@@ -13,7 +15,7 @@ from discord import ui, MediaGalleryItem
 import sys
 
 from .errors import DownloadError, InvalidWebsite
-from .functions import to_thread, run, litterbox
+from .functions import to_thread, litterbox
 from .regexes import (
     INSTAGRAM_RE,
     SOUNDCLOUD_RE,
@@ -23,6 +25,8 @@ from .regexes import (
     YOUTUBE_RE,
     YT_CLIP_RE,
     YT_SHORT_RE,
+    KLIPY_RE,
+    LIVE_STREAM_RE,
 )
 from io import BufferedReader, BytesIO
 
@@ -30,6 +34,7 @@ if TYPE_CHECKING:
     from core import Context
 
 MAX_FILESIZE: int = 50_000_000  # 50 MB
+DOWNLOAD_TIMEOUT: float = 180.0  # three minutes
 
 _COOKIE_MAP: list[tuple[Any, str]] = [
     (YOUTUBE_RE, "files/cookies/youtube-cookies.txt"),
@@ -71,9 +76,61 @@ class Downloader:
         self.ctx = ctx
         self.url = url
         self.format = format
-        self.filename = filename or secrets.token_urlsafe(8).strip("-")
+        raw_filename = filename or secrets.token_urlsafe(8).strip("-")
+        # Titles are user-controlled (``download --title``).  Restrict the
+        # name to a plain filename so it cannot escape the download directory
+        # or inject shell syntax into cleanup/logging paths.
+        safe_filename = re.sub(r"[^A-Za-z0-9._-]+", "_", str(raw_filename))
+        self.filename = safe_filename.strip("._")[:80] or secrets.token_urlsafe(8).strip("-")
         self.hidden = hidden
         self._duration = 0
+        self._deadline: float | None = None
+
+    def _remaining_timeout(self) -> float:
+        if self._deadline is None:
+            return DOWNLOAD_TIMEOUT
+        remaining = self._deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise DownloadError(
+                "This download took longer than 3 minutes and was stopped. "
+                "Try a shorter video."
+            )
+        return remaining
+
+    async def _communicate_with_timeout(
+        self, proc: Any, timeout: float | None = None
+    ) -> tuple[bytes, bytes]:
+        """Collect subprocess output while ensuring child processes cannot linger."""
+        if timeout is None:
+            try:
+                timeout = self._remaining_timeout()
+            except DownloadError:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await proc.communicate()
+                raise
+        communicate_task = asyncio.create_task(proc.communicate())
+        try:
+            return await asyncio.wait_for(asyncio.shield(communicate_task), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await communicate_task
+            raise DownloadError(
+                "This download took longer than 3 minutes and was stopped. "
+                "Try a shorter video."
+            ) from exc
+        except asyncio.CancelledError:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await communicate_task
+            raise
 
     def _output_glob(self) -> str:
         return f"files/downloads/{self.filename}.*"
@@ -97,6 +154,7 @@ class Downloader:
         is_youtube = bool(YOUTUBE_RE.search(video) or YT_SHORT_RE.search(video))
         is_audio = SOUNDCLOUD_RE.search(video) or self.format == "mp3"
         is_twitter = bool(TWITTER_RE.search(video))
+        is_klipy = bool(KLIPY_RE.search(video))
 
         args = [
             sys.executable,
@@ -126,9 +184,19 @@ class Downloader:
                 "Accept-Language:en-US,en;q=0.9",
             ]
 
+        if is_klipy:
+            # Klipy's page extractor can be challenged by Cloudflare. yt-dlp
+            # uses curl_cffi to impersonate a browser for the generic fallback.
+            args += ["--extractor-args", "generic:impersonate"]
+
         if is_audio:
             args += ["--extract-audio", "--audio-format", "mp3"]
             self.format = "mp3"
+
+        # Reject live broadcasts before yt-dlp starts consuming an endless
+        # stream. This also catches YouTube watch URLs that resolve to live
+        # content while leaving regular recorded videos available.
+        args += ["--break-match-filters", "!is_live"]
 
         args.append(video)
 
@@ -142,8 +210,13 @@ class Downloader:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            start_new_session=True,
         )
-        stdout, stderr_raw = await proc.communicate()
+        try:
+            stdout, stderr_raw = await self._communicate_with_timeout(proc)
+        except DownloadError:
+            self._cleanup_output()
+            raise
         stderr_text = stderr_raw.decode().strip() if stderr_raw else ""
 
         if proc.returncode != 0:
@@ -152,6 +225,10 @@ class Downloader:
             )
             if stderr_text:
                 self.ctx.bot.logger.error(f"yt-dlp stderr:\n{stderr_text}")
+            if "is_live" in stderr_text and "filter" in stderr_text:
+                raise DownloadError(
+                    "Live streams cannot be downloaded. Please provide a recorded video."
+                )
             err = stderr_text or "unknown error"
             # Extract the last meaningful line for the user.
             for line in reversed(err.splitlines()):
@@ -170,37 +247,47 @@ class Downloader:
         self.ctx.bot.current_downloads.append(os.path.basename(output_path))
         return output_path
 
-    @to_thread
-    def _convert_to_gif(self, input_path: str) -> str:
+    async def _convert_to_gif(self, input_path: str) -> str:
         """Convert a video file to an optimized GIF via ffmpeg.
 
         Returns the path to the new ``.gif`` file (the original is removed).
         """
         output_path = input_path.rsplit(".", 1)[0] + ".gif"
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-i",
-                input_path,
-                "-vf",
-                GIF_FILTER,
-                "-y",
-                output_path,
-            ],
-            capture_output=True,
-            text=True,
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-i",
+            input_path,
+            "-vf",
+            GIF_FILTER,
+            "-y",
+            output_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
+        try:
+            _, stderr_raw = await self._communicate_with_timeout(proc)
+        except DownloadError:
+            self._cleanup_output()
+            try:
+                os.remove(input_path)
+            except OSError:
+                pass
+            raise
 
-        if result.returncode != 0:
-            os.remove(input_path)
-            tail = (
-                result.stderr.strip().rsplit("\n", 1)[-1]
-                if result.stderr
-                else "unknown error"
-            )
+        if proc.returncode != 0:
+            try:
+                os.remove(input_path)
+            except OSError:
+                pass
+            stderr = stderr_raw.decode(errors="replace").strip() if stderr_raw else ""
+            tail = stderr.rsplit("\n", 1)[-1] if stderr else "unknown error"
             raise DownloadError(f"GIF conversion failed: {tail}")
 
-        os.remove(input_path)
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
         return output_path
 
     async def _has_audio(self, path: str) -> bool:
@@ -218,8 +305,9 @@ class Downloader:
             path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
         )
-        stdout, _ = await proc.communicate()
+        stdout, _ = await self._communicate_with_timeout(proc)
         return proc.returncode == 0 and b"audio" in stdout
 
     async def _get_duration(self, path: str) -> float:
@@ -235,8 +323,9 @@ class Downloader:
             path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
         )
-        stdout, _ = await proc.communicate()
+        stdout, _ = await self._communicate_with_timeout(proc)
         if proc.returncode == 0 and stdout:
             try:
                 return float(stdout.decode().strip())
@@ -256,7 +345,19 @@ class Downloader:
             TWITCH_RE,
         )
 
+        if any(pattern.search(self.url) for pattern in LIVE_STREAM_RE):
+            raise DownloadError(
+                "Live streams cannot be downloaded. Please provide a recorded video."
+            )
+
         is_audio = SOUNDCLOUD_RE.search(self.url) or self.format == "mp3"
+        # Klipy's resolver returns a direct static media URL.  Keep track of
+        # that host because the original klipy.com page URL is no longer
+        # available here after resolution.
+        is_klipy_media = (
+            urlsplit(self.url).scheme == "https"
+            and urlsplit(self.url).hostname == "static.klipy.com"
+        )
 
         output_path = await self._yt_dlp_download(self.url, res_target=1080)
 
@@ -301,9 +402,29 @@ class Downloader:
                         "GIF conversion exceeded 50 MB. Try a shorter clip or omit `--gif`."
                     )
 
+        # Klipy pages represent GIFs as video files.  Normalize those files to
+        # an actual GIF before sending so Discord renders them as animated GIFs
+        # instead of a video attachment.
+        if is_klipy_media and not is_audio and not output_path.lower().endswith(".gif"):
+            dur = self._duration or await self._get_duration(output_path)
+            if dur > 30:
+                self._cleanup_output()
+                raise DownloadError(
+                    "GIF conversion is limited to videos 30 seconds or shorter. "
+                    "This video is {:.0f} seconds.".format(dur)
+                )
+            output_path = await self._convert_to_gif(output_path)
+            self.format = "gif"
+
+            if os.path.getsize(output_path) > MAX_FILESIZE:
+                self._cleanup_output()
+                raise DownloadError(
+                    "GIF conversion exceeded 50 MB. Try a shorter clip."
+                )
+
         return discord.File(output_path, filename=os.path.basename(output_path))
 
-    async def download(self):
+    async def _download_and_send(self):
         files: List[discord.File] = []
 
         started = time.time()
@@ -311,6 +432,7 @@ class Downloader:
         try:
             files.append(await self._download())
         except DownloadError as e:
+            self._cleanup_output()
             await self.ctx.send(str(e), ephemeral=self.hidden)
             return
 
@@ -358,12 +480,30 @@ class Downloader:
             await self.ctx.send(text, ephemeral=self.hidden)
 
         for f in files:
+            filename = os.path.basename(f.filename)
+            if filename != f.filename:
+                continue
             try:
-                await run(f'cd files/downloads && rm "{f.filename}"')
-            except Exception:
+                os.remove(os.path.join("files/downloads", filename))
+            except OSError:
                 pass
 
         self._cleanup_output()
+
+    async def download(self):
+        """Run the complete download/conversion/send workflow with one deadline."""
+        self._deadline = asyncio.get_running_loop().time() + DOWNLOAD_TIMEOUT
+        try:
+            await asyncio.wait_for(
+                self._download_and_send(), timeout=DOWNLOAD_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            self._cleanup_output()
+            await self.ctx.send(
+                "This download took longer than 3 minutes and was stopped. "
+                "Try a shorter video.",
+                ephemeral=self.hidden,
+            )
 
     @to_thread
     def _file_to_bytes(self, file: discord.File) -> bytes:

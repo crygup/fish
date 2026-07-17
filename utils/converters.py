@@ -4,12 +4,14 @@ import asyncio
 import re
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
+from urllib.parse import quote, unquote, urlsplit
 
+import aiohttp
 from bs4 import BeautifulSoup
 import discord
 from discord.ext import commands
 from .functions import response_checker, to_thread
-from .regexes import TENOR_PAGE_RE, KLIPY_RE
+from .regexes import TENOR_PAGE_RE
 from .vars import base_header
 
 if TYPE_CHECKING:
@@ -193,23 +195,99 @@ class TenorUrlConverter(commands.Converter):
 
 
 class KlipyUrlConverter(commands.Converter):
+    def __init__(self, media_format: str = "gif") -> None:
+        self.media_format = media_format
+
+    @staticmethod
+    def _slug(url: str) -> str:
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or (parsed.hostname or "").lower().removeprefix("www.") != "klipy.com"
+        ):
+            raise commands.BadArgument("Invalid Klipy URL.")
+        parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
+        if len(parts) != 2 or parts[0].lower() != "gifs":
+            raise commands.BadArgument("Invalid Klipy GIF URL.")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", parts[1]):
+            raise commands.BadArgument("Invalid Klipy GIF slug.")
+        return parts[1]
+
+    @staticmethod
+    def _api_media(payload: object, media_format: str) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+        data = payload.get("data")
+        files = data.get("file") if isinstance(data, dict) else None
+        if not isinstance(files, dict):
+            return None
+
+        formats = [media_format]
+        if media_format == "mp3":
+            formats.append("mp4")
+        formats.extend(
+            format_name
+            for format_name in ("mp4", "gif", "webm")
+            if format_name not in formats
+        )
+
+        for quality in ("hd", "md", "sm", "xs"):
+            variants = files.get(quality)
+            if not isinstance(variants, dict):
+                continue
+            for format_name in formats:
+                item = variants.get(format_name)
+                media_url = item.get("url") if isinstance(item, dict) else None
+                parsed = urlsplit(media_url) if isinstance(media_url, str) else None
+                if (
+                    parsed
+                    and parsed.scheme == "https"
+                    and parsed.hostname == "static.klipy.com"
+                ):
+                    return media_url
+        return None
+
     @to_thread
     def get_url(self, text: str) -> str:
         scraper = BeautifulSoup(text, "html.parser")
-        video = scraper.find("video", class_="w-full h-full object-contain")
-        if not video:
-            raise commands.BadArgument("Couldn't find video on that page.")
-        src = video.get("src")
-        if not src:
-            raise commands.BadArgument("Video element has no src attribute.")
-        return src if src.startswith("http") else f"https:{src}"
+        candidates: list[str] = []
+        for video in scraper.find_all("video"):
+            if src := video.get("src"):
+                candidates.append(src)
+            candidates.extend(
+                source.get("src")
+                for source in video.find_all("source")
+                if source.get("src")
+            )
+        for meta in scraper.find_all("meta"):
+            if meta.get("property") in {"og:video", "og:video:url", "og:image"}:
+                if content := meta.get("content"):
+                    candidates.append(content)
+        for candidate in candidates:
+            if candidate.startswith("//"):
+                candidate = f"https:{candidate}"
+            if candidate.startswith(("http://", "https://")):
+                return candidate
+        raise commands.BadArgument("Couldn't find media on that Klipy page.")
 
     async def convert(self, ctx: Context, url: str) -> str:
-        if not KLIPY_RE.search(url):
-            raise commands.BadArgument("Invalid Klipy URL.")
-        async with ctx.session.get(url) as r:
-            text = await r.text()
-        return await self.get_url(text)
+        slug = self._slug(url)
+        api_url = f"https://api.klipy.com/api/v1/gifs/{quote(slug, safe='')}"
+        try:
+            async with ctx.session.get(api_url, headers=base_header) as response:
+                if response.status == 200:
+                    direct_url = self._api_media(
+                        await response.json(content_type=None), self.media_format
+                    )
+                    if direct_url:
+                        return direct_url
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            pass
+
+        # Keep an HTML fallback for pages that expose media metadata without a
+        # Cloudflare challenge.
+        async with ctx.session.get(url, headers=base_header) as response:
+            return await self.get_url(await response.text())
 
 
 class MediaConverter(commands.Converter[str]):

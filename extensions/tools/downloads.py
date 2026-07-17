@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Literal
 import discord
 from discord.ext import commands
 from core import Cog
-from utils import Downloader, TenorUrlConverter, to_image
+from utils import Downloader, KlipyUrlConverter, TenorUrlConverter, to_image
 from discord import app_commands
 
 if TYPE_CHECKING:
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     format: Literal["mp4", "mp3", "webm", "gif"] = commands.flag(
-        description="What format to download as (gif auto-converts Twitter videos).",
+        description="What format to download as (Klipy and Tenor videos are sent as GIFs).",
         default="mp4",
     )
     title: str = commands.flag(
@@ -48,6 +48,14 @@ class Downloads(Cog):
 
                 return
 
+            except commands.BadArgument:
+                pass
+
+            # Resolve Klipy pages to their direct media URL before yt-dlp sees
+            # them. This avoids sending the Cloudflare-protected HTML page to
+            # the generic extractor.
+            try:
+                url = await KlipyUrlConverter(flags.format).convert(ctx, url)
             except commands.BadArgument:
                 pass
 

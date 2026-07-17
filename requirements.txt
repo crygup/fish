@@ -15,5 +15,6 @@ lru-dict
 Pillow
 pandas
 beautifulsoup4
+curl-cffi
 psutil
 cachetools

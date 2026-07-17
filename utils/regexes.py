@@ -7,7 +7,7 @@ VIDEOS_RE: Pattern[str] = comp(
     (https://(vt|www|vm|m|vk)?.?tiktok.com/(@?[a-zA-z0-9_.]{1,})?/?(@?[a-zA-z0-9_.]{1,})?/?(@?[a-zA-z0-9_.]{1,})?/)?
     (https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,})?
     (https?://clips.twitch.tv/[a-zA-Z0-9_-])?
-    (https?://(twitter|x).com/[a-zA-Z0-9_]{1,}/status/[0-9]{19})?
+    (https?://(?:www\.)?(twitter|x|fxtwitter|vxtwitter|fixupx|girlcockx)\.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19,})?
     (https?://(www.)reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6})?
     (https://(www.)?youtube.com/clip/[A-Za-z0-9_-]{1,})?
     (https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11})?
@@ -22,7 +22,25 @@ VIDEOS_RE: Pattern[str] = comp(
 TIKTOK_RE: Pattern[str] = comp(r"https://(vt|www|vm|m|vk)?.?tiktok.com/(@?[a-zA-z0-9_.]{1,})?/?(@?[a-zA-z0-9_.]{1,})?/?(@?[a-zA-z0-9_.]{1,})?/")
 INSTAGRAM_RE: Pattern[str] = comp(r"https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,}")
 TWITCH_RE: Pattern[str] = comp(r"https?://clips.twitch.tv/[a-zA-Z0-9_-]")
-TWITTER_RE: Pattern[str] = comp(r"https?://(twitter|x)\.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19,}")
+# Twitter-compatible mirrors expose the same status URL structure and media.
+TWITTER_RE: Pattern[str] = comp(
+    r"https?://(?:www\.)?(?:twitter|x|fxtwitter|vxtwitter|fixupx|girlcockx)\.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19,}"
+)
+# Explicit live-stream routes that should never be passed to the downloader.
+YOUTUBE_LIVE_RE: Pattern[str] = comp(
+    r"https?://(?:www\.)?youtube\.com/(?:live/[A-Za-z0-9_-]+|(?:@[A-Za-z0-9_.-]+|channel/[A-Za-z0-9_-]+|c/[A-Za-z0-9_-]+|user/[A-Za-z0-9_-]+)/live)(?:[/?#]|$)"
+)
+TWITCH_LIVE_RE: Pattern[str] = comp(
+    r"https?://(?:www\.)?twitch\.tv/(?!directory(?:[/?#]|$)|videos?(?:[/?#]|$)|clips?(?:[/?#]|$)|search(?:[/?#]|$)|downloads(?:[/?#]|$))[A-Za-z0-9_]{2,25}(?:[/?#]|$)"
+)
+KICK_LIVE_RE: Pattern[str] = comp(
+    r"https?://(?:www\.)?kick\.com/[A-Za-z0-9][A-Za-z0-9_-]{1,24}(?:[/?#]|$)"
+)
+LIVE_STREAM_RE: tuple[Pattern[str], ...] = (
+    YOUTUBE_LIVE_RE,
+    TWITCH_LIVE_RE,
+    KICK_LIVE_RE,
+)
 REDDIT_RE: Pattern[str] = comp(r"https?://(www.)reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6}")
 YT_CLIP_RE: Pattern[str] = comp(r"https://(www.)?youtube.com/clip/[A-Za-z0-9_-]{1,}")
 YT_SHORT_RE: Pattern[str] = comp(r"https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}")
@@ -40,7 +58,7 @@ TENOR_PAGE_RE: Pattern = comp(r"https?://(www\.)?tenor\.com/view/\S+/?")
 TENOR_GIF_RE: Pattern = comp(r"https?://(www\.)?c\.tenor\.com/\S+/\S+\.gif/?")
 
 # klipy
-KLIPY_RE: Pattern[str] = comp(r"https?://(www\.)?klipy\.com/[a-zA-Z0-9_-]+/?")
+KLIPY_RE: Pattern[str] = comp(r"https?://(?:www\.)?klipy\.com/gifs/[a-zA-Z0-9_-]+(?:[/?#]|$)")
 # websites
 LBD_URL_RE: Pattern[str] = comp(r"https?://(?:www\.)?letterboxd\.com/([a-zA-Z0-9_\-]+)/?")
 STEAM_URL_RE: Pattern[str] = comp(r"https?://(?:www\.)?steamcommunity\.com/(?:profiles/(\d+)|id/([a-zA-Z0-9_\-]+))/?")
