@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Callable, Optional, TypeVar
 import discord
 from discord.ext import commands
 from typing_extensions import Annotated
+from discord import app_commands
 
 from core import Cog
 from utils import time as time_utils
@@ -69,7 +70,95 @@ class Moderation(Logger, Honeypot):
     def __init__(self, bot: Fishie):
         self.bot = bot
 
-    @commands.hybrid_command(name="ban")
+    async def _resolve_command_for_config(
+        self, ctx: GuildContext, command_name: str
+    ) -> commands.Command:
+        command = self.bot.get_command(command_name.casefold())
+        if command is None:
+            raise commands.BadArgument(
+                f"I couldn't find a command named `{command_name}`."
+            )
+        if self.bot._command_disable_excluded(command):
+            raise commands.BadArgument(
+                f"The `{command.qualified_name}` command cannot be disabled."
+            )
+
+        setattr(ctx, "_skip_command_disable_check", True)
+        try:
+            can_use = await command.can_run(ctx)
+        except commands.CommandError:
+            can_use = False
+        finally:
+            delattr(ctx, "_skip_command_disable_check")
+        if not can_use:
+            raise commands.BadArgument(
+                f"You cannot use `{command.qualified_name}`, so you cannot configure it."
+            )
+        return command
+
+    @commands.hybrid_command(name="disable")
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def disable(
+        self,
+        ctx: GuildContext,
+        command_name: str,
+        channel: Optional[discord.TextChannel] = None,
+    ):
+        """Disable a command in this channel or the whole server."""
+        command = await self._resolve_command_for_config(ctx, command_name)
+        if channel is not None and channel.guild.id != ctx.guild.id:
+            raise commands.BadArgument("The channel must belong to this server.")
+
+        channel_id = channel.id if channel is not None else 0
+        await self.bot.pool.execute(
+            """
+            INSERT INTO command_disables (guild_id, command, channel_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (guild_id, command, channel_id) DO NOTHING
+            """,
+            ctx.guild.id,
+            command.qualified_name.casefold(),
+            channel_id,
+        )
+        self.bot.db_cache.add_disabled_command(
+            ctx.guild.id, command.qualified_name.casefold(), channel_id
+        )
+        scope = f"in {channel.mention}" if channel is not None else "in this server"
+        await ctx.send(f"Disabled `{command.qualified_name}` {scope}.")
+
+    @commands.command(name="enable")
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def enable(
+        self,
+        ctx: GuildContext,
+        command_name: str,
+        channel: Optional[discord.TextChannel] = None,
+    ):
+        """Enable a command in this channel or the whole server."""
+        command = await self._resolve_command_for_config(ctx, command_name)
+        if channel is not None and channel.guild.id != ctx.guild.id:
+            raise commands.BadArgument("The channel must belong to this server.")
+
+        channel_id = channel.id if channel is not None else 0
+        await self.bot.pool.execute(
+            "DELETE FROM command_disables WHERE guild_id = $1 AND command = $2 AND channel_id = $3",
+            ctx.guild.id,
+            command.qualified_name.casefold(),
+            channel_id,
+        )
+        self.bot.db_cache.remove_disabled_command(
+            ctx.guild.id, command.qualified_name.casefold(), channel_id
+        )
+        scope = f"in {channel.mention}" if channel is not None else "in this server"
+        await ctx.send(f"Enabled `{command.qualified_name}` {scope}.")
+
+    @commands.command(name="ban")
     @mod_target("ban_members")
     async def ban(
         self,
@@ -150,7 +239,7 @@ class Moderation(Logger, Honeypot):
         await member.timeout(None, reason=f"{str(ctx.author)} (ID: {ctx.author.id})")
         await ctx.send(f"Unmuted **{member}**.")
 
-    @commands.hybrid_command(name="kick")
+    @commands.command(name="kick")
     @mod_target("kick_members")
     async def kick(
         self,

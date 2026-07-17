@@ -76,6 +76,9 @@ class Fishie(commands.Bot):
     cached_mudae_consent: set[int] = set()
     cached_honeypots: set[int] = set()
     cached_banned_ips: set[str] = set()
+    _steam_oauth_states: dict[str, dict[str, int | str]]
+    _spotify_oauth_states: dict[str, dict[str, int | str]]
+    _anilist_oauth_states: dict[str, dict[str, int | str]]
     pokemon: List[str]
     error_logs: discord.Webhook | None
 
@@ -126,6 +129,48 @@ class Fishie(commands.Bot):
             intents=discord.Intents.all(),
             strip_after_prefix=True,
         )
+        self.add_check(self._check_command_disabled)
+
+    @staticmethod
+    def _command_disable_excluded(command: commands.Command[Any, Any, Any]) -> bool:
+        qualified_name = command.qualified_name.casefold()
+        root_name = qualified_name.split(" ", 1)[0]
+        cog = command.cog
+        module = getattr(cog.__class__, "__module__", "") if cog is not None else ""
+        return (
+            root_name in {"enable", "disable", "invite", "about", "help"}
+            or qualified_name.startswith("logging-delete")
+            or root_name == "jsk"
+            or module.startswith("extensions.owner")
+            or module.startswith("extensions.jishaku")
+        )
+
+    async def _check_command_disabled(self, ctx: commands.Context[Fishie]) -> bool:
+        if getattr(ctx, "_skip_command_disable_check", False):
+            return True
+        if ctx.guild is None or ctx.command is None:
+            return True
+        if self._command_disable_excluded(ctx.command):
+            return True
+
+        qualified_name = ctx.command.qualified_name.casefold()
+        parts = qualified_name.split()
+        channel_id = getattr(ctx.channel, "id", 0)
+        for index in range(len(parts), 0, -1):
+            command_name = " ".join(parts[:index])
+            if (
+                ctx.guild.id,
+                command_name,
+                channel_id,
+            ) in self.db_cache.disabled_commands or (
+                ctx.guild.id,
+                command_name,
+                0,
+            ) in self.db_cache.disabled_commands:
+                raise commands.CheckFailure(
+                    f"The `{command_name}` command is disabled in this channel."
+                )
+        return True
 
     # thanks leo
     async def on_message_edit(
@@ -327,6 +372,7 @@ class Fishie(commands.Bot):
         self.db_cache.nsfw_covers.clear()
         self.db_cache.pinboard.clear()
         self.db_cache.lastfm.clear()
+        self.db_cache.disabled_commands.clear()
         self.cached_roblox_templates.clear()
         self.cached_mudae_consent.clear()
         self.cached_honeypots.clear()
@@ -339,6 +385,14 @@ class Fishie(commands.Bot):
             prefix = record["prefix"]
             self.db_cache.add_prefix(guild_id, prefix)
             self.logger.info(f'Added prefix "{prefix}" to "{guild_id}"')
+
+        disabled_commands = await self.pool.fetch(
+            "SELECT guild_id, command, channel_id FROM command_disables"
+        )
+        for row in disabled_commands:
+            self.db_cache.add_disabled_command(
+                row["guild_id"], row["command"], row["channel_id"]
+            )
 
         opted_out = await self.pool.fetch("SELECT * FROM opted_out")
         for row in opted_out:

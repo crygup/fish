@@ -10,6 +10,7 @@ class db_cache:
     nsfw_covers: List[int] = []
     pinboard: Dict[int, int] = {}
     lastfm: dict[int, str] = {}
+    disabled_commands: set[tuple[int, str, int]] = set()
 
     def add_account(
         self, user_id: int, last_fm: str
@@ -18,6 +19,16 @@ class db_cache:
 
     def remove_account(self, user_id: int):
         del self.lastfm[user_id]
+
+    def add_disabled_command(
+        self, guild_id: int, command: str, channel_id: int
+    ) -> None:
+        self.disabled_commands.add((guild_id, command.casefold(), channel_id))
+
+    def remove_disabled_command(
+        self, guild_id: int, command: str, channel_id: int
+    ) -> None:
+        self.disabled_commands.discard((guild_id, command.casefold(), channel_id))
 
     def add_prefix(self, guild_id: int, prefix: str) -> List[str]:
         try:
