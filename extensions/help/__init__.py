@@ -46,7 +46,7 @@ def make_command_embed(
     if isinstance(command, commands.Group):
         text = "\n".join(
             [
-                f"{ctx.get_prefix}{c.parent.name} {c.name} {c.signature}"
+                f"{ctx.get_prefix}{c.qualified_name} {c.signature}"
                 for c in command.commands
             ]
         )
@@ -91,6 +91,7 @@ class HelpCommand(commands.HelpCommand):
         [Support Server](https://discord.com/invite/rM9u4MRFBE)
         [Terms of Service](https://github.com/fishie-bot/fishie-bot/blob/main/Terms%20of%20Service.md)
         [Privacy Policy](https://github.com/fishie-bot/fishie-bot/blob/main/Privacy%20Policy.md)
+        [Donate](https://ko-fi.com/crygup)
         """
 
         embed.add_field(name="Command usage", value=dedent(field_1))

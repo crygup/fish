@@ -63,6 +63,7 @@ class About(Cog):
                 ctx.bot.start_time, accuracy=None, brief=True, suffix=False
             ),
         )
+        e.add_field(name="Donate", value="[ko-fi :D](https://ko-fi.com/crygup)")
 
         await ctx.send(embed=e)
 
