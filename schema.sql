@@ -186,6 +186,32 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     PRIMARY KEY (guild_id)
 );
 
+CREATE TABLE IF NOT EXISTS guild_log_channels (
+    guild_id BIGINT NOT NULL,
+    event TEXT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    webhook_url TEXT,
+    PRIMARY KEY (guild_id, event)
+);
+
+ALTER TABLE guild_log_channels
+    ADD COLUMN IF NOT EXISTS webhook_url TEXT;
+
+CREATE INDEX IF NOT EXISTS guild_log_channels_guild_idx
+    ON guild_log_channels (guild_id);
+
+CREATE TABLE IF NOT EXISTS highlights (
+    user_id BIGINT NOT NULL,
+    guild_id BIGINT NOT NULL,
+    word TEXT NOT NULL,
+    word_normalized TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, guild_id, word_normalized)
+);
+
+CREATE INDEX IF NOT EXISTS highlights_guild_idx
+    ON highlights (guild_id);
+
 CREATE TABLE IF NOT EXISTS twitch_follows (
     guild_id BIGINT NOT NULL,
     channel_name TEXT NOT NULL,

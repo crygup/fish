@@ -231,15 +231,22 @@ class PurgeCog(Cog):
                     confirmation_message or await ctx.interaction.original_response()
                 )
 
+            ctx.bot.dispatch("logger_purge_start", ctx.guild.id, channel.id)
             try:
                 deleted = await channel.purge(
                     limit=amount, before=before, after=after, check=predicate
                 )
             except discord.Forbidden as e:
+                ctx.bot.dispatch("logger_purge_cancel", ctx.guild.id, channel.id)
                 return await ctx.send("I do not have permissions to delete messages.")
             except discord.HTTPException as e:
+                ctx.bot.dispatch("logger_purge_cancel", ctx.guild.id, channel.id)
                 return await ctx.send(f"Error: {e} (try a smaller search?)")
 
+            if len(deleted) > 1:
+                ctx.bot.dispatch("logger_purge", ctx.guild, channel, tuple(deleted))
+            else:
+                ctx.bot.dispatch("logger_purge_cancel", ctx.guild.id, channel.id)
             await ctx.send(f"Deleted {plural(len(deleted)):message}.", delete_after=7)
 
     async def purge_guild_invites(

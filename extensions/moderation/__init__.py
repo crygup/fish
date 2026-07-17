@@ -10,6 +10,7 @@ from typing_extensions import Annotated
 from core import Cog
 from utils import time as time_utils
 from .honeypot import Honeypot
+from .logger import Logger
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -60,7 +61,7 @@ def _parse_duration(until: datetime.datetime) -> int:
     return int(minutes)
 
 
-class Moderation(Honeypot, Cog):
+class Moderation(Logger, Honeypot):
     """Server moderation commands."""
 
     emoji = discord.PartialEmoji(name="\U0001f528")
@@ -73,18 +74,20 @@ class Moderation(Honeypot, Cog):
     async def ban(
         self,
         ctx: GuildContext,
-        member: discord.Member,
+        user: discord.User,
         *,
         reason: Optional[str] = None,
     ):
-        """Ban someone."""
-        _check_target(ctx, member)
+        """Ban a server member or a user who is not currently in the server."""
+        member = ctx.guild.get_member(user.id)
+        if member is not None:
+            _check_target(ctx, member)
         await ctx.guild.ban(
-            member,
+            user,
             reason=f"{str(ctx.author)} (ID: {ctx.author.id}): {reason}",
             delete_message_seconds=604800,
         )
-        await ctx.send(f"Banned **{member}**.")
+        await ctx.send(f"Banned **{user}**.")
 
     @commands.hybrid_command(name="softban")
     @mod_target("ban_members")

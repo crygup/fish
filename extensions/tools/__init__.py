@@ -6,7 +6,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 import discord
 from discord.ext import commands
@@ -87,6 +87,326 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
     """Quality of life tools"""
 
     emoji = discord.PartialEmoji(name="\U0001f6e0")
+
+    def __init__(self, bot: Fishie) -> None:
+        super().__init__(bot)
+        self._highlight_activity: dict[tuple[int, int], float] = {}
+        self._highlight_cache: dict[int, list[tuple[int, str, re.Pattern[str]]]] = {}
+        self._highlight_tasks: set[asyncio.Task[None]] = set()
+
+    def cog_unload(self) -> None:
+        for task in self._highlight_tasks:
+            task.cancel()
+        super().cog_unload()
+
+    async def _get_highlights(
+        self, guild_id: int
+    ) -> list[tuple[int, str, re.Pattern[str]]]:
+        cached = self._highlight_cache.get(guild_id)
+        if cached is not None:
+            return cached
+
+        rows = await self.bot.pool.fetch(
+            "SELECT user_id, word, word_normalized FROM highlights "
+            "WHERE guild_id = $1",
+            guild_id,
+        )
+        highlights = []
+        for row in rows:
+            word = str(row["word"])
+            normalized = str(row["word_normalized"])
+            if not normalized:
+                continue
+            pattern = re.compile(rf"(?<!\w){re.escape(normalized)}(?!\w)")
+            highlights.append((int(row["user_id"]), word, pattern))
+
+        self._highlight_cache[guild_id] = highlights
+        return highlights
+
+    def _invalidate_highlights(self, guild_id: int) -> None:
+        self._highlight_cache.pop(guild_id, None)
+
+    async def _send_highlight_list(self, ctx: Context) -> None:
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage()
+
+        highlights = await self._get_highlights(ctx.guild.id)
+        mine = sorted(
+            (word for user_id, word, _ in highlights if user_id == ctx.author.id),
+            key=str.casefold,
+        )
+        description = "\n".join(f"• {escape_markdown(word)}" for word in mine)
+        if not description:
+            description = "You do not have any highlights in this server."
+        elif len(description) > 4096:
+            description = description[:4093].rsplit("\n", 1)[0] + "\n…"
+
+        embed = discord.Embed(
+            title=f"Your highlights in {ctx.guild.name}",
+            description=description,
+            color=self.bot.embedcolor,
+        )
+        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+    @staticmethod
+    def _resolve_guild(bot: Fishie, value: str) -> discord.Guild | None:
+        value = value.strip()
+        if value.isdigit():
+            return bot.get_guild(int(value))
+
+        matches = [
+            guild for guild in bot.guilds if guild.name.casefold() == value.casefold()
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def _highlight_task_done(self, task: asyncio.Task[None]) -> None:
+        self._highlight_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            return
+        if error:
+            self.bot.logger.error("Highlight notification failed", exc_info=error)
+
+    async def _send_highlight_notification(
+        self,
+        message: discord.Message,
+        user_id: int,
+        words: list[str],
+        triggered_at: float,
+    ) -> None:
+        await asyncio.sleep(15)
+
+        guild = message.guild
+        if guild is None:
+            return
+
+        activity = self._highlight_activity.get((guild.id, user_id), 0.0)
+        if activity >= triggered_at:
+            return
+
+        member = guild.get_member(user_id)
+        if member is None:
+            return
+
+        highlighted = ", ".join(
+            f"**{escape_markdown(word)}**"
+            for word in sorted(set(words), key=str.casefold)
+        )
+        guild_name = discord.utils.escape_mentions(escape_markdown(guild.name))
+        channel = getattr(message.channel, "mention", "this channel")
+        content = (
+            f"Your highlight {highlighted} was mentioned in **{guild_name}** "
+            f"in {channel}. [Jump to the message]({message.jump_url})"
+        )
+
+        try:
+            await member.send(
+                content,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.Forbidden:
+            self.bot.logger.debug(
+                "Could not DM highlight notification to user %s", user_id
+            )
+        except discord.HTTPException:
+            self.bot.logger.warning(
+                "Failed to send highlight notification to user %s", user_id
+            )
+
+    @commands.Cog.listener("on_message")
+    async def _highlight_on_message(self, message: discord.Message) -> None:
+        guild = message.guild
+        if guild is None or message.author.bot:
+            return
+
+        now = asyncio.get_running_loop().time()
+        self._highlight_activity[(guild.id, message.author.id)] = now
+        if len(self._highlight_activity) > 10_000:
+            cutoff = now - 900
+            self._highlight_activity = {
+                key: timestamp
+                for key, timestamp in self._highlight_activity.items()
+                if timestamp >= cutoff
+            }
+        highlights = await self._get_highlights(guild.id)
+        content = message.content.casefold()
+        if not content:
+            return
+
+        matches: dict[int, list[str]] = {}
+        for user_id, word, pattern in highlights:
+            if pattern.search(content):
+                matches.setdefault(user_id, []).append(word)
+
+        for user_id, words in matches.items():
+            task = asyncio.create_task(
+                self._send_highlight_notification(message, user_id, words, now)
+            )
+            self._highlight_tasks.add(task)
+            task.add_done_callback(self._highlight_task_done)
+
+    @commands.Cog.listener("on_typing")
+    async def _highlight_on_typing(
+        self,
+        channel: discord.abc.Messageable,
+        user: discord.User | discord.Member,
+        when: datetime.datetime,
+    ) -> None:
+        guild = getattr(channel, "guild", None)
+        if guild is not None and not user.bot:
+            self._highlight_activity[(guild.id, user.id)] = (
+                asyncio.get_running_loop().time()
+            )
+
+    @commands.hybrid_group(name="highlight", aliases=("hl",))
+    @commands.guild_only()
+    async def highlight(self, ctx: Context) -> None:
+        """Manage words that should notify you when mentioned in this server."""
+        await ctx.send_help(ctx.command)
+
+    @highlight.command(name="list")
+    @commands.guild_only()
+    async def highlight_list(self, ctx: Context) -> None:
+        """Show your highlights in this server."""
+        await self._send_highlight_list(ctx)
+
+    @highlight.command(name="add", aliases=("set",))
+    @commands.guild_only()
+    async def highlight_add(
+        self,
+        ctx: Context,
+        *,
+        word: str = commands.param(description="The word or phrase to highlight."),
+    ) -> None:
+        """Add a word or phrase to your highlights."""
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage()
+
+        word = " ".join(word.split())
+        if not word:
+            raise commands.BadArgument("The highlight cannot be empty.")
+        if len(word) > 100:
+            raise commands.BadArgument("Highlights must be 100 characters or fewer.")
+
+        normalized = word.casefold()
+        row = await self.bot.pool.fetchrow(
+            "INSERT INTO highlights (user_id, guild_id, word, word_normalized) "
+            "VALUES ($1, $2, $3, $4) "
+            "ON CONFLICT (user_id, guild_id, word_normalized) DO NOTHING "
+            "RETURNING word",
+            ctx.author.id,
+            ctx.guild.id,
+            word,
+            normalized,
+        )
+        self._invalidate_highlights(ctx.guild.id)
+        if row is None:
+            await ctx.send(
+                f"You are already highlighting **{escape_markdown(word)}**.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        else:
+            await ctx.send(
+                f"Now highlighting **{escape_markdown(word)}** in this server.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+    @highlight.command(name="remove", aliases=("delete", "del", "unset"))
+    @commands.guild_only()
+    async def highlight_remove(
+        self,
+        ctx: Context,
+        *,
+        word: str = commands.param(description="The word or phrase to remove."),
+    ) -> None:
+        """Remove one of your highlights from this server."""
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage()
+
+        normalized = " ".join(word.split()).casefold()
+        row = await self.bot.pool.fetchrow(
+            "DELETE FROM highlights "
+            "WHERE user_id = $1 AND guild_id = $2 AND word_normalized = $3 "
+            "RETURNING word",
+            ctx.author.id,
+            ctx.guild.id,
+            normalized,
+        )
+        self._invalidate_highlights(ctx.guild.id)
+        if row is None:
+            await ctx.send(
+                "That highlight does not exist in this server.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        else:
+            await ctx.send(
+                f"Removed highlight **{escape_markdown(str(row['word']))}**.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+    @highlight.command(name="import")
+    @commands.guild_only()
+    async def highlight_import(
+        self,
+        ctx: Context,
+        *,
+        source: str = commands.param(
+            description="The source server ID or exact server name."
+        ),
+    ) -> None:
+        """Copy your highlights from another server into this server."""
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage()
+
+        source_guild = self._resolve_guild(self.bot, source)
+        if source_guild is None:
+            raise commands.BadArgument(
+                "I could not find one unique server matching that ID or name."
+            )
+        if source_guild.id == ctx.guild.id:
+            raise commands.BadArgument(
+                "The source and destination servers are the same."
+            )
+
+        source_member = source_guild.get_member(ctx.author.id)
+        if source_member is None:
+            try:
+                source_member = await source_guild.fetch_member(ctx.author.id)
+            except discord.HTTPException as exc:
+                raise commands.BadArgument(
+                    "You must be a member of the source server to import highlights."
+                ) from exc
+
+        rows = await self.bot.pool.fetch(
+            "SELECT word, word_normalized FROM highlights "
+            "WHERE user_id = $1 AND guild_id = $2",
+            ctx.author.id,
+            source_guild.id,
+        )
+        if not rows:
+            await ctx.send(
+                "You do not have any highlights in the source server.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        await self.bot.pool.executemany(
+            "INSERT INTO highlights (user_id, guild_id, word, word_normalized) "
+            "VALUES ($1, $2, $3, $4) "
+            "ON CONFLICT (user_id, guild_id, word_normalized) DO NOTHING",
+            [
+                (ctx.author.id, ctx.guild.id, row["word"], row["word_normalized"])
+                for row in rows
+            ],
+        )
+        self._invalidate_highlights(ctx.guild.id)
+        await ctx.send(
+            f"Imported {len(rows)} highlight(s) from **{escape_markdown(source_guild.name)}**.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def self_send_asset(
         self,
@@ -533,10 +853,14 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
 
         url = f"https://img.pokemondb.net/artwork/large/{name}.jpg"
 
+        img_data: bytes | None = None
         async with ctx.typing():
             for attempt in range(3):
                 try:
-                    img_data = await to_image(ctx.session, url, bytes=True)
+                    # ``bytes=True`` returns raw bytes at runtime, but the
+                    # converter's union return type cannot express that
+                    # relationship to static type checkers.
+                    img_data = cast(bytes, await to_image(ctx.session, url, bytes=True))
                     break
                 except Exception:
                     if attempt >= 2:
@@ -555,6 +879,9 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
                     name = row["pokemon_name"]
                     display = name.capitalize()
                     url = f"https://img.pokemondb.net/artwork/large/{name}.jpg"
+
+        if img_data is None:
+            raise commands.BadArgument("Couldn't load an image.")
 
         embed = discord.Embed(
             color=self.bot.embedcolor, title="What Pokémon is this? You have 5 guesses."
