@@ -78,7 +78,7 @@ class Fishing(Cog):
 
     async def _account(self, user_id: int):
         await self._ensure_account(user_id)
-        return await self.bot.pool.fetchrow(
+        account = await self.bot.pool.fetchrow(
             """
             SELECT user_id, coins, equipped_rod_key, equipped_rod_rarity_key,
                    equipped_bait_key, total_catches
@@ -87,6 +87,18 @@ class Fishing(Cog):
             """,
             user_id,
         )
+        if account is None:
+            raise RuntimeError("Fishing account was not created.")
+        return account
+
+    async def _locked_account(self, connection: Any, user_id: int):
+        account = await connection.fetchrow(
+            "SELECT * FROM fishing_accounts WHERE user_id = $1 FOR UPDATE",
+            user_id,
+        )
+        if account is None:
+            raise RuntimeError("Fishing account was not created.")
+        return account
 
     @staticmethod
     def _weighted(items: list[dict[str, Any]], weight_key: str) -> dict[str, Any]:
@@ -128,9 +140,7 @@ class Fishing(Cog):
         rarity = self.rarities.get(rarity_key or "common", self.rarities["common"])
         return f"{rarity['name']} {rod['name']} Fishing Rod"
 
-    @commands.hybrid_command(name="balance", aliases=("coins", "wallet"))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="balance", aliases=("coins", "wallet"))
     async def balance(self, ctx: Context):
         """Show your fishing coin balance."""
         account = await self._account(ctx.author.id)
@@ -139,9 +149,7 @@ class Fishing(Cog):
             allowed_mentions=discord.AllowedMentions(users=True),
         )
 
-    @commands.hybrid_command(name="shop", aliases=("fishing_shop",))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="shop", aliases=("fishing_shop",))
     async def shop(self, ctx: Context):
         """Show available fishing rods and bait."""
         embed = discord.Embed(title="Fishing Shop", color=self.bot.embedcolor)
@@ -164,13 +172,11 @@ class Fishing(Cog):
         embed.set_footer(text="Buy with: fish buy <rod or bait> [quantity]")
         await ctx.send(embed=embed)
 
-    @commands.hybrid_command(name="buy", aliases=("purchase",))
+    @commands.command(name="buy", aliases=("purchase",))
     @app_commands.describe(
         item="A rod or bait name from the fishing shop",
         quantity="How many bait items to buy",
     )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def buy(self, ctx: Context, item: str, quantity: int = 1):
         """Buy a fishing rod upgrade or bait."""
         if quantity < 1 or quantity > 100:
@@ -178,8 +184,12 @@ class Fishing(Cog):
         item_key = _key(item)
         rod = self.rods.get(item_key)
         bait = self.bait.get(item_key)
-        if rod is None and bait is None:
-            raise commands.BadArgument("That item is not in the fishing shop.")
+        if rod is None:
+            if bait is None:
+                raise commands.BadArgument("That item is not in the fishing shop.")
+            price = int(bait["price"]) * quantity
+        else:
+            price = int(rod["price"]) * quantity
         if rod is not None and quantity != 1:
             raise commands.BadArgument(
                 "Fishing rods can only be purchased one at a time."
@@ -188,11 +198,7 @@ class Fishing(Cog):
         await self._ensure_account(ctx.author.id)
         async with self.bot.pool.acquire() as connection:
             async with connection.transaction():
-                account = await connection.fetchrow(
-                    "SELECT * FROM fishing_accounts WHERE user_id = $1 FOR UPDATE",
-                    ctx.author.id,
-                )
-                price = int((rod or bait)["price"]) * quantity
+                account = await self._locked_account(connection, ctx.author.id)
                 if account["coins"] < price:
                     raise commands.BadArgument(
                         f"You need **{self._money(price)}**, but only have **{self._money(account['coins'])}**."
@@ -232,6 +238,8 @@ class Fishing(Cog):
                     )
                     result = f"Bought a **{rarity['name']} {rod['name']} Fishing Rod**"
                 else:
+                    if bait is None:
+                        raise RuntimeError("Fishing bait was not found.")
                     await connection.execute(
                         """
                         INSERT INTO fishing_bait (user_id, bait_key, quantity)
@@ -258,10 +266,8 @@ class Fishing(Cog):
 
         await ctx.send(f"{result} for **{self._money(price)}**.")
 
-    @commands.hybrid_command(name="equip", aliases=("use",))
+    @commands.command(name="equip", aliases=("use",))
     @app_commands.describe(item="The bait to equip")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def equip(self, ctx: Context, item: str):
         """Equip bait you already own."""
         item_key = _key(item)
@@ -283,9 +289,7 @@ class Fishing(Cog):
         )
         await ctx.send(f"Equipped **{bait['name']}**.")
 
-    @commands.hybrid_command(name="inventory", aliases=("inv", "bag"))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="inventory", aliases=("inv", "bag"))
     async def inventory(self, ctx: Context):
         """Show your fishing equipment, bait, and notable catches."""
         account = await self._account(ctx.author.id)
@@ -338,18 +342,13 @@ class Fishing(Cog):
         embed.set_footer(text=f"Total catches: {account['total_catches']:,}")
         await ctx.send(embed=embed)
 
-    @commands.hybrid_command(name="cast", aliases=("catch", "fish"))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="cast", aliases=("catch", "fish"))
     async def cast(self, ctx: Context):
         """Cast your equipped rod and catch a sea creature."""
         await self._ensure_account(ctx.author.id)
         async with self.bot.pool.acquire() as connection:
             async with connection.transaction():
-                account = await connection.fetchrow(
-                    "SELECT * FROM fishing_accounts WHERE user_id = $1 FOR UPDATE",
-                    ctx.author.id,
-                )
+                account = await self._locked_account(connection, ctx.author.id)
                 if not account["equipped_rod_key"]:
                     raise commands.BadArgument(
                         "Buy a fishing rod first with `fish buy plastic`."
