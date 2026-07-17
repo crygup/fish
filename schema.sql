@@ -78,6 +78,16 @@ CREATE TABLE IF NOT EXISTS command_config (
 
 CREATE INDEX IF NOT EXISTS command_config_guild_id_idx ON command_config (guild_id);
 
+CREATE TABLE IF NOT EXISTS command_disables (
+    guild_id BIGINT NOT NULL,
+    command TEXT NOT NULL,
+    channel_id BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, command, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS command_disables_guild_channel_idx
+    ON command_disables (guild_id, channel_id);
+
 CREATE TABLE IF NOT EXISTS avatars (
     id SERIAL,
     user_id BIGINT,
@@ -416,6 +426,11 @@ CREATE TABLE IF NOT EXISTS mudae_dm_consent (
     consented BOOLEAN NOT NULL DEFAULT TRUE
 );
 
+CREATE TABLE IF NOT EXISTS phone_consent (
+    user_id BIGINT PRIMARY KEY,
+    consented BOOLEAN NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS honeypot_channels (
     guild_id BIGINT PRIMARY KEY,
     channel_id BIGINT NOT NULL
@@ -434,6 +449,16 @@ CREATE TABLE IF NOT EXISTS corn_reacts (
 CREATE INDEX IF NOT EXISTS corn_reacts_receiver_idx ON corn_reacts (receiver_id);
 CREATE INDEX IF NOT EXISTS corn_reacts_giver_idx ON corn_reacts (giver_id);
 CREATE INDEX IF NOT EXISTS corn_reacts_guild_idx ON corn_reacts (guild_id);
+
+-- Enforce one corn reaction per giver/message across restarts and cache expiry.
+DELETE FROM corn_reacts older
+USING corn_reacts newer
+WHERE older.giver_id = newer.giver_id
+  AND older.message_id = newer.message_id
+  AND older.id > newer.id;
+
+CREATE UNIQUE INDEX IF NOT EXISTS corn_reacts_giver_message_idx
+    ON corn_reacts (giver_id, message_id);
 
 CREATE TABLE IF NOT EXISTS banned_ips (
     ip TEXT PRIMARY KEY,
