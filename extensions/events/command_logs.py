@@ -17,8 +17,10 @@ class CommandLogs(Cog):
         if ctx.command is None:
             return
 
+        message = getattr(ctx, "message", None)
+        content = getattr(message, "content", "")
         ctx.bot.logger.info(
-            f'Command {ctx.command.name} ran by {ctx.author}. Full content: "{ctx.message.content}"'
+            f'Command {ctx.command.name} ran by {ctx.author}. Full content: "{content}"'
         )
 
     @commands.Cog.listener("on_command_completion")
@@ -31,12 +33,14 @@ class CommandLogs(Cog):
         VALUES ($1, $2, $3, $4, $5, $6)
         """
 
+        message = getattr(ctx, "message", None)
+        channel = getattr(ctx, "channel", None)
         await self.bot.pool.execute(
             sql,
             ctx.author.id,
             ctx.guild.id if ctx.guild else None,
-            ctx.channel.id,
-            ctx.message.id,
+            getattr(channel, "id", None),
+            getattr(message, "id", None),
             ctx.command.name,
             discord.utils.utcnow(),
         )

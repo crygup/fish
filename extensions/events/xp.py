@@ -20,9 +20,10 @@ if TYPE_CHECKING:
 class XPCog(Cog):
     xp_cd: commands.CooldownMapping[discord.Message]
 
-    async def add_xp(
-        self, message: discord.Message, amount: int = random.randint(10, 20)
-    ):
+    async def add_xp(self, message: discord.Message, amount: int | None = None):
+        if amount is None:
+            amount = random.randint(10, 20)
+
         sql = """
         INSERT INTO message_xp (user_id, messages, xp) 
         VALUES ($1, $2, $3)

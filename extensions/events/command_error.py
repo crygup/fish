@@ -35,8 +35,10 @@ class CommandErrors(Cog):
         if isinstance(error, ignored_errors):
             return
 
+        message = getattr(ctx, "message", None)
+        content = getattr(message, "content", "")
         ctx.bot.logger.info(
-            f'Command {command.name} errored by {ctx.author}. Full content: "{ctx.message.content}"'
+            f'Command {command.name} errored by {ctx.author}. Full content: "{content}"'
         )
         traceback.print_exception(
             type(error), error, error.__traceback__, file=sys.stderr

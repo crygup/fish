@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import re
@@ -306,6 +307,19 @@ class Tasks(Cog):
             known_ids.add(broadcaster_id)
             await self.ensure_twitch_eventsub_subscription(broadcaster_id)
 
+        # Retry deleting subscriptions whose guild follows were removed while
+        # Twitch authentication was unavailable.
+        orphaned = await self.bot.pool.fetch(
+            "SELECT broadcaster_id FROM twitch_eventsub_subscriptions "
+            "WHERE NOT EXISTS ("
+            "SELECT 1 FROM twitch_follows "
+            "WHERE twitch_follows.broadcaster_id = "
+            "twitch_eventsub_subscriptions.broadcaster_id"
+            ")"
+        )
+        for row in orphaned:
+            await self.remove_twitch_eventsub_subscription(str(row["broadcaster_id"]))
+
     async def remove_twitch_eventsub_subscription(self, broadcaster_id: str) -> None:
         remaining = await self.bot.pool.fetchval(
             "SELECT 1 FROM twitch_follows WHERE broadcaster_id = $1 LIMIT 1",
@@ -323,30 +337,37 @@ class Tasks(Cog):
             return
 
         token = await self._get_twitch_access_token()
-        if token:
-            try:
-                async with self.bot.session.delete(
-                    "https://api.twitch.tv/helix/eventsub/subscriptions",
-                    headers={
-                        "Client-ID": self.bot.config["keys"]["twitch_id"],
-                        "Authorization": f"Bearer {token}",
-                    },
-                    params={"id": subscription["subscription_id"]},
-                ) as response:
-                    if response.status not in (204, 404):
-                        self.bot.logger.warning(
-                            "Could not remove Twitch EventSub subscription for %s: status %s",
-                            broadcaster_id,
-                            response.status,
-                        )
-                        return
-            except Exception as error:
-                self.bot.logger.warning(
-                    "Could not remove Twitch EventSub subscription for %s: %s",
-                    broadcaster_id,
-                    error,
-                )
-                return
+        if not token:
+            self.bot.logger.warning(
+                "Keeping Twitch EventSub subscription %s for retry because "
+                "Twitch authentication is unavailable",
+                broadcaster_id,
+            )
+            return
+
+        try:
+            async with self.bot.session.delete(
+                "https://api.twitch.tv/helix/eventsub/subscriptions",
+                headers={
+                    "Client-ID": self.bot.config["keys"]["twitch_id"],
+                    "Authorization": f"Bearer {token}",
+                },
+                params={"id": subscription["subscription_id"]},
+            ) as response:
+                if response.status not in (204, 404):
+                    self.bot.logger.warning(
+                        "Could not remove Twitch EventSub subscription for %s: status %s",
+                        broadcaster_id,
+                        response.status,
+                    )
+                    return
+        except Exception as error:
+            self.bot.logger.warning(
+                "Could not remove Twitch EventSub subscription for %s: %s",
+                broadcaster_id,
+                error,
+            )
+            return
 
         await self.bot.pool.execute(
             "DELETE FROM twitch_eventsub_subscriptions WHERE broadcaster_id = $1",
@@ -395,16 +416,51 @@ class Tasks(Cog):
         }
         stream["id"] = str(event.get("id") or stream.get("id"))
         for row in rows:
-            if stream["id"] == row["last_stream_id"]:
-                continue
-            if await self._announce_twitch_stream(row, stream):
-                await self.bot.pool.execute(
-                    "UPDATE twitch_follows SET last_stream_id = $3 "
+            await self._announce_twitch_stream_once(row, stream)
+
+    async def _announce_twitch_stream_once(
+        self, row: Any, stream: dict[str, Any]
+    ) -> bool:
+        """Claim a stream notification before sending it.
+
+        EventSub and the reconciliation loop can process the same stream at
+        the same time. The transaction lock serializes the check, send, and
+        update, so only one path announces a given stream for a guild/channel
+        pair while failed sends remain retryable.
+        """
+        stream_id = str(stream.get("id") or "")
+        if not stream_id:
+            self.bot.logger.warning(
+                "Twitch stream event for %s did not include a stream ID",
+                row["channel_name"],
+            )
+            return False
+
+        async with self.bot.pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    f"fishie:twitch:announce:{row['guild_id']}:{row['channel_name']}",
+                )
+                previous_id = await connection.fetchval(
+                    "SELECT last_stream_id FROM twitch_follows "
                     "WHERE guild_id = $1 AND channel_name = $2",
                     row["guild_id"],
                     row["channel_name"],
-                    stream["id"],
                 )
+                if previous_id == stream_id:
+                    return False
+
+                announced = await self._announce_twitch_stream(row, stream)
+                if announced:
+                    await connection.execute(
+                        "UPDATE twitch_follows SET last_stream_id = $3 "
+                        "WHERE guild_id = $1 AND channel_name = $2",
+                        row["guild_id"],
+                        row["channel_name"],
+                        stream_id,
+                    )
+                return announced
 
     async def _announce_twitch_stream(self, row, stream: dict[str, Any]) -> bool:
         channel = self.bot.get_channel(row["announce_channel_id"])
@@ -558,17 +614,7 @@ class Tasks(Cog):
                     )
                 continue
 
-            stream_id = str(stream["id"])
-            if stream_id == row["last_stream_id"]:
-                continue
-            if await self._announce_twitch_stream(row, stream):
-                await self.bot.pool.execute(
-                    "UPDATE twitch_follows SET last_stream_id = $3 "
-                    "WHERE guild_id = $1 AND channel_name = $2",
-                    row["guild_id"],
-                    row["channel_name"],
-                    stream_id,
-                )
+            await self._announce_twitch_stream_once(row, stream)
 
     async def set_spotify_key(self):
         url = "https://accounts.spotify.com/api/token"
@@ -611,7 +657,16 @@ class Tasks(Cog):
 
     @tasks.loop(minutes=30.0)
     async def set_key_task(self):
-        await self.set_spotify_key()
+        try:
+            await self.set_spotify_key()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self.bot.logger.warning("Could not refresh Spotify client token: %s", error)
+
+    @set_key_task.before_loop
+    async def before_set_key_task(self):
+        await self.bot.wait_until_ready()
 
     async def cog_unload(self):
         self.set_key_task.cancel()
