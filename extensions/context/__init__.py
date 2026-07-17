@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from copy import deepcopy
 from io import StringIO
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generic, Optional, TypeVar
@@ -58,7 +57,10 @@ class ConfirmationView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         if self.delete_after and self.message:
-            await self.message.delete()
+            try:
+                await self.message.delete()
+            except discord.HTTPException:
+                pass
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(
@@ -80,13 +82,15 @@ class ConfirmationView(discord.ui.View):
 
 
 class DisambiguatorView(discord.ui.View, Generic[T]):
-    message: discord.Message
-    selected: T
+    message: Optional[discord.Message]
+    selected: Optional[T]
 
     def __init__(self, ctx: Context, data: list[T], entry: Callable[[T], Any]):
         super().__init__()
         self.ctx: Context = ctx
         self.data: list[T] = data
+        self.message = None
+        self.selected = None
 
         options = []
         for i, x in enumerate(data):
@@ -107,16 +111,31 @@ class DisambiguatorView(discord.ui.View, Generic[T]):
             return True
 
         await interaction.response.send_message(
-            "This confirmation dialog is not for you.", ephemeral=True
+            "This selection menu is not for you.", ephemeral=True
         )
         return False
+
+    async def on_timeout(self) -> None:
+        if not self.message:
+            return
+
+        try:
+            if self.message.flags.ephemeral:
+                await self.message.edit(view=None)
+            else:
+                await self.message.delete()
+                self.ctx._previous_message = None
+        except discord.HTTPException:
+            pass
 
     async def on_select_submit(self, interaction: discord.Interaction):
         index = int(self.select.values[0])
         self.selected = self.data[index]
         await interaction.response.defer()
-        if not self.message.flags.ephemeral:
-            await self.message.delete()
+        message = self.message
+        if message is not None and not message.flags.ephemeral:
+            await message.delete()
+            self.ctx._previous_message = None
 
         self.stop()
 
@@ -142,7 +161,7 @@ class Context(commands.Context["Fishie"]):
         cancel_label: str = "Cancel",
         **kwargs,
     ) -> Optional[discord.Message]:
-        author_id = author_id or self.author.id
+        author_id = self.author.id if author_id is None else author_id
         view = ConfirmationView(
             timeout=timeout,
             delete_after=delete_after,
@@ -154,12 +173,15 @@ class Context(commands.Context["Fishie"]):
         view.message = await self.send(message, view=view, **kwargs)
         await view.wait()
         if view.value:
+            if delete_after:
+                self._previous_message = None
             return view.message
         else:
             try:
                 await view.message.delete()
-            except:
+            except discord.HTTPException:
                 pass
+            self._previous_message = None
 
             return None
 
@@ -182,6 +204,8 @@ class Context(commands.Context["Fishie"]):
             ephemeral=ephemeral,
         )
         await view.wait()
+        if view.selected is None:
+            raise commands.BadArgument("Selection timed out.")
         return view.selected
 
     async def trigger_typing(
@@ -189,13 +213,17 @@ class Context(commands.Context["Fishie"]):
     ) -> Typing | DeferTyping | None:
         try:
             return super().typing(ephemeral=ephemeral)
-        except:
+        except (AttributeError, RuntimeError, TypeError):
             return
 
     @property
     def get_prefix(self):
         prefix = self.prefix
-        if re.search(f"^{prefix} ", self.message.content):
+        if (
+            prefix
+            and not prefix.endswith(" ")
+            and self.message.content.startswith(f"{prefix} ")
+        ):
             return f"{prefix} "
 
         return prefix
@@ -253,6 +281,7 @@ class Context(commands.Context["Fishie"]):
             except discord.HTTPException:
                 self._previous_message = None
                 self._previous_message = m = await super().send(content, **kwargs)
+                self._message_count += 1
                 return m
 
         self._previous_message = m = await super().send(content, **kwargs)
@@ -261,18 +290,30 @@ class Context(commands.Context["Fishie"]):
 
     @property
     def _previous_message(self) -> Optional[discord.Message]:
-        if self.message:
+        if self.message or self.interaction:
             try:
-                return self.bot.messages[repr(self)]
+                return self.bot.messages[self._message_cache_key]
             except KeyError:
                 return None
 
     @_previous_message.setter
     def _previous_message(self, message: Optional[discord.Message]) -> None:
         if isinstance(message, discord.Message):
-            self.bot.messages[repr(self)] = message
+            self.bot.messages[self._message_cache_key] = message
         else:
-            self.bot.messages.pop(repr(self), None)
+            self.bot.messages.pop(self._message_cache_key, None)
+
+    @property
+    def _message_cache_key(self) -> str:
+        """Return a stable key for responses belonging to this context."""
+        if self.message:
+            return (
+                "<extensions.context bound to message "
+                f"({self.channel.id}-{self.message.id}-0)>"
+            )
+        if self.interaction:
+            return f"<extensions.context bound to interaction {self.interaction.id}>"
+        return repr(self)
 
     def __repr__(self) -> str:
         if self.message:

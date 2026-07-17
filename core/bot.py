@@ -8,6 +8,7 @@ import sys
 import traceback
 from io import StringIO
 from logging import Logger
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -55,10 +56,7 @@ async def get_prefix(bot: Fishie, message: discord.Message) -> List[str]:
     if message.guild is None:
         return commands.when_mentioned_or(*default)(bot, message)
 
-    try:
-        prefixes = bot.db_cache.prefixes[message.guild.id]
-    except:  # SHUT UP
-        prefixes = []
+    prefixes = bot.db_cache.prefixes.get(message.guild.id, [])
 
     packed = default + list(prefixes)
 
@@ -79,7 +77,7 @@ class Fishie(commands.Bot):
     cached_honeypots: set[int] = set()
     cached_banned_ips: set[str] = set()
     pokemon: List[str]
-    error_logs: discord.Webhook
+    error_logs: discord.Webhook | None
 
     def __init__(
         self,
@@ -109,6 +107,7 @@ class Fishie(commands.Bot):
         self.cached_banned_ips: set[str] = set()
         self.testing: bool = testing
         self.current_downloads: List[str] = []
+        self.error_logs = None
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(
             60.0, 60.0, commands.BucketType.default
         )
@@ -116,9 +115,10 @@ class Fishie(commands.Bot):
             maxsize=1000, ttl=300.0
         )  # {repr(ctx): message(from ctx.send) }
         self.support_invite: str = f"https://discord.gg/Fct5UGadcb"
-        self.lfm_api = f"http://ws.audioscrobbler.com/2.0/?api_key={self.config['keys']['lastfm']}&format=json"
+        self.lfm_api = "https://ws.audioscrobbler.com/2.0/"
+        self.lastfm_api_key = str(self.config["keys"]["lastfm"])
         self.lastfm_response_cache: TTLCache[tuple[tuple[str, str], ...], Any] = (
-            TTLCache(maxsize=512, ttl=30)
+            TTLCache[tuple[tuple[str, str], ...], Any](maxsize=512, ttl=30)
         )
 
         super().__init__(
@@ -193,14 +193,22 @@ class Fishie(commands.Bot):
 
         excinfo = self.redact(excinfo)
 
-        if len(excinfo) > 2000:
+        formatted = f"```py\n{excinfo}\n```"
+        if len(formatted) > 2000:
             files = [self.too_big(excinfo)]
-            excinfo = "File too large"
+            content = "File too large"
         else:
             files = []
-            excinfo = f"```py\n{excinfo}\n```"
+            content = formatted
 
-        await self.error_logs.send(content=excinfo, files=files)
+        if self.error_logs is None:
+            self.logger.error("Error webhook is not initialized; cannot send report")
+            return
+
+        try:
+            await self.error_logs.send(content=content, files=files)
+        except Exception:
+            self.logger.exception("Failed to send error report")
 
     async def on_error(self, event: str, *args: Any, **kwargs: Any) -> None:
         _, error, _ = sys.exc_info()
@@ -222,9 +230,8 @@ class Fishie(commands.Bot):
             try:
                 await self.load_extension(ext)
                 self.logger.info(f"Loaded extension: {ext}")
-            except Exception as e:
-                self.logger.warning(f"Failed to load extension: {ext}")
-                self.logger.warning(f"{e.__class__.__name__}: {str(e)}")
+            except Exception:
+                self.logger.exception(f"Failed to load extension: {ext}")
                 continue
 
     async def unload_extensions(self):
@@ -232,9 +239,8 @@ class Fishie(commands.Bot):
             try:
                 await self.unload_extension(ext)
                 self.logger.info(f"Unloaded extension: {ext}")
-            except Exception as e:
-                self.logger.warning(f"Failed to unload extension: {ext}")
-                self.logger.warning(f"{e.__class__.__name__}: {str(e)}")
+            except Exception:
+                self.logger.exception(f"Failed to unload extension: {ext}")
                 continue
 
     async def reload_extensions(self):
@@ -242,25 +248,25 @@ class Fishie(commands.Bot):
             try:
                 await self.reload_extension(ext)
                 self.logger.info(f"Reloaded extension: {ext}")
-            except Exception as e:
-                self.logger.warning(f"Failed to reload extension: {ext}")
-                self.logger.warning(f"{e.__class__.__name__}: {str(e)}")
+            except Exception:
+                self.logger.exception(f"Failed to reload extension: {ext}")
                 continue
 
     async def setup_hook(self) -> None:
-        with open("schema.sql") as fp:
+        schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
+        with schema_path.open(encoding="utf-8") as fp:
             await self.pool.execute(fp.read())
 
         self.activity = discord.CustomActivity(name="fish help")
+
+        self.error_logs = discord.Webhook.from_url(
+            self.config["webhooks"]["error_logs"], session=self.session
+        )
 
         await self.load_extensions()
         await self.populate_cache()
         await update_pokemon(self)
         self.logger.info(f"Added {len(self.pokemon):,} pokemon")
-
-        self.error_logs = discord.Webhook.from_url(
-            self.config["webhooks"]["error_logs"], session=self.session
-        )
 
     async def on_ready(self):
         if not hasattr(self, "start_time"):
@@ -295,7 +301,7 @@ class Fishie(commands.Bot):
         self,
         message: discord.Message | discord.Interaction[Fishie],
         *,
-        cls: Type[FCT] = None,
+        cls: Optional[Type[FCT]] = None,
     ) -> Context | commands.Context[Fishie]:
         new_cls = cls or self.context_cls
         return await super().get_context(message, cls=new_cls)
@@ -313,6 +319,19 @@ class Fishie(commands.Bot):
         self.logger.info("Closed aiohttp session")
 
     async def populate_cache(self):
+        self.db_cache.prefixes.clear()
+        self.db_cache.opted_out.clear()
+        self.db_cache.auto_downloads.clear()
+        self.db_cache.poketwo_guilds.clear()
+        self.db_cache.auto_reaction_guilds.clear()
+        self.db_cache.nsfw_covers.clear()
+        self.db_cache.pinboard.clear()
+        self.db_cache.lastfm.clear()
+        self.cached_roblox_templates.clear()
+        self.cached_mudae_consent.clear()
+        self.cached_honeypots.clear()
+        self.cached_banned_ips.clear()
+
         prefixes = await self.pool.fetch("""SELECT * FROM guild_prefixes""")
 
         for record in prefixes:
@@ -418,8 +437,13 @@ class Fishie(commands.Bot):
         for reaction in reactions:
             try:
                 await message.add_reaction(reaction)
-            except:
-                pass
+            except (discord.HTTPException, TypeError, ValueError) as exc:
+                self.logger.debug(
+                    "Failed to add reaction %r to message %s",
+                    reaction,
+                    message.id,
+                    exc_info=exc,
+                )
 
     @property
     def bot_permissions(self) -> discord.Permissions:
@@ -491,8 +515,17 @@ class Fishie(commands.Bot):
             except KeyError:
                 pass
 
-        async with self.session.get(self.lfm_api, params=data) as resp:
-            result = await resp.json()
+        params = dict(data)
+        params.setdefault("api_key", self.lastfm_api_key)
+        params.setdefault("format", "json")
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with self.session.get(
+            self.lfm_api, params=params, timeout=timeout
+        ) as resp:
+            resp.raise_for_status()
+            result = await resp.json(content_type=None)
+            if not isinstance(result, dict):
+                raise ValueError("Last.fm returned an invalid response")
         if cacheable and isinstance(result, dict) and not result.get("error"):
             self.lastfm_response_cache[cache_key] = result
         return result

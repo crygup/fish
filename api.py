@@ -1003,9 +1003,7 @@ async def oauth_me(
 ):
     """Return the current session, treating a missing/expired login as anonymous."""
     response.headers["Cache-Control"] = "private, no-store"
-    if not session_id and not (
-        authorization and authorization.startswith("Bearer ")
-    ):
+    if not session_id and not (authorization and authorization.startswith("Bearer ")):
         return {"authenticated": False, "user": None}
 
     try:
