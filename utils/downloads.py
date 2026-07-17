@@ -81,7 +81,9 @@ class Downloader:
         # name to a plain filename so it cannot escape the download directory
         # or inject shell syntax into cleanup/logging paths.
         safe_filename = re.sub(r"[^A-Za-z0-9._-]+", "_", str(raw_filename))
-        self.filename = safe_filename.strip("._")[:80] or secrets.token_urlsafe(8).strip("-")
+        self.filename = safe_filename.strip("._")[:80] or secrets.token_urlsafe(
+            8
+        ).strip("-")
         self.hidden = hidden
         self._duration = 0
         self._deadline: float | None = None
@@ -113,7 +115,9 @@ class Downloader:
                 raise
         communicate_task = asyncio.create_task(proc.communicate())
         try:
-            return await asyncio.wait_for(asyncio.shield(communicate_task), timeout=timeout)
+            return await asyncio.wait_for(
+                asyncio.shield(communicate_task), timeout=timeout
+            )
         except asyncio.TimeoutError as exc:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -494,9 +498,7 @@ class Downloader:
         """Run the complete download/conversion/send workflow with one deadline."""
         self._deadline = asyncio.get_running_loop().time() + DOWNLOAD_TIMEOUT
         try:
-            await asyncio.wait_for(
-                self._download_and_send(), timeout=DOWNLOAD_TIMEOUT
-            )
+            await asyncio.wait_for(self._download_and_send(), timeout=DOWNLOAD_TIMEOUT)
         except asyncio.TimeoutError:
             self._cleanup_output()
             await self.ctx.send(
