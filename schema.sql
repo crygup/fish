@@ -20,6 +20,17 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS spotify_refresh_token TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS anilist TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS anilist_access_token TEXT;
 
+CREATE TABLE IF NOT EXISTS web_sessions (
+    session_id_hash TEXT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    discord_access_token TEXT NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (now() at time zone 'utc'),
+    last_seen_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (now() at time zone 'utc')
+);
+
+CREATE INDEX IF NOT EXISTS web_sessions_expires_at_idx ON web_sessions (expires_at);
+
 CREATE TABLE IF NOT EXISTS reminders (
     id SERIAL PRIMARY KEY,
     expires TIMESTAMP,
