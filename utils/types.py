@@ -36,6 +36,7 @@ class Webhooks(TypedDict):
     images: List[str]
     error_logs: str
     messages: str
+    phone_logs: str
 
 
 class Twitter(TypedDict):
