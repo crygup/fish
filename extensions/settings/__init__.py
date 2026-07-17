@@ -327,6 +327,7 @@ class Settings(Logging, Server):
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def accounts(self, ctx: Context):
+        """View and manage your connected accounts"""
         row = await self.bot.pool.fetchrow(
             "SELECT lastfm, steam, roblox, letterboxd, anilist FROM accounts "
             "WHERE user_id = $1",
@@ -343,133 +344,6 @@ class Settings(Logging, Server):
             anilist_connected=anilist_connected,
         )
         await ctx.send(view=view)
-
-    @commands.hybrid_group(name="link", fallback="accounts")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def link(self, ctx: Context):
-        await self.accounts(ctx)
-
-    @link.command(name="lastfm")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def link_lastfm(self, ctx: Context):
-        connected = bool(
-            await self.bot.pool.fetchval(
-                "SELECT lastfm FROM accounts WHERE user_id = $1",
-                ctx.author.id,
-            )
-        )
-        await ctx.send(
-            (
-                "Use the button below to disconnect your Last.fm account."
-                if connected
-                else "Use the button below to connect your Last.fm account."
-            ),
-            view=LastfmConnectView(ctx, connected=connected),
-            ephemeral=True,
-        )
-
-    @link.command(name="steam")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def link_steam(self, ctx: Context):
-        connected = bool(
-            await self.bot.pool.fetchval(
-                "SELECT steam FROM accounts WHERE user_id = $1",
-                ctx.author.id,
-            )
-        )
-        await ctx.send(
-            (
-                "Use the button below to disconnect your Steam account."
-                if connected
-                else "Use the button below to connect your Steam account."
-            ),
-            view=SteamConnectView(ctx, connected=connected),
-            ephemeral=True,
-        )
-
-    @link.command(name="anilist")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def link_anilist(self, ctx: Context):
-        connected = bool(
-            await self.bot.pool.fetchval(
-                "SELECT anilist FROM accounts WHERE user_id = $1",
-                ctx.author.id,
-            )
-        )
-        if connected:
-            await ctx.send(
-                "Use the button below to disconnect your AniList account.",
-                view=AnilistConnectView(ctx, connected=True),
-                ephemeral=True,
-            )
-            return
-        await ctx.send(
-            "Use the button below to connect your AniList account.",
-            view=AnilistConnectView(ctx, connected=False),
-            ephemeral=True,
-        )
-
-    @link.command(name="letterboxd")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def link_letterboxd(self, ctx: Context, username: str):
-        u = username.strip().lower().rstrip("/")
-        if m := LBD_URL_RE.match(u):
-            u = m.group(1)
-        await self._set_account(ctx.author.id, "letterboxd", u)
-        await ctx.send(f"Linked Letterboxd: **{u}**", ephemeral=True)
-
-    @commands.hybrid_group(name="unlink", fallback="accounts")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def unlink(self, ctx: Context):
-        await self.accounts(ctx)
-
-    @unlink.command(name="lastfm")
-    @lastfm_command()
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def unlink_lastfm(self, ctx: Context):
-        await _disconnect_lastfm(self.bot, ctx.author.id)
-        await ctx.send("Unlinked last.fm.", ephemeral=True)
-
-    @unlink.command(name="steam")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def unlink_steam(self, ctx: Context):
-        await _disconnect_steam(self.bot, ctx.author.id)
-        await ctx.send("Unlinked Steam.", ephemeral=True)
-
-    @unlink.command(name="anilist")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def unlink_anilist(self, ctx: Context):
-        await _disconnect_anilist(self.bot, ctx.author.id)
-        await ctx.send("Unlinked AniList.", ephemeral=True)
-
-    @unlink.command(name="letterboxd")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def unlink_letterboxd(self, ctx: Context):
-        await self._clear_account(ctx.author.id, "letterboxd")
-        await ctx.send("Unlinked Letterboxd.", ephemeral=True)
-
-    async def _set_account(self, user_id, col, val):
-        await self.bot.pool.execute(
-            f'INSERT INTO accounts (user_id, "{col}") VALUES ($1, $2) '
-            f'ON CONFLICT (user_id) DO UPDATE SET "{col}" = $2',
-            user_id,
-            val,
-        )
-
-    async def _clear_account(self, user_id, col):
-        await self.bot.pool.execute(
-            f'UPDATE accounts SET "{col}" = NULL WHERE user_id = $1', user_id
-        )
 
 
 class LastfmConnectView(discord.ui.View):

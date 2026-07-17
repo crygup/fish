@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import discord
 from discord.ext import commands
@@ -10,8 +10,10 @@ from core import Cog
 from utils import AuthorView, FieldPageSource, Pager, get_or_fetch_user
 
 if TYPE_CHECKING:
+    from core import Fishie
     from extensions.context import GuildContext
     from extensions.context import Context
+    from extensions.events import Events
 
 
 def to_lower(argument: str):
@@ -104,7 +106,7 @@ class TwitchFollowView(AuthorView):
     def __init__(
         self,
         ctx: Context,
-        bot: commands.Bot,
+        bot: Fishie,
         author_id: int,
         guild_id: int,
         channel_name: str,
@@ -142,7 +144,7 @@ class TwitchFollowView(AuthorView):
 
 
 class Server(Cog):
-    @commands.hybrid_group(name="prefix", fallback="get")
+    @commands.group(name="prefix", invoke_without_command=True)
     @commands.guild_only()
     async def prefix(self, ctx: GuildContext):
         """Manage the server prefixes"""
@@ -378,7 +380,7 @@ class Server(Cog):
                 "Enter a valid Twitch channel name (letters, numbers, and underscores only)."
             )
 
-        events = self.bot.get_cog("Events")
+        events = cast("Events | None", self.bot.get_cog("Events"))
         if events is None or not hasattr(events, "_get_twitch_user"):
             raise commands.BadArgument("Twitch monitoring is not available right now.")
         twitch_user = await events._get_twitch_user(channel_name)
@@ -495,7 +497,7 @@ class Server(Cog):
                 f"This server is not following **{channel_name}**."
             )
         if broadcaster_id:
-            events = self.bot.get_cog("Events")
+            events = cast("Events | None", self.bot.get_cog("Events"))
             if events is not None and hasattr(
                 events, "remove_twitch_eventsub_subscription"
             ):
