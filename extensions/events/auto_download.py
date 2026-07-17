@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import VIDEOS_RE, Downloader, TenorUrlConverter, to_image, TENOR_PAGE_RE
+from utils import (
+    KLIPY_RE,
+    TENOR_PAGE_RE,
+    VIDEOS_RE,
+    Downloader,
+    KlipyUrlConverter,
+    TenorUrlConverter,
+    to_image,
+)
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -28,10 +35,11 @@ class AutoDownload(Cog):
 
         video_match = VIDEOS_RE.search(message.content)
         tenor_match = TENOR_PAGE_RE.search(message.content)
+        klipy_match = KLIPY_RE.search(message.content)
+        has_video_match = bool(video_match and video_match.group(0))
 
-        if not tenor_match:
-            if video_match is None or video_match and video_match.group(0) == "":
-                return
+        if not tenor_match and not klipy_match and not has_video_match:
+            return
 
         bucket = self.cd_mapping.get_bucket(message)
 
@@ -53,6 +61,15 @@ class AutoDownload(Cog):
 
                 return
 
+            except commands.BadArgument:
+                pass
+
+        if klipy_match:
+            try:
+                url = await KlipyUrlConverter().convert(ctx, klipy_match.group(0))
+                async with ctx.typing(ephemeral=True):
+                    await Downloader(ctx, url, format="gif").download()
+                return
             except commands.BadArgument:
                 pass
 
