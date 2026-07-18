@@ -32,7 +32,9 @@ topMode: TypeAlias = Union[
     Literal["gettopartists"], Literal["gettopalbums"], Literal["gettoptracks"]
 ]
 modeName = {"gettopartists": "artist", "gettopalbums": "album", "gettoptracks": "track"}
-SPOTIFY_COVER_CACHE: TTLCache[tuple[str, str], str] = TTLCache(maxsize=512, ttl=3600)
+SPOTIFY_COVER_CACHE: TTLCache[tuple[str, str], str] = TTLCache[tuple[str, str], str](
+    maxsize=512, ttl=3600
+)
 
 
 class ChartEmbed(ui.LayoutView):

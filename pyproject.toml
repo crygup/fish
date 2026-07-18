@@ -3,3 +3,5 @@ reportPrivateUsage = "none"
 typeCheckingMode = "basic"
 strictParameterNoneValue = false
 pythonVersion = "3.13.5"
+venvPath = "."
+venv = "venv"

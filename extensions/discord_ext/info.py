@@ -6,6 +6,7 @@ import random
 from typing import (
     TYPE_CHECKING,
     Any,
+    cast,
     Dict,
     List,
     Literal,
@@ -223,8 +224,8 @@ class RoleDropdown(discord.ui.Select):
                 embed.add_field(name="Bots", value=str(len(bots)), inline=True)
 
                 if (
-                    self.ctx.author.guild_permissions.manage_roles
-                    and self.ctx.guild.me.guild_permissions.manage_roles
+                    cast(Any, self.ctx.author).guild_permissions.manage_roles
+                    and cast(Any, self.ctx.guild).me.guild_permissions.manage_roles
                 ):
                     for btn in RoleMemberButtons(self.ctx, self.role).children:
                         base_view.add_item(btn)
@@ -245,7 +246,7 @@ class RoleMemberButtons(discord.ui.View):
     async def add_member(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        if not interaction.user.guild_permissions.manage_roles:
+        if not cast(Any, interaction.user).guild_permissions.manage_roles:
             return await interaction.response.send_message(
                 "You need Manage Roles permission.", ephemeral=True
             )
@@ -256,7 +257,7 @@ class RoleMemberButtons(discord.ui.View):
     async def remove_member(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        if not interaction.user.guild_permissions.manage_roles:
+        if not cast(Any, interaction.user).guild_permissions.manage_roles:
             return await interaction.response.send_message(
                 "You need Manage Roles permission.", ephemeral=True
             )
@@ -277,7 +278,7 @@ class _RoleMemberModal(discord.ui.Modal, title="Member ID"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            member = await interaction.guild.fetch_member(
+            member = await cast(Any, interaction.guild).fetch_member(
                 int(self.member_id.value.strip())
             )
         except (ValueError, discord.HTTPException):
@@ -1294,7 +1295,9 @@ class Info(Cog):
         embed.set_author(
             name=f"{role.name}  ·  {role.id}",
             icon_url=(
-                ctx.guild.icon.url if ctx.guild.icon else ctx.author.display_avatar.url
+                cast(Any, ctx.guild).icon.url
+                if cast(Any, ctx.guild).icon
+                else ctx.author.display_avatar.url
             ),
         )
         info = f"""

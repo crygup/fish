@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 import time
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, cast
 
 import discord
 from discord.ext import commands, tasks
@@ -527,12 +527,12 @@ class Tasks(Cog):
         view_type = type("TwitchAnnouncementView", (discord.ui.LayoutView,), {})
         view = view_type(timeout=None)
         view.add_item(container)
-        send_kwargs = {"view": view}
+        send_kwargs: dict[str, Any] = {"view": view}
         if row["message_template"]:
             send_kwargs["allowed_mentions"] = discord.AllowedMentions.all()
 
         try:
-            await channel.send(**send_kwargs)
+            await cast(Any, channel).send(**send_kwargs)
         except Exception as error:
             self.bot.logger.warning(
                 "Could not announce Twitch stream %s in guild %s: %s",

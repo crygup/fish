@@ -406,7 +406,9 @@ class Commands(Cog):
         status_nice = status if status != "***dnd***" else f"on ***Do Not Disturb***"
         await ctx.send(f"{user} was last seen {status_nice} {delta} ago.")
 
-    @commands.hybrid_group(name="joins", invoke_without_command=True, fallback="user")
+    @commands.hybrid_group(  # type: ignore[call-arg]
+        name="joins", invoke_without_command=True, fallback="user"  # type: ignore[call-arg]
+    )
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True, private_channels=True)
     async def joins(self, ctx: Context, *, user: discord.User = commands.Author):
@@ -496,13 +498,20 @@ class Commands(Cog):
 
         if not guild_total and not global_total:
             if ctx.guild and self.bot.logging:
-                await self.bot.logging.add_join(user)
-                guild_total = 1
-                global_total = 1
+                member = ctx.guild.get_member(user.id)
+                if member is not None:
+                    await self.bot.logging.add_join(member)
+                    guild_total = 1
+                    global_total = 1
+                else:
+                    await ctx.send(f"**{user.display_name}** has no join records yet!")
+                    return
             else:
                 await ctx.send(f"**{user.display_name}** has no join records yet!")
                 return
 
+        guild_name = ctx.guild.name if ctx.guild else "this server"
         await ctx.send(
-            f"**{utils.escape_markdown(user.display_name)}** has joined {ctx.guild.name} {plural(int(guild_total)):time}.\n-# \- *{plural(int(global_total)):join} across all servers*"
+            f"**{utils.escape_markdown(user.display_name)}** has joined {guild_name} "
+            f"{plural(int(guild_total)):time}.\n-# *{plural(int(global_total)):join} across all servers*"
         )

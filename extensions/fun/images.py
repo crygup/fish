@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from io import BytesIO
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import discord
 from discord import ui, MediaGalleryItem, app_commands
@@ -154,7 +154,7 @@ def _caption_frame(img: Image.Image, caption_text: str) -> Image.Image:
     if not lines:
         lines = [caption_text]
 
-    line_h = font.getbbox("Ag")[3]
+    line_h = int(font.getbbox("Ag")[3])
     gap = max(2, line_h // 5)
     box_h = len(lines) * (line_h + gap) + padding * 2
 
@@ -301,7 +301,7 @@ class Images(Cog):
             import time
 
             started = time.time()
-            img_data = await to_image(ctx.session, image_url, bytes=True)
+            img_data = cast(bytes, await to_image(ctx.session, image_url, bytes=True))
             buf, filename = await make_caption(img_data, caption_text)
 
             elapsed = time.time() - started
@@ -430,7 +430,7 @@ class Images(Cog):
             import time as _time
 
             started = _time.time()
-            img_data = await to_image(ctx.session, image_str, bytes=True)
+            img_data = cast(bytes, await to_image(ctx.session, image_str, bytes=True))
             result = await _speed_video(img_data, speed_val)
 
             elapsed = _time.time() - started

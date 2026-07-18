@@ -252,16 +252,17 @@ class KlipyUrlConverter(commands.Converter):
         scraper = BeautifulSoup(text, "html.parser")
         candidates: list[str] = []
         for video in scraper.find_all("video"):
-            if src := video.get("src"):
+            src = video.get("src")
+            if isinstance(src, str):
                 candidates.append(src)
-            candidates.extend(
-                source.get("src")
-                for source in video.find_all("source")
-                if source.get("src")
-            )
+            for source in video.find_all("source"):
+                source_url = source.get("src")
+                if isinstance(source_url, str):
+                    candidates.append(source_url)
         for meta in scraper.find_all("meta"):
             if meta.get("property") in {"og:video", "og:video:url", "og:image"}:
-                if content := meta.get("content"):
+                content = meta.get("content")
+                if isinstance(content, str):
                     candidates.append(content)
         for candidate in candidates:
             if candidate.startswith("//"):
