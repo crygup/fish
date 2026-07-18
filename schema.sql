@@ -196,6 +196,9 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     PRIMARY KEY (guild_id)
 );
 
+ALTER TABLE guild_settings
+    ADD COLUMN IF NOT EXISTS dehoist BOOLEAN DEFAULT FALSE;
+
 CREATE TABLE IF NOT EXISTS guild_log_channels (
     guild_id BIGINT NOT NULL,
     event TEXT NOT NULL,

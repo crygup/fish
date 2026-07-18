@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 from typing import TYPE_CHECKING, Callable, Optional, TypeVar
 
@@ -9,6 +10,7 @@ from typing_extensions import Annotated
 from discord import app_commands
 
 from core import Cog
+from extensions.context import ConfirmationView
 from utils import time as time_utils
 from .honeypot import Honeypot
 from .logger import Logger
@@ -20,6 +22,7 @@ if TYPE_CHECKING:
 F = TypeVar("F", bound=Callable[..., object])
 
 MAX_MUTE_MINUTES = 20160  # 2 weeks
+DEHOIST_CHARS = frozenset("!.@?#$*()_-'")
 
 
 def mod_target(perm: str):
@@ -69,6 +72,158 @@ class Moderation(Logger, Honeypot):
 
     def __init__(self, bot: Fishie):
         self.bot = bot
+        self._dehoist_guilds: set[int] = set()
+
+    async def cog_load(self) -> None:
+        rows = await self.bot.pool.fetch(
+            "SELECT guild_id FROM guild_settings WHERE dehoist = TRUE"
+        )
+        self._dehoist_guilds = {int(row["guild_id"]) for row in rows}
+
+    @staticmethod
+    def _can_dehoist(member: discord.Member, me: discord.Member) -> bool:
+        if (
+            member.bot
+            or member.id in {member.guild.owner_id, me.id}
+            or member.top_role >= me.top_role
+        ):
+            return False
+        if me.guild_permissions.administrator:
+            return True
+        if member.guild_permissions.administrator:
+            return False
+        return not (member.guild_permissions.value & ~me.guild_permissions.value)
+
+    async def _dehoist_member(
+        self, member: discord.Member, *, name: str | None = None
+    ) -> bool:
+        me = member.guild.me
+        if me is None or not me.guild_permissions.manage_nicknames:
+            return False
+        if not self._can_dehoist(member, me):
+            return False
+
+        name = name or member.display_name
+        if name.startswith("| ") or not name or name[0] not in DEHOIST_CHARS:
+            return False
+
+        try:
+            await member.edit(
+                nick=f"| {name}"[:32],
+                reason="Dehoist member name",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            return False
+        return True
+
+    @commands.Cog.listener("on_member_update")
+    async def dehoist_member_update(
+        self, before: discord.Member, after: discord.Member
+    ) -> None:
+        if after.guild.id not in self._dehoist_guilds:
+            return
+        username_changed = before.name != after.name and bool(after.nick)
+        await self._dehoist_member(
+            after,
+            name=after.name if username_changed else None,
+        )
+
+    async def _scan_dehoist(
+        self, guild: discord.Guild, message: discord.Message
+    ) -> tuple[int, int]:
+        await message.edit(content="Dehoist scan is fetching the full member list...")
+        try:
+            members = [member async for member in guild.fetch_members(limit=None)]
+        except discord.HTTPException:
+            members = list(guild.members)
+        total = len(members)
+        processed = 0
+        changed = 0
+        lock = asyncio.Lock()
+        semaphore = asyncio.Semaphore(3)
+        last_update = 0.0
+
+        async def update_progress(force: bool = False) -> None:
+            nonlocal last_update
+            now = asyncio.get_running_loop().time()
+            if not force and processed < total and now - last_update < 2:
+                return
+            last_update = now
+            await message.edit(
+                content=(
+                    f"Dehoist scan in progress: **{processed:,}/{total:,}** "
+                    f"members checked • **{changed:,}** updated."
+                )
+            )
+
+        async def process(member: discord.Member) -> None:
+            nonlocal processed, changed
+            async with semaphore:
+                updated = await self._dehoist_member(member)
+            async with lock:
+                processed += 1
+                if updated:
+                    changed += 1
+                await update_progress()
+
+        await asyncio.gather(*(process(member) for member in members))
+        await update_progress(force=True)
+        return total, changed
+
+    @commands.hybrid_command(name="dehoist")
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    async def dehoist(self, ctx: GuildContext) -> None:
+        """Toggle automatic dehoisting for members in this server."""
+        guild = ctx.guild
+        if guild.me is None or not guild.me.guild_permissions.manage_nicknames:
+            raise commands.BotMissingPermissions(["manage_nicknames"])
+
+        if guild.id in self._dehoist_guilds:
+            await self.bot.pool.execute(
+                "UPDATE guild_settings SET dehoist = FALSE WHERE guild_id = $1",
+                guild.id,
+            )
+            self._dehoist_guilds.remove(guild.id)
+            await ctx.send("Dehoist is now disabled for this server.")
+            return
+
+        await self.bot.pool.execute(
+            """
+            INSERT INTO guild_settings (guild_id, dehoist)
+            VALUES ($1, TRUE)
+            ON CONFLICT (guild_id) DO UPDATE SET dehoist = TRUE
+            """,
+            guild.id,
+        )
+        self._dehoist_guilds.add(guild.id)
+        view = ConfirmationView(
+            timeout=60,
+            author_id=ctx.author.id,
+            ctx=ctx,
+            delete_after=False,
+            confirm_label="Scan all members",
+            cancel_label="Only future updates",
+        )
+        view.message = await ctx.send(
+            "Dehoist is enabled. Do you want to scan existing members now?",
+            view=view,
+        )
+        await view.wait()
+        if view.value is not True:
+            await ctx.send(
+                "Dehoist is enabled for future name updates. No member scan was run."
+            )
+            return
+
+        total, changed = await self._scan_dehoist(guild, view.message)
+        await view.message.edit(
+            content=(
+                f"Dehoist is enabled. Checked **{total:,}** members and updated "
+                f"**{changed:,}** name{'s' if changed != 1 else ''}."
+            ),
+            view=None,
+        )
 
     async def _resolve_command_for_config(
         self, ctx: GuildContext, command_name: str
