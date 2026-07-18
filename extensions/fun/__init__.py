@@ -238,11 +238,11 @@ class Fun(About, Corn, Images):
         )
 
     @commands.command(name="hattori")
-    @commands.cooldown(1, 5)
+    @commands.cooldown(1, 3)
     async def hattori(self, ctx: Context):
         """hattori"""
-
-        await ctx.send(file=discord.File(rf"files/images/hattori.png", "hattori.png"))
+        name = f"hattori2" if random.randint(0, 15) == 6 else "hattori"
+        await ctx.send(file=discord.File(rf"files/images/{name}.png", "hattori.png"))
 
     @commands.command(name="merica", aliases=("cm",))
     @commands.cooldown(1, 5)

@@ -21,7 +21,9 @@ VIDEOS_RE: Pattern[str] = comp(
 # sites
 TIKTOK_RE: Pattern[str] = comp(r"https://(vt|www|vm|m|vk)?.?tiktok.com/(@?[a-zA-z0-9_.]{1,})?/?(@?[a-zA-z0-9_.]{1,})?/?(@?[a-zA-z0-9_.]{1,})?/")
 INSTAGRAM_RE: Pattern[str] = comp(r"https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,}")
-TWITCH_RE: Pattern[str] = comp(r"https?://clips.twitch.tv/[a-zA-Z0-9_-]")
+TWITCH_RE: Pattern[str] = comp(
+    r"https?://(?:clips\.twitch\.tv/[a-zA-Z0-9_-]+|(?:www\.)?twitch\.tv/[A-Za-z0-9_]{2,25}/clip/[A-Za-z0-9_-]+)"
+)
 # Twitter-compatible mirrors expose the same status URL structure and media.
 TWITTER_RE: Pattern[str] = comp(
     r"https?://(?:www\.)?(?:twitter|x|fxtwitter|vxtwitter|fixupx|girlcockx)\.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19,}"
@@ -31,7 +33,7 @@ YOUTUBE_LIVE_RE: Pattern[str] = comp(
     r"https?://(?:www\.)?youtube\.com/(?:live/[A-Za-z0-9_-]+|(?:@[A-Za-z0-9_.-]+|channel/[A-Za-z0-9_-]+|c/[A-Za-z0-9_-]+|user/[A-Za-z0-9_-]+)/live)(?:[/?#]|$)"
 )
 TWITCH_LIVE_RE: Pattern[str] = comp(
-    r"https?://(?:www\.)?twitch\.tv/(?!directory(?:[/?#]|$)|videos?(?:[/?#]|$)|clips?(?:[/?#]|$)|search(?:[/?#]|$)|downloads(?:[/?#]|$))[A-Za-z0-9_]{2,25}(?:[/?#]|$)"
+    r"https?://(?:www\.)?twitch\.tv/(?!directory(?:[/?#]|$)|videos?(?:[/?#]|$)|clips?(?:[/?#]|$)|search(?:[/?#]|$)|downloads(?:[/?#]|$)|[A-Za-z0-9_]{2,25}/clip(?:[/?#]|$))[A-Za-z0-9_]{2,25}(?:[/?#]|$)"
 )
 KICK_LIVE_RE: Pattern[str] = comp(
     r"https?://(?:www\.)?kick\.com/[A-Za-z0-9][A-Za-z0-9_-]{1,24}(?:[/?#]|$)"
