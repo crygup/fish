@@ -14,10 +14,11 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import aiohttp
+import discord
 from fastapi import (
     Body,
     Cookie,
@@ -250,6 +251,8 @@ def _anilist_state(
 
 
 def _anilist_authorization_url(user_id: int, source: str) -> str:
+    if bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
     state = _anilist_state(user_id, source)
     return "https://anilist.co/api/v2/oauth/authorize?" + urlencode(
         {
@@ -354,7 +357,7 @@ async def _refresh_discord_accounts_message(
     try:
         from extensions.settings import ManageAccountsView
 
-        channel = bot_ref.get_channel(channel_id)
+        channel: Any = bot_ref.get_channel(channel_id)
         if channel is None:
             channel = await bot_ref.fetch_channel(channel_id)
         message = await channel.fetch_message(message_id)
@@ -367,7 +370,7 @@ async def _refresh_discord_accounts_message(
         ctx = SimpleNamespace(bot=bot_ref, author=author)
         await message.edit(
             view=ManageAccountsView(
-                ctx,
+                cast(Any, ctx),
                 row=row,
                 lastfm_connected=bool(row and row["lastfm"]),
                 steam_connected=bool(row and row["steam"]),
@@ -388,7 +391,8 @@ def _schedule_discord_accounts_refresh(
         return
     tasks = getattr(bot_ref, "_oauth_refresh_tasks", None)
     if tasks is None:
-        tasks = bot_ref._oauth_refresh_tasks = set()
+        tasks = set()
+        setattr(bot_ref, "_oauth_refresh_tasks", tasks)
     task = asyncio.create_task(
         _refresh_discord_accounts_message(user_id, channel_id, message_id)
     )
@@ -498,6 +502,9 @@ async def twitch_eventsub(request: Request):
     """Receive verified Twitch EventSub stream notifications."""
     body = await request.body()
     _verify_twitch_eventsub(request, body)
+    if bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
+    bot = bot_ref
 
     try:
         payload = json.loads(body)
@@ -505,7 +512,7 @@ async def twitch_eventsub(request: Request):
         raise HTTPException(400, "Invalid Twitch EventSub payload")
 
     message_type = request.headers.get("Twitch-Eventsub-Message-Type")
-    bot_ref.logger.info(
+    bot.logger.info(
         "Received Twitch EventSub message type=%s", message_type or "unknown"
     )
     if message_type == "webhook_callback_verification":
@@ -514,7 +521,7 @@ async def twitch_eventsub(request: Request):
             raise HTTPException(400, "Missing Twitch EventSub challenge")
         subscription = payload.get("subscription")
         if isinstance(subscription, dict) and subscription.get("id"):
-            await bot_ref.pool.execute(
+            await bot.pool.execute(
                 "UPDATE twitch_eventsub_subscriptions "
                 "SET status = 'enabled', updated_at = now() "
                 "WHERE subscription_id = $1",
@@ -546,7 +553,7 @@ async def twitch_eventsub(request: Request):
     event = dict(event)
     event["type"] = subscription.get("type")
 
-    events_cog = bot_ref.get_cog("Events") if bot_ref else None
+    events_cog: Any = bot_ref.get_cog("Events")
     if events_cog is None or not hasattr(events_cog, "handle_twitch_event"):
         raise HTTPException(503, "Twitch event handler is not ready")
 
@@ -569,12 +576,12 @@ async def twitch_eventsub(request: Request):
                     message_id,
                 )
             except Exception as cleanup_error:
-                bot_ref.logger.warning(
+                bot.logger.warning(
                     "Could not requeue failed Twitch EventSub event %s: %s",
                     message_id,
                     cleanup_error,
                 )
-            bot_ref.logger.warning("Twitch EventSub event processing failed: %s", error)
+            bot.logger.warning("Twitch EventSub event processing failed: %s", error)
 
     asyncio.create_task(process_event())
     return {"ok": True}
@@ -678,7 +685,10 @@ async def get_user_guilds(
                 {
                     "id": str(guild.id),
                     "name": guild.name,
-                    "icon": str(guild.icon) if guild.icon else None,
+                    # Use a static icon for the dashboard. Animated Discord
+                    # GIF frames can leave transparent-frame ghosting in the
+                    # browser while the image is being updated.
+                    "icon": str(guild.icon.with_format("png")) if guild.icon else None,
                     "opted_out": row["items"] if row else [],
                 }
             )
@@ -695,6 +705,127 @@ async def get_guild_opted_out(guild_id: int):
         "SELECT items FROM guild_opted_out WHERE guild_id = $1", guild_id
     )
     return {"items": row["items"] if row else []}
+
+
+@app.get("/user/{user_id}/highlights")
+async def get_user_highlights(
+    user_id: int,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    """Return a user's highlights for every guild they share with Fishie."""
+    me = await _verify_token(authorization, session_id)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "You can only view your own highlights")
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+
+    # Large guilds are not always fully member-cached, so fall back to a
+    # bounded member lookup instead of silently returning an empty tab.
+    semaphore = asyncio.Semaphore(8)
+
+    async def find_shared_guild(guild: Any) -> Any | None:
+        if guild.get_member(user_id) is not None:
+            return guild
+        async with semaphore:
+            try:
+                await guild.fetch_member(user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return None
+        return guild
+
+    candidates = await asyncio.gather(
+        *(find_shared_guild(guild) for guild in bot_ref.guilds)
+    )
+    shared_guilds = [guild for guild in candidates if guild is not None]
+    guild_ids = [guild.id for guild in shared_guilds]
+    rows: list[Any] = []
+    if guild_ids:
+        rows = await _check_pool().fetch(
+            "SELECT guild_id, word FROM highlights "
+            "WHERE user_id = $1 AND guild_id = ANY($2::BIGINT[]) "
+            "ORDER BY guild_id, created_at, word_normalized",
+            user_id,
+            guild_ids,
+        )
+    words_by_guild: dict[int, list[str]] = {guild_id: [] for guild_id in guild_ids}
+    for row in rows:
+        words_by_guild[int(row["guild_id"])].append(str(row["word"]))
+    return {
+        "guilds": [
+            {
+                "id": str(guild.id),
+                "name": guild.name,
+                "icon": str(guild.icon.with_format("png")) if guild.icon else None,
+                "highlights": words_by_guild[guild.id],
+            }
+            for guild in sorted(shared_guilds, key=lambda item: item.name.casefold())
+        ]
+    }
+
+
+@app.post("/user/{user_id}/highlights")
+async def set_user_highlights(
+    user_id: int,
+    payload: dict = Body(...),
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    """Replace a user's highlights for one shared guild."""
+    me = await _verify_token(authorization, session_id)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "You can only manage your own highlights")
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    raw_guild_id = payload.get("guild_id")
+    if not isinstance(raw_guild_id, (str, int)):
+        raise HTTPException(400, "guild_id must be a guild ID")
+    try:
+        guild_id = int(raw_guild_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "guild_id must be a guild ID")
+    guild: Any = bot_ref.get_guild(guild_id)
+    if guild is None or guild.get_member(user_id) is None:
+        raise HTTPException(403, "You must share that server with Fishie")
+
+    raw_words = payload.get("words", [])
+    if not isinstance(raw_words, list):
+        raise HTTPException(400, "words must be a list")
+    if len(raw_words) > 100:
+        raise HTTPException(400, "You can have up to 100 highlights per server")
+    words: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw_word in raw_words:
+        if not isinstance(raw_word, str):
+            continue
+        word = " ".join(raw_word.split())
+        normalized = word.casefold()
+        if not word or len(word) > 100 or normalized in seen:
+            continue
+        seen.add(normalized)
+        words.append((word, normalized))
+
+    pool = _check_pool()
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "DELETE FROM highlights WHERE user_id = $1 AND guild_id = $2",
+                user_id,
+                guild_id,
+            )
+            if words:
+                await connection.executemany(
+                    "INSERT INTO highlights "
+                    "(user_id, guild_id, word, word_normalized) VALUES ($1, $2, $3, $4)",
+                    [
+                        (user_id, guild_id, word, normalized)
+                        for word, normalized in words
+                    ],
+                )
+    tools: Any = bot_ref.get_cog("Tools")
+    if tools is not None and hasattr(tools, "_invalidate_highlights"):
+        tools._invalidate_highlights(guild_id)
+    return {"guild_id": str(guild_id), "highlights": [word for word, _ in words]}
 
 
 @app.post("/guild/{guild_id}/opted-out")
@@ -842,7 +973,7 @@ async def list_commands():
     for cmd in bot_ref.commands:
         add_cmd(cmd)
         if hasattr(cmd, "walk_commands"):
-            for sub in cmd.walk_commands():
+            for sub in cast(Any, cmd).walk_commands():
                 add_cmd(sub)
     return {"commands": sorted(cmds, key=lambda c: (c["category"], c["name"]))}
 
@@ -2087,6 +2218,388 @@ async def set_guild_settings(
             bot_ref.cached_honeypots.add(updates["honeypot"])
 
     return {"settings": updates}
+
+
+def _dashboard_command_list():
+    if not bot_ref:
+        return []
+    bot = bot_ref
+    commands_by_name = {}
+
+    def add_command(command):
+        if (
+            command.hidden
+            or command.cog_name in ("Owner", "Jishaku")
+            or bot._command_disable_excluded(command)
+        ):
+            return
+        name = command.qualified_name.casefold()
+        commands_by_name[name] = {
+            "name": command.qualified_name,
+            "description": command.description or command.short_doc or "",
+        }
+
+    for command in bot_ref.commands:
+        add_command(command)
+    return sorted(commands_by_name.values(), key=lambda item: item["name"].casefold())
+
+
+async def _managed_guild(
+    guild_id: int, authorization: str | None, session_id: str | None
+):
+    me = await _verify_token(authorization, session_id)
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    guild = bot_ref.get_guild(guild_id)
+    if not guild:
+        raise HTTPException(404, "Guild not found")
+    member = guild.get_member(int(me["id"]))
+    if not member or not member.guild_permissions.manage_guild:
+        raise HTTPException(403, "Need Manage Server permission")
+    return guild
+
+
+@app.get("/guild/{guild_id}/command-disables")
+async def get_command_disables(
+    guild_id: int,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    pool = _check_pool()
+    rows = await pool.fetch(
+        "SELECT command, channel_id FROM command_disables WHERE guild_id = $1",
+        guild_id,
+    )
+    return {
+        "commands": _dashboard_command_list(),
+        "channels": [
+            {"id": str(channel.id), "name": channel.name}
+            for channel in guild.text_channels
+        ],
+        "disabled": [
+            {"command": row["command"], "channel_id": int(row["channel_id"])}
+            for row in rows
+        ],
+    }
+
+
+@app.post("/guild/{guild_id}/command-disables")
+async def set_command_disable(
+    guild_id: int,
+    payload: dict = Body(...),
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+
+    requested = str(payload.get("command", "")).strip()
+    command = bot_ref.get_command(requested.casefold())
+    if command is None or command.qualified_name.casefold() != requested.casefold():
+        raise HTTPException(400, "Unknown command")
+    if bot_ref._command_disable_excluded(command):
+        raise HTTPException(400, "This command cannot be disabled")
+
+    try:
+        channel_id = int(payload.get("channel_id", 0) or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "channel_id must be a text channel ID or 0")
+    if channel_id:
+        channel = guild.get_channel(channel_id)
+        if channel is None or channel not in guild.text_channels:
+            raise HTTPException(
+                400, "channel_id must belong to a text channel in this server"
+            )
+
+    pool = _check_pool()
+    command_name = command.qualified_name.casefold()
+    if bool(payload.get("disabled")):
+        await pool.execute(
+            """
+            INSERT INTO command_disables (guild_id, command, channel_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (guild_id, command, channel_id) DO NOTHING
+            """,
+            guild_id,
+            command_name,
+            channel_id,
+        )
+        bot_ref.db_cache.add_disabled_command(guild_id, command_name, channel_id)
+        disabled = True
+    else:
+        await pool.execute(
+            "DELETE FROM command_disables WHERE guild_id = $1 AND command = $2 AND channel_id = $3",
+            guild_id,
+            command_name,
+            channel_id,
+        )
+        bot_ref.db_cache.remove_disabled_command(guild_id, command_name, channel_id)
+        disabled = False
+    return {"command": command_name, "channel_id": channel_id, "disabled": disabled}
+
+
+LOGGER_EVENT_LABELS = {
+    "avatar": "Avatar changes",
+    "member": "Member joins, leaves, and name changes",
+    "channel": "Channel changes",
+    "role": "Role changes",
+    "server": "Server changes",
+    "moderation": "Bans, kicks, unbans, and timeouts",
+    "message": "Message edits, deletions, and purges",
+}
+
+
+async def _resolve_guild_text_channel(guild: Any, channel_id: int) -> Any | None:
+    """Resolve a guild text channel even when it is not in the local cache."""
+    channel = next(
+        (item for item in guild.text_channels if item.id == channel_id),
+        None,
+    )
+    if channel is not None:
+        return channel
+    if bot_ref is None:
+        return None
+    try:
+        channel = await bot_ref.fetch_channel(channel_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return None
+    if (
+        isinstance(channel, discord.TextChannel)
+        and channel.guild is not None
+        and channel.guild.id == guild.id
+    ):
+        return channel
+    return None
+
+
+@app.get("/guild/{guild_id}/twitch-follows")
+async def get_twitch_follows(
+    guild_id: int,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    rows = await _check_pool().fetch(
+        "SELECT channel_name, announce_channel_id, message_template, broadcaster_id "
+        "FROM twitch_follows WHERE guild_id = $1 ORDER BY channel_name",
+        guild_id,
+    )
+    channels = {str(channel.id): channel.name for channel in guild.text_channels}
+    return {
+        "follows": [
+            {
+                "channel_name": row["channel_name"],
+                "announce_channel_id": int(row["announce_channel_id"]),
+                "announce_channel_name": channels.get(
+                    str(row["announce_channel_id"]), "Unknown channel"
+                ),
+                "message_template": row["message_template"],
+                "broadcaster_id": row["broadcaster_id"],
+            }
+            for row in rows
+        ],
+        "channels": [
+            {"id": str(channel.id), "name": channel.name}
+            for channel in guild.text_channels
+        ],
+    }
+
+
+@app.post("/guild/{guild_id}/twitch-follows")
+async def set_twitch_follow(
+    guild_id: int,
+    payload: dict = Body(...),
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    channel_name = str(payload.get("channel_name", "")).strip().lstrip("@").lower()
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,25}", channel_name):
+        raise HTTPException(400, "Invalid Twitch channel name")
+    raw_channel_id = payload.get("announce_channel_id")
+    if not isinstance(raw_channel_id, (str, int)):
+        raise HTTPException(400, "announce_channel_id must be a text channel ID")
+    try:
+        announce_channel_id = int(raw_channel_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "announce_channel_id must be a text channel ID")
+    # Resolve from the guild's text-channel collection instead of relying only
+    # on the cache-backed get_channel lookup.  A freshly loaded guild can have
+    # valid channels that are not present in that cache yet.
+    announce_channel = await _resolve_guild_text_channel(guild, announce_channel_id)
+    if announce_channel is None:
+        raise HTTPException(400, "Announcement channel must belong to this server")
+    message_template = payload.get("message_template")
+    if message_template is not None:
+        message_template = str(message_template).strip() or None
+        if message_template and len(message_template) > 2000:
+            raise HTTPException(400, "The Twitch message cannot exceed 2000 characters")
+
+    events: Any = bot_ref.get_cog("Events") if bot_ref else None
+    if events is None or not hasattr(events, "_get_twitch_user"):
+        raise HTTPException(503, "Twitch monitoring is unavailable")
+    twitch_user = await events._get_twitch_user(channel_name)
+    if not twitch_user or not twitch_user.get("id"):
+        raise HTTPException(404, "Twitch channel not found")
+    broadcaster_id = str(twitch_user["id"])
+    pool = _check_pool()
+    existing = await pool.fetchval(
+        "SELECT 1 FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
+        guild_id,
+        channel_name,
+    )
+    if not existing:
+        count = await pool.fetchval(
+            "SELECT COUNT(*) FROM twitch_follows WHERE guild_id = $1", guild_id
+        )
+        if count >= 3:
+            raise HTTPException(
+                400, "You can follow up to 3 Twitch channels per server"
+            )
+    await pool.execute(
+        """INSERT INTO twitch_follows
+           (guild_id, channel_name, announce_channel_id, broadcaster_id, message_template)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (guild_id, channel_name) DO UPDATE SET
+             announce_channel_id = EXCLUDED.announce_channel_id,
+             broadcaster_id = EXCLUDED.broadcaster_id,
+             message_template = EXCLUDED.message_template""",
+        guild_id,
+        channel_name,
+        announce_channel_id,
+        broadcaster_id,
+        message_template,
+    )
+    try:
+        await events.ensure_twitch_eventsub_subscription(broadcaster_id)
+    except Exception as error:
+        cast(Any, bot_ref).logger.warning(
+            "Dashboard Twitch subscription failed: %s", error
+        )
+    return {"channel_name": channel_name}
+
+
+@app.delete("/guild/{guild_id}/twitch-follows/{channel_name}")
+async def delete_twitch_follow(
+    guild_id: int,
+    channel_name: str,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    await _managed_guild(guild_id, authorization, session_id)
+    channel_name = channel_name.strip().lstrip("@").lower()
+    pool = _check_pool()
+    broadcaster_id = await pool.fetchval(
+        "SELECT broadcaster_id FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
+        guild_id,
+        channel_name,
+    )
+    result = await pool.execute(
+        "DELETE FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
+        guild_id,
+        channel_name,
+    )
+    if result == "DELETE 0":
+        raise HTTPException(404, "Twitch channel is not followed")
+    events: Any = bot_ref.get_cog("Events") if bot_ref else None
+    if broadcaster_id and events is not None:
+        await events.remove_twitch_eventsub_subscription(str(broadcaster_id))
+    return {"channel_name": channel_name}
+
+
+@app.get("/guild/{guild_id}/logger")
+async def get_logger_settings(
+    guild_id: int,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    rows = await _check_pool().fetch(
+        "SELECT event, channel_id FROM guild_log_channels WHERE guild_id = $1",
+        guild_id,
+    )
+    channels = {str(channel.id): channel.name for channel in guild.text_channels}
+    return {
+        "events": LOGGER_EVENT_LABELS,
+        "channels": [
+            {"id": str(channel.id), "name": channel.name}
+            for channel in guild.text_channels
+        ],
+        "configured": [
+            {
+                "event": row["event"],
+                "channel_id": int(row["channel_id"]),
+                "channel_name": channels.get(str(row["channel_id"]), "Unknown channel"),
+            }
+            for row in rows
+        ],
+    }
+
+
+@app.post("/guild/{guild_id}/logger")
+async def set_logger_setting(
+    guild_id: int,
+    payload: dict = Body(...),
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    event = str(payload.get("event", "")).strip().casefold()
+    if event not in LOGGER_EVENT_LABELS:
+        raise HTTPException(400, "Unknown logger event")
+    raw_channel_id = payload.get("channel_id")
+    if not isinstance(raw_channel_id, (str, int)):
+        raise HTTPException(400, "channel_id must be a text channel ID")
+    try:
+        channel_id = int(raw_channel_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "channel_id must be a text channel ID")
+    channel = await _resolve_guild_text_channel(guild, channel_id)
+    if channel is None:
+        raise HTTPException(400, "Logger channel must belong to this server")
+    moderation: Any = bot_ref.get_cog("Moderation") if bot_ref else None
+    if moderation is None or not hasattr(moderation, "_set_logger_channel"):
+        raise HTTPException(503, "Logger is unavailable")
+    actor_id = None
+    try:
+        actor_id = int((await _verify_token(authorization, session_id))["id"])
+    except HTTPException:
+        pass
+    ctx = SimpleNamespace(guild=guild, author=SimpleNamespace(id=actor_id), bot=bot_ref)
+    await moderation._set_logger_channel(
+        ctx, event, channel, announce=False, actor_id=actor_id
+    )
+    return {"event": event, "channel_id": channel_id}
+
+
+@app.delete("/guild/{guild_id}/logger/{event}")
+async def delete_logger_setting(
+    guild_id: int,
+    event: str,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    event = event.strip().casefold()
+    if event not in LOGGER_EVENT_LABELS:
+        raise HTTPException(400, "Unknown logger event")
+    moderation: Any = bot_ref.get_cog("Moderation") if bot_ref else None
+    pool = _check_pool()
+    row = await pool.fetchrow(
+        "SELECT webhook_url FROM guild_log_channels WHERE guild_id = $1 AND event = $2",
+        guild_id,
+        event,
+    )
+    if row and moderation is not None:
+        await moderation._delete_logger_webhook(row["webhook_url"], guild_id, event)
+    await pool.execute(
+        "DELETE FROM guild_log_channels WHERE guild_id = $1 AND event = $2",
+        guild_id,
+        event,
+    )
+    return {"event": event}
 
 
 @app.get("/guild/{guild_id}/prefixes")
