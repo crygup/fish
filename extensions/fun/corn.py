@@ -7,7 +7,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, SILENT_COMMAND_USERS
 from utils import get_or_fetch_user
 
 if TYPE_CHECKING:
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 def crab_command():
     async def predicate(ctx: Context) -> bool:
-        if ctx.author.id == 662378595192274974:
+        if ctx.author.id in SILENT_COMMAND_USERS["crab"]:
             return False
 
         return True
@@ -214,6 +214,8 @@ class Corn(Cog):
             "i kinda miss tabole ngl... oh how the times go... pls tell mv to play spire with me BY THE WAY",
             "I just want to see im sorry for everything i have done for you and to anybody else in table, im really sorry",
             "https://crygup.com/images/crab/crab1.jpg",
+            "https://crygup.com/images/crab/crab2.png",
+            "https://crygup.com/images/crab/crab3.png",
         ]
 
         await ctx.send(random.choice(things))

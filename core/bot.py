@@ -32,6 +32,10 @@ from discord.ext import commands
 from utils import MESSAGE_RE, Config, EmojiInputType, Emojis, update_pokemon, drpepper
 from .cache import db_cache
 
+SILENT_COMMAND_USERS: dict[str, frozenset[int]] = {
+    "crab": frozenset({662378595192274974}),
+}
+
 if TYPE_CHECKING:
     from extensions.context import Context
     from extensions.discord_ext import Discord as DiscordCog

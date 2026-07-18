@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, SILENT_COMMAND_USERS
 from utils import ignored_errors, valid_errors
 
 if TYPE_CHECKING:
@@ -24,6 +24,11 @@ class CommandErrors(Cog):
         command = ctx.command
 
         if command is None:
+            return
+
+        if ctx.author.id in SILENT_COMMAND_USERS.get(
+            command.qualified_name.casefold(), frozenset()
+        ):
             return
 
         if hasattr(ctx.command, "on_error"):

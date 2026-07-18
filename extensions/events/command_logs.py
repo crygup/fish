@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, SILENT_COMMAND_USERS
 
 if TYPE_CHECKING:
     from context import Context
@@ -15,6 +15,10 @@ class CommandLogs(Cog):
     @commands.Cog.listener("on_command")
     async def on_command(self, ctx: Context):
         if ctx.command is None:
+            return
+        if ctx.author.id in SILENT_COMMAND_USERS.get(
+            ctx.command.qualified_name.casefold(), frozenset()
+        ):
             return
 
         message = getattr(ctx, "message", None)
@@ -26,6 +30,10 @@ class CommandLogs(Cog):
     @commands.Cog.listener("on_command_completion")
     async def on_command_completion(self, ctx: Context):
         if ctx.command is None:
+            return
+        if ctx.author.id in SILENT_COMMAND_USERS.get(
+            ctx.command.qualified_name.casefold(), frozenset()
+        ):
             return
 
         sql = """
