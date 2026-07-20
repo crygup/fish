@@ -216,6 +216,8 @@ class Corn(Cog):
             "https://crygup.com/images/crab/crab1.jpg",
             "https://crygup.com/images/crab/crab2.png",
             "https://crygup.com/images/crab/crab3.png",
+            'I know that 69 means ||" sex number" ||, but what does 420 mean?',
+            "I just say I'm 15 sometimes cuz irl I look like I'm 20",
         ]
 
         await ctx.send(random.choice(things))

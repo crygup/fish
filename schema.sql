@@ -55,9 +55,12 @@ CREATE TABLE IF NOT EXISTS user_statuses (
     user_id BIGINT NOT NULL,
     guild_id BIGINT NOT NULL,
     status TEXT NOT NULL,
-    last_seen TIMESTAMP WITH TIME ZONE DEFAULT (now() at time zone 'utc'),
+    last_seen TIMESTAMP WITH TIME ZONE DEFAULT now(),
     PRIMARY KEY (user_id, guild_id, status)
 );
+
+ALTER TABLE user_statuses
+    ALTER COLUMN last_seen SET DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS plonks (
     id SERIAL PRIMARY KEY,

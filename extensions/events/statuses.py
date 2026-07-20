@@ -13,10 +13,12 @@ if TYPE_CHECKING:
 
 class StatusCog(Cog):
 
+    _TRACKED_STATUSES = frozenset({"offline", "idle", "online", "dnd"})
+
     async def store_status(self, member: discord.Member, status: str) -> None:
         sql = """
         INSERT INTO user_statuses (user_id, guild_id, status, last_seen)
-        VALUES ($1, $2, $3, now() at time zone 'utc')
+        VALUES ($1, $2, $3, now())
         ON CONFLICT (user_id, guild_id, status)
         DO UPDATE SET last_seen = EXCLUDED.last_seen
         """
@@ -31,4 +33,10 @@ class StatusCog(Cog):
         if before.status == after.status:
             return
 
-        await self.store_status(after, str(after.status))
+        status = str(after.status)
+        if status == "invisible":
+            status = "offline"
+        if status not in self._TRACKED_STATUSES:
+            return
+
+        await self.store_status(after, status)

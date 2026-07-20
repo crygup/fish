@@ -4,7 +4,7 @@ import asyncio
 import re
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -482,10 +482,126 @@ class LastfmConverter(_AccountConverter):
     regex_error = "Invalid last.fm username. Must be 2-15 characters (letters, underscores, hyphens)."
 
 
+_LETTERBOXD_HOSTS = {"letterboxd.com", "www.letterboxd.com"}
+_BOXD_HOSTS = {"boxd.it", "www.boxd.it"}
+_LETTERBOXD_REDIRECTS = {301, 302, 303, 307, 308}
+_LETTERBOXD_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_\-]{2,30}$")
+
+
+def _letterboxd_username(value: str, *, lowercase: bool = True) -> str:
+    value = value.strip()
+    candidate = value.lower() if lowercase else value
+    if not _LETTERBOXD_USERNAME_RE.fullmatch(candidate):
+        raise commands.BadArgument(LetterboxdConverter.regex_error)
+    return candidate
+
+
+def _letterboxd_profile_from_url(value: str) -> str | None:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+        return None
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host not in _LETTERBOXD_HOSTS or port is not None:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) != 1:
+        return None
+    # Keep URL path casing intact. boxd.it short codes are case-sensitive.
+    return _letterboxd_username(parts[0], lowercase=False)
+
+
+async def normalize_letterboxd(ctx: Context, argument: str) -> str:
+    """Return a validated Letterboxd username from a name or profile link."""
+    value = argument.strip()
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise commands.BadArgument(
+            "Invalid Letterboxd profile. Use a username, profile URL, or boxd.it link."
+        ) from error
+    if parsed.scheme or parsed.netloc:
+        if parsed.scheme not in {"http", "https"}:
+            raise commands.BadArgument(
+                "Invalid Letterboxd profile. Use a username, profile URL, or boxd.it link."
+            )
+        if profile := _letterboxd_profile_from_url(value):
+            return profile
+
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if (
+            host not in _BOXD_HOSTS
+            or parsed.username
+            or parsed.password
+            or port is not None
+        ):
+            raise commands.BadArgument(
+                "Invalid Letterboxd profile. Use a username, profile URL, or boxd.it link."
+            )
+
+        current = value
+        for _ in range(5):
+            try:
+                parsed = urlsplit(current)
+                port = parsed.port
+            except ValueError as error:
+                raise commands.BadArgument(
+                    "The short link must redirect to a Letterboxd user profile."
+                ) from error
+            host = (parsed.hostname or "").lower().rstrip(".")
+            if host in _LETTERBOXD_HOSTS and port is None:
+                if profile := _letterboxd_profile_from_url(current):
+                    return profile
+                raise commands.BadArgument(
+                    "The link must point to a Letterboxd user profile."
+                )
+            if (
+                host not in _BOXD_HOSTS
+                or parsed.scheme not in {"http", "https"}
+                or parsed.username
+                or parsed.password
+                or port is not None
+            ):
+                raise commands.BadArgument(
+                    "The short link must redirect to a Letterboxd user profile."
+                )
+            try:
+                async with ctx.bot.session.get(
+                    current,
+                    allow_redirects=False,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    if response.status not in _LETTERBOXD_REDIRECTS:
+                        raise commands.BadArgument(
+                            "The short link must redirect to a Letterboxd user profile."
+                        )
+                    location = response.headers.get("Location")
+            except commands.BadArgument:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+                raise commands.BadArgument(
+                    "Could not resolve the Letterboxd short link. Try the full profile URL."
+                ) from error
+            if not location:
+                raise commands.BadArgument(
+                    "The short link did not point to a Letterboxd user profile."
+                )
+            current = urljoin(current, location)
+        raise commands.BadArgument(
+            "The Letterboxd short link redirected too many times."
+        )
+
+    return _letterboxd_username(value)
+
+
 class LetterboxdConverter(_AccountConverter):
     column = "letterboxd"
     site_name = "Letterboxd"
-    regex = re.compile(r"^[a-zA-Z0-9_\-]{2,30}$")
+    regex = _LETTERBOXD_USERNAME_RE
     regex_error = "Invalid Letterboxd username. Must be 2-30 characters (letters, numbers, underscores, hyphens)."
 
     async def convert(self, ctx: Context, argument: str) -> str:
@@ -499,7 +615,18 @@ class LetterboxdConverter(_AccountConverter):
             raise commands.BadArgument(
                 f"**{argument.display_name}** has no linked Letterboxd account."
             )
-        return await super().convert(ctx, argument)
+        try:
+            user = await commands.UserConverter().convert(ctx, argument)
+        except commands.UserNotFound:
+            return await normalize_letterboxd(ctx, argument)
+        row = await ctx.bot.pool.fetchrow(
+            'SELECT "letterboxd" FROM accounts WHERE user_id = $1', user.id
+        )
+        if row and row["letterboxd"]:
+            return row["letterboxd"]
+        raise commands.BadArgument(
+            f"**{user.display_name}** has no linked Letterboxd account."
+        )
 
 
 class SteamConverter(_AccountConverter):

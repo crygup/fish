@@ -271,7 +271,34 @@ class Server(Cog):
                 f"No auto-download channel found. You may set one with `{ctx.get_prefix}auto-download`"
             )
 
-        channel: discord.TextChannel = self.bot.get_channel(channel_id)  # type: ignore
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                await self.bot.pool.execute(
+                    "UPDATE guild_settings SET auto_download = NULL WHERE guild_id = $1",
+                    ctx.guild.id,
+                )
+                self.bot.db_cache.remove_adl(channel_id)
+                raise commands.BadArgument(
+                    "The configured auto-download channel no longer exists. "
+                    "The setting was removed."
+                )
+
+        if (
+            not isinstance(channel, discord.TextChannel)
+            or channel.guild.id != ctx.guild.id
+        ):
+            await self.bot.pool.execute(
+                "UPDATE guild_settings SET auto_download = NULL WHERE guild_id = $1",
+                ctx.guild.id,
+            )
+            self.bot.db_cache.remove_adl(channel_id)
+            raise commands.BadArgument(
+                "The configured auto-download channel is no longer available. "
+                "The setting was removed."
+            )
 
         await self.remove_adl_channel(channel)
         await ctx.send(f"Removed auto-downloads from {channel.mention}")

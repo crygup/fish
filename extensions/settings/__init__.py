@@ -16,7 +16,7 @@ from discord import app_commands
 from .logging import Logging
 from .server import Server
 from utils import lastfm_command
-from utils.regexes import LBD_URL_RE
+from utils.converters import normalize_letterboxd
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -510,7 +510,7 @@ class ManageAccountsModal(discord.ui.Modal, title="Manage Other Accounts"):
         label="Letterboxd",
         required=False,
         max_length=100,
-        placeholder="Clear to unlink",
+        placeholder="Username, profile URL, or boxd.it link (clear to unlink)",
     )
 
     def __init__(self, ctx: Context, current: dict, view: ManageAccountsView):
@@ -522,6 +522,9 @@ class ManageAccountsModal(discord.ui.Modal, title="Manage Other Accounts"):
         self.letterboxd.default = current.get("letterboxd", "")
 
     async def on_submit(self, interaction):
+        # Resolving a boxd.it link may require a network request, so acknowledge
+        # the modal before validating the supplied account values.
+        await interaction.response.defer(ephemeral=True)
         added = []
         removed = []
         COLS = {
@@ -533,9 +536,11 @@ class ManageAccountsModal(discord.ui.Modal, title="Manage Other Accounts"):
             was_set = bool(self._current.get(col))
             if v:
                 if col == "letterboxd":
-                    v = v.lower().rstrip("/")
-                    if m := LBD_URL_RE.match(v):
-                        v = m.group(1)
+                    try:
+                        v = await normalize_letterboxd(self.ctx, v)
+                    except commands.BadArgument as error:
+                        await interaction.followup.send(str(error), ephemeral=True)
+                        return
                 await self.ctx.bot.pool.execute(
                     f'INSERT INTO accounts (user_id, "{col}") VALUES ($1, $2) '
                     f'ON CONFLICT (user_id) DO UPDATE SET "{col}" = $2',
@@ -565,7 +570,7 @@ class ManageAccountsModal(discord.ui.Modal, title="Manage Other Accounts"):
         if interaction.message:
             await interaction.message.edit(view=self._view)
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "\n".join(msg) if msg else "No changes made.", ephemeral=True
         )
 

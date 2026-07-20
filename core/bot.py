@@ -55,7 +55,9 @@ FCT = TypeVar("FCT", bound="Context")
 
 
 async def get_prefix(bot: Fishie, message: discord.Message) -> List[str]:
-    default = ["fish "] if not bot.testing else [";"]
+    default = (
+        ["fish ", "fish", "\U0001f41f", "\U0001f41f "] if not bot.testing else [";"]
+    )
 
     if message.guild is None:
         return commands.when_mentioned_or(*default)(bot, message)
@@ -121,7 +123,7 @@ class Fishie(commands.Bot):
         self.messages: TTLCache[str, discord.Message] = TTLCache[str, discord.Message](
             maxsize=1000, ttl=300.0
         )  # {repr(ctx): message(from ctx.send) }
-        self.support_invite: str = f"https://discord.gg/Fct5UGadcb"
+        self.support_invite: str = f"https://discord.gg/rM9u4MRFBE"
         self.lfm_api = "https://ws.audioscrobbler.com/2.0/"
         self.lastfm_api_key = str(self.config["keys"]["lastfm"])
         self.lastfm_response_cache: TTLCache[tuple[tuple[str, str], ...], Any] = (

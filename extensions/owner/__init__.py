@@ -5,7 +5,7 @@ import re
 import time
 from pathlib import Path
 import discord
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, List, Literal, Optional, Union, cast
 from discord.abc import Messageable
 from discord.ext import commands
 
@@ -63,13 +63,15 @@ class Owner(Cog):
     async def message(
         self,
         ctx: Context,
-        channel: Optional[Union[AllMsgbleChannels, discord.User]] = None,
+        channel: Optional[
+            Union[AllMsgbleChannels, discord.User]
+        ] = commands.CurrentChannel,
         *,
         text: str,
     ):
         """Send a message"""
-        channel = channel or ctx.channel  # type: ignore
-        await channel.send(text, allowed_mentions=discord.AllowedMentions.all())  # type: ignore
+        target = cast(Messageable | discord.User, channel or ctx.channel)
+        await target.send(text, allowed_mentions=discord.AllowedMentions.all())
 
         await self._add_reaction(ctx, ctx.message)
 

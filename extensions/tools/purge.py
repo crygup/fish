@@ -50,6 +50,10 @@ class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     files: bool = commands.flag(description="Remove messages that have attachments", default=False)
     emoji: bool = commands.flag(description="Remove messages that have custom emoji", default=False)
     reactions: bool = commands.flag(description="Remove messages that have reactions", default=False)
+    left: bool = commands.flag(description="Remove messages from users who left the server", default=False)
+    online: bool = commands.flag(description="Remove messages from users who are online", default=False)
+    offline: bool = commands.flag(description="Remove messages from users who are offline", default=False)
+    idle: bool = commands.flag(description="Remove messages from users who are idle", default=False)
     require: Literal["any", "all"] = commands.flag(description='Whether any or all of the flags should be met before deleting messages. Defaults to "all"',default="all",)
     skip: bool = commands.flag(description="Skip the purge confirmation", default=False)
     # fmt: on
@@ -60,7 +64,9 @@ class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
         # boolean flags to the end so they can safely receive `true`, even when
         # other flags follow them. Explicit values such as `--bot false` remain
         # unchanged.
-        boolean_flags = "bot|webhooks|embeds|files|emoji|reactions|skip"
+        boolean_flags = (
+            "bot|webhooks|embeds|files|emoji|reactions|left|online|offline|idle|skip"
+        )
         bare_boolean = (
             rf"(?<!\S)--?(?P<flag>{boolean_flags})(?=\s*(?:--?\w+(?=\s|$)|$))"
         )
@@ -93,6 +99,10 @@ class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
 --files         Messages that have attachments
 --emoji         Messages that have custom emojis
 --reactions     Messages that have reactions
+--left          Messages from users who have left the server
+--online        Messages from users who are online
+--offline       Messages from users who are offline
+--idle          Messages from users who are idle
 --require       Whether any or all of the flags should be met before deleting messages. Defaults to "all"
 --skip          Skip the purge confirmation
 """
@@ -128,6 +138,10 @@ class PurgeCog(Cog):
         -# --files         Messages that have attachments
         -# --emoji         Messages that have custom emojis
         -# --reactions     Messages that have reactions
+        -# --left          Messages from users who have left the server
+        -# --online        Messages from users who are online
+        -# --offline       Messages from users who are offline
+        -# --idle          Messages from users who are idle
         -# --require       Whether any or all of the flags should be met before deleting messages.
         -# --skip          Skip the purge confirmation.
         """
@@ -147,6 +161,10 @@ class PurgeCog(Cog):
                 flags.files,
                 flags.emoji,
                 flags.reactions,
+                flags.left,
+                flags.online,
+                flags.offline,
+                flags.idle,
             )
         )
 
@@ -198,6 +216,25 @@ class PurgeCog(Cog):
 
             if flags.user:
                 predicates.append(lambda m: m.author == flags.user)
+
+            if flags.left:
+                predicates.append(lambda m: ctx.guild.get_member(m.author.id) is None)
+
+            if flags.online:
+                predicates.append(
+                    lambda m: getattr(m.author, "status", None) == discord.Status.online
+                )
+
+            if flags.offline:
+                predicates.append(
+                    lambda m: getattr(m.author, "status", None)
+                    == discord.Status.offline
+                )
+
+            if flags.idle:
+                predicates.append(
+                    lambda m: getattr(m.author, "status", None) == discord.Status.idle
+                )
 
             if flags.contains:
                 predicates.append(lambda m: flags.contains in m.content)  # type: ignore

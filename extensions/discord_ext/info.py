@@ -318,7 +318,6 @@ class UserDropdown(discord.ui.Select):
         self.avatar_cache: Optional[discord.Embed] = None
         self.banner_cache: Optional[discord.Embed] = None
         self.bot_cache: Optional[discord.Embed] = None
-        self.statuses_cache: Optional[discord.Embed] = None
 
         if isinstance(user, discord.Member):
             self._guild_id: Optional[int] = user.guild.id
@@ -497,9 +496,6 @@ class UserDropdown(discord.ui.Select):
         return embed
 
     async def statuses_response(self) -> discord.Embed:
-        if self.statuses_cache:
-            return self.statuses_cache
-
         ctx = self.ctx
         user = self.user
 
@@ -530,7 +526,6 @@ class UserDropdown(discord.ui.Select):
             )
             embed.add_field(name="Last Seen", value=value)
 
-        self.statuses_cache = embed
         return embed
 
     async def callback(self, interaction: Interaction):
