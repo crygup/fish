@@ -1,20 +1,15 @@
 from __future__ import annotations
 
-import base64
-import os
 import random
-import re
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING
 
-import asyncpg
 import discord
 from discord.ext import commands
 
 from core import Cog
 
 if TYPE_CHECKING:
-    from core import Fishie
-    from extensions.context import Context
+    pass
 
 
 class XPCog(Cog):
@@ -38,6 +33,8 @@ class XPCog(Cog):
     @commands.Cog.listener("on_message")
     async def xp_message(self, message: discord.Message):
         if message.author.bot:
+            return
+        if "xp" in self.bot.db_cache.get_opted_out(message.author.id):
             return
 
         bucket = self.xp_cd.get_bucket(message)

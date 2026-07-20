@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
 from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import aiohttp
-from bs4 import BeautifulSoup
 import discord
+from bs4 import BeautifulSoup
 from discord.ext import commands
+
 from .functions import response_checker, to_thread
 from .regexes import TENOR_PAGE_RE
 from .vars import base_header
@@ -93,7 +94,7 @@ class SpotifyConverter:
         async with ctx.session.get(url, headers=headers, params=api_data) as resp:
             response_checker(resp)
             data: Optional[Dict[Any, Any]] = (
-                (await resp.json()).get(self.format_mode[self.mode]).get(f"items")
+                (await resp.json()).get(self.format_mode[self.mode]).get("items")
             )
 
         if data == [] or data is None:
@@ -118,14 +119,16 @@ class SpotifyConverter:
 
 
 async def render_with_rsvg(blob):
-    rsvg = "rsvg-convert --width=1024"
-    proc = await asyncio.create_subprocess_shell(
-        rsvg,
+    proc = await asyncio.create_subprocess_exec(
+        "rsvg-convert",
+        "--width=1024",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await proc.communicate(blob)
+    if proc.returncode:
+        raise commands.BadArgument("The emoji image could not be rendered.")
     return BytesIO(stdout), stderr
 
 
@@ -148,7 +151,7 @@ class TwemojiConverter(commands.Converter):
                         new_ipt = argument.removeprefix(VS_16)
                         if new_ipt == argument:
                             new_ipt = argument.replace(VS_16, "")
-                        ipt = new_ipt
+                        argument = new_ipt
                         continue
                     raise commands.BadArgument("Not a valid unicode emoji.")
                 blob = await resp.read()
@@ -176,7 +179,7 @@ class TenorUrlConverter(commands.Converter):
             raise commands.BadArgument(f"Something went wrong. \n{e}")
 
         if element is None:
-            raise commands.BadArgument(f"Something went wrong.")
+            raise commands.BadArgument("Something went wrong.")
 
         return element["src"]  # type: ignore
 
@@ -663,7 +666,7 @@ class SteamConverter(_AccountConverter):
         except commands.UserNotFound:
             pass
 
-        from .regexes import STEAM_URL_RE, STEAM_ID64_RE
+        from .regexes import STEAM_ID64_RE, STEAM_URL_RE
 
         argument = argument.strip().rstrip("/")
         if m := STEAM_URL_RE.match(argument):

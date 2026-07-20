@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict
 
 import discord
 from discord.ext import commands

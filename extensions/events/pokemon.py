@@ -9,7 +9,7 @@ from discord.ext import commands
 from core import Cog
 
 if TYPE_CHECKING:
-    from core import Fishie
+    pass
 
 POKETWO_ID = 716390085896962058
 
@@ -23,6 +23,8 @@ class Pokemon(Cog):
         method: str,
         guild_id: Optional[int] = None,
     ) -> None:
+        if "pokemon" in self.bot.db_cache.get_opted_out(user_id):
+            return
         sql = """
         INSERT INTO pokemon_solves (user_id, pokemon_name, method, guild_id)
         VALUES ($1, $2, $3, $4)

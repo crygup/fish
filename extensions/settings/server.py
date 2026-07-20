@@ -7,12 +7,11 @@ import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import AuthorView, FieldPageSource, Pager, get_or_fetch_user
+from utils import AuthorView, FieldPageSource, Pager
 
 if TYPE_CHECKING:
     from core import Fishie
-    from extensions.context import GuildContext
-    from extensions.context import Context
+    from extensions.context import Context, GuildContext
     from extensions.events import Events
 
 

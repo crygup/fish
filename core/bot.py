@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import pkgutil
@@ -8,7 +9,6 @@ import sys
 import traceback
 from io import StringIO
 from logging import Logger
-from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,8 +29,10 @@ from cachetools import TTLCache
 from discord.abc import Messageable
 from discord.ext import commands
 
-from utils import MESSAGE_RE, Config, EmojiInputType, Emojis, update_pokemon, drpepper
+from utils import MESSAGE_RE, Config, EmojiInputType, Emojis, update_pokemon
+
 from .cache import db_cache
+from .migrations import check_migrations
 
 SILENT_COMMAND_USERS: dict[str, frozenset[int]] = {
     "crab": frozenset({662378595192274974}),
@@ -40,18 +42,34 @@ if TYPE_CHECKING:
     from extensions.context import Context
     from extensions.discord_ext import Discord as DiscordCog
     from extensions.events import Events
-    from extensions.logging import Logging
-    from extensions.settings import Settings
-    from extensions.tools import Tools
     from extensions.lastfm import Lastfm
+    from extensions.logging import Logging
     from extensions.moderation import Moderation
     from extensions.mudae import Mudae
+    from extensions.settings import Settings
+    from extensions.tools import Tools
 
     # from extensions.fishing import Fishing
-
     from .cog import Cog
 
 FCT = TypeVar("FCT", bound="Context")
+
+
+def required_intents() -> discord.Intents:
+    """Enable only gateway events used by Fishie's loaded extensions."""
+
+    intents = discord.Intents.none()
+    intents.guilds = True
+    intents.members = True
+    intents.moderation = True
+    intents.emojis_and_stickers = True
+    intents.webhooks = True
+    intents.messages = True
+    intents.reactions = True
+    intents.typing = True
+    intents.message_content = True
+    intents.presences = True
+    return intents
 
 
 async def get_prefix(bot: Fishie, message: discord.Message) -> List[str]:
@@ -80,7 +98,7 @@ class Fishie(commands.Bot):
     cached_covers: Dict[str, Tuple[str, bool]] = {}
     cached_roblox_templates: dict[int, tuple[str, dict, datetime.datetime]] = {}
     cached_mudae_consent: set[int] = set()
-    cached_honeypots: set[int] = set()
+    cached_honeypots: dict[int, int] = {}
     cached_banned_ips: set[str] = set()
     _steam_oauth_states: dict[str, dict[str, int | str]]
     _spotify_oauth_states: dict[str, dict[str, int | str]]
@@ -92,7 +110,7 @@ class Fishie(commands.Bot):
         self,
         config: Config,
         logger: Logger,
-        pool: "asyncpg.Pool[asyncpg.Record]",
+        pool: asyncpg.Pool,
         session: aiohttp.ClientSession,
         testing: bool = False,
     ):
@@ -112,10 +130,13 @@ class Fishie(commands.Bot):
             {}
         )
         self.cached_mudae_consent: set[int] = set()
-        self.cached_honeypots: set[int] = set()
+        self.cached_honeypots: dict[int, int] = {}
         self.cached_banned_ips: set[str] = set()
+        self.media_semaphore = asyncio.Semaphore(3)
+        self._resources_closed = False
+        self._oauth_refresh_tasks: set[asyncio.Task[Any]] = set()
+        self._eventsub_tasks: set[asyncio.Task[Any]] = set()
         self.testing: bool = testing
-        self.current_downloads: List[str] = []
         self.error_logs = None
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(
             60.0, 60.0, commands.BucketType.default
@@ -123,7 +144,7 @@ class Fishie(commands.Bot):
         self.messages: TTLCache[str, discord.Message] = TTLCache[str, discord.Message](
             maxsize=1000, ttl=300.0
         )  # {repr(ctx): message(from ctx.send) }
-        self.support_invite: str = f"https://discord.gg/rM9u4MRFBE"
+        self.support_invite: str = "https://discord.gg/rM9u4MRFBE"
         self.lfm_api = "https://ws.audioscrobbler.com/2.0/"
         self.lastfm_api_key = str(self.config["keys"]["lastfm"])
         self.lastfm_response_cache: TTLCache[tuple[tuple[str, str], ...], Any] = (
@@ -132,7 +153,7 @@ class Fishie(commands.Bot):
 
         super().__init__(
             command_prefix=get_prefix,
-            intents=discord.Intents.all(),
+            intents=required_intents(),
             strip_after_prefix=True,
         )
         self.add_check(self._check_command_disabled)
@@ -277,16 +298,31 @@ class Fishie(commands.Bot):
         return await super().on_error(event, *args, **kwargs)
 
     async def load_extensions(self):
+        required = {
+            "extensions.context",
+            "extensions.events",
+            "extensions.logging",
+            "extensions.moderation",
+            "extensions.settings",
+            "extensions.tools",
+        }
+        failed_required: list[str] = []
         for ext in self._extensions:
             try:
                 await self.load_extension(ext)
                 self.logger.info(f"Loaded extension: {ext}")
             except Exception:
                 self.logger.exception(f"Failed to load extension: {ext}")
+                if ext in required:
+                    failed_required.append(ext)
                 continue
+        if failed_required:
+            raise RuntimeError(
+                "Required extensions failed to load: " + ", ".join(failed_required)
+            )
 
     async def unload_extensions(self):
-        for ext in self._extensions:
+        for ext in tuple(self.extensions):
             try:
                 await self.unload_extension(ext)
                 self.logger.info(f"Unloaded extension: {ext}")
@@ -304,9 +340,8 @@ class Fishie(commands.Bot):
                 continue
 
     async def setup_hook(self) -> None:
-        schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
-        with schema_path.open(encoding="utf-8") as fp:
-            await self.pool.execute(fp.read())
+        async with self.pool.acquire() as connection:
+            await check_migrations(connection)
 
         self.activity = discord.CustomActivity(name="fish help")
 
@@ -358,6 +393,10 @@ class Fishie(commands.Bot):
         return await super().get_context(message, cls=new_cls)
 
     async def close(self) -> None:
+        if self._resources_closed:
+            await super().close()
+            return
+        self._resources_closed = True
         self.logger.info("Logging out")
         await self.unload_extensions()
         await self.close_sessions()
@@ -478,10 +517,10 @@ class Fishie(commands.Bot):
         self.logger.info(f"Cached {len(self.cached_mudae_consent)} Mudae DM consent(s)")
 
         honeypot_rows = await self.pool.fetch(
-            "SELECT channel_id FROM honeypot_channels"
+            "SELECT guild_id, channel_id FROM honeypot_channels"
         )
         for row in honeypot_rows:
-            self.cached_honeypots.add(row["channel_id"])
+            self.cached_honeypots[row["guild_id"]] = row["channel_id"]
         self.logger.info(f"Cached {len(self.cached_honeypots)} honeypot channel(s)")
 
         banned_rows = await self.pool.fetch("SELECT ip FROM banned_ips")

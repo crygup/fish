@@ -69,10 +69,15 @@ def cache(
             _stats = _internal_cache.get_stats
         elif strategy is Strategy.raw:
             _internal_cache = {}
-            _stats = lambda: (0, 0)
+
+            def _stats() -> tuple[int, int]:
+                return (0, 0)
+
         elif strategy is Strategy.timed:
             _internal_cache = ExpiringCache(maxsize)
-            _stats = lambda: (0, 0)
+
+            def _stats() -> tuple[int, int]:
+                return (0, 0)
 
         def _make_key(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
             # this is a bit of a cluster fuck

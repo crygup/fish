@@ -4,10 +4,10 @@ from typing import TYPE_CHECKING
 
 import asyncpg
 from discord.ext import commands
-from jishaku.cog import OPTIONAL_FEATURES, STANDARD_FEATURES
-from jishaku.features.baseclass import Feature
 
 from core import Cog
+from jishaku.cog import OPTIONAL_FEATURES, STANDARD_FEATURES
+from jishaku.features.baseclass import Feature
 from utils import fish_owner
 
 if TYPE_CHECKING:

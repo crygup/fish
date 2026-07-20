@@ -4,21 +4,25 @@ Fishie bot API | commands, stats, OAuth, and user data history.
 
 from __future__ import annotations
 
-import base64
 import asyncio
+import base64
 import hashlib
 import hmac
+import ipaddress
 import json
+import os
 import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Any, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import aiohttp
 import discord
+from cachetools import TTLCache
+from discord.ext import commands
 from fastapi import (
     Body,
     Cookie,
@@ -31,14 +35,21 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 if TYPE_CHECKING:
     from core import Fishie
 
+from core.privacy import erase_guild, erase_user
+from utils.credentials import decrypt_credential, encrypt_credential
+from utils.network import validate_public_url
+
 WEB_ORIGINS = frozenset({"https://crygup.com", "https://www.crygup.com"})
 SESSION_COOKIE = "__Host-fishie_session"
+OAUTH_STATE_COOKIE = "__Host-fishie_oauth_state"
 SESSION_MAX_AGE = 7 * 24 * 60 * 60
+OAUTH_STATE_MAX_AGE = 10 * 60
+MAX_REQUEST_BYTES = 2 * 1024 * 1024
 
 app = FastAPI(title="Fishie API")
 app.add_middleware(
@@ -53,6 +64,15 @@ app.add_middleware(
 @app.middleware("http")
 async def protect_cookie_requests(request: Request, call_next):
     """Reject cross-origin state changes authenticated by the session cookie."""
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_REQUEST_BYTES:
+                return JSONResponse(
+                    status_code=413, content={"detail": "Request body is too large"}
+                )
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid body size"})
     if request.method not in {"GET", "HEAD", "OPTIONS"} and request.cookies.get(
         SESSION_COOKIE
     ):
@@ -61,6 +81,22 @@ async def protect_cookie_requests(request: Request, call_next):
                 status_code=403, content={"detail": "Invalid request origin"}
             )
     return await call_next(request)
+
+
+@app.get("/health/live", include_in_schema=False)
+async def health_live():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def health_ready():
+    if bot_ref is None or bot_ref.is_closed() or not bot_ref.is_ready():
+        raise HTTPException(503, "Bot is not ready")
+    try:
+        await asyncio.wait_for(_check_pool().fetchval("SELECT 1"), timeout=2)
+    except Exception as error:
+        raise HTTPException(503, "Database is not ready") from error
+    return {"status": "ok"}
 
 
 bot_ref: "Fishie | None" = None
@@ -389,10 +425,7 @@ def _schedule_discord_accounts_refresh(
 ) -> None:
     if not bot_ref or channel_id is None or message_id is None:
         return
-    tasks = getattr(bot_ref, "_oauth_refresh_tasks", None)
-    if tasks is None:
-        tasks = set()
-        setattr(bot_ref, "_oauth_refresh_tasks", tasks)
+    tasks = bot_ref._oauth_refresh_tasks
     task = asyncio.create_task(
         _refresh_discord_accounts_message(user_id, channel_id, message_id)
     )
@@ -433,7 +466,7 @@ async def _create_web_session(
            VALUES ($1, $2, $3, $4)""",
         _session_hash(session_id),
         user_id,
-        discord_access_token,
+        encrypt_credential(discord_access_token),
         expires_at,
     )
     return session_id, lifetime
@@ -459,7 +492,10 @@ async def _session_access_token(session_id: str) -> str:
         "UPDATE web_sessions SET last_seen_at = now() WHERE session_id_hash = $1",
         _session_hash(session_id),
     )
-    return row["discord_access_token"]
+    token = decrypt_credential(row["discord_access_token"])
+    if token is None:
+        raise HTTPException(401, "Session credential is unavailable")
+    return token
 
 
 def _verify_twitch_eventsub(request: Request, body: bytes) -> None:
@@ -559,31 +595,18 @@ async def twitch_eventsub(request: Request):
 
     pool = _check_pool()
     result = await pool.execute(
-        "INSERT INTO twitch_eventsub_events (message_id) VALUES ($1) "
+        "INSERT INTO twitch_eventsub_events (message_id, payload) VALUES ($1, $2::jsonb) "
         "ON CONFLICT (message_id) DO NOTHING",
         message_id,
+        event,
     )
     if result == "INSERT 0 0":
         return {"ok": True, "duplicate": True}
 
-    async def process_event():
-        try:
-            await events_cog.handle_twitch_event(event)
-        except Exception as error:
-            try:
-                await pool.execute(
-                    "DELETE FROM twitch_eventsub_events WHERE message_id = $1",
-                    message_id,
-                )
-            except Exception as cleanup_error:
-                bot.logger.warning(
-                    "Could not requeue failed Twitch EventSub event %s: %s",
-                    message_id,
-                    cleanup_error,
-                )
-            bot.logger.warning("Twitch EventSub event processing failed: %s", error)
-
-    asyncio.create_task(process_event())
+    task = asyncio.create_task(events_cog.process_twitch_event_message(message_id))
+    tasks = bot._eventsub_tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
     return {"ok": True}
 
 
@@ -595,12 +618,29 @@ async def _check_opted_out(user_id: int) -> bool:
     return r is not None
 
 
-VALID_OPTOUTS = {"avatar", "username", "display", "nickname", "discrim", "joins"}
+VALID_OPTOUTS = {
+    "avatar",
+    "username",
+    "display",
+    "nickname",
+    "discrim",
+    "joins",
+    "xp",
+    "commands",
+    "status",
+    "pokemon",
+    "corn",
+}
 
 
 @app.get("/user/{user_id}/opted-out")
-async def get_opted_out(user_id: int):
+async def get_opted_out(
+    user_id: int,
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
     """Get the list of tracking methods this user has opted out of."""
+    await _require_self(user_id, authorization, session_id)
     pool = _check_pool()
     row = await pool.fetchrow("SELECT items FROM opted_out WHERE user_id = $1", user_id)
     items = row["items"] if row else []
@@ -639,22 +679,59 @@ async def set_opted_out(
 async def _verify_token(
     authorization: str | None = None, session_id: str | None = None
 ) -> dict:
-    import aiohttp
-
     if session_id:
         token = await _session_access_token(session_id)
     elif authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
     else:
         raise HTTPException(401, "Missing access token")
-    async with aiohttp.ClientSession() as session:
-        headers = {"Authorization": f"Bearer {token}"}
-        async with session.get(
-            "https://discord.com/api/users/@me", headers=headers
+    if bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with bot_ref.session.get(
+            "https://discord.com/api/users/@me",
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status != 200:
                 raise HTTPException(401, "Invalid access token")
             return await resp.json()
+    except HTTPException:
+        raise
+    except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+        raise HTTPException(503, "Discord authentication is temporarily unavailable") from error
+
+
+async def _require_self(
+    user_id: int, authorization: str | None, session_id: str | None
+) -> dict[str, Any]:
+    user = await _verify_token(authorization, session_id)
+    if int(user["id"]) != user_id:
+        raise HTTPException(403, "You can only access your own data")
+    return user
+
+
+async def _require_guild_manager(
+    guild_id: int, authorization: str | None, session_id: str | None
+) -> tuple[dict[str, Any], discord.Guild, discord.Member]:
+    user = await _verify_token(authorization, session_id)
+    if bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
+    guild = bot_ref.get_guild(guild_id)
+    if guild is None:
+        raise HTTPException(404, "Guild not found")
+    member = guild.get_member(int(user["id"]))
+    if member is None:
+        try:
+            member = await guild.fetch_member(int(user["id"]))
+        except (discord.NotFound, discord.Forbidden):
+            raise HTTPException(403, "You need Manage Server in this guild")
+        except discord.HTTPException as error:
+            raise HTTPException(503, "Discord membership lookup failed") from error
+    if not member.guild_permissions.manage_guild:
+        raise HTTPException(403, "You need Manage Server in this guild")
+    return user, guild, member
 
 
 VALID_GUILD_OPTOUTS = {"name", "icon"}
@@ -674,32 +751,43 @@ async def get_user_guilds(
         raise HTTPException(503, "Bot not ready")
 
     pool = _check_pool()
+    manageable = [
+        guild
+        for guild in bot_ref.guilds
+        if (member := guild.get_member(user_id))
+        and member.guild_permissions.manage_guild
+    ]
+    opt_out_rows = await pool.fetch(
+        "SELECT guild_id, items FROM guild_opted_out WHERE guild_id = ANY($1::BIGINT[])",
+        [guild.id for guild in manageable],
+    )
+    opted_out_by_guild = {row["guild_id"]: row["items"] for row in opt_out_rows}
     guilds = []
-    for guild in bot_ref.guilds:
-        member = guild.get_member(user_id)
-        if member and member.guild_permissions.manage_guild:
-            row = await pool.fetchrow(
-                "SELECT items FROM guild_opted_out WHERE guild_id = $1", guild.id
-            )
-            guilds.append(
-                {
-                    "id": str(guild.id),
-                    "name": guild.name,
-                    # Use a static icon for the dashboard. Animated Discord
-                    # GIF frames can leave transparent-frame ghosting in the
-                    # browser while the image is being updated.
-                    "icon": str(guild.icon.with_format("png")) if guild.icon else None,
-                    "opted_out": row["items"] if row else [],
-                }
-            )
+    for guild in manageable:
+        guilds.append(
+            {
+                "id": str(guild.id),
+                "name": guild.name,
+                # Use a static icon for the dashboard. Animated Discord
+                # GIF frames can leave transparent-frame ghosting in the
+                # browser while the image is being updated.
+                "icon": str(guild.icon.with_format("png")) if guild.icon else None,
+                "opted_out": opted_out_by_guild.get(guild.id, []),
+            }
+        )
 
     guilds.sort(key=lambda g: g["name"].lower())
     return {"guilds": guilds}
 
 
 @app.get("/guild/{guild_id}/opted-out")
-async def get_guild_opted_out(guild_id: int):
+async def get_guild_opted_out(
+    guild_id: int,
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
     """Get opted-out tracking items for a guild."""
+    await _require_guild_manager(guild_id, authorization, session_id)
     pool = _check_pool()
     row = await pool.fetchrow(
         "SELECT items FROM guild_opted_out WHERE guild_id = $1", guild_id
@@ -720,24 +808,12 @@ async def get_user_highlights(
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
 
-    # Large guilds are not always fully member-cached, so fall back to a
-    # bounded member lookup instead of silently returning an empty tab.
-    semaphore = asyncio.Semaphore(8)
-
-    async def find_shared_guild(guild: Any) -> Any | None:
-        if guild.get_member(user_id) is not None:
-            return guild
-        async with semaphore:
-            try:
-                await guild.fetch_member(user_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                return None
-        return guild
-
-    candidates = await asyncio.gather(
-        *(find_shared_guild(guild) for guild in bot_ref.guilds)
-    )
-    shared_guilds = [guild for guild in candidates if guild is not None]
+    # Member intent chunks guilds during startup. Avoid issuing one Discord API
+    # request per uncached guild from a dashboard request; that pattern does not
+    # scale and can exhaust the bot's global rate limit.
+    shared_guilds = [
+        guild for guild in bot_ref.guilds if guild.get_member(user_id) is not None
+    ]
     guild_ids = [guild.id for guild in shared_guilds]
     rows: list[Any] = []
     if guild_ids:
@@ -892,9 +968,14 @@ async def _refresh_urls(urls: list[str]) -> list[str]:
 
 @app.get("/guild/{guild_id}/icons")
 async def get_guild_icons(
-    guild_id: int, page: int = Query(1, ge=1), per_page: int = Query(80, ge=1, le=100)
+    guild_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(80, ge=1, le=100),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
     """Get guild icon history."""
+    await _require_guild_manager(guild_id, authorization, session_id)
     pool = _check_pool()
     count = await pool.fetchval(
         "SELECT COUNT(*) FROM guild_icons WHERE guild_id = $1", guild_id
@@ -909,7 +990,7 @@ async def get_guild_icons(
     )
     urls = [r["icon"] for r in rows if r["icon"]]
     refreshed = await _refresh_urls(urls)
-    url_map = dict(zip(urls, refreshed))
+    url_map = dict(zip(urls, refreshed, strict=False))
     icons = [
         {
             "icon_key": r["icon_key"],
@@ -923,9 +1004,14 @@ async def get_guild_icons(
 
 @app.get("/guild/{guild_id}/names")
 async def get_guild_names(
-    guild_id: int, page: int = Query(1, ge=1), per_page: int = Query(80, ge=1, le=100)
+    guild_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(80, ge=1, le=100),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
     """Get guild name history."""
+    await _require_guild_manager(guild_id, authorization, session_id)
     pool = _check_pool()
     count = await pool.fetchval(
         "SELECT COUNT(*) FROM guild_name_logs WHERE guild_id = $1", guild_id
@@ -978,120 +1064,171 @@ async def list_commands():
     return {"commands": sorted(cmds, key=lambda c: (c["category"], c["name"]))}
 
 
+_stats_cache: tuple[float, dict[str, Any]] | None = None
+_stats_lock = asyncio.Lock()
+
+
 @app.get("/stats")
 async def bot_stats():
+    global _stats_cache
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
+    now_monotonic = time.monotonic()
+    if _stats_cache and now_monotonic - _stats_cache[0] < 300:
+        return _stats_cache[1]
     import datetime
 
+    async with _stats_lock:
+        now_monotonic = time.monotonic()
+        if _stats_cache and now_monotonic - _stats_cache[0] < 300:
+            return _stats_cache[1]
+        pool = _check_pool()
+        async with pool.acquire() as conn:
+            start = datetime.datetime.now(datetime.timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            rows = await conn.fetch(
+                """
+                SELECT 'avatars' AS name, COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE created_at >= $1) AS today FROM avatars
+                UNION ALL SELECT 'commands', COUNT(*),
+                    COUNT(*) FILTER (WHERE created_at >= $1) FROM command_logs
+                UNION ALL SELECT 'usernames', COUNT(*),
+                    COUNT(*) FILTER (WHERE created_at >= $1) FROM username_logs
+                UNION ALL SELECT 'discrims', COUNT(*),
+                    COUNT(*) FILTER (WHERE created_at >= $1) FROM discrim_logs
+                UNION ALL SELECT 'nicknames', COUNT(*),
+                    COUNT(*) FILTER (WHERE created_at >= $1) FROM nickname_logs
+                UNION ALL SELECT 'guild_names', COUNT(*),
+                    COUNT(*) FILTER (WHERE created_at >= $1) FROM guild_name_logs
+                UNION ALL SELECT 'member_joins', COUNT(*),
+                    COUNT(*) FILTER (WHERE time >= $1) FROM member_join_logs
+                UNION ALL SELECT 'guild_icons', COUNT(*),
+                    COUNT(*) FILTER (WHERE created_at >= $1) FROM guild_icons
+                UNION ALL SELECT 'guild_avatars', COUNT(*),
+                    COUNT(*) FILTER (WHERE created_at >= $1) FROM guild_avatars
+                """,
+                start,
+            )
+        by_name = {row["name"]: row for row in rows}
+        result = {
+            "guilds": len(bot_ref.guilds),
+            "users": sum(g.member_count or 0 for g in bot_ref.guilds),
+            "commands": len(bot_ref.commands),
+            "uptime_seconds": (
+                (
+                    datetime.datetime.now().astimezone() - bot_ref.start_time
+                ).total_seconds()
+                if hasattr(bot_ref, "start_time")
+                else 0
+            ),
+            "today": {name: row["today"] for name, row in by_name.items()},
+            "totals": {name: row["total"] for name, row in by_name.items()},
+        }
+        _stats_cache = (now_monotonic, result)
+        return result
+
+
+class OAuthExchangePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=2048)
+    state: str = Field(min_length=32, max_length=256)
+    redirect_uri: str = "https://crygup.com/dashboard"
+
+
+def _oauth_redirect_uri(value: str) -> str:
+    if value not in {"https://crygup.com", "https://crygup.com/dashboard"}:
+        raise HTTPException(400, "Invalid OAuth redirect URI")
+    return value
+
+
+@app.get("/oauth/start")
+async def oauth_start(
+    response: Response,
+    redirect_uri: str = Query("https://crygup.com/dashboard"),
+):
+    """Create a one-time Discord OAuth state and PKCE verifier."""
+    if not bot_ref:
+        raise HTTPException(503, "Bot not ready")
+    redirect_uri = _oauth_redirect_uri(redirect_uri)
+    state = secrets.token_urlsafe(32)
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).decode().rstrip("=")
     pool = _check_pool()
-    async with pool.acquire() as conn:
-        start = datetime.datetime.now(datetime.timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        avatars_total = await conn.fetchval("SELECT COUNT(*) FROM avatars")
-        avatars_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM avatars WHERE created_at >= $1", start
-        )
-        commands_total = await conn.fetchval("SELECT COUNT(*) FROM command_logs")
-        commands_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM command_logs WHERE created_at >= $1", start
-        )
-        usernames_total = await conn.fetchval("SELECT COUNT(*) FROM username_logs")
-        usernames_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM username_logs WHERE created_at >= $1", start
-        )
-        discrims_total = await conn.fetchval("SELECT COUNT(*) FROM discrim_logs")
-        discrims_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM discrim_logs WHERE created_at >= $1", start
-        )
-        nicknames_total = await conn.fetchval("SELECT COUNT(*) FROM nickname_logs")
-        nicknames_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM nickname_logs WHERE created_at >= $1", start
-        )
-        guild_names_total = await conn.fetchval("SELECT COUNT(*) FROM guild_name_logs")
-        guild_names_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM guild_name_logs WHERE created_at >= $1", start
-        )
-        member_joins_total = await conn.fetchval(
-            "SELECT COUNT(*) FROM member_join_logs"
-        )
-        member_joins_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM member_join_logs WHERE time >= $1", start
-        )
-        guild_icons_total = await conn.fetchval("SELECT COUNT(*) FROM guild_icons")
-        guild_icons_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM guild_icons WHERE created_at >= $1", start
-        )
-        guild_avatars_total = await conn.fetchval("SELECT COUNT(*) FROM guild_avatars")
-        guild_avatars_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM guild_avatars WHERE created_at >= $1", start
-        )
-    return {
-        "guilds": len(bot_ref.guilds),
-        "users": sum(g.member_count or 0 for g in bot_ref.guilds),
-        "commands": len(bot_ref.commands),
-        "uptime_seconds": (
-            (datetime.datetime.now().astimezone() - bot_ref.start_time).total_seconds()
-            if hasattr(bot_ref, "start_time")
-            else 0
-        ),
-        "today": {
-            "avatars": avatars_today,
-            "commands": commands_today,
-            "usernames": usernames_today,
-            "discrims": discrims_today,
-            "nicknames": nicknames_today,
-            "guild_names": guild_names_today,
-            "member_joins": member_joins_today,
-            "guild_icons": guild_icons_today,
-            "guild_avatars": guild_avatars_today,
-        },
-        "totals": {
-            "avatars": avatars_total,
-            "commands": commands_total,
-            "usernames": usernames_total,
-            "discrims": discrims_total,
-            "nicknames": nicknames_total,
-            "guild_names": guild_names_total,
-            "member_joins": member_joins_total,
-            "guild_icons": guild_icons_total,
-            "guild_avatars": guild_avatars_total,
-        },
-    }
+    await pool.execute("DELETE FROM oauth_states WHERE expires_at <= now()")
+    await pool.execute(
+        "INSERT INTO oauth_states (state_hash, code_verifier, redirect_uri, expires_at) "
+        "VALUES ($1, $2, $3, now() + interval '10 minutes')",
+        _session_hash(state),
+        verifier,
+        redirect_uri,
+    )
+    response.set_cookie(
+        key=OAUTH_STATE_COOKIE,
+        value=state,
+        max_age=OAUTH_STATE_MAX_AGE,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    query = urlencode(
+        {
+            "client_id": str(bot_ref.config["ids"]["bot_id"]),
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "identify",
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+    )
+    return {"url": f"https://discord.com/oauth2/authorize?{query}"}
 
 
-@app.get("/oauth/exchange")
 @app.post("/oauth/exchange")
 async def oauth_exchange(
     response: Response,
-    code: str = Query(...),
-    redirect_uri: str = Query("https://crygup.com/dashboard"),
+    payload: OAuthExchangePayload,
+    oauth_state: str | None = Cookie(None, alias=OAUTH_STATE_COOKIE),
 ):
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
-    if redirect_uri not in {"https://crygup.com", "https://crygup.com/dashboard"}:
-        raise HTTPException(400, "Invalid OAuth redirect URI")
+    redirect_uri = _oauth_redirect_uri(payload.redirect_uri)
+    if not oauth_state or not hmac.compare_digest(oauth_state, payload.state):
+        raise HTTPException(400, "Invalid OAuth state")
+    row = await _check_pool().fetchrow(
+        "DELETE FROM oauth_states WHERE state_hash = $1 AND expires_at > now() "
+        "RETURNING code_verifier, redirect_uri",
+        _session_hash(payload.state),
+    )
+    if row is None or row["redirect_uri"] != redirect_uri:
+        raise HTTPException(400, "Invalid or expired OAuth state")
     data = {
         "client_id": str(bot_ref.config["ids"]["bot_id"]),
         "client_secret": bot_ref.config["keys"]["client_secret"],
-        "code": code,
+        "code": payload.code,
         "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
+        "code_verifier": row["code_verifier"],
     }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "https://discord.com/api/oauth2/token", data=data
-        ) as resp:
-            if resp.status != 200:
-                err = await resp.text()
-                raise HTTPException(400, f"OAuth exchange failed: {err}")
-            token_data = await resp.json()
-        headers = {"Authorization": f"Bearer {token_data['access_token']}"}
-        async with session.get(
-            "https://discord.com/api/users/@me", headers=headers
-        ) as resp:
-            user_data = await resp.json()
+    async with bot_ref.session.post(
+        "https://discord.com/api/oauth2/token", data=data
+    ) as resp:
+        if resp.status != 200:
+            raise HTTPException(400, "OAuth exchange failed")
+        token_data = await resp.json()
+    headers = {"Authorization": f"Bearer {token_data['access_token']}"}
+    async with bot_ref.session.get(
+        "https://discord.com/api/users/@me", headers=headers
+    ) as resp:
+        if resp.status != 200:
+            raise HTTPException(400, "Discord user lookup failed")
+        user_data = await resp.json()
     session_id, max_age = await _create_web_session(
         int(user_data["id"]),
         token_data["access_token"],
@@ -1106,6 +1243,7 @@ async def oauth_exchange(
         samesite="lax",
         path="/",
     )
+    response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/")
     response.headers["Cache-Control"] = "no-store"
     return {"user": user_data}
 
@@ -1207,7 +1345,7 @@ async def lastfm_callback(token: str = Query(...), state: str = Query(...)):
         """,
         user_id,
         username,
-        session_key,
+        encrypt_credential(session_key),
     )
     bot_ref.db_cache.add_account(user_id, username)
     await _refresh_discord_accounts_message(user_id, channel_id, message_id)
@@ -1363,13 +1501,14 @@ async def spotify_callback(code: str = Query(...), state: str = Query(...)):
     refresh_token = issued_refresh_token
     if not refresh_token:
         try:
-            refresh_token = await asyncio.wait_for(
+            stored_refresh_token = await asyncio.wait_for(
                 pool.fetchval(
                     "SELECT spotify_refresh_token FROM accounts WHERE user_id = $1",
                     user_id,
                 ),
                 timeout=5,
             )
+            refresh_token = decrypt_credential(stored_refresh_token)
         except asyncio.TimeoutError:
             bot_ref.logger.warning(
                 "Spotify stored refresh-token lookup timed out user_id=%s", user_id
@@ -1396,7 +1535,7 @@ async def spotify_callback(code: str = Query(...), state: str = Query(...)):
                    ON CONFLICT (user_id) DO UPDATE
                    SET spotify_refresh_token = EXCLUDED.spotify_refresh_token;""",
                 user_id,
-                refresh_token,
+                encrypt_credential(refresh_token),
             ),
             timeout=5,
         )
@@ -1450,7 +1589,7 @@ async def spotify_callback(code: str = Query(...), state: str = Query(...)):
                    WHERE user_id = $1;""",
                 user_id,
                 display_name,
-                refresh_token,
+                encrypt_credential(refresh_token),
             ),
             timeout=5,
         )
@@ -1529,33 +1668,29 @@ async def anilist_callback(code: str = Query(...), state: str = Query(...)):
                anilist_access_token = EXCLUDED.anilist_access_token;""",
         user_id,
         username,
-        access_token,
+        encrypt_credential(access_token),
     )
     await _refresh_discord_accounts_message(user_id, channel_id, message_id)
     return {"username": username, "source": source}
 
 
 @app.get("/user/{user_id}")
-async def get_user_data(user_id: int):
+async def get_user_data(
+    user_id: int,
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    await _require_self(user_id, authorization, session_id)
     pool = _check_pool()
-    async with pool.acquire() as conn:
-        return {
-            "user_id": user_id,
-            "counts": {
-                "avatars": await conn.fetchval(
-                    "SELECT COUNT(*) FROM avatars WHERE user_id = $1", user_id
-                ),
-                "usernames": await conn.fetchval(
-                    "SELECT COUNT(*) FROM username_logs WHERE user_id = $1", user_id
-                ),
-                "display_names": await conn.fetchval(
-                    "SELECT COUNT(*) FROM display_name_logs WHERE user_id = $1", user_id
-                ),
-                "discrims": await conn.fetchval(
-                    "SELECT COUNT(*) FROM discrim_logs WHERE user_id = $1", user_id
-                ),
-            },
-        }
+    counts = await pool.fetchrow(
+        """SELECT
+               (SELECT COUNT(*) FROM avatars WHERE user_id = $1) AS avatars,
+               (SELECT COUNT(*) FROM username_logs WHERE user_id = $1) AS usernames,
+               (SELECT COUNT(*) FROM display_name_logs WHERE user_id = $1) AS display_names,
+               (SELECT COUNT(*) FROM discrim_logs WHERE user_id = $1) AS discrims""",
+        user_id,
+    )
+    return {"user_id": user_id, "counts": dict(counts)}
 
 
 @app.get("/user/{user_id}/xp")
@@ -1579,8 +1714,13 @@ async def get_user_xp(
 
 @app.get("/usernames/{user_id}")
 async def get_usernames(
-    user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)
+    user_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
+    await _require_self(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -1610,8 +1750,13 @@ async def get_usernames(
 
 @app.get("/display-names/{user_id}")
 async def get_display_names(
-    user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)
+    user_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
+    await _require_self(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -1641,8 +1786,13 @@ async def get_display_names(
 
 @app.get("/discrims/{user_id}")
 async def get_discrims(
-    user_id: int, page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=100)
+    user_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
+    await _require_self(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -1679,40 +1829,45 @@ async def delete_user_data(
 ):
     me = await _verify_token(authorization, session_id)
 
-    tables = [table] if table else list(TABLE_MAP.keys())
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "You can only delete your own data")
     deleted = 0
     pool = _check_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            for t in tables:
-                db_table = TABLE_MAP.get(t)
-                if not db_table:
-                    raise HTTPException(400, f"Invalid table: {t}")
-                if t in GUILD_TABLES:
-                    if not bot_ref:
-                        raise HTTPException(503, "Bot not ready")
-                    guild = bot_ref.get_guild(user_id)
-                    if not guild:
-                        raise HTTPException(404, "Guild not found")
-                    member = guild.get_member(int(me["id"]))
-                    if not member or not member.guild_permissions.manage_guild:
-                        raise HTTPException(403, "You need Manage Server in this guild")
-                    r = await conn.execute(
-                        f"DELETE FROM {db_table} WHERE guild_id = $1", user_id
-                    )
-                else:
-                    if int(me["id"]) != user_id:
-                        raise HTTPException(403, "You can only delete your own data")
+            if table is None:
+                deleted = await erase_user(conn, user_id)
+            else:
+                tables = [table]
+                for t in tables:
+                    db_table = TABLE_MAP.get(t)
+                    if not db_table or t in GUILD_TABLES:
+                        raise HTTPException(400, f"Invalid user table: {t}")
                     r = await conn.execute(
                         f"DELETE FROM {db_table} WHERE user_id = $1", user_id
                     )
-                deleted += int(r.split()[-1])
+                    deleted += int(r.split()[-1])
+    if bot_ref:
+        bot_ref.db_cache.lastfm.pop(user_id, None)
+        bot_ref.db_cache.opted_out.pop(user_id, None)
+        bot_ref.cached_mudae_consent.discard(user_id)
+        tools = bot_ref.get_cog("Tools")
+        if tools is not None and hasattr(tools, "_highlight_cache"):
+            cast(Any, tools)._highlight_cache.clear()
+        fun = bot_ref.get_cog("Fun")
+        if fun is not None and hasattr(fun, "_phone_consent_cache"):
+            cast(Any, fun)._phone_consent_cache.pop(user_id, None)
     return {"user_id": user_id, "deleted_rows": deleted}
 
 
 @app.get("/resolve")
-async def resolve_user(q: str = Query(...)):
+async def resolve_user(
+    q: str = Query(..., min_length=2, max_length=64),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
     """Resolve a Discord username or ID to a user ID."""
+    await _verify_token(authorization, session_id)
     q = q.strip()
     if q.isdigit():
         return {"user_id": str(q)}
@@ -1763,13 +1918,13 @@ async def delete_item(
             if not member or not member.guild_permissions.manage_guild:
                 raise HTTPException(403, "You need Manage Server in this guild")
             if table == "guild_icons":
-                r = await conn.execute(
+                result = await conn.execute(
                     f"DELETE FROM {db_table} WHERE guild_id = $1 AND icon_key = $2",
                     user_id,
                     key,
                 )
             else:
-                r = await conn.execute(
+                result = await conn.execute(
                     f"DELETE FROM {db_table} WHERE guild_id = $1 AND id = $2",
                     user_id,
                     int(key),
@@ -1777,7 +1932,7 @@ async def delete_item(
         elif table == "avatars":
             if int(me["id"]) != user_id:
                 raise HTTPException(403, "You can only delete your own data")
-            r = await conn.execute(
+            result = await conn.execute(
                 f"DELETE FROM {db_table} WHERE user_id = $1 AND avatar_key = $2",
                 user_id,
                 key,
@@ -1785,27 +1940,35 @@ async def delete_item(
         else:
             if int(me["id"]) != user_id:
                 raise HTTPException(403, "You can only delete your own data")
-            r = await conn.execute(
+            result = await conn.execute(
                 f"DELETE FROM {db_table} WHERE user_id = $1 AND id = $2",
                 user_id,
                 int(key),
             )
-    return {"deleted": True}
+    deleted = int(result.rsplit(" ", 1)[-1])
+    return {"deleted": deleted > 0, "deleted_rows": deleted}
+
+
+_spotify_cover_cache = TTLCache[tuple[str, str], str](maxsize=1024, ttl=600)
 
 
 @app.get("/spotify-cover")
-async def spotify_cover(artist: str = Query(...), track: str = Query(...)):
+async def spotify_cover(
+    artist: str = Query(..., min_length=1, max_length=200),
+    track: str = Query(..., min_length=1, max_length=200),
+):
     """Search Spotify for a track cover image. Falls back if Last.fm has no cover."""
-    import base64
-
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
     sid = bot_ref.config["keys"]["spotify_id"]
     ss = bot_ref.config["keys"]["spotify_secret"]
     encoded = base64.b64encode(f"{sid}:{ss}".encode("ascii")).decode("ascii")
-    async with aiohttp.ClientSession() as session:
-        # Get token
-        async with session.post(
+    cache_key = (artist.casefold(), track.casefold())
+    if cached := _spotify_cover_cache.get(cache_key):
+        return {"url": cached}
+    token = bot_ref.spotify_key
+    if token is None:
+        async with bot_ref.session.post(
             "https://accounts.spotify.com/api/token",
             data={"grant_type": "client_credentials"},
             headers={
@@ -1816,38 +1979,73 @@ async def spotify_cover(artist: str = Query(...), track: str = Query(...)):
             if resp.status != 200:
                 raise HTTPException(502, "Spotify auth failed")
             token_data = await resp.json()
-        # Search
-        headers = {"Authorization": f"Bearer {token_data['access_token']}"}
-        q = f"track:{track} artist:{artist}"
-        async with session.get(
-            "https://api.spotify.com/v1/search",
-            params={"q": q, "type": "track", "limit": 1},
-            headers=headers,
-        ) as resp:
-            if resp.status != 200:
-                raise HTTPException(502, "Spotify search failed")
-            data = await resp.json()
+        token = token_data["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    q = f"track:{track} artist:{artist}"
+    async with bot_ref.session.get(
+        "https://api.spotify.com/v1/search",
+        params={"q": q, "type": "track", "limit": 1},
+        headers=headers,
+    ) as resp:
+        if resp.status != 200:
+            raise HTTPException(502, "Spotify search failed")
+        data = await resp.json()
     items = data.get("tracks", {}).get("items", [])
     if not items:
         raise HTTPException(404, "No cover found")
     images = items[0].get("album", {}).get("images", [])
     if not images:
         raise HTTPException(404, "No cover found")
-    return {"url": images[0]["url"]}
+    cover_url = images[0]["url"]
+    _spotify_cover_cache[cache_key] = cover_url
+    return {"url": cover_url}
 
 
 class MessagePayload(BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
     content: str = Field(..., min_length=1, max_length=2000)
-    avatar_url: str | None = None
-    discord_id: str | None = None
+    avatar_url: str | None = Field(None, max_length=2048)
+    discord_id: str | None = Field(None, pattern=r"^[0-9]{1,20}$")
 
 
-_msg_rate_limit: dict[str, float] = {}
+_msg_rate_limit = TTLCache[str, bool](maxsize=10_000, ttl=60)
+
+
+def _client_ip(request: Request) -> str:
+    remote = request.client.host if request.client else ""
+    configured = os.environ.get(
+        "FISHIE_TRUSTED_PROXIES", "127.0.0.0/8,::1/128"
+    ).split(",")
+    try:
+        remote_ip = ipaddress.ip_address(remote)
+        trusted = any(
+            remote_ip in ipaddress.ip_network(item.strip())
+            for item in configured
+            if item.strip()
+        )
+    except ValueError:
+        trusted = False
+
+    candidate = remote
+    if trusted:
+        candidate = (
+            request.headers.get("CF-Connecting-IP")
+            or request.headers.get("X-Real-IP")
+            or remote
+        ).split(",")[0].strip()
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError as error:
+        raise HTTPException(400, "Invalid client address") from error
 
 
 @app.post("/send-message")
-async def send_message(payload: MessagePayload, request: Request):
+async def send_message(
+    payload: MessagePayload,
+    request: Request,
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
 
@@ -1856,21 +2054,24 @@ async def send_message(payload: MessagePayload, request: Request):
         raise HTTPException(500, "Webhook not configured")
 
     # rate limit: 1 per minute per IP
-    ip = (
-        request.headers.get("CF-Connecting-IP")
-        or request.headers.get("X-Real-IP")
-        or (request.client.host if request.client else "unknown")
-    )
-    ip = ip.split(",")[0].strip()
+    ip = _client_ip(request)
 
     if ip in bot_ref.cached_banned_ips:
         raise HTTPException(403, "You are banned from sending messages")
 
-    now = time.time()
-    last = _msg_rate_limit.get(ip, 0)
-    if now - last < 60:
+    if ip in _msg_rate_limit:
         raise HTTPException(429, "Please wait before sending another message")
-    _msg_rate_limit[ip] = now
+    _msg_rate_limit[ip] = True
+
+    if payload.avatar_url:
+        try:
+            await validate_public_url(payload.avatar_url)
+        except commands.CommandError as error:
+            raise HTTPException(400, str(error)) from error
+    if payload.discord_id:
+        user = await _verify_token(authorization, session_id)
+        if not hmac.compare_digest(str(user["id"]), payload.discord_id):
+            raise HTTPException(403, "The Discord identity does not match your session")
 
     # sanitize
     name = payload.name.replace("discord.com/api/webhooks", "[redacted]")
@@ -1883,16 +2084,22 @@ async def send_message(payload: MessagePayload, request: Request):
             else {"name": name}
         ),
         "description": content,
-        "footer": {"text": f"IP: {ip}"},
+        "footer": {
+            "text": "Source: "
+            + hmac.new(
+                str(bot_ref.config["keys"]["client_secret"]).encode(),
+                ip.encode(),
+                hashlib.sha256,
+            ).hexdigest()[:16]
+        },
         "color": 0xFAA0C1,
     }
     if payload.discord_id:
         embed["footer"]["text"] += f" · ID: {payload.discord_id}"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(webhook_url, json={"embeds": [embed]}) as resp:
-            if resp.status not in (200, 204):
-                raise HTTPException(500, f"Webhook returned {resp.status}")
+    async with bot_ref.session.post(webhook_url, json={"embeds": [embed]}) as resp:
+        if resp.status not in (200, 204):
+            raise HTTPException(502, "Message delivery failed")
 
     return {"ok": True}
 
@@ -1956,8 +2163,13 @@ async def get_user_reminders(
 
 
 @app.get("/user/{user_id}/first-command")
-async def get_user_first_command(user_id: int):
+async def get_user_first_command(
+    user_id: int,
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
     """Get the date of a user's first command use."""
+    await _require_self(user_id, authorization, session_id)
     pool = _check_pool()
     row = await pool.fetchrow(
         "SELECT created_at FROM command_logs WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1",
@@ -2069,6 +2281,16 @@ async def disconnect_anilist(
     return {"disconnected": True}
 
 
+class GuildSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auto_download: int | str | None = None
+    poketwo: StrictBool | None = None
+    auto_reactions: StrictBool | None = None
+    pinboard: int | str | None = None
+    honeypot: int | str | None = None
+
+
 @app.get("/guild/{guild_id}/settings")
 async def get_guild_settings(
     guild_id: int,
@@ -2110,7 +2332,7 @@ async def get_guild_settings(
 @app.post("/guild/{guild_id}/settings")
 async def set_guild_settings(
     guild_id: int,
-    payload: dict = Body(...),
+    payload: "GuildSettingsPayload",
     authorization: str = Header(None),
     session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
@@ -2123,7 +2345,7 @@ async def set_guild_settings(
     member = guild.get_member(int(me["id"]))
     if not member or not member.guild_permissions.manage_guild:
         raise HTTPException(403, "Need Manage Server permission")
-    allowed = {"auto_download", "poketwo", "auto_reactions", "pinboard", "honeypot"}
+    payload_data = payload.model_dump(exclude_unset=True)
     updates = {}
     pool = _check_pool()
 
@@ -2132,32 +2354,34 @@ async def set_guild_settings(
         "FROM guild_settings WHERE guild_id = $1",
         guild_id,
     )
-    current_honeypot = await pool.fetchval(
-        "SELECT channel_id FROM honeypot_channels WHERE guild_id = $1", guild_id
-    )
-
-    if "honeypot" in payload:
-        hp_val = payload["honeypot"]
+    if "honeypot" in payload_data:
+        hp_val = payload_data["honeypot"]
         if hp_val:
             try:
                 hp_val = int(hp_val)
             except (TypeError, ValueError):
                 raise HTTPException(400, "honeypot must be a channel ID")
-            await pool.execute(
-                "INSERT INTO honeypot_channels (guild_id, channel_id) VALUES ($1, $2) "
-                "ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2",
-                guild_id,
-                hp_val,
-            )
-        else:
-            await pool.execute(
-                "DELETE FROM honeypot_channels WHERE guild_id = $1", guild_id
-            )
+            channel = await _resolve_guild_text_channel(guild, hp_val)
+            if channel is None:
+                raise HTTPException(400, "Honeypot channel must belong to this server")
+            if not (
+                member.guild_permissions.manage_channels
+                and member.guild_permissions.ban_members
+            ):
+                raise HTTPException(
+                    403, "Manage Channels and Ban Members are required for honeypots"
+                )
+            me_member = guild.me
+            if me_member is None or not (
+                me_member.guild_permissions.manage_channels
+                and me_member.guild_permissions.ban_members
+            ):
+                raise HTTPException(400, "The bot lacks channel or ban permissions")
         updates["honeypot"] = hp_val
 
     gs_updates = {}
-    for key, value in payload.items():
-        if key not in allowed or key == "honeypot":
+    for key, value in payload_data.items():
+        if key == "honeypot":
             continue
         if key in {"auto_download", "pinboard"}:
             if value in (None, ""):
@@ -2167,24 +2391,38 @@ async def set_guild_settings(
                     value = int(value)
                 except (TypeError, ValueError):
                     raise HTTPException(400, f"{key} must be a channel ID")
-        elif key in {"poketwo", "auto_reactions"}:
-            if isinstance(value, str):
-                value = value.strip().lower() in {"1", "true", "yes", "on"}
-            else:
-                value = bool(value)
+            if value is not None:
+                channel = await _resolve_guild_text_channel(guild, value)
+                if channel is None:
+                    raise HTTPException(400, f"{key} channel must belong to this server")
+                if not member.guild_permissions.manage_channels:
+                    raise HTTPException(403, "Manage Channels is required")
         gs_updates[key] = value
 
-    if gs_updates:
-        keys = ", ".join(gs_updates.keys())
-        placeholders = ", ".join(f"${i+2}" for i in range(len(gs_updates)))
-        set_clause = ", ".join(f"{k} = EXCLUDED.{k}" for k in gs_updates)
-        await pool.execute(
-            f"INSERT INTO guild_settings (guild_id, {keys}) VALUES ($1, {placeholders}) ON CONFLICT (guild_id) DO UPDATE SET {set_clause}",
-            guild_id,
-            *list(gs_updates.values()),
-        )
-        for k, v in gs_updates.items():
-            updates[k] = v
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            if "honeypot" in updates:
+                if updates["honeypot"]:
+                    await connection.execute(
+                        "INSERT INTO honeypot_channels (guild_id, channel_id) VALUES ($1, $2) "
+                        "ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2",
+                        guild_id,
+                        updates["honeypot"],
+                    )
+                else:
+                    await connection.execute(
+                        "DELETE FROM honeypot_channels WHERE guild_id = $1", guild_id
+                    )
+            if gs_updates:
+                keys = ", ".join(gs_updates.keys())
+                placeholders = ", ".join(f"${i+2}" for i in range(len(gs_updates)))
+                set_clause = ", ".join(f"{k} = EXCLUDED.{k}" for k in gs_updates)
+                await connection.execute(
+                    f"INSERT INTO guild_settings (guild_id, {keys}) VALUES ($1, {placeholders}) ON CONFLICT (guild_id) DO UPDATE SET {set_clause}",
+                    guild_id,
+                    *list(gs_updates.values()),
+                )
+                updates.update(gs_updates)
 
     # Keep the running bot in sync with dashboard changes.  These values are
     # read from db_cache by the event cogs and are otherwise stale until restart.
@@ -2212,10 +2450,10 @@ async def set_guild_settings(
         if gs_updates["pinboard"]:
             cache.add_pinboard(guild_id, gs_updates["pinboard"])
     if "honeypot" in updates:
-        if current_honeypot:
-            bot_ref.cached_honeypots.discard(current_honeypot)
         if updates["honeypot"]:
-            bot_ref.cached_honeypots.add(updates["honeypot"])
+            bot_ref.cached_honeypots[guild_id] = updates["honeypot"]
+        else:
+            bot_ref.cached_honeypots.pop(guild_id, None)
 
     return {"settings": updates}
 
@@ -2445,33 +2683,38 @@ async def set_twitch_follow(
         raise HTTPException(404, "Twitch channel not found")
     broadcaster_id = str(twitch_user["id"])
     pool = _check_pool()
-    existing = await pool.fetchval(
-        "SELECT 1 FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
-        guild_id,
-        channel_name,
-    )
-    if not existing:
-        count = await pool.fetchval(
-            "SELECT COUNT(*) FROM twitch_follows WHERE guild_id = $1", guild_id
-        )
-        if count >= 3:
-            raise HTTPException(
-                400, "You can follow up to 3 Twitch channels per server"
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))", f"fishie:twitch:{guild_id}"
             )
-    await pool.execute(
-        """INSERT INTO twitch_follows
-           (guild_id, channel_name, announce_channel_id, broadcaster_id, message_template)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (guild_id, channel_name) DO UPDATE SET
-             announce_channel_id = EXCLUDED.announce_channel_id,
-             broadcaster_id = EXCLUDED.broadcaster_id,
-             message_template = EXCLUDED.message_template""",
-        guild_id,
-        channel_name,
-        announce_channel_id,
-        broadcaster_id,
-        message_template,
-    )
+            existing = await connection.fetchval(
+                "SELECT 1 FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
+                guild_id,
+                channel_name,
+            )
+            if not existing:
+                count = await connection.fetchval(
+                    "SELECT COUNT(*) FROM twitch_follows WHERE guild_id = $1", guild_id
+                )
+                if count >= 3:
+                    raise HTTPException(
+                        400, "You can follow up to 3 Twitch channels per server"
+                    )
+            await connection.execute(
+                """INSERT INTO twitch_follows
+                   (guild_id, channel_name, announce_channel_id, broadcaster_id, message_template)
+                   VALUES ($1, $2, $3, $4, $5)
+                   ON CONFLICT (guild_id, channel_name) DO UPDATE SET
+                     announce_channel_id = EXCLUDED.announce_channel_id,
+                     broadcaster_id = EXCLUDED.broadcaster_id,
+                     message_template = EXCLUDED.message_template""",
+                guild_id,
+                channel_name,
+                announce_channel_id,
+                broadcaster_id,
+                message_template,
+            )
     try:
         await events.ensure_twitch_eventsub_subscription(broadcaster_id)
     except Exception as error:
@@ -2581,7 +2824,7 @@ async def delete_logger_setting(
     authorization: str = Header(None),
     session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
-    guild = await _managed_guild(guild_id, authorization, session_id)
+    await _managed_guild(guild_id, authorization, session_id)
     event = event.strip().casefold()
     if event not in LOGGER_EVENT_LABELS:
         raise HTTPException(400, "Unknown logger event")
@@ -2626,37 +2869,20 @@ async def add_guild_prefix(
     session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
     """Add a custom prefix. Requires OAuth + Manage Server."""
-    try:
-        me = await _verify_token(authorization, session_id)
-        if not bot_ref:
-            raise HTTPException(503, "Bot not ready")
-        guild = bot_ref.get_guild(guild_id)
-        if not guild:
-            raise HTTPException(404, "Guild not found")
-        member = guild.get_member(int(me["id"]))
-        if not member or not member.guild_permissions.manage_guild:
-            raise HTTPException(403, "Need Manage Server permission")
-        prefix = payload.get("prefix", "").strip()
-        if not prefix or len(prefix) > 10:
-            raise HTTPException(400, "Prefix must be 1-10 characters")
-        pool = _check_pool()
-        await pool.execute(
-            "INSERT INTO guild_prefixes (guild_id, prefix, author_id, time) VALUES ($1, $2, $3, NOW()) ON CONFLICT (guild_id, prefix) DO UPDATE SET author_id = EXCLUDED.author_id, time = NOW()",
-            guild_id,
-            prefix,
-            int(payload.get("author_id", me["id"])),
-        )
-        if bot_ref:
-            bot_ref.db_cache.add_prefix(guild_id, prefix)
-        return {"prefix": prefix}
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-
-        print(f"[API ERROR] add_guild_prefix: {e}", flush=True)
-        traceback.print_exc()
-        raise HTTPException(500, str(e))
+    me, _, _ = await _require_guild_manager(guild_id, authorization, session_id)
+    prefix = payload.get("prefix", "").strip()
+    if not prefix or len(prefix) > 10:
+        raise HTTPException(400, "Prefix must be 1-10 characters")
+    pool = _check_pool()
+    await pool.execute(
+        "INSERT INTO guild_prefixes (guild_id, prefix, author_id, time) VALUES ($1, $2, $3, NOW()) ON CONFLICT (guild_id, prefix) DO UPDATE SET author_id = EXCLUDED.author_id, time = NOW()",
+        guild_id,
+        prefix,
+        int(me["id"]),
+    )
+    if bot_ref:
+        bot_ref.db_cache.add_prefix(guild_id, prefix)
+    return {"prefix": prefix}
 
 
 @app.delete("/guild/{guild_id}/prefixes")
@@ -2667,15 +2893,7 @@ async def remove_guild_prefix(
     session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
     """Remove a custom prefix. Requires OAuth + Manage Server."""
-    me = await _verify_token(authorization, session_id)
-    if not bot_ref:
-        raise HTTPException(503, "Bot not ready")
-    guild = bot_ref.get_guild(guild_id)
-    if not guild:
-        raise HTTPException(404, "Guild not found")
-    member = guild.get_member(int(me["id"]))
-    if not member or not member.guild_permissions.manage_guild:
-        raise HTTPException(403, "Need Manage Server permission")
+    await _require_guild_manager(guild_id, authorization, session_id)
     prefix = payload.get("prefix", "").strip()
     pool = _check_pool()
     await pool.execute(
@@ -2695,23 +2913,46 @@ async def delete_guild_data(
     session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
     """Delete all tracking data for a guild. Requires OAuth + Manage Server."""
-    me = await _verify_token(authorization, session_id)
-    if not bot_ref:
+    await _require_guild_manager(guild_id, authorization, session_id)
+    if bot_ref is None:
         raise HTTPException(503, "Bot not ready")
-    guild = bot_ref.get_guild(guild_id)
-    if not guild:
-        raise HTTPException(404, "Guild not found")
-    member = guild.get_member(int(me["id"]))
-    if not member or not member.guild_permissions.manage_guild:
-        raise HTTPException(403, "Need Manage Server permission")
     pool = _check_pool()
-    for table in ("guild_icons", "guild_name_logs", "guild_avatars"):
-        await pool.execute(f"DELETE FROM {table} WHERE guild_id = $1", guild_id)
-    for table in (
-        "guild_settings",
-        "honeypot_channels",
-        "guild_prefixes",
-        "guild_opted_out",
-    ):
-        await pool.execute(f"DELETE FROM {table} WHERE guild_id = $1", guild_id)
-    return {"deleted": True}
+    logger_rows = await pool.fetch(
+        "SELECT event, webhook_url FROM guild_log_channels WHERE guild_id = $1", guild_id
+    )
+    broadcasters = await pool.fetch(
+        "SELECT DISTINCT broadcaster_id FROM twitch_follows "
+        "WHERE guild_id = $1 AND broadcaster_id IS NOT NULL",
+        guild_id,
+    )
+    auto_download_channel = await pool.fetchval(
+        "SELECT auto_download FROM guild_settings WHERE guild_id = $1", guild_id
+    )
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            deleted = await erase_guild(connection, guild_id)
+
+    moderation: Any = bot_ref.get_cog("Moderation")
+    if moderation is not None:
+        for row in logger_rows:
+            await moderation._delete_logger_webhook(
+                row["webhook_url"], guild_id, row["event"]
+            )
+    events: Any = bot_ref.get_cog("Events")
+    if events is not None:
+        for row in broadcasters:
+            await events.remove_twitch_eventsub_subscription(str(row["broadcaster_id"]))
+
+    cache = bot_ref.db_cache
+    cache.prefixes.pop(guild_id, None)
+    cache.opted_out.pop(guild_id, None)
+    cache.pinboard.pop(guild_id, None)
+    cache.poketwo_guilds.discard(guild_id)
+    cache.auto_reaction_guilds.discard(guild_id)
+    if auto_download_channel:
+        cache.auto_downloads.discard(int(auto_download_channel))
+    cache.disabled_commands = {
+        item for item in cache.disabled_commands if item[0] != guild_id
+    }
+    bot_ref.cached_honeypots.pop(guild_id, None)
+    return {"deleted": True, "deleted_rows": deleted}

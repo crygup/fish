@@ -4,28 +4,34 @@ import asyncio
 import datetime
 import json
 import re
-import xml.etree.ElementTree as ET
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from urllib.parse import urljoin
 
+import aiohttp
 import discord
+from defusedxml import ElementTree as ET
+from discord import app_commands
 from discord.ext import commands
 from discord.utils import escape_markdown
 from playwright.async_api import async_playwright
-from discord import app_commands
+
 from extensions.context import Context
 from utils import (
-    plural,
-    Pager,
+    ROBLOX_ASSET_RE,
+    AuthorView,
     FieldPageSource,
+    Pager,
     SimplePages,
     TenorUrlConverter,
     UrbanPageSource,
     URLConverter,
     get_or_fetch_user,
-    AuthorView,
-    ROBLOX_ASSET_RE,
+    plural,
+    read_bounded_response,
     to_image,
+    validate_connected_peer,
+    validate_public_url,
 )
 
 from .command_stats import CommandStats
@@ -38,6 +44,8 @@ from .reminders import Reminder
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context
+
+ROBLOX_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 param = commands.param
 
@@ -512,12 +520,13 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
         for letter in all_letters:
             try:
                 new_words.append(self.cyrillic_letters[letter])
-            except:
+            except KeyError:
                 new_words.append(f"‌**{letter}**‌")
         fmt = "".join(new_words)
         await ctx.send(fmt[:2000])
 
     @commands.command(name="screenshot", aliases=("ss",))
+    @commands.cooldown(1, 30, commands.BucketType.user)
     async def screenshot(
         self,
         ctx: Context,
@@ -528,12 +537,40 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
         ),
     ):
         """Screenshot a website from the internet"""
-        async with ctx.typing():
+        if flags.delay < 0 or flags.delay > 10:
+            raise commands.BadArgument("Screenshot delay must be between 0 and 10 seconds.")
+        await validate_public_url(website)
+        async with self.bot.media_semaphore, ctx.typing():
             async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch()
-                page = await browser.new_page(locale="en-US")
-                await page.goto(website)
+                browser = await playwright.chromium.launch(
+                    args=["--disable-dev-shm-usage", "--no-first-run"]
+                )
+                browser_context = await browser.new_context(
+                    locale="en-US", service_workers="block"
+                )
+                page = await browser_context.new_page()
+
+                async def guard_request(route):
+                    try:
+                        await validate_public_url(route.request.url)
+                    except commands.CommandError:
+                        await route.abort("blockedbyclient")
+                    else:
+                        await route.continue_()
+
+                await page.route("**/*", guard_request)
+                await page.goto(
+                    website, wait_until="domcontentloaded", timeout=15_000
+                )
                 await asyncio.sleep(flags.delay)
+                if flags.full_page:
+                    height = await page.evaluate(
+                        "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+                    )
+                    if int(height) > 12_000:
+                        raise commands.BadArgument(
+                            "The page is too tall for a full-page screenshot."
+                        )
                 file = discord.File(
                     BytesIO(
                         await page.screenshot(
@@ -587,7 +624,7 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
     async def lb_name(self, user_id: int) -> discord.User | int:
         try:
             return await get_or_fetch_user(self.bot, user_id)
-        except:
+        except discord.HTTPException:
             return user_id
 
     @commands.hybrid_command(name="leaderboard", aliases=("lb",))
@@ -602,14 +639,13 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
         if not bool(xp):
             raise commands.BadArgument("No data found")
 
-        data: Data[int, int] = dict(xp)  # type: ignore
-
-        data = [
+        xp_by_user: dict[int, int] = dict(xp)  # type: ignore
+        entries = [
             escape_markdown(f"{await self.lb_name(user_id)}: {xp:,}")
-            for user_id, xp in data.items()
+            for user_id, xp in xp_by_user.items()
         ]
-        pages = SimplePages(entries=data, per_page=10, ctx=ctx)
-        pages.embed.title = f"Gloabl ranks"
+        pages = SimplePages(entries=entries, per_page=10, ctx=ctx)
+        pages.embed.title = "Global ranks"
         await pages.start(ctx)
 
     @commands.command(name="solve")
@@ -689,23 +725,14 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
                 )
                 return
 
-            proc = await asyncio.create_subprocess_exec(
-                "curl",
-                "-s",
-                "--max-time",
-                "10",
+            async with self.bot.session.get(
                 f"https://economy.roblox.com/v2/assets/{aid}/details",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-
-            if proc.returncode != 0:
-                raise commands.CommandError(
-                    f"Failed to reach Roblox (curl exit {proc.returncode}). Try again later."
-                )
-
-            details = json.loads(stdout)
+                timeout=ROBLOX_TIMEOUT,
+            ) as response:
+                validate_connected_peer(response)
+                if response.status != 200:
+                    raise commands.CommandError("Failed to reach Roblox. Try again later.")
+                details = json.loads(await read_bounded_response(response, 1_000_000))
             asset_type = details.get("AssetTypeId")
             if asset_type not in (2, 11, 12):
                 raise commands.CommandError(
@@ -727,31 +754,36 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
                 extra["owner"] = creator_name
 
             cookie = self.bot.config["keys"].get("roblox", "")
-            cookie_header = f"Cookie: .ROBLOSECURITY={cookie}" if cookie else ""
-            curl_args = [
-                "curl",
-                "-s",
-                "--compressed",
-                "--max-time",
-                "10",
-                "-L",
-                f"https://assetdelivery.roblox.com/v1/asset?id={aid}",
-            ]
-            if cookie_header:
-                curl_args[1:1] = ["-H", cookie_header]
-
-            proc = await asyncio.create_subprocess_exec(
-                *curl_args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-
-            if proc.returncode != 0:
-                raise commands.CommandError(
-                    f"Failed to fetch asset XML (curl exit {proc.returncode}). Try again later."
-                )
-
+            asset_url = f"https://assetdelivery.roblox.com/v1/asset?id={aid}"
+            headers = {"Cookie": f".ROBLOSECURITY={cookie}"} if cookie else None
+            async with self.bot.session.get(
+                asset_url,
+                headers=headers,
+                allow_redirects=False,
+                timeout=ROBLOX_TIMEOUT,
+            ) as response:
+                validate_connected_peer(response)
+                if 300 <= response.status < 400 and response.headers.get("Location"):
+                    # Never forward the account cookie to the redirect target.
+                    redirected = urljoin(asset_url, response.headers["Location"])
+                    await validate_public_url(redirected)
+                    async with self.bot.session.get(
+                        redirected, allow_redirects=False, timeout=ROBLOX_TIMEOUT
+                    ) as redirected_response:
+                        validate_connected_peer(redirected_response)
+                        if redirected_response.status != 200:
+                            raise commands.CommandError(
+                                "Failed to fetch asset XML. Try again later."
+                            )
+                        stdout = await read_bounded_response(
+                            redirected_response, 5_000_000
+                        )
+                elif response.status == 200:
+                    stdout = await read_bounded_response(response, 5_000_000)
+                else:
+                    raise commands.CommandError(
+                        "Failed to fetch asset XML. Try again later."
+                    )
             if stdout.startswith(b"{"):
                 await ctx.send(
                     "Something went wrong while trying to get the asset, please try again later, we may be rate limited."
@@ -779,23 +811,19 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
 
             texture_id = texture_match.group(1)
 
-            proc = await asyncio.create_subprocess_exec(
-                "curl",
-                "-s",
-                "--max-time",
-                "10",
-                f"https://thumbnails.roblox.com/v1/assets?assetIds={texture_id}&size=420x420&format=Png",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-
-            if proc.returncode != 0:
-                raise commands.CommandError(
-                    f"Failed to fetch template thumbnail (curl exit {proc.returncode}). Try again later."
+            async with self.bot.session.get(
+                "https://thumbnails.roblox.com/v1/assets",
+                params={"assetIds": texture_id, "size": "420x420", "format": "Png"},
+                timeout=ROBLOX_TIMEOUT,
+            ) as response:
+                validate_connected_peer(response)
+                if response.status != 200:
+                    raise commands.CommandError(
+                        "Failed to fetch template thumbnail. Try again later."
+                    )
+                thumb_data = json.loads(
+                    await read_bounded_response(response, 1_000_000)
                 )
-
-            thumb_data = json.loads(stdout)
             image_url = thumb_data["data"][0]["imageUrl"]
 
             await self.bot.pool.execute(
@@ -933,12 +961,12 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
                 embed.title = f"Correct! It's {display}."
                 try:
                     await guess_msg.add_reaction("✅")
-                except:
+                except discord.HTTPException:
                     pass
             else:
                 try:
                     await guess_msg.add_reaction("❌")
-                except:
+                except discord.HTTPException:
                     pass
                 if attempts >= 5:
                     embed.color = 0xE74C3C

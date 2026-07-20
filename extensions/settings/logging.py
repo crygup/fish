@@ -149,6 +149,11 @@ class Logging(Cog):
             "nickname": ["Nickname logging", "\U0001f7e2"],
             "discrim": ["Discriminator logging", "\U0001f7e2"],
             "joins": ["Server join logging", "\U0001f7e2"],
+            "xp": ["XP and message count tracking", "\U0001f7e2"],
+            "commands": ["Command usage tracking", "\U0001f7e2"],
+            "status": ["Presence status tracking", "\U0001f7e2"],
+            "pokemon": ["Pokémon solve tracking", "\U0001f7e2"],
+            "corn": ["Corn reaction tracking", "\U0001f7e2"],
         }
 
         if bool(records):
@@ -288,7 +293,7 @@ class Logging(Cog):
         """Delete a saved username."""
 
         name = await self.bot.pool.fetchval(
-            f"SELECT username FROM username_logs WHERE user_id = $1 AND id = $2",
+            "SELECT username FROM username_logs WHERE user_id = $1 AND id = $2",
             ctx.author.id,
             id,
         )
@@ -326,7 +331,7 @@ class Logging(Cog):
         """Delete a saved nickname."""
 
         name = await self.bot.pool.fetchval(
-            f"SELECT nickname FROM nickname_logs WHERE user_id = $1 AND id = $2",
+            "SELECT nickname FROM nickname_logs WHERE user_id = $1 AND id = $2",
             ctx.author.id,
             id,
         )
@@ -366,7 +371,7 @@ class Logging(Cog):
         """Delete a saved display name."""
 
         name = await self.bot.pool.fetchval(
-            f"SELECT display_name FROM display_name_logs WHERE user_id = $1 AND id = $2",
+            "SELECT display_name FROM display_name_logs WHERE user_id = $1 AND id = $2",
             ctx.author.id,
             id,
         )
@@ -408,7 +413,7 @@ class Logging(Cog):
         """Delete a saved discriminator."""
 
         discrim = await self.bot.pool.fetchval(
-            f"SELECT discrim FROM discrim_logs WHERE user_id = $1 AND id = $2",
+            "SELECT discrim FROM discrim_logs WHERE user_id = $1 AND id = $2",
             ctx.author.id,
             id,
         )

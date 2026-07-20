@@ -4,8 +4,9 @@ import os
 import re
 import time
 from pathlib import Path
-import discord
 from typing import TYPE_CHECKING, List, Literal, Optional, Union, cast
+
+import discord
 from discord.abc import Messageable
 from discord.ext import commands
 
@@ -13,11 +14,11 @@ from core import Cog
 from extensions.settings import _spotify_authorization_url, _spotify_link_view
 from extensions.spotify import Spotify
 from utils import (
-    fish_owner,
-    greenTick,
     AllMsgbleChannels,
-    update_pokemon,
+    fish_owner,
     fish_x,
+    greenTick,
+    update_pokemon,
 )
 
 if TYPE_CHECKING:
@@ -40,7 +41,7 @@ class Owner(Cog):
     ):
         try:
             await ctx.message.add_reaction(greenTick if check else fish_x)
-        except:
+        except discord.HTTPException:
             pass
 
     @commands.command(name="reply")
@@ -94,7 +95,7 @@ class Owner(Cog):
             await self.bot.pool.execute(sql, name.lower(), discord.utils.utcnow())
             await update_pokemon(self.bot)
             await self._add_reaction(ctx, ctx.message)
-        except:
+        except Exception:
             await self._add_reaction(ctx, ctx.message, check=False)
 
     @pokemon.command(name="solve")

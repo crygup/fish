@@ -1,21 +1,21 @@
 from __future__ import annotations
 
+import random
 from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
-import random
 
 from .auto_download import AutoDownload
 from .auto_reactions import Reactions
 from .command_error import CommandErrors
 from .command_logs import CommandLogs
+from .corn import CornReacts
 from .guilds import Guilds
 from .pokemon import Pokemon
 from .statuses import StatusCog
 from .tasks import Tasks
 from .xp import XPCog
-from .corn import CornReacts
 
 if TYPE_CHECKING:
     from core import Fishie

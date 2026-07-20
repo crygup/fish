@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -14,7 +13,6 @@ from typing import (
 )
 
 import discord
-from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
@@ -240,10 +238,12 @@ class PurgeCog(Cog):
                 predicates.append(lambda m: flags.contains in m.content)  # type: ignore
 
             if flags.starts:
-                predicates.append(lambda m: m.content.startswith(flags.prefix))  # type: ignore
+                starts = flags.starts
+                predicates.append(lambda m: m.content.startswith(starts))
 
             if flags.ends:
-                predicates.append(lambda m: m.content.endswith(flags.suffix))  # type: ignore
+                ends = flags.ends
+                predicates.append(lambda m: m.content.endswith(ends))
 
             if not predicates:
                 # If nothing is passed then default to `True` to emulate ?purge all behaviour
@@ -273,7 +273,7 @@ class PurgeCog(Cog):
                 deleted = await channel.purge(
                     limit=amount, before=before, after=after, check=predicate
                 )
-            except discord.Forbidden as e:
+            except discord.Forbidden:
                 ctx.bot.dispatch("logger_purge_cancel", ctx.guild.id, channel.id)
                 return await ctx.send("I do not have permissions to delete messages.")
             except discord.HTTPException as e:

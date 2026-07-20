@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import asyncpg
 import discord
-from discord import utils, app_commands
+from discord import app_commands, utils
 from discord.ext import commands
 from discord.http import Route
 
@@ -16,10 +16,10 @@ from utils import (
     FieldPageSource,
     Pager,
     format_bytes,
+    get_or_fetch_user,
     human_timedelta,
     plural,
     to_image,
-    get_or_fetch_user,
 )
 
 if TYPE_CHECKING:
@@ -403,7 +403,7 @@ class Commands(Cog):
         status = row["status"]
         last_seen = row["last_seen"]
         delta = human_timedelta(last_seen, suffix=False)
-        status_nice = status if status != "***dnd***" else f"on ***Do Not Disturb***"
+        status_nice = status if status != "***dnd***" else "on ***Do Not Disturb***"
         await ctx.send(f"{user} was last seen {status_nice} {delta} ago.")
 
     @commands.hybrid_group(  # type: ignore[call-arg]

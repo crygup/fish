@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+*.log
+.env
+config.toml
+files/cookies
+files/downloads
+tests

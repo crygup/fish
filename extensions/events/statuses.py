@@ -8,7 +8,7 @@ from discord.ext import commands
 from core import Cog
 
 if TYPE_CHECKING:
-    from extensions.context import Context
+    pass
 
 
 class StatusCog(Cog):
@@ -28,6 +28,8 @@ class StatusCog(Cog):
     @commands.Cog.listener("on_presence_update")
     async def _on_presence_update(self, before: discord.Member, after: discord.Member):
         if self.bot.user and after.id == self.bot.user.id:
+            return
+        if "status" in self.bot.db_cache.get_opted_out(after.id):
             return
 
         if before.status == after.status:

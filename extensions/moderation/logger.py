@@ -12,7 +12,6 @@ from discord.ext import commands
 from core import Cog
 
 if TYPE_CHECKING:
-    from core import Fishie
     from extensions.context import GuildContext
 
 

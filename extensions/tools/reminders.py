@@ -84,9 +84,7 @@ class Timer:
         self.args: Sequence[Any] = extra.get("args", [])
         self.kwargs: dict[str, Any] = extra.get("kwargs", {})
         self.event: str = record["event"]
-        # Reminder timestamps are stored as naive UTC values in PostgreSQL.
-        # Keep them naive internally so timer comparisons and arithmetic use a
-        # consistent datetime type.
+        # PostgreSQL returns timezone-aware UTC values for reminder timestamps.
         self.created_at: datetime.datetime = record["created"]
         self.expires: datetime.datetime = record["expires"]
         self.timezone: str = record["timezone"]
@@ -292,59 +290,67 @@ class Reminder(Cog):
     ) -> Optional[Timer]:
         query = """
             SELECT * FROM reminders
-            WHERE (expires AT TIME ZONE 'UTC' AT TIME ZONE timezone) < (CURRENT_TIMESTAMP + $1::interval)
             ORDER BY expires
             LIMIT 1;
         """
         con = connection or self.bot.pool
 
-        record = await con.fetchrow(query, datetime.timedelta(days=days))
+        record = await con.fetchrow(query)
         return Timer(record=record) if record else None
 
     async def wait_for_active_timers(
         self, *, connection: Optional[asyncpg.Connection] = None, days: int = 7
     ) -> Timer:
         async with MaybeAcquire(connection=connection, pool=self.bot.pool) as con:
-            timer = await self.get_active_timer(connection=con, days=days)
-            if timer is not None:
-                self._have_data.set()
-                return timer
-
-            self._have_data.clear()
-            self._current_timer = None
-            await self._have_data.wait()
-
-            # At this point we always have data
-            return await self.get_active_timer(connection=con, days=days)  # type: ignore
+            while True:
+                # Clear before querying so an insert racing with the query always
+                # leaves the event set and cannot strand the dispatcher.
+                self._have_data.clear()
+                timer = await self.get_active_timer(connection=con, days=days)
+                if timer is not None:
+                    return timer
+                self._current_timer = None
+                try:
+                    await asyncio.wait_for(self._have_data.wait(), timeout=3600)
+                except asyncio.TimeoutError:
+                    pass
 
     async def call_timer(self, timer: Timer) -> None:
         # delete the timer
-        query = "DELETE FROM reminders WHERE id=$1;"
-        await self.bot.pool.execute(query, timer.id)
+        query = "DELETE FROM reminders WHERE id=$1 RETURNING id;"
+        deleted = await self.bot.pool.fetchval(query, timer.id)
+        if deleted is None:
+            return
 
         # dispatch the event
         event_name = f"{timer.event}_timer_complete"
         self.bot.dispatch(event_name, timer)
 
     async def dispatch_timers(self) -> None:
-        try:
-            while not self.bot.is_closed():
-                # can only asyncio.sleep for up to ~48 days reliably
-                # so we're gonna cap it off at 40 days
-                # see: http://bugs.python.org/issue20493
-                timer = self._current_timer = await self.wait_for_active_timers(days=40)
-                now = datetime.datetime.utcnow()
-
-                if timer.expires >= now:
-                    to_sleep = (timer.expires - now).total_seconds()
-                    await asyncio.sleep(to_sleep)
-
+        backoff = 1.0
+        while not self.bot.is_closed():
+            try:
+                timer = self._current_timer = await self.wait_for_active_timers()
+                now = discord.utils.utcnow()
+                delay = max(0.0, (timer.expires - now).total_seconds())
+                if delay:
+                    self._have_data.clear()
+                    try:
+                        await asyncio.wait_for(
+                            self._have_data.wait(), timeout=min(delay, 3600.0)
+                        )
+                    except asyncio.TimeoutError:
+                        pass
+                    if self._have_data.is_set() or delay > 3600.0:
+                        continue
                 await self.call_timer(timer)
-        except asyncio.CancelledError:
-            raise
-        except (OSError, discord.ConnectionClosed, asyncpg.PostgresConnectionError):
-            self._task.cancel()
-            self._task = self.bot.loop.create_task(self.dispatch_timers())
+                backoff = 1.0
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.bot.logger.exception("Reminder dispatcher failed; retrying")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60.0)
 
     async def short_timer_optimisation(self, seconds: float, timer: Timer) -> None:
         await asyncio.sleep(seconds)
@@ -403,9 +409,7 @@ class Reminder(Cog):
             and self._current_timer
             and self._current_timer.id == record["id"]
         ):
-            # cancel the task and re-run it
-            self._task.cancel()
-            self._task = self.bot.loop.create_task(self.dispatch_timers())
+            self._have_data.set()
 
     async def create_timer(
         self, when: datetime.datetime, event: str, /, *args: Any, **kwargs: Any
@@ -451,9 +455,16 @@ class Reminder(Cog):
             now = discord.utils.utcnow()
 
         timezone_name = kwargs.pop("timezone", "UTC")
-        # Remove timezone information since the database does not deal with it
-        when = when.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-        now = now.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        when = (
+            when.astimezone(datetime.timezone.utc)
+            if when.tzinfo is not None
+            else when.replace(tzinfo=datetime.timezone.utc)
+        )
+        now = (
+            now.astimezone(datetime.timezone.utc)
+            if now.tzinfo is not None
+            else now.replace(tzinfo=datetime.timezone.utc)
+        )
 
         timer = Timer.temporary(
             event=event,
@@ -463,12 +474,6 @@ class Reminder(Cog):
             created=now,
             timezone=timezone_name,
         )
-        delta = (when - now).total_seconds()
-        if delta <= 60:
-            # a shortcut for small timers
-            self.bot.loop.create_task(self.short_timer_optimisation(delta, timer))
-            return timer
-
         query = """INSERT INTO reminders (event, extra, expires, created, timezone)
                    VALUES ($1, $2::jsonb, $3, $4, $5)
                    RETURNING id;
@@ -483,15 +488,7 @@ class Reminder(Cog):
 
         timer.id = row[0]
 
-        # only set the data check if it can be waited on
-        if delta <= (86400 * 40):  # 40 days
-            self._have_data.set()
-
-        # check if this timer is earlier than our currently run timer
-        if self._current_timer and when < self._current_timer.expires:
-            # cancel the task and re-run it
-            self._task.cancel()
-            self._task = self.bot.loop.create_task(self.dispatch_timers())
+        self._have_data.set()
 
         return timer
 
@@ -602,9 +599,7 @@ class Reminder(Cog):
 
         # if the current timer is being deleted
         if self._current_timer and self._current_timer.id == id:
-            # cancel the task and re-run it
-            self._task.cancel()
-            self._task = self.bot.loop.create_task(self.dispatch_timers())
+            self._have_data.set()
 
         await ctx.send("Successfully deleted reminder.", ephemeral=True)
 
@@ -640,8 +635,7 @@ class Reminder(Cog):
 
         # Check if the current timer is the one being cleared and cancel it if so
         if self._current_timer and self._current_timer.author_id == ctx.author.id:
-            self._task.cancel()
-            self._task = self.bot.loop.create_task(self.dispatch_timers())
+            self._have_data.set()
 
         await ctx.send(
             f"Successfully deleted {formats.plural(total):reminder}.", ephemeral=True  # type: ignore
@@ -663,7 +657,7 @@ class Reminder(Cog):
 
         entries = [
             (
-                f"{_id}: {discord.utils.format_dt(expires.replace(tzinfo=datetime.timezone.utc),'R')}",
+                f"{_id}: {discord.utils.format_dt(expires, 'R')}",
                 textwrap.shorten(message, width=512),
             )
             for _id, expires, message in records
@@ -813,7 +807,7 @@ class Reminder(Cog):
                 try:
                     message = await channel.fetch_message(message_id)
                     return await message.reply(msg)
-                except:
+                except discord.HTTPException:
                     pass
 
             await channel.send(msg)

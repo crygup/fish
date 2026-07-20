@@ -9,8 +9,7 @@ from core import Cog
 from utils import AuthorView
 
 if TYPE_CHECKING:
-    from core import Fishie
-    from extensions.context import Context, GuildContext
+    from extensions.context import GuildContext
 
 
 async def add_pinboard_channel(ctx: GuildContext, channel: discord.TextChannel):
@@ -73,7 +72,7 @@ class PinBoardView(AuthorView):
     async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             channel = await self.ctx.guild.create_text_channel(name="pinboard")
-        except:
+        except discord.HTTPException:
             await interaction.response.edit_message(
                 content="I do not have permission to create channels, please select one or give me the required permissions.",
                 view=None,
@@ -127,7 +126,7 @@ class Pinboard(Cog):
         if guild is None:
             return
 
-        if old_message.pinned == False and message.pinned == True:
+        if not old_message.pinned and message.pinned:
             try:
                 pinboard = self.bot.db_cache.pinboard[guild.id]
             except KeyError:
@@ -161,21 +160,25 @@ class Pinboard(Cog):
                     embeds.append(embed)
 
             if message.attachments:
-                for attachment in message.attachments:
+                for attachment in message.attachments[:9]:
                     image = await attachment.to_file(filename=attachment.filename)
                     files.append(image)
                     new_embed = discord.Embed(color=fm.accent_color)
                     new_embed.set_image(url=f"attachment://{image.filename}")
                     embeds.append(new_embed)
 
-            async for entry in guild.audit_logs(
-                limit=5, action=discord.AuditLogAction.message_pin
-            ):
-                if entry.target and entry.target.id == fm.id and entry.user:
-                    user = entry.user.display_name
-                    real_user = entry.user
-                else:
-                    user = "<Blank>"
+            user = "<Blank>"
+            pinner_id: int | None = None
+            try:
+                async for entry in guild.audit_logs(
+                    limit=5, action=discord.AuditLogAction.message_pin
+                ):
+                    if entry.target and entry.target.id == fm.id and entry.user:
+                        user = entry.user.display_name
+                        pinner_id = entry.user.id
+                        break
+            except discord.Forbidden:
+                pass
 
             msg = f"\U0001f4cc {user} pinned a message to the server's Pinboard"
 
@@ -189,7 +192,7 @@ class Pinboard(Cog):
             VALUES ($1, $2, $3, $4 , $5)"""
 
             await self.bot.pool.execute(
-                sql, message.id, real_user.id or 333, fm.id, guild.id, pinboard
+                sql, message.id, pinner_id, fm.id, guild.id, pinboard
             )
 
             await channel.send(msg, embeds=embeds[:10], files=files[:10])
@@ -198,7 +201,7 @@ class Pinboard(Cog):
             if len(pins) > 40:
                 try:
                     await pins[-1].unpin()
-                except:
+                except discord.HTTPException:
                     pass
 
     @commands.hybrid_group(name="pinboard", aliases=("pb",), fallback="setup")

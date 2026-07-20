@@ -1,6 +1,7 @@
 /config.toml
 __pycache__/
 /venv/
+/.venv/
 .env
 *.log
 /.vscode
@@ -9,6 +10,7 @@ __pycache__/
 /files/cookies/youtube-cookies.txt
 /files/cookies/cobalt.json
 /files/cookies/letterboxd-cookies.txt
+/files/cookies/*
 /extensions/private
 testing.py
 /files/downloads/

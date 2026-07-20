@@ -3,21 +3,71 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
-import re
-import subprocess
+import shutil
 import time
-from typing import TYPE_CHECKING, Any, Dict, cast
+from typing import Any, Dict, cast
 
 import discord
 from discord.ext import commands, tasks
 
 from core import Cog
-from utils import run
 
 TWITCH_EVENTSUB_CALLBACK = "https://api.crygup.com/fishie/twitch/eventsub"
 
 
 class Tasks(Cog):
+    async def process_twitch_event_message(self, message_id: str | None = None) -> bool:
+        """Claim and process one durable EventSub inbox row."""
+        async with self.bot.pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    SELECT message_id, payload, attempts
+                    FROM twitch_eventsub_events
+                    WHERE ($1::text IS NULL OR message_id = $1)
+                      AND next_attempt_at <= now()
+                      AND (status = 'pending' OR
+                           (status = 'processing' AND updated_at < now() - interval '5 minutes'))
+                    ORDER BY received_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                    """,
+                    message_id,
+                )
+                if row is None:
+                    return False
+                await connection.execute(
+                    "UPDATE twitch_eventsub_events SET status = 'processing', "
+                    "attempts = attempts + 1, updated_at = now() WHERE message_id = $1",
+                    row["message_id"],
+                )
+
+        try:
+            await self.handle_twitch_event(dict(row["payload"]))
+        except Exception as error:
+            delay = min(300, 2 ** min(int(row["attempts"]), 8))
+            status = "dead" if int(row["attempts"]) >= 9 else "pending"
+            await self.bot.pool.execute(
+                "UPDATE twitch_eventsub_events SET status = $2, "
+                "next_attempt_at = now() + ($3 * interval '1 second'), "
+                "updated_at = now(), last_error = $4 WHERE message_id = $1",
+                row["message_id"],
+                status,
+                delay,
+                str(error)[:1000],
+            )
+            self.bot.logger.exception(
+                "Twitch EventSub event %s failed", row["message_id"]
+            )
+            return False
+
+        await self.bot.pool.execute(
+            "UPDATE twitch_eventsub_events SET status = 'done', updated_at = now(), "
+            "last_error = NULL WHERE message_id = $1",
+            row["message_id"],
+        )
+        return True
+
     def _twitch_eventsub_secret(self) -> str | None:
         keys = self.bot.config["keys"]
         secret = keys.get("twitch_eventsub_secret") or keys.get("twitch_secret")
@@ -148,137 +198,92 @@ class Tasks(Cog):
         if not token:
             return False
 
-        async with self.bot.pool.acquire() as connection:
-            async with connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1))",
-                    f"fishie:twitch:eventsub:{broadcaster_id}",
-                )
-                existing = await connection.fetchrow(
-                    "SELECT subscription_id, status "
-                    "FROM twitch_eventsub_subscriptions "
-                    "WHERE broadcaster_id = $1",
-                    broadcaster_id,
-                )
-                if existing and existing["status"] == "enabled":
-                    return True
+        claimed = await self.bot.pool.fetchval(
+            """
+            INSERT INTO twitch_eventsub_subscriptions
+                (broadcaster_id, subscription_id, status, updated_at)
+            VALUES ($1, '', 'creating', now())
+            ON CONFLICT (broadcaster_id) DO UPDATE
+            SET subscription_id = '', status = 'creating', updated_at = now()
+            WHERE twitch_eventsub_subscriptions.status NOT IN
+                    ('enabled', 'webhook_callback_verification_pending', 'creating')
+               OR twitch_eventsub_subscriptions.updated_at < now() - interval '15 minutes'
+            RETURNING broadcaster_id
+            """,
+            broadcaster_id,
+        )
+        if claimed is None:
+            return True
 
-                if (
-                    existing
-                    and existing["status"] == "webhook_callback_verification_pending"
-                ):
-                    try:
-                        async with self.bot.session.get(
-                            "https://api.twitch.tv/helix/eventsub/subscriptions",
-                            headers={
-                                "Client-ID": self.bot.config["keys"]["twitch_id"],
-                                "Authorization": f"Bearer {token}",
-                            },
-                            params={"id": existing["subscription_id"]},
-                        ) as response:
-                            remote_data = await response.json(content_type=None)
-                    except Exception as error:
-                        self.bot.logger.warning(
-                            "Could not verify Twitch EventSub subscription for %s: %s",
-                            broadcaster_id,
-                            error,
-                        )
-                        return False
+        payload = {
+            "type": "stream.online",
+            "version": "1",
+            "condition": {"broadcaster_user_id": broadcaster_id},
+            "transport": {
+                "method": "webhook",
+                "callback": TWITCH_EVENTSUB_CALLBACK,
+                "secret": secret,
+            },
+        }
+        try:
+            async with self.bot.session.post(
+                "https://api.twitch.tv/helix/eventsub/subscriptions",
+                headers={
+                    "Client-ID": self.bot.config["keys"]["twitch_id"],
+                    "Authorization": f"Bearer {token}",
+                },
+                json=payload,
+            ) as response:
+                data = await response.json(content_type=None)
+        except Exception as error:
+            await self.bot.pool.execute(
+                "UPDATE twitch_eventsub_subscriptions SET status = 'failed', "
+                "updated_at = now() WHERE broadcaster_id = $1",
+                broadcaster_id,
+            )
+            self.bot.logger.warning(
+                "Could not create Twitch EventSub subscription for %s: %s",
+                broadcaster_id,
+                error,
+            )
+            return False
 
-                    remote_subscriptions = (
-                        remote_data.get("data")
-                        if isinstance(remote_data, dict)
-                        else None
-                    )
-                    remote = (
-                        remote_subscriptions[0]
-                        if isinstance(remote_subscriptions, list)
-                        and remote_subscriptions
-                        and isinstance(remote_subscriptions[0], dict)
-                        else None
-                    )
-                    remote_status = remote.get("status") if remote else None
-                    if remote_status in {
-                        "enabled",
-                        "webhook_callback_verification_pending",
-                    }:
-                        if remote_status != existing["status"]:
-                            await connection.execute(
-                                "UPDATE twitch_eventsub_subscriptions "
-                                "SET status = $2, updated_at = now() "
-                                "WHERE broadcaster_id = $1",
-                                broadcaster_id,
-                                remote_status,
-                            )
-                        return True
+        subscriptions = data.get("data") if isinstance(data, dict) else None
+        if response.status not in (200, 202) or not subscriptions:
+            await self.bot.pool.execute(
+                "UPDATE twitch_eventsub_subscriptions SET status = 'failed', "
+                "updated_at = now() WHERE broadcaster_id = $1",
+                broadcaster_id,
+            )
+            self.bot.logger.warning(
+                "Twitch EventSub subscription failed for %s with status %s: %s",
+                broadcaster_id,
+                response.status,
+                data,
+            )
+            return False
 
-                    # Twitch rejected or revoked the old subscription. Remove the
-                    # stale local row so the new subscription can be created.
-                    await connection.execute(
-                        "DELETE FROM twitch_eventsub_subscriptions "
-                        "WHERE broadcaster_id = $1",
-                        broadcaster_id,
-                    )
-
-                payload = {
-                    "type": "stream.online",
-                    "version": "1",
-                    "condition": {"broadcaster_user_id": broadcaster_id},
-                    "transport": {
-                        "method": "webhook",
-                        "callback": TWITCH_EVENTSUB_CALLBACK,
-                        "secret": secret,
-                    },
-                }
-                try:
-                    async with self.bot.session.post(
-                        "https://api.twitch.tv/helix/eventsub/subscriptions",
-                        headers={
-                            "Client-ID": self.bot.config["keys"]["twitch_id"],
-                            "Authorization": f"Bearer {token}",
-                        },
-                        json=payload,
-                    ) as response:
-                        data = await response.json(content_type=None)
-                except Exception as error:
-                    self.bot.logger.warning(
-                        "Could not create Twitch EventSub subscription for %s: %s",
-                        broadcaster_id,
-                        error,
-                    )
-                    return False
-
-                subscriptions = data.get("data") if isinstance(data, dict) else None
-                if response.status not in (200, 202) or not subscriptions:
-                    self.bot.logger.warning(
-                        "Twitch EventSub subscription failed for %s with status %s: %s",
-                        broadcaster_id,
-                        response.status,
-                        data,
-                    )
-                    return False
-
-                subscription = subscriptions[0]
-                if not isinstance(subscription, dict):
-                    return False
-                await connection.execute(
-                    """INSERT INTO twitch_eventsub_subscriptions
-                       (broadcaster_id, subscription_id, status)
-                       VALUES ($1, $2, $3)
-                       ON CONFLICT (broadcaster_id) DO UPDATE
-                       SET subscription_id = EXCLUDED.subscription_id,
-                           status = EXCLUDED.status,
-                           updated_at = now()""",
-                    broadcaster_id,
-                    subscription["id"],
-                    subscription.get("status", "enabled"),
-                )
+        subscription = subscriptions[0]
+        if not isinstance(subscription, dict):
+            return False
+        await self.bot.pool.execute(
+            "UPDATE twitch_eventsub_subscriptions SET subscription_id = $2, "
+            "status = $3, updated_at = now() WHERE broadcaster_id = $1",
+            broadcaster_id,
+            subscription["id"],
+            subscription.get("status", "enabled"),
+        )
         return True
 
     async def sync_twitch_eventsub_subscriptions(self) -> None:
         await self.bot.pool.execute(
             "DELETE FROM twitch_eventsub_events "
-            "WHERE received_at < now() - interval '1 day'"
+            "WHERE (status = 'done' AND received_at < now() - interval '1 day') "
+            "OR (status = 'dead' AND received_at < now() - interval '7 days')"
+        )
+        await self.bot.pool.execute(
+            "DELETE FROM twitch_announcement_deliveries "
+            "WHERE status = 'dead' AND updated_at < now() - interval '30 days'"
         )
         rows = await self.bot.pool.fetch(
             "SELECT DISTINCT channel_name, broadcaster_id FROM twitch_follows"
@@ -421,13 +426,7 @@ class Tasks(Cog):
     async def _announce_twitch_stream_once(
         self, row: Any, stream: dict[str, Any]
     ) -> bool:
-        """Claim a stream notification before sending it.
-
-        EventSub and the reconciliation loop can process the same stream at
-        the same time. The transaction lock serializes the check, send, and
-        update, so only one path announces a given stream for a guild/channel
-        pair while failed sends remain retryable.
-        """
+        """Durably claim a stream notification without holding a DB lock on I/O."""
         stream_id = str(stream.get("id") or "")
         if not stream_id:
             self.bot.logger.warning(
@@ -436,23 +435,41 @@ class Tasks(Cog):
             )
             return False
 
-        async with self.bot.pool.acquire() as connection:
-            async with connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1))",
-                    f"fishie:twitch:announce:{row['guild_id']}:{row['channel_name']}",
-                )
-                previous_id = await connection.fetchval(
-                    "SELECT last_stream_id FROM twitch_follows "
-                    "WHERE guild_id = $1 AND channel_name = $2",
-                    row["guild_id"],
-                    row["channel_name"],
-                )
-                if previous_id == stream_id:
-                    return False
+        claimed = await self.bot.pool.fetchval(
+            """
+            INSERT INTO twitch_announcement_deliveries
+                (guild_id, channel_name, stream_id, stream_payload, status, attempts)
+            VALUES ($1, $2, $3, $4::jsonb, 'processing', 1)
+            ON CONFLICT (guild_id, channel_name, stream_id) DO UPDATE
+            SET status = 'processing', attempts = twitch_announcement_deliveries.attempts + 1,
+                stream_payload = EXCLUDED.stream_payload, updated_at = now()
+            WHERE (twitch_announcement_deliveries.status = 'pending'
+                   AND twitch_announcement_deliveries.attempts < 10)
+               OR (twitch_announcement_deliveries.status = 'processing'
+                   AND twitch_announcement_deliveries.updated_at < now() - interval '5 minutes'
+                   AND twitch_announcement_deliveries.attempts < 10)
+            RETURNING stream_id
+            """,
+            row["guild_id"],
+            row["channel_name"],
+            stream_id,
+            stream,
+        )
+        if claimed is None:
+            return False
 
-                announced = await self._announce_twitch_stream(row, stream)
-                if announced:
+        announced = await self._announce_twitch_stream(row, stream)
+        if announced:
+            async with self.bot.pool.acquire() as connection:
+                async with connection.transaction():
+                    await connection.execute(
+                        "UPDATE twitch_announcement_deliveries SET status = 'done', "
+                        "updated_at = now(), last_error = NULL "
+                        "WHERE guild_id = $1 AND channel_name = $2 AND stream_id = $3",
+                        row["guild_id"],
+                        row["channel_name"],
+                        stream_id,
+                    )
                     await connection.execute(
                         "UPDATE twitch_follows SET last_stream_id = $3 "
                         "WHERE guild_id = $1 AND channel_name = $2",
@@ -460,7 +477,18 @@ class Tasks(Cog):
                         row["channel_name"],
                         stream_id,
                     )
-                return announced
+            return True
+
+        await self.bot.pool.execute(
+            "UPDATE twitch_announcement_deliveries "
+            "SET status = CASE WHEN attempts >= 10 THEN 'dead' ELSE 'pending' END, "
+            "updated_at = now(), last_error = 'Discord delivery failed' "
+            "WHERE guild_id = $1 AND channel_name = $2 AND stream_id = $3",
+            row["guild_id"],
+            row["channel_name"],
+            stream_id,
+        )
+        return False
 
     async def _announce_twitch_stream(self, row, stream: dict[str, Any]) -> bool:
         channel = self.bot.get_channel(row["announce_channel_id"])
@@ -527,9 +555,10 @@ class Tasks(Cog):
         view_type = type("TwitchAnnouncementView", (discord.ui.LayoutView,), {})
         view = view_type(timeout=None)
         view.add_item(container)
-        send_kwargs: dict[str, Any] = {"view": view}
-        if row["message_template"]:
-            send_kwargs["allowed_mentions"] = discord.AllowedMentions.all()
+        send_kwargs: dict[str, Any] = {
+            "view": view,
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
 
         try:
             await cast(Any, channel).send(**send_kwargs)
@@ -641,19 +670,21 @@ class Tasks(Cog):
             raise commands.BadArgument("Unable to set spotify key.")
 
     def delete_videos(self):
-        valid_formats = (
-            "mp4",
-            "webm",
-            "mov",
-            "mp3",
-            "ogg",
-            "wav",
-            "part",
-            "ytdl",
-        )
-        for file in os.listdir(r"files/downloads"):
-            if file.endswith(valid_formats):
-                os.remove(os.path.join("files/downloads", file))
+        # Normal jobs clean themselves in ``Downloader.download``. Remove only
+        # crash-orphaned job directories old enough that no valid job can still
+        # be running (the hard job timeout is three minutes).
+        root = "files/downloads"
+        if not os.path.isdir(root):
+            return
+        cutoff = time.time() - 3600
+        for entry in os.scandir(root):
+            if not entry.name.startswith(".job-") or not entry.is_dir():
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    shutil.rmtree(entry.path, ignore_errors=True)
+            except OSError:
+                continue
 
     @tasks.loop(minutes=30.0)
     async def set_key_task(self):
@@ -673,6 +704,7 @@ class Tasks(Cog):
         self.delete_videos_task.cancel()
         self.twitch_eventsub_sync_task.cancel()
         self.twitch_reconciliation_task.cancel()
+        self.twitch_event_inbox_task.cancel()
 
     async def cog_load(self) -> None:
         self._twitch_access_token: str | None = None
@@ -681,6 +713,7 @@ class Tasks(Cog):
         self.delete_videos_task.start()
         self.twitch_eventsub_sync_task.start()
         self.twitch_reconciliation_task.start()
+        self.twitch_event_inbox_task.start()
 
     @tasks.loop(minutes=10.0)
     async def delete_videos_task(self):
@@ -706,4 +739,14 @@ class Tasks(Cog):
 
     @twitch_reconciliation_task.before_loop
     async def before_twitch_reconciliation_task(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(seconds=30.0)
+    async def twitch_event_inbox_task(self):
+        for _ in range(25):
+            if not await self.process_twitch_event_message():
+                break
+
+    @twitch_event_inbox_task.before_loop
+    async def before_twitch_event_inbox_task(self):
         await self.bot.wait_until_ready()

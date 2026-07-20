@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import sys
-import traceback
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 import discord
 from discord.interactions import Interaction
-from discord.ui.item import Item
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -42,7 +39,10 @@ class AuthorView(discord.ui.View):
 
     async def on_error(self, interaction: Interaction, error: Exception, _):
         self.ctx.bot.logger.info(
-            f'View {self} errored by {self.ctx.author}. Full content: "{self.ctx.message.content}"'
+            "View %s errored for user_id=%s command=%s",
+            type(self).__name__,
+            self.ctx.author.id,
+            getattr(self.ctx.command, "qualified_name", None),
         )
         await self.ctx.bot.log_error(error)
 

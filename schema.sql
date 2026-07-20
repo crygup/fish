@@ -31,6 +31,15 @@ CREATE TABLE IF NOT EXISTS web_sessions (
 
 CREATE INDEX IF NOT EXISTS web_sessions_expires_at_idx ON web_sessions (expires_at);
 
+CREATE TABLE IF NOT EXISTS oauth_states (
+    state_hash TEXT PRIMARY KEY,
+    code_verifier TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS oauth_states_expires_at_idx ON oauth_states (expires_at);
+
 CREATE TABLE IF NOT EXISTS reminders (
     id SERIAL PRIMARY KEY,
     expires TIMESTAMP,
@@ -247,7 +256,37 @@ CREATE TABLE IF NOT EXISTS twitch_eventsub_subscriptions (
 
 CREATE TABLE IF NOT EXISTS twitch_eventsub_events (
     message_id TEXT PRIMARY KEY,
-    received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+    received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    payload JSONB,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    last_error TEXT
+);
+
+ALTER TABLE twitch_eventsub_events ADD COLUMN IF NOT EXISTS payload JSONB;
+ALTER TABLE twitch_eventsub_events ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE twitch_eventsub_events ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE twitch_eventsub_events ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now();
+ALTER TABLE twitch_eventsub_events ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now();
+ALTER TABLE twitch_eventsub_events ADD COLUMN IF NOT EXISTS last_error TEXT;
+UPDATE twitch_eventsub_events SET status = 'done' WHERE payload IS NULL;
+
+CREATE INDEX IF NOT EXISTS twitch_eventsub_events_pending_idx
+    ON twitch_eventsub_events (next_attempt_at)
+    WHERE status IN ('pending', 'processing');
+
+CREATE TABLE IF NOT EXISTS twitch_announcement_deliveries (
+    guild_id BIGINT NOT NULL,
+    channel_name TEXT NOT NULL,
+    stream_id TEXT NOT NULL,
+    stream_payload JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    last_error TEXT,
+    PRIMARY KEY (guild_id, channel_name, stream_id)
 );
 
 CREATE INDEX IF NOT EXISTS twitch_follows_guild_idx

@@ -10,7 +10,7 @@ from discord.ext import commands
 from core import Cog
 
 if TYPE_CHECKING:
-    from context import Context
+    pass
 
 
 class Guilds(Cog):
@@ -80,7 +80,7 @@ class Guilds(Cog):
 
         try:
             await channel.send(embed=embed)
-        except:
+        except discord.HTTPException:
             pass
 
         await guild.leave()

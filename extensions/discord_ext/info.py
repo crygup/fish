@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import datetime
-from collections import Counter
 import random
+from collections import Counter
 from typing import (
     TYPE_CHECKING,
     Any,
-    cast,
     Dict,
     List,
     Literal,
     Optional,
-    Tuple,
     TypeAlias,
     Union,
+    cast,
 )
 
 import asyncpg
@@ -27,16 +26,15 @@ from utils import (
     USER_FLAGS,
     AllChannels,
     AuthorView,
+    Pager,
+    Review,
+    ReviewSender,
+    ReviewsPageSource,
     fish_download,
     fish_edit,
     fish_go_back,
     human_join,
     reply,
-    Review,
-    ReviewsPageSource,
-    ReviewSender,
-    Pager,
-    SimplePages,
 )
 
 if TYPE_CHECKING:
@@ -329,7 +327,7 @@ class UserDropdown(discord.ui.Select):
         options = [
             discord.SelectOption(
                 label="Index",
-                description=f"Goes back to home page",
+                description="Goes back to home page",
                 emoji=discord.PartialEmoji(name="\U0001f3e0"),
                 value="index",
             ),
@@ -1143,7 +1141,7 @@ class Info(Cog):
 
         bots = sum(m.bot for m in guild.members)
         embed.add_field(
-            name=f"Members",
+            name="Members",
             value=f"{guild.member_count:,} ({bots:,} bots)",
         )
 
@@ -1154,7 +1152,7 @@ class Info(Cog):
         if private > 0:
             channels_text += f" ({private:,} private)"
 
-        embed.add_field(name=f"Channels", value=channels_text)
+        embed.add_field(name="Channels", value=channels_text)
 
         embed.add_field(name="Roles", value=f"{len(guild.roles):,} Roles")
 

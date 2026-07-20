@@ -1,32 +1,38 @@
 from __future__ import annotations
 
-import os
 from io import BytesIO
 from typing import TYPE_CHECKING, Optional, cast
 
 import discord
-from discord import ui, MediaGalleryItem, app_commands
+from discord import MediaGalleryItem, app_commands, ui
 from discord.ext import commands
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 from core import Cog
-from utils import to_image, to_thread, MediaConverter
+from utils import MediaConverter, to_image, to_thread
 
 if TYPE_CHECKING:
     from extensions.context import Context
 
+Image.MAX_IMAGE_PIXELS = 25_000_000
+
 
 @to_thread
 def make_caption(img_bytes: bytes, caption_text: str) -> tuple[BytesIO, str]:
-    import subprocess, tempfile, json, os as _os
+    import json
+    import os as _os
+    import subprocess
+    import tempfile
 
     try:
         src = Image.open(BytesIO(img_bytes))
-    except Exception:
-        tmp_path = tempfile.mktemp(suffix=".mp4")
-        with open(tmp_path, "wb") as f:
-            f.write(img_bytes)
-        try:
+    except UnidentifiedImageError:
+        with tempfile.TemporaryDirectory(prefix="fishie-caption-") as temp_dir:
+            tmp_path = _os.path.join(temp_dir, "input.mp4")
+            overlay_path = _os.path.join(temp_dir, "overlay.png")
+            out_path = _os.path.join(temp_dir, "output.mp4")
+            with open(tmp_path, "wb") as f:
+                f.write(img_bytes)
             probe = subprocess.run(
                 [
                     "ffprobe",
@@ -35,7 +41,7 @@ def make_caption(img_bytes: bytes, caption_text: str) -> tuple[BytesIO, str]:
                     "-select_streams",
                     "v:0",
                     "-show_entries",
-                    "stream=width,height",
+                    "stream=width,height:format=duration",
                     "-of",
                     "json",
                     tmp_path,
@@ -43,14 +49,17 @@ def make_caption(img_bytes: bytes, caption_text: str) -> tuple[BytesIO, str]:
                 capture_output=True,
                 timeout=10,
                 text=True,
+                check=True,
             )
             info = json.loads(probe.stdout)
             vw = info["streams"][0]["width"]
+            vh = info["streams"][0]["height"]
+            duration = float(info.get("format", {}).get("duration") or 0)
+            if vw > 4096 or vh > 4096 or duration > 60:
+                raise ValueError("Videos are limited to 4096px and 60 seconds.")
             dummy = Image.new("RGBA", (vw, 1), (0, 0, 0, 0))
             overlay = _caption_frame(dummy, caption_text)
-            overlay_path = tempfile.mktemp(suffix=".png")
             overlay.save(overlay_path)
-            out_path = tempfile.mktemp(suffix=".mp4")
             subprocess.run(
                 [
                     "ffmpeg",
@@ -61,6 +70,8 @@ def make_caption(img_bytes: bytes, caption_text: str) -> tuple[BytesIO, str]:
                     overlay_path,
                     "-filter_complex",
                     "[0:v][1:v]overlay=0:0",
+                    "-t",
+                    "60",
                     "-c:a",
                     "copy",
                     "-movflags",
@@ -69,24 +80,27 @@ def make_caption(img_bytes: bytes, caption_text: str) -> tuple[BytesIO, str]:
                 ],
                 capture_output=True,
                 timeout=60,
+                check=True,
             )
             with open(out_path, "rb") as f:
                 result = f.read()
-        finally:
-            for p in (tmp_path, overlay_path, out_path):
-                try:
-                    _os.unlink(p)
-                except:
-                    pass
         return BytesIO(result), "captioned.mp4"
+
+    frame_pixels = src.width * src.height
+    if frame_pixels > 25_000_000:
+        raise ValueError("Images are limited to 25 million pixels per frame.")
 
     is_gif = src.format == "GIF" or getattr(src, "n_frames", 1) > 1
 
     if is_gif and getattr(src, "n_frames", 1) > 1:
+        if frame_pixels * int(getattr(src, "n_frames", 1)) > 100_000_000:
+            raise ValueError("Animated images are limited to 100 million total pixels.")
         frames = []
         durations = []
         try:
             while True:
+                if len(frames) >= 300:
+                    raise ValueError("Animated images are limited to 300 frames.")
                 frame = src.convert("RGBA")
                 durations.append(src.info.get("duration", 100))
                 frames.append(_caption_frame(frame, caption_text))
@@ -177,51 +191,86 @@ def _caption_frame(img: Image.Image, caption_text: str) -> Image.Image:
     return new_img
 
 
+def _atempo_filter(speed: float) -> str:
+    remaining = speed
+    factors: list[float] = []
+    while remaining < 0.5:
+        factors.append(0.5)
+        remaining /= 0.5
+    while remaining > 2.0:
+        factors.append(2.0)
+        remaining /= 2.0
+    factors.append(remaining)
+    return ",".join(f"atempo={factor:.6f}" for factor in factors)
+
+
 @to_thread
 def _speed_video(data: bytes, speed: float) -> bytes:
-    import subprocess, tempfile, os
+    import os
+    import subprocess
+    import tempfile
 
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-        tmp.write(data)
-        tmp_in = tmp.name
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-        tmp_out = tmp.name
-    af = f"atempo={speed}" if speed >= 0.5 else f"atempo=0.5,atempo={speed * 2}"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            tmp_in,
-            "-filter_complex",
-            f"[0:v]setpts={1/speed}*PTS[v];[0:a]{af}[a]",
-            "-map",
-            "[v]",
-            "-map",
-            "[a]",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "64k",
-            "-movflags",
-            "+faststart",
-            tmp_out,
-        ],
-        capture_output=True,
-        timeout=60,
-    )
-    with open(tmp_out, "rb") as f:
-        result = f.read()
-    os.unlink(tmp_in)
-    try:
-        os.unlink(tmp_out)
-    except:
-        pass
-    return result
+    with tempfile.TemporaryDirectory(prefix="fishie-speed-") as temp_dir:
+        tmp_in = os.path.join(temp_dir, "input.mp4")
+        tmp_out = os.path.join(temp_dir, "output.mp4")
+        with open(tmp_in, "wb") as tmp:
+            tmp.write(data)
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type", "-of", "csv=p=0", tmp_in,
+            ],
+            capture_output=True,
+            timeout=10,
+            check=False,
+            text=True,
+        )
+        command = ["ffmpeg", "-y", "-i", tmp_in]
+        if probe.stdout.strip():
+            audio_filter = _atempo_filter(speed)
+            command += [
+                "-filter_complex",
+                f"[0:v]setpts={1/speed}*PTS[v];[0:a]{audio_filter}[a]",
+                "-map", "[v]", "-map", "[a]", "-c:a", "aac", "-b:a", "64k",
+            ]
+        else:
+            command += ["-filter:v", f"setpts={1/speed}*PTS", "-an"]
+        command += [
+            "-c:v", "libx264", "-preset", "fast", "-movflags", "+faststart", tmp_out,
+        ]
+        subprocess.run(
+            command,
+            capture_output=True,
+            timeout=60,
+            check=True,
+        )
+        with open(tmp_out, "rb") as f:
+            return f.read()
+
+
+@to_thread
+def _compress_video(data: bytes) -> bytes:
+    import os
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="fishie-compress-") as temp_dir:
+        input_path = os.path.join(temp_dir, "input.mp4")
+        output_path = os.path.join(temp_dir, "output.mp4")
+        with open(input_path, "wb") as output:
+            output.write(data)
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", input_path, "-c:v", "libx264",
+                "-crf", "28", "-preset", "fast", "-c:a", "aac",
+                "-b:a", "64k", "-movflags", "+faststart", output_path,
+            ],
+            capture_output=True,
+            timeout=60,
+            check=True,
+        )
+        with open(output_path, "rb") as compressed:
+            return compressed.read()
 
 
 class Images(Cog):
@@ -297,7 +346,10 @@ class Images(Cog):
                     "No image or video found. Attach one, reply to media, or use a media URL."
                 ) from error
 
-        async with ctx.typing():
+        if len(caption_text) > 1000:
+            raise commands.BadArgument("Captions are limited to 1,000 characters.")
+
+        async with self.bot.media_semaphore, ctx.typing():
             import time
 
             started = time.time()
@@ -312,47 +364,8 @@ class Images(Cog):
                 buf.seek(0, 2)
                 size = buf.tell()
                 if size > 20 * 1024 * 1024:
-                    import subprocess, tempfile
-
                     buf.seek(0)
-                    with tempfile.NamedTemporaryFile(
-                        suffix=".mp4", delete=False
-                    ) as tmp:
-                        tmp.write(buf.read())
-                        tmp_path = tmp.name
-                    out_path = tempfile.mktemp(suffix=".mp4")
-                    try:
-                        subprocess.run(
-                            [
-                                "ffmpeg",
-                                "-y",
-                                "-i",
-                                tmp_path,
-                                "-c:v",
-                                "libx264",
-                                "-crf",
-                                "28",
-                                "-preset",
-                                "fast",
-                                "-c:a",
-                                "aac",
-                                "-b:a",
-                                "64k",
-                                "-movflags",
-                                "+faststart",
-                                out_path,
-                            ],
-                            capture_output=True,
-                            timeout=60,
-                        )
-                        with open(out_path, "rb") as f:
-                            data = f.read()
-                    finally:
-                        os.unlink(tmp_path)
-                        try:
-                            os.unlink(out_path)
-                        except:
-                            pass
+                    data = await _compress_video(buf.read())
                     buf = BytesIO(data)
                 buf.seek(0, 2)
                 if buf.tell() > max_size:
@@ -415,7 +428,7 @@ class Images(Cog):
             else:
                 speed_val = 2.0
 
-        if speed_val <= 0 or speed_val > 10:
+        if speed_val < 0.1 or speed_val > 10:
             raise commands.BadArgument("Speed must be between 0.1 and 10.")
 
         if not image_str:
@@ -426,7 +439,7 @@ class Images(Cog):
 
         if not image_str or not isinstance(image_str, str):
             raise commands.BadArgument("Could not resolve an image or video source.")
-        async with ctx.typing():
+        async with self.bot.media_semaphore, ctx.typing():
             import time as _time
 
             started = _time.time()
@@ -443,7 +456,7 @@ class Images(Cog):
                 )
 
             buf = BytesIO(result)
-            gallery = ui.MediaGallery(MediaGalleryItem(f"attachment://speed.mp4"))
+            gallery = ui.MediaGallery(MediaGalleryItem("attachment://speed.mp4"))
             container = ui.Container(
                 gallery,
                 ui.TextDisplay(info_text),

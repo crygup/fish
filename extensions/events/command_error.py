@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import sys
-import textwrap
 import traceback
 from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
 
-from core import Cog, SILENT_COMMAND_USERS
-from utils import ignored_errors, valid_errors
+from core import SILENT_COMMAND_USERS, Cog
+from utils import ignored_errors
 
 if TYPE_CHECKING:
     from context import Context

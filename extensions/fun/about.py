@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import textwrap
 from time import perf_counter
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 import discord
 import psutil
@@ -26,14 +27,16 @@ class About(Cog):
         if ctx.bot.user is None:
             return
 
-        sql = """SELECT * FROM command_logs"""
-        results = await self.bot.pool.fetch(sql)
-
-        total = len(results)
         start = discord.utils.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        today = len([result for result in results if result["created_at"] >= start])
+        counts = await self.bot.pool.fetchrow(
+            "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE created_at >= $1) AS today "
+            "FROM command_logs",
+            start,
+        )
+        total = int(counts["total"])
+        today = int(counts["today"])
         memory_usage = self.process.memory_full_info().uss / 1024**2
         cpu_usage = self.process.cpu_percent() / psutil.cpu_count()  # type: ignore
         liz = await get_or_fetch_user(
@@ -90,20 +93,20 @@ class About(Cog):
             members_count: int = sum(g.member_count for g in bot.guilds)  # type: ignore
             start = discord.utils.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
-            avatars = await bot.pool.fetch("SELECT created_at FROM avatars")
-            avatars_today = len([result for result in avatars if result["created_at"] >= start])
+            async def table_counts(table: str):
+                return await bot.pool.fetchrow(
+                    f"SELECT COUNT(*) AS total, "
+                    f"COUNT(*) FILTER (WHERE created_at >= $1) AS today FROM {table}",
+                    start,
+                )
 
-            commands = await bot.pool.fetch("SELECT created_at FROM command_logs")
-            commands_today = len([result for result in commands if result["created_at"] >= start])
-
-            usernames = await bot.pool.fetch("SELECT created_at FROM username_logs")
-            usernames_today = len([result for result in usernames if result["created_at"] >= start])
-
-            nicknames = await bot.pool.fetch("SELECT created_at FROM nickname_logs")
-            nicknames_today = len([result for result in nicknames if result["created_at"] >= start])
-
-            discrims = await bot.pool.fetch("SELECT created_at FROM discrim_logs")
-            discrims_today = len([result for result in discrims if result["created_at"] >= start])
+            avatars, commands, usernames, nicknames, discrims = await asyncio.gather(
+                table_counts("avatars"),
+                table_counts("command_logs"),
+                table_counts("username_logs"),
+                table_counts("nickname_logs"),
+                table_counts("discrim_logs"),
+            )
             # fmt: on
             psql_start = perf_counter()
             await bot.pool.execute("SELECT 1")
@@ -128,11 +131,11 @@ class About(Cog):
                cached messages : {len(bot.cached_messages):,}
              websocket latency : {round(bot.latency * 1000, 3)}ms
             postgresql latency : {round(psql_end - psql_start, 3)}ms
-                avatars logged : {len(avatars):,} - {avatars_today:,}
-              usernames logged : {len(usernames):,} - {usernames_today:,}
-               discrims logged : {len(discrims):,} - {discrims_today:,}
-              nicknames logged : {len(nicknames):,} - {nicknames_today:,}
-                  commands ran : {len(commands):,} - {commands_today:,}
+                avatars logged : {avatars['total']:,} - {avatars['today']:,}
+              usernames logged : {usernames['total']:,} - {usernames['today']:,}
+               discrims logged : {discrims['total']:,} - {discrims['today']:,}
+              nicknames logged : {nicknames['total']:,} - {nicknames['today']:,}
+                  commands ran : {commands['total']:,} - {commands['today']:,}
                   """
 
         await ctx.send(f"```yaml{textwrap.dedent(message)}```")

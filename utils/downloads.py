@@ -1,40 +1,76 @@
 from __future__ import annotations
 
+import asyncio
 import glob
 import os
 import re
 import secrets
+import shutil
 import signal
+import sys
+import tempfile
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from io import BufferedReader, BytesIO
+from typing import TYPE_CHECKING, Any, List, Optional
 from urllib.parse import urlsplit
 
-import asyncio
 import discord
-from discord import ui, MediaGalleryItem
-import sys
+from discord import MediaGalleryItem, ui
 
-from .errors import DownloadError, InvalidWebsite
-from .functions import to_thread, litterbox
+from .errors import DownloadError
+from .functions import litterbox, to_thread
+from .network import validate_public_url
 from .regexes import (
     INSTAGRAM_RE,
+    KLIPY_RE,
+    LIVE_STREAM_RE,
     SOUNDCLOUD_RE,
-    TIKTOK_RE,
-    TWITCH_RE,
     TWITTER_RE,
     YOUTUBE_RE,
     YT_CLIP_RE,
     YT_SHORT_RE,
-    KLIPY_RE,
-    LIVE_STREAM_RE,
 )
-from io import BufferedReader, BytesIO
 
 if TYPE_CHECKING:
     from core import Context
 
 MAX_FILESIZE: int = 50_000_000  # 50 MB
 DOWNLOAD_TIMEOUT: float = 180.0  # three minutes
+DOWNLOAD_HOSTS = frozenset(
+    {
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "youtu.be",
+        "instagram.com",
+        "www.instagram.com",
+        "tiktok.com",
+        "www.tiktok.com",
+        "m.tiktok.com",
+        "vm.tiktok.com",
+        "vt.tiktok.com",
+        "vk.tiktok.com",
+        "soundcloud.com",
+        "on.soundcloud.com",
+        "twitter.com",
+        "www.twitter.com",
+        "x.com",
+        "www.x.com",
+        "fxtwitter.com",
+        "vxtwitter.com",
+        "fixupx.com",
+        "girlcockx.com",
+        "clips.twitch.tv",
+        "twitch.tv",
+        "www.twitch.tv",
+        "reddit.com",
+        "www.reddit.com",
+        "pin.it",
+        "pinterest.com",
+        "www.pinterest.com",
+        "static.klipy.com",
+    }
+)
 
 _COOKIE_MAP: list[tuple[Any, str]] = [
     (YOUTUBE_RE, "files/cookies/youtube-cookies.txt"),
@@ -87,6 +123,7 @@ class Downloader:
         self.hidden = hidden
         self._duration = 0
         self._deadline: float | None = None
+        self._job_dir: str | None = None
 
     def _remaining_timeout(self) -> float:
         if self._deadline is None:
@@ -137,7 +174,9 @@ class Downloader:
             raise
 
     def _output_glob(self) -> str:
-        return f"files/downloads/{self.filename}.*"
+        if self._job_dir is None:
+            raise DownloadError("The download job was not initialized.")
+        return os.path.join(self._job_dir, f"{self.filename}.*")
 
     def _find_output(self) -> str:
         matches = glob.glob(self._output_glob())
@@ -157,7 +196,6 @@ class Downloader:
 
         is_youtube = bool(YOUTUBE_RE.search(video) or YT_SHORT_RE.search(video))
         is_audio = SOUNDCLOUD_RE.search(video) or self.format == "mp3"
-        is_twitter = bool(TWITTER_RE.search(video))
         is_klipy = bool(KLIPY_RE.search(video))
 
         args = [
@@ -165,9 +203,13 @@ class Downloader:
             "-m",
             "yt_dlp",
             "-f",
-            "bestaudio/best" if is_audio else "best",
+            (
+                "bestaudio/best"
+                if is_audio
+                else f"bestvideo[height<={res_target}]+bestaudio/best[height<={res_target}]"
+            ),
             "-o",
-            f"files/downloads/{self.filename}.%(ext)s",
+            os.path.join(self._job_dir or "", f"{self.filename}.%(ext)s"),
             "--no-playlist",
             "--js-runtimes",
             "deno",
@@ -204,16 +246,10 @@ class Downloader:
 
         args.append(video)
 
-        env = {
-            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
-            + ":/home/zil/.deno/bin",
-            "HOME": os.environ.get("HOME", "/home/zil"),
-        }
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=env,
             start_new_session=True,
         )
         try:
@@ -225,22 +261,18 @@ class Downloader:
 
         if proc.returncode != 0:
             self.ctx.bot.logger.error(
-                f"yt-dlp failed (exit {proc.returncode}). Command: {' '.join(args)}"
+                "yt-dlp failed exit=%s host=%s",
+                proc.returncode,
+                urlsplit(video).hostname,
             )
-            if stderr_text:
-                self.ctx.bot.logger.error(f"yt-dlp stderr:\n{stderr_text}")
             if "is_live" in stderr_text and "filter" in stderr_text:
                 raise DownloadError(
                     "Live streams cannot be downloaded. Please provide a recorded video."
                 )
-            err = stderr_text or "unknown error"
-            # Extract the last meaningful line for the user.
-            for line in reversed(err.splitlines()):
-                line = line.strip()
-                if line and not line.startswith("[") and "WARNING" not in line:
-                    err = line
-                    break
-            raise DownloadError(f"yt-dlp was unable to download this video: {err}")
+            raise DownloadError(
+                "yt-dlp could not download this video. The site may be blocking "
+                "the request, or the video may be unavailable."
+            )
         output_path = stdout.decode().strip()
         if not output_path or not os.path.isfile(output_path):
             raise DownloadError(
@@ -248,7 +280,6 @@ class Downloader:
                 "The site may be blocking the request, or the video is unavailable."
             )
 
-        self.ctx.bot.current_downloads.append(os.path.basename(output_path))
         return output_path
 
     async def _convert_to_gif(self, input_path: str) -> str:
@@ -338,16 +369,7 @@ class Downloader:
         return 0.0
 
     async def _download(self) -> discord.File:
-        _ALLOWED = (
-            YOUTUBE_RE,
-            YT_SHORT_RE,
-            YT_CLIP_RE,
-            INSTAGRAM_RE,
-            TIKTOK_RE,
-            SOUNDCLOUD_RE,
-            TWITTER_RE,
-            TWITCH_RE,
-        )
+        await validate_public_url(self.url, allowed_hosts=DOWNLOAD_HOSTS)
 
         if any(pattern.search(self.url) for pattern in LIVE_STREAM_RE):
             raise DownloadError(
@@ -496,9 +518,14 @@ class Downloader:
 
     async def download(self):
         """Run the complete download/conversion/send workflow with one deadline."""
+        os.makedirs("files/downloads", exist_ok=True)
+        self._job_dir = tempfile.mkdtemp(prefix=".job-", dir="files/downloads")
         self._deadline = asyncio.get_running_loop().time() + DOWNLOAD_TIMEOUT
         try:
-            await asyncio.wait_for(self._download_and_send(), timeout=DOWNLOAD_TIMEOUT)
+            async with self.ctx.bot.media_semaphore:
+                await asyncio.wait_for(
+                    self._download_and_send(), timeout=DOWNLOAD_TIMEOUT
+                )
         except asyncio.TimeoutError:
             self._cleanup_output()
             await self.ctx.send(
@@ -506,6 +533,10 @@ class Downloader:
                 "Try a shorter video.",
                 ephemeral=self.hidden,
             )
+        finally:
+            if self._job_dir is not None:
+                shutil.rmtree(self._job_dir, ignore_errors=True)
+                self._job_dir = None
 
     @to_thread
     def _file_to_bytes(self, file: discord.File) -> bytes:

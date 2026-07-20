@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 import discord
 
@@ -21,9 +20,9 @@ USER_FLAGS = {
     "system": f"{system} System",
     "active_developer": f"{active_developer} Active Developer",
     "owner": f"{fish_owner} Bot Owner",
-    "server_owner": f"<:owner:949147456376033340> Server Owner",
-    "booster": f"<:booster:949147430786596896> Server Booster",
-    "nitro": f"<:nitro:949147454991896616> Nitro",
+    "server_owner": "<:owner:949147456376033340> Server Owner",
+    "booster": "<:booster:949147430786596896> Server Booster",
+    "nitro": "<:nitro:949147454991896616> Nitro",
     1247673648626667642: f"{ori} ori",
     536939325380755487: f"{sac} Sac",
     1471310794648977491: f"{smuckers} Smuckers",

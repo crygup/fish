@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import secrets
 from typing import TYPE_CHECKING, Literal
 
 import discord
+from discord import app_commands
 from discord.ext import commands
+
 from core import Cog
 from utils import Downloader, KlipyUrlConverter, TenorUrlConverter, to_image
-from discord import app_commands
 
 if TYPE_CHECKING:
-    from core import Fishie
     from extensions.context import Context
 
 
@@ -19,9 +18,9 @@ class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
         description="What format to download as (Klipy and Tenor videos are sent as GIFs).",
         default="mp4",
     )
-    title: str = commands.flag(
+    title: str | None = commands.flag(
         description="The title of the video to save as.",
-        default=secrets.token_urlsafe(8),
+        default=None,
     )
     ignore_checks: bool = commands.flag(
         description="you cant use this lol", default=False
