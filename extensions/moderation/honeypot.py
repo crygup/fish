@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
@@ -9,7 +9,6 @@ from core import Cog
 from core.views import AuthorView
 
 if TYPE_CHECKING:
-    from core import Fishie
     from extensions.context import Context, GuildContext
 
 
@@ -78,7 +77,7 @@ class Honeypot(Cog):
             ctx.guild.id,
             channel.id,
         )
-        self.bot.cached_honeypots.add(channel.id)
+        self.bot.cached_honeypots[ctx.guild.id] = channel.id
 
         embed = discord.Embed(
             color=self.bot.embedcolor,
@@ -103,7 +102,7 @@ class Honeypot(Cog):
             ctx.guild.id,
         )
         if row:
-            self.bot.cached_honeypots.discard(row["channel_id"])
+            self.bot.cached_honeypots.pop(ctx.guild.id, None)
             await ctx.send("Honeypot removed.")
         else:
             await ctx.send("No honeypot is set up in this server.")
@@ -112,7 +111,7 @@ class Honeypot(Cog):
     async def honeypot_on_message(self, message: discord.Message):
         if not message.guild or message.author.bot:
             return
-        if message.channel.id not in self.bot.cached_honeypots:
+        if self.bot.cached_honeypots.get(message.guild.id) != message.channel.id:
             return
         if message.author.guild_permissions.ban_members or message.author.guild_permissions.manage_guild:  # type: ignore[union-attr]
             return

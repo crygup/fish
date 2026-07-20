@@ -1,25 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import hashlib
+import re
 from typing import TYPE_CHECKING
 
 import discord
-import re
-import datetime
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 
 from core import Cog
 from utils import (
-    lastfm_command,
-    to_image,
     format_millis,
-    plural,
+    lastfm_command,
     lfm_emoji,
+    plural,
+    to_image,
 )
-from .top import Top
+from utils.credentials import decrypt_credential
+
 from .charts import Charts
+from .top import Top
 
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 
@@ -43,7 +45,7 @@ class Lastfm(Top, Charts):
             user_id,
         )
         username = row["lastfm"] if row else None
-        session_key = row["lastfm_session_key"] if row else None
+        session_key = decrypt_credential(row["lastfm_session_key"]) if row else None
         if not username:
             raise commands.BadArgument(
                 "Connect your Last.fm account first with `fish link lastfm`."
@@ -215,7 +217,7 @@ class Lastfm(Top, Charts):
             if footer_text:
                 embed.set_footer(text=footer_text)
 
-            loved = f" \U00002764\U0000fe0f" if t and t.get("userloved") != "0" else ""
+            loved = " \U00002764\U0000fe0f" if t and t.get("userloved") != "0" else ""
             embed.title = f'{lt["name"]}{loved}'
 
             await ctx.send(embed=embed, files=files)

@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 from discord.ext import commands
 
 if TYPE_CHECKING:
-    from core import Fishie
     from extensions.context import Context
 
 
@@ -27,7 +26,7 @@ def lastfm_command():
             return True
 
         raise commands.BadArgument(
-            f"Please connect your last.fm account to the bot first before using this command. See command `link lastfm`"
+            "Please connect your last.fm account to the bot first before using this command. See command `link lastfm`"
         )
 
     return commands.check(predicate)

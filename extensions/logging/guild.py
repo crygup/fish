@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import random
 from io import BytesIO
 from typing import TYPE_CHECKING
@@ -14,7 +13,7 @@ from core import Cog
 from utils import resize_to_limit
 
 if TYPE_CHECKING:
-    from core import Fishie
+    pass
 
 
 class Guild(Cog):

@@ -2,6 +2,30 @@
 reportPrivateUsage = "none"
 typeCheckingMode = "basic"
 strictParameterNoneValue = false
-pythonVersion = "3.13.5"
+pythonVersion = "3.13"
 venvPath = "."
-venv = "venv"
+venv = ".venv"
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+exclude = ["extensions/fishing"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = [
+    "E501",  # Existing command help and SQL strings are intentionally long.
+    "F401",  # Several package modules intentionally re-export mixins.
+    "F403",  # The legacy emoji catalog is an intentional wildcard re-export.
+    "F405",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+"extensions/owner/**" = ["S102"]

@@ -74,6 +74,8 @@ class AutoDownload(Cog):
                 pass
 
         async with ctx.typing(ephemeral=True):
-            dl = Downloader(ctx, message.content)
+            if not video_match or not video_match.group(0):
+                return
+            dl = Downloader(ctx, video_match.group(0))
 
             await dl.download()

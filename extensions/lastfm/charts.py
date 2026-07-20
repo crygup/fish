@@ -1,31 +1,27 @@
 from __future__ import annotations
 
 import asyncio
-from io import BytesIO
 import re
-import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, TypeAlias, Union
 
 import discord
-from discord.ext import commands
-from discord import MediaGalleryItem, app_commands
-from discord import ui
 from cachetools import TTLCache
+from discord import MediaGalleryItem, app_commands, ui
+from discord.ext import commands
+
 from core import Cog
 from utils import (
-    lastfm_command,
     LastfmTimeConverter,
-    lastfm_period,
-    to_image,
     format_bytes,
-    AuthorView,
+    lastfm_command,
+    lastfm_period,
     response_checker,
+    to_image,
 )
 
 if TYPE_CHECKING:
-    from core import Fishie
     from extensions.context import Context
-    from .__init__ import Lastfm
+
 
 period: str = commands.param(converter=LastfmTimeConverter, default="overall")
 topMode: TypeAlias = Union[

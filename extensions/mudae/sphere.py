@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Optional, Set, Tuple
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
-from utils.emojis import sp, spB, spG, spO, spT, spY, spU
+from utils.emojis import sp, spB, spG, spO, spT, spU, spY
 
 if TYPE_CHECKING:
     from extensions.context import Context

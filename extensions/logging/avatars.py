@@ -13,8 +13,7 @@ from core import Cog
 from utils import resize_to_limit
 
 if TYPE_CHECKING:
-    from core import Fishie
-    from extensions.context import Context
+    pass
 
 
 class Avatars(Cog):

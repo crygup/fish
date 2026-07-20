@@ -11,6 +11,7 @@ from discord.ext import commands
 
 from core import Cog
 from utils import get_sp_cover, response_checker, spotify, to_image
+from utils.credentials import decrypt_credential, encrypt_credential
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -56,7 +57,7 @@ class Spotify(Cog):
         async with ctx.session.get(url, headers=headers, params=api_data) as resp:
             response_checker(resp)
             data: Optional[Dict[Any, Any]] = (
-                (await resp.json()).get(self.format_mode[mode]).get(f"items")
+                (await resp.json()).get(self.format_mode[mode]).get("items")
             )
 
         if data == [] or data is None:
@@ -289,7 +290,7 @@ class Spotify(Cog):
         row = await self.bot.pool.fetchrow(
             "SELECT spotify_refresh_token FROM accounts WHERE user_id = $1", user_id
         )
-        refresh_token = row["spotify_refresh_token"] if row else None
+        refresh_token = decrypt_credential(row["spotify_refresh_token"]) if row else None
         if not refresh_token:
             raise commands.BadArgument(
                 "Connect your Spotify account first with `fish refresh spotify login`."
@@ -317,7 +318,7 @@ class Spotify(Cog):
             await self.bot.pool.execute(
                 "UPDATE accounts SET spotify_refresh_token = $2 WHERE user_id = $1",
                 user_id,
-                new_refresh_token,
+                encrypt_credential(new_refresh_token),
             )
         return data["access_token"]
 

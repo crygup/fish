@@ -6,8 +6,8 @@ from utils import fish_discord2
 
 from .emojis import Emojis
 from .info import Info
-from .raw import RawCommands
 from .pins import Pinboard
+from .raw import RawCommands
 
 if TYPE_CHECKING:
     from core import Fishie

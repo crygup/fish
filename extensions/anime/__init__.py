@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import html
 import re
-import asyncio
 from collections import Counter
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
@@ -15,6 +15,7 @@ from PIL import Image
 
 from core import Cog
 from utils import to_thread
+from utils.credentials import decrypt_credential
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -979,7 +980,9 @@ class Anime(Cog):
             "SELECT anilist_access_token FROM accounts WHERE user_id = $1",
             ctx.author.id,
         )
-        access_token = account["anilist_access_token"] if account else None
+        access_token = (
+            decrypt_credential(account["anilist_access_token"]) if account else None
+        )
         async with ctx.typing():
             response_status, payload = await self._anilist_request(
                 ANILIST_MEDIA_QUERY,
@@ -1080,7 +1083,11 @@ class Anime(Cog):
                 target_user.id,
             )
             username = account["anilist"] if account else None
-            access_token = account["anilist_access_token"] if account else None
+            access_token = (
+                decrypt_credential(account["anilist_access_token"])
+                if account
+                else None
+            )
             if not username:
                 raise commands.BadArgument(
                     f"{target_user.display_name} has not connected an AniList account."

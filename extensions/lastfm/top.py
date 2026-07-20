@@ -1,25 +1,24 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, Literal, TypeAlias, Union
+from typing import TYPE_CHECKING, Literal, TypeAlias, Union
 
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 
 from core import Cog
 from utils import (
-    lastfm_command,
     LastfmTimeConverter,
-    interaction_only,
     SimplePages,
-    plural,
+    interaction_only,
+    lastfm_command,
     lastfm_period,
+    plural,
 )
 
 if TYPE_CHECKING:
-    from core import Fishie
     from extensions.context import Context
-    from .__init__ import Lastfm
+
 
 period: str = commands.param(converter=LastfmTimeConverter, default="overall")
 topMode: TypeAlias = Union[

@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import re
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
 
 from core import Cog
-from utils import EmojiInputType
 
 if TYPE_CHECKING:
-    from context import Context
+    pass
 
 
 class Reactions(Cog):
@@ -18,7 +16,7 @@ class Reactions(Cog):
         if message.guild is None:
             return
 
-        if message.channel.id not in self.bot.db_cache.auto_reaction_guilds:
+        if message.guild.id not in self.bot.db_cache.auto_reaction_guilds:
             return
 
         if message.attachments:

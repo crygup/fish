@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import math
 import re
-import sys
 import textwrap
 from io import BytesIO
 from typing import (
@@ -43,14 +41,14 @@ def to_thread(func: Callable[P, T]) -> Callable[P, Awaitable[T]]:
     return wrapper
 
 
-async def create_pool(connection_url: str) -> "asyncpg.Pool[asyncpg.Record]":
+async def create_pool(connection_url: str) -> asyncpg.Pool:
     def _encode_jsonb(value: Any) -> Any:
         return json.dumps(value)
 
     def _decode_jsonb(value: Any) -> Any:
         return json.loads(value)
 
-    async def init(con: "asyncpg.Connection[Any]"):
+    async def init(con: asyncpg.Connection):
         await con.set_type_codec(
             "jsonb",
             schema="pg_catalog",
@@ -161,13 +159,17 @@ async def to_image(
     bytes: bool = False,
     skip_check: bool = False,
 ) -> BytesIO | bytes:
-    async with session.get(url) as resp:
-        if not skip_check:
-            response_checker(resp)
+    # Imported lazily to keep utils.functions usable without a circular import.
+    from .network import fetch_public_bytes
 
-        data = await resp.read()
-
-        return data if bytes else BytesIO(data)
+    prefixes = () if skip_check else ("image/", "video/")
+    result = await fetch_public_bytes(
+        session,
+        url,
+        max_bytes=50 * 1024 * 1024,
+        allowed_content_prefixes=prefixes,
+    )
+    return result.data if bytes else BytesIO(result.data)
 
 
 # https://github.com/CuteFwan/Koishi/blob/master/cogs/utils/images.py#L4-L34
@@ -247,12 +249,22 @@ def format_status(member: discord.Member) -> str:
 
 async def update_pokemon(bot: Fishie):
     url = "https://raw.githubusercontent.com/poketwo/data/master/csv/pokemon.csv"
-    data = pd.read_csv(url)
-    pokemon = [str(p).lower() for p in data["name.en"]]
-
     manual_pokemon = await bot.pool.fetch("""SELECT name FROM added_pokemon""")
-
-    bot.pokemon = pokemon + [str(record["name"]).lower() for record in manual_pokemon]
+    manual = [str(record["name"]).lower() for record in manual_pokemon]
+    try:
+        async with bot.session.get(
+            url, timeout=aiohttp.ClientTimeout(total=15)
+        ) as response:
+            response_checker(response)
+            payload = await response.read()
+            if len(payload) > 10 * 1024 * 1024:
+                raise RuntimeError("Pokémon catalog response was too large")
+        data = await asyncio.to_thread(pd.read_csv, BytesIO(payload))
+        pokemon = [str(p).lower() for p in data["name.en"]]
+    except Exception:
+        bot.logger.exception("Could not refresh Pokémon catalog; using cached data")
+        pokemon = list(getattr(bot, "pokemon", ()))
+    bot.pokemon = list(dict.fromkeys(pokemon + manual))
 
 
 async def get_or_fetch_user(bot: Fishie, user_id: int) -> discord.User:
@@ -292,58 +304,6 @@ def natural_size(size_in_bytes: int) -> str:
     return f"{size_in_bytes / (1024 ** power):.2f} {units[power]}"
 
 
-async def run(cmd):
-    logger = logging.getLogger("fishie")
-    proc = await asyncio.create_subprocess_shell(
-        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-
-    stdout, stderr = await proc.communicate()
-
-    logger.info(f"[{cmd!r} exited with {proc.returncode}]")
-    if stdout:
-        logger.info(f"[stdout]\n{stdout.decode()}")
-    if stderr:
-        logger.error(f"[stderr]\n{stderr.decode()}")
-
-
-async def identify_mobile(self) -> None:
-    """Sends the IDENTIFY packet."""
-    payload = {
-        "op": self.IDENTIFY,
-        "d": {
-            "token": self.token,
-            "properties": {
-                "os": sys.platform,
-                "browser": "Discord iOS",
-                "device": "Discord iOS",
-            },
-            "compress": True,
-            "large_threshold": 250,
-        },
-    }
-
-    if self.shard_id is not None and self.shard_count is not None:
-        payload["d"]["shard"] = [self.shard_id, self.shard_count]
-
-    state = self._connection
-    if state._activity is not None or state._status is not None:
-        payload["d"]["presence"] = {
-            "status": state._status,
-            "game": state._activity,
-            "since": 0,
-            "afk": False,
-        }
-
-    if state._intents is not None:
-        payload["d"]["intents"] = state._intents.value
-
-    await self.call_hooks(
-        "before_identify", self.shard_id, initial=self._initial_identify
-    )
-    await self.send_as_json(payload)
-
-
 async def litterbox(
     session: aiohttp.ClientSession,
     file: bytes,
@@ -363,7 +323,7 @@ async def litterbox(
         "https://litterbox.catbox.moe/resources/internals/api.php", data=data
     ) as resp:
         if resp.status != 200:
-            raise commands.CommandError(f"File too large.")
+            raise commands.CommandError("File too large.")
 
         return await resp.text()
 

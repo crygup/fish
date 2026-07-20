@@ -10,13 +10,14 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
+
+from utils import lastfm_command
+from utils.converters import normalize_letterboxd
 
 from .logging import Logging
 from .server import Server
-from utils import lastfm_command
-from utils.converters import normalize_letterboxd
 
 if TYPE_CHECKING:
     from core import Fishie

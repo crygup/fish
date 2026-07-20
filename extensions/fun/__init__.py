@@ -13,10 +13,11 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import to_image
+
 from .about import About
 from .corn import Corn
-from .images import Images
 from .helpers import RPSView, WTPView, dagpi
+from .images import Images
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -241,7 +242,7 @@ class Fun(About, Corn, Images):
     @commands.cooldown(1, 3)
     async def hattori(self, ctx: Context):
         """hattori"""
-        name = f"hattori2" if random.randint(0, 15) == 6 else "hattori"
+        name = "hattori2" if random.randint(0, 15) == 6 else "hattori"
         await ctx.send(file=discord.File(rf"files/images/{name}.png", "hattori.png"))
 
     @commands.command(name="merica", aliases=("cm",))

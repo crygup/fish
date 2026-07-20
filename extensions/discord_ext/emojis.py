@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zipfile
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
@@ -14,10 +15,8 @@ from utils import (
     human_join,
     plural,
     to_image,
-    reply,
     to_thread,
 )
-import zipfile
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
@@ -125,7 +124,7 @@ class Emojis(Cog):
 
                 try:
                     femoji = await emoji.guild.fetch_emoji(emoji.id)
-                except:
+                except discord.HTTPException:
                     femoji = None
 
                 if femoji:
@@ -263,7 +262,7 @@ class Emojis(Cog):
                 try:
                     data = await emoji.read()
                     emoji_data.append((f"{emoji.name}.{ext}", data))
-                except:
+                except discord.HTTPException:
                     continue
 
             if not emoji_data:

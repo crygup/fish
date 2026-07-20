@@ -66,7 +66,7 @@ class HelpCommand(commands.HelpCommand):
         bot = ctx.bot
         embed = discord.Embed(color=bot.embedcolor)
 
-        field_1 = f"""
+        field_1 = """
         My default prefix is `fish` however mentioning me also works.
         
         Commands help will be displayed as `fish avatars [user]`.

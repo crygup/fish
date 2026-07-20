@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:18.1-alpine
+    environment:
+      POSTGRES_DB: fishie
+      POSTGRES_USER: fishie
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fishie -d fishie"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["python", "manage.py", "migrate"]
+    environment: &fishie-env
+      DATABASE_URL: postgresql://fishie:${POSTGRES_PASSWORD}@postgres/fishie
+      FISHIE_CONFIG: /run/secrets/config.toml
+      FISHIE_CREDENTIAL_KEY: ${FISHIE_CREDENTIAL_KEY:?set FISHIE_CREDENTIAL_KEY}
+    volumes:
+      - ./config.toml:/run/secrets/config.toml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  fishie:
+    build: .
+    environment:
+      <<: *fishie-env
+      FISHIE_API_HOST: 0.0.0.0
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+    volumes:
+      - ./config.toml:/run/secrets/config.toml:ro
+      - ./files/cookies:/app/files/cookies:ro
+      - downloads:/app/files/downloads
+    ports:
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    init: true
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  downloads:

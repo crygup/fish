@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from core import Cog, SILENT_COMMAND_USERS
+from core import SILENT_COMMAND_USERS, Cog
 
 if TYPE_CHECKING:
     from context import Context
@@ -21,10 +21,12 @@ class CommandLogs(Cog):
         ):
             return
 
-        message = getattr(ctx, "message", None)
-        content = getattr(message, "content", "")
         ctx.bot.logger.info(
-            f'Command {ctx.command.name} ran by {ctx.author}. Full content: "{content}"'
+            "Command %s invoked by user_id=%s guild_id=%s channel_id=%s",
+            ctx.command.qualified_name,
+            ctx.author.id,
+            ctx.guild.id if ctx.guild else None,
+            getattr(ctx.channel, "id", None),
         )
 
     @commands.Cog.listener("on_command_completion")
@@ -34,6 +36,8 @@ class CommandLogs(Cog):
         if ctx.author.id in SILENT_COMMAND_USERS.get(
             ctx.command.qualified_name.casefold(), frozenset()
         ):
+            return
+        if "commands" in self.bot.db_cache.get_opted_out(ctx.author.id):
             return
 
         sql = """

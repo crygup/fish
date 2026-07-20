@@ -42,7 +42,7 @@ class Google(Cog):
     async def google(self, ctx: Context, *, query: str):
         """Search something on the web"""
 
-        url = f"https://customsearch.googleapis.com/customsearch/v1"
+        url = "https://customsearch.googleapis.com/customsearch/v1"
         params = {
             "cx": self.bot.config["keys"]["google_id"],
             "q": query,
@@ -96,7 +96,7 @@ class Google(Cog):
     )
     async def google_image(self, ctx: Context, *, query: str):
         """Search google images"""
-        url = f"https://customsearch.googleapis.com/customsearch/v1"
+        url = "https://customsearch.googleapis.com/customsearch/v1"
         params = {
             "cx": self.bot.config["keys"]["google_id"],
             "q": query,
@@ -146,7 +146,7 @@ class Google(Cog):
         query: str,
         type: str,
     ):
-        url = f"https://www.googleapis.com/youtube/v3/search"
+        url = "https://www.googleapis.com/youtube/v3/search"
         params = {
             "q": query,
             "key": random.choice(self.bot.config["keys"]["google"]),

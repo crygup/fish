@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 import discord
-from discord import app_commands
 from discord.ext import commands
 from PIL import Image
 from playwright.async_api import async_playwright

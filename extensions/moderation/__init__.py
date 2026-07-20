@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-from typing import TYPE_CHECKING, Callable, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar, cast
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 from typing_extensions import Annotated
-from discord import app_commands
 
 from core import Cog
 from extensions.context import ConfirmationView
 from utils import time as time_utils
+
 from .honeypot import Honeypot
 from .logger import Logger
 
@@ -238,7 +239,7 @@ class Moderation(Logger, Honeypot):
                 f"The `{command.qualified_name}` command cannot be disabled."
             )
 
-        setattr(ctx, "_skip_command_disable_check", True)
+        setattr(cast(Any, ctx), "_skip_command_disable_check", True)
         try:
             can_use = await command.can_run(ctx)
         except commands.CommandError:

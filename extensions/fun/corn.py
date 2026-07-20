@@ -7,7 +7,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from core import Cog, SILENT_COMMAND_USERS
+from core import SILENT_COMMAND_USERS, Cog
 from utils import get_or_fetch_user
 
 if TYPE_CHECKING:
