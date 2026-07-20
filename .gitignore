@@ -14,5 +14,7 @@ __pycache__/
 /extensions/private
 testing.py
 /files/downloads/
+/files/secrets/
 /wip/
 /backup
+useful-commands.md

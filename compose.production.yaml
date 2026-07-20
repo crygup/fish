@@ -1,0 +1,53 @@
+name: fishie-production
+
+services:
+  fishie:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "${FISHIE_UID:?set FISHIE_UID}:${FISHIE_GID:?set FISHIE_GID}"
+    network_mode: host
+    environment:
+      FISHIE_CONFIG: /run/secrets/config.toml
+      FISHIE_CREDENTIAL_KEY_FILE: /run/secrets/credential.key
+      FISHIE_API_HOST: 127.0.0.1
+      FISHIE_TRUSTED_PROXIES: ${FISHIE_TRUSTED_PROXIES:-127.0.0.1,::1}
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+      TZ: Europe/Berlin
+    volumes:
+      - ./config.toml:/run/secrets/config.toml:ro
+      - ./files/secrets/credential.key:/run/secrets/credential.key:ro
+      - ./files/cookies:/app/files/cookies:ro
+      - ./files/downloads:/app/files/downloads
+      - ./discord.log:/app/discord.log
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1g
+    shm_size: 1g
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"

@@ -18,7 +18,9 @@ RUN python -m playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --chown=fishie:fishie . .
-RUN mkdir -p files/downloads && chown fishie:fishie files/downloads
+RUN mkdir -p files/downloads \
+    && chown fishie:fishie files/downloads \
+    && chmod -R a=rX /app
 
 USER fishie
 EXPOSE 8001
