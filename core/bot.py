@@ -322,7 +322,7 @@ class Fishie(commands.Bot):
             )
 
     async def unload_extensions(self):
-        for ext in self._extensions:
+        for ext in tuple(self.extensions):
             try:
                 await self.unload_extension(ext)
                 self.logger.info(f"Unloaded extension: {ext}")
