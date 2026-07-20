@@ -1,3 +1,5 @@
+import inspect
+
 from fastapi.testclient import TestClient
 
 import api
@@ -20,7 +22,13 @@ def test_rejects_oversized_request_before_route_processing() -> None:
     assert response.status_code == 413
 
 
-def test_user_history_is_not_public() -> None:
-    for path in ("/user/1", "/usernames/1", "/display-names/1", "/discrims/1"):
-        response = client.get(path)
-        assert response.status_code == 401
+def test_user_history_routes_are_public() -> None:
+    for handler in (
+        api.get_user_data,
+        api.get_usernames,
+        api.get_display_names,
+        api.get_discrims,
+    ):
+        parameters = inspect.signature(handler).parameters
+        assert "authorization" not in parameters
+        assert "session_id" not in parameters

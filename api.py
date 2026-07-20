@@ -1675,12 +1675,7 @@ async def anilist_callback(code: str = Query(...), state: str = Query(...)):
 
 
 @app.get("/user/{user_id}")
-async def get_user_data(
-    user_id: int,
-    authorization: str | None = Header(None),
-    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
-):
-    await _require_self(user_id, authorization, session_id)
+async def get_user_data(user_id: int):
     pool = _check_pool()
     counts = await pool.fetchrow(
         """SELECT
@@ -1717,10 +1712,7 @@ async def get_usernames(
     user_id: int,
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=100),
-    authorization: str | None = Header(None),
-    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
-    await _require_self(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -1753,10 +1745,7 @@ async def get_display_names(
     user_id: int,
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=100),
-    authorization: str | None = Header(None),
-    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
-    await _require_self(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -1789,10 +1778,7 @@ async def get_discrims(
     user_id: int,
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=100),
-    authorization: str | None = Header(None),
-    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
-    await _require_self(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(

@@ -38,6 +38,8 @@ Dashboard and OAuth state records expire automatically. Completed webhook inbox 
 
 The dashboard and bot settings provide per-category opt-outs for supported history including avatars, names, nicknames, joins, status, XP, commands, Pokémon solves, and corn reactions. An opt-out prevents new collection for that category; it does not erase existing rows.
 
+Avatar, username, display-name, and legacy discriminator histories are publicly searchable through the dashboard. Account settings, linked services, and deletion controls remain restricted to the authenticated account owner.
+
 Authenticated users can inspect and delete their own stored data. A full user deletion removes account links, sessions, settings, histories, reminders, game state, subscriptions, and references where the user is an actor or target. Server managers can delete guild-owned history and configuration. Some security or backup records may persist temporarily where needed to prevent abuse or complete backup expiry.
 
 To request help with access, correction, deletion, or a failed self-service request, contact the Fishie developers through the bot's support Discord. The operator may ask for proof that the requester controls the relevant Discord account or server.
