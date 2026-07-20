@@ -7,11 +7,14 @@ import tomllib
 
 import aiohttp
 import uvicorn
+from discord import gateway
 
 from api import app as api_app
 from api import init as api_init
 from core import Fishie
-from utils import Config, base_header, create_pool
+from utils import Config, base_header, create_pool, identify_mobile
+
+gateway.DiscordWebSocket.identify = identify_mobile
 
 
 async def start(testing: bool):

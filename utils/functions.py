@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import re
+import sys
 import textwrap
 from io import BytesIO
 from typing import (
@@ -302,6 +303,43 @@ def natural_size(size_in_bytes: int) -> str:
     power = int(math.log(max(abs(size_in_bytes), 1), 1024))
 
     return f"{size_in_bytes / (1024 ** power):.2f} {units[power]}"
+
+
+async def identify_mobile(self) -> None:
+    """Send Discord's IDENTIFY payload using the mobile client properties."""
+    payload = {
+        "op": self.IDENTIFY,
+        "d": {
+            "token": self.token,
+            "properties": {
+                "os": sys.platform,
+                "browser": "Discord iOS",
+                "device": "Discord iOS",
+            },
+            "compress": True,
+            "large_threshold": 250,
+        },
+    }
+
+    if self.shard_id is not None and self.shard_count is not None:
+        payload["d"]["shard"] = [self.shard_id, self.shard_count]
+
+    state = self._connection
+    if state._activity is not None or state._status is not None:
+        payload["d"]["presence"] = {
+            "status": state._status,
+            "game": state._activity,
+            "since": 0,
+            "afk": False,
+        }
+
+    if state._intents is not None:
+        payload["d"]["intents"] = state._intents.value
+
+    await self.call_hooks(
+        "before_identify", self.shard_id, initial=self._initial_identify
+    )
+    await self.send_as_json(payload)
 
 
 async def litterbox(
