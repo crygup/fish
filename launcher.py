@@ -12,7 +12,13 @@ from discord import gateway
 from api import app as api_app
 from api import init as api_init
 from core import Fishie
-from utils import Config, base_header, create_pool, identify_mobile
+from utils import (
+    Config,
+    base_header,
+    create_pool,
+    identify_mobile,
+    validate_credential_key,
+)
 
 gateway.DiscordWebSocket.identify = identify_mobile
 
@@ -55,10 +61,7 @@ async def start(testing: bool):
         raise RuntimeError("A PostgreSQL URL is required")
     if not token:
         raise RuntimeError("A Discord bot token is required")
-    if not os.getenv("FISHIE_CREDENTIAL_KEY"):
-        raise RuntimeError(
-            "FISHIE_CREDENTIAL_KEY is required; generate one with Fernet.generate_key()"
-        )
+    validate_credential_key()
 
     jsk_envs = [
         "JISHAKU_RETAIN",
