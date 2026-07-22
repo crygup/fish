@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from io import BytesIO
+from typing import TYPE_CHECKING, Literal, cast
 
 import discord
 from discord import app_commands
@@ -40,7 +41,14 @@ class Downloads(Cog):
         async with ctx.typing(ephemeral=flags.hidden):
             try:
                 url = await TenorUrlConverter().convert(ctx, url)
-                img = await to_image(ctx.session, url)
+                img = cast(BytesIO, await to_image(ctx.session, url))
+                downloader = Downloader(ctx, url)
+                if img.getbuffer().nbytes > downloader.max_filesize:
+                    await ctx.send(
+                        f"This GIF exceeds {downloader.upload_limit_description}.",
+                        ephemeral=flags.hidden,
+                    )
+                    return
                 await ctx.send(
                     file=discord.File(img, filename="tenor.gif"), ephemeral=True
                 )

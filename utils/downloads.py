@@ -34,7 +34,6 @@ from .regexes import (
 if TYPE_CHECKING:
     from core import Context
 
-MAX_FILESIZE: int = 50_000_000  # 50 MB
 DOWNLOAD_TIMEOUT: float = 180.0  # three minutes
 DOWNLOAD_HOSTS = frozenset(
     {
@@ -121,9 +120,21 @@ class Downloader:
             8
         ).strip("-")
         self.hidden = hidden
+        self.max_filesize = (
+            ctx.guild.filesize_limit
+            if ctx.guild is not None
+            else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
+        )
         self._duration = 0
         self._deadline: float | None = None
         self._job_dir: str | None = None
+        self._cookie_file: str | None = None
+
+    @property
+    def upload_limit_description(self) -> str:
+        size_mb = self.max_filesize / (1024 * 1024)
+        scope = "this server's" if self.ctx.guild is not None else "Discord's"
+        return f"{scope} {size_mb:g} MB upload limit"
 
     def _remaining_timeout(self) -> float:
         if self._deadline is None:
@@ -191,6 +202,23 @@ class Downloader:
             except OSError:
                 pass
 
+    def _prepare_cookie_file(self, source: str) -> str:
+        """Copy read-only site cookies into this download's private job directory."""
+        if self._cookie_file is not None and os.path.isfile(self._cookie_file):
+            return self._cookie_file
+        if self._job_dir is None:
+            raise DownloadError("The download job was not initialized.")
+
+        cookie_file = os.path.join(self._job_dir, ".yt-dlp-cookies.txt")
+        try:
+            shutil.copyfile(source, cookie_file)
+            os.chmod(cookie_file, 0o600)
+        except OSError as exc:
+            raise DownloadError("Could not prepare site cookies for this download.") from exc
+
+        self._cookie_file = cookie_file
+        return cookie_file
+
     async def _yt_dlp_download(self, video: str, *, res_target: int) -> str:
         """Download via yt-dlp CLI subprocess; return the output path on disk."""
 
@@ -218,7 +246,13 @@ class Downloader:
         ]
 
         if cookies := _get_cookies(video):
-            args += ["--cookies", cookies]
+            args += ["--cookies", self._prepare_cookie_file(cookies)]
+
+        # Instagram returns different DASH manifests over this host's IPv6
+        # route for some Reels.  The IPv4 response includes the matching audio
+        # adaptation set that Discord needs for proper playback.
+        if INSTAGRAM_RE.search(video):
+            args.append("--force-ipv4")
 
         if not is_youtube:
             args += [
@@ -388,16 +422,22 @@ class Downloader:
         output_path = await self._yt_dlp_download(self.url, res_target=1080)
 
         if is_audio:
+            if os.path.getsize(output_path) > self.max_filesize:
+                self._cleanup_output()
+                raise DownloadError(
+                    f"This audio file exceeds {self.upload_limit_description}."
+                )
             return discord.File(output_path, filename=os.path.basename(output_path))
 
-        if os.path.getsize(output_path) > MAX_FILESIZE:
+        if os.path.getsize(output_path) > self.max_filesize:
             self._cleanup_output()
             output_path = await self._yt_dlp_download(self.url, res_target=720)
 
-            if os.path.getsize(output_path) > MAX_FILESIZE:
+            if os.path.getsize(output_path) > self.max_filesize:
                 self._cleanup_output()
                 raise DownloadError(
-                    "This video exceeds 50 MB even at 720p. Try a shorter clip."
+                    f"This video exceeds {self.upload_limit_description} even at "
+                    "720p. Try a shorter clip."
                 )
 
         # Twitter GIF conversion:
@@ -422,10 +462,11 @@ class Downloader:
                 output_path = await self._convert_to_gif(output_path)
                 self.format = "gif"
 
-                if os.path.getsize(output_path) > MAX_FILESIZE:
+                if os.path.getsize(output_path) > self.max_filesize:
                     self._cleanup_output()
                     raise DownloadError(
-                        "GIF conversion exceeded 50 MB. Try a shorter clip or omit `--gif`."
+                        f"GIF conversion exceeded {self.upload_limit_description}. "
+                        "Try a shorter clip or omit `--gif`."
                     )
 
         # Klipy pages represent GIFs as video files.  Normalize those files to
@@ -442,10 +483,11 @@ class Downloader:
             output_path = await self._convert_to_gif(output_path)
             self.format = "gif"
 
-            if os.path.getsize(output_path) > MAX_FILESIZE:
+            if os.path.getsize(output_path) > self.max_filesize:
                 self._cleanup_output()
                 raise DownloadError(
-                    "GIF conversion exceeded 50 MB. Try a shorter clip."
+                    f"GIF conversion exceeded {self.upload_limit_description}. "
+                    "Try a shorter clip."
                 )
 
         return discord.File(output_path, filename=os.path.basename(output_path))
@@ -537,6 +579,7 @@ class Downloader:
             if self._job_dir is not None:
                 shutil.rmtree(self._job_dir, ignore_errors=True)
                 self._job_dir = None
+                self._cookie_file = None
 
     @to_thread
     def _file_to_bytes(self, file: discord.File) -> bytes:

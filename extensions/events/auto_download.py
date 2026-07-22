@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from io import BytesIO
+from typing import TYPE_CHECKING, cast
 
 import discord
 from discord.ext import commands
@@ -54,7 +55,14 @@ class AutoDownload(Cog):
         if tenor_match:
             try:
                 url = await TenorUrlConverter().convert(ctx, message.content)
-                img = await to_image(ctx.session, url)
+                img = cast(BytesIO, await to_image(ctx.session, url))
+                downloader = Downloader(ctx, url)
+                if img.getbuffer().nbytes > downloader.max_filesize:
+                    await ctx.send(
+                        f"This GIF exceeds {downloader.upload_limit_description}.",
+                        ephemeral=True,
+                    )
+                    return
                 await ctx.send(
                     file=discord.File(img, filename="tenor.gif"), ephemeral=True
                 )
