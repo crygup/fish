@@ -10,12 +10,15 @@ import asyncpg
 
 from core.migrations import migrate
 from utils.credentials import encrypt_credential
+from utils.paths import REPOSITORY_ROOT
 
 
 def database_url() -> str:
     if value := os.getenv("DATABASE_URL"):
         return value
-    config_path = Path(os.getenv("FISHIE_CONFIG", "config.toml"))
+    config_path = Path(
+        os.getenv("FISHIE_CONFIG", str(REPOSITORY_ROOT / "config.toml"))
+    )
     with config_path.open("rb") as config_file:
         config = tomllib.load(config_file)
     return str(config["databases"]["psql"])

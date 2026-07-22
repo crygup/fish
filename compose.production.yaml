@@ -17,9 +17,9 @@ services:
       TZ: Europe/Berlin
     volumes:
       - ./config.toml:/run/secrets/config.toml:ro
-      - ./files/secrets/credential.key:/run/secrets/credential.key:ro
-      - ./files/cookies:/app/files/cookies:ro
-      - ./files/downloads:/app/files/downloads
+      - ./src/files/secrets/credential.key:/run/secrets/credential.key:ro
+      - ./src/files/cookies:/app/src/files/cookies:ro
+      - ./src/files/downloads:/app/src/files/downloads
       - ./discord.log:/app/discord.log
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro

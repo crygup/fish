@@ -11,10 +11,10 @@ __pycache__
 .env
 config.toml
 backup
-extensions/private
-files/cookies
-files/downloads
-files/secrets
+src/extensions/private
+src/files/cookies
+src/files/downloads
+src/files/secrets
 tests
 testing.py
 wip

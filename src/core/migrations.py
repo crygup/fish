@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_LOCK_ID = 0x464953484945  # "FISHIE"
 
 
@@ -100,7 +100,7 @@ async def check_migrations(connection: Any) -> None:
 
     exists = await connection.fetchval("SELECT to_regclass('schema_migrations')")
     if not exists:
-        raise RuntimeError("Database is not migrated; run `python manage.py migrate`")
+        raise RuntimeError("Database is not migrated; run `python src/manage.py migrate`")
     records = {
         row["version"]: row
         for row in await connection.fetch(
@@ -112,7 +112,7 @@ async def check_migrations(connection: Any) -> None:
         if record is None:
             raise RuntimeError(
                 f"Database migration {migration.version} is pending; "
-                "run `python manage.py migrate`"
+                "run `python src/manage.py migrate`"
             )
         if record["checksum"] != migration.checksum:
             raise RuntimeError(

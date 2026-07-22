@@ -9,6 +9,8 @@ def test_migrations_are_unique_and_have_content_checksums() -> None:
 
 
 def test_schema_no_longer_runs_from_bot_startup() -> None:
-    source = (available_migrations()[0].path.parent / "core" / "bot.py").read_text()
+    source = (
+        available_migrations()[0].path.parent / "src" / "core" / "bot.py"
+    ).read_text()
     assert "check_migrations" in source
     assert "pool.execute(fp.read())" not in source

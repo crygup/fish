@@ -235,8 +235,9 @@ class Owner(Cog):
 
         if not extensions:
             modified = []
+            extension_root = Path(__file__).resolve().parents[1]
             for ext in self.bot._extensions:
-                pkg_dir = Path("extensions") / ext.split(".", 1)[1]
+                pkg_dir = extension_root / ext.split(".", 1)[1]
                 if not pkg_dir.is_dir():
                     continue
                 for py_file in pkg_dir.rglob("*.py"):

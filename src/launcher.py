@@ -4,6 +4,7 @@ import logging.handlers
 import os
 import sys
 import tomllib
+from pathlib import Path
 
 import aiohttp
 import uvicorn
@@ -19,6 +20,7 @@ from utils import (
     identify_mobile,
     validate_credential_key,
 )
+from utils.paths import REPOSITORY_ROOT
 
 gateway.DiscordWebSocket.identify = identify_mobile
 
@@ -28,9 +30,12 @@ async def start(testing: bool):
     logger.setLevel(logging.INFO)
     logging.getLogger("discord.http").setLevel(logging.INFO)
 
+    log_path = Path(
+        os.getenv("FISHIE_LOG_PATH", str(REPOSITORY_ROOT / "discord.log"))
+    )
     handlers = [
         logging.handlers.RotatingFileHandler(
-            filename="discord.log",
+            filename=log_path,
             encoding="utf-8",
             maxBytes=32 * 1024 * 1024,  # 32 MiB
             backupCount=5,  # Rotate through 5 files
@@ -47,7 +52,7 @@ async def start(testing: bool):
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
-    config_path = os.getenv("FISHIE_CONFIG", "config.toml")
+    config_path = os.getenv("FISHIE_CONFIG", str(REPOSITORY_ROOT / "config.toml"))
     with open(config_path, "rb") as fileObj:
         config: Config = Config(**tomllib.load(fileObj))
 

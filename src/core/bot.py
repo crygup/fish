@@ -9,6 +9,7 @@ import sys
 import traceback
 from io import StringIO
 from logging import Logger
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -121,8 +122,12 @@ class Fishie(commands.Bot):
         self.session = session
         self.start_time: datetime.datetime
         self.context_cls: Type[commands.Context[Fishie]] = commands.Context
+        extension_root = Path(__file__).resolve().parents[1] / "extensions"
         self._extensions = [
-            m.name for m in pkgutil.iter_modules(["./extensions"], prefix="extensions.")
+            module.name
+            for module in pkgutil.iter_modules(
+                [str(extension_root)], prefix="extensions."
+            )
         ]
         self.spotify_key: Optional[str] = None
         self.cached_covers: Dict[str, Tuple[str, bool]] = {}

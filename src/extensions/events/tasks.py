@@ -11,6 +11,7 @@ import discord
 from discord.ext import commands, tasks
 
 from core import Cog
+from utils.paths import DOWNLOADS_ROOT
 
 TWITCH_EVENTSUB_CALLBACK = "https://api.crygup.com/fishie/twitch/eventsub"
 
@@ -673,7 +674,7 @@ class Tasks(Cog):
         # Normal jobs clean themselves in ``Downloader.download``. Remove only
         # crash-orphaned job directories old enough that no valid job can still
         # be running (the hard job timeout is three minutes).
-        root = "files/downloads"
+        root = DOWNLOADS_ROOT
         if not os.path.isdir(root):
             return
         cutoff = time.time() - 3600

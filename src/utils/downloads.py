@@ -20,6 +20,7 @@ from discord import MediaGalleryItem, ui
 from .errors import DownloadError
 from .functions import litterbox, to_thread
 from .network import validate_public_url
+from .paths import DOWNLOADS_ROOT, FILES_ROOT
 from .regexes import (
     INSTAGRAM_RE,
     KLIPY_RE,
@@ -72,11 +73,11 @@ DOWNLOAD_HOSTS = frozenset(
 )
 
 _COOKIE_MAP: list[tuple[Any, str]] = [
-    (YOUTUBE_RE, "files/cookies/youtube-cookies.txt"),
-    (YT_SHORT_RE, "files/cookies/youtube-cookies.txt"),
-    (YT_CLIP_RE, "files/cookies/youtube-cookies.txt"),
-    (TWITTER_RE, "files/cookies/twitter-cookies.txt"),
-    (INSTAGRAM_RE, "files/cookies/instagram-cookies.txt"),
+    (YOUTUBE_RE, str(FILES_ROOT / "cookies" / "youtube-cookies.txt")),
+    (YT_SHORT_RE, str(FILES_ROOT / "cookies" / "youtube-cookies.txt")),
+    (YT_CLIP_RE, str(FILES_ROOT / "cookies" / "youtube-cookies.txt")),
+    (TWITTER_RE, str(FILES_ROOT / "cookies" / "twitter-cookies.txt")),
+    (INSTAGRAM_RE, str(FILES_ROOT / "cookies" / "instagram-cookies.txt")),
 ]
 
 
@@ -552,7 +553,7 @@ class Downloader:
             if filename != f.filename:
                 continue
             try:
-                os.remove(os.path.join("files/downloads", filename))
+                os.remove(DOWNLOADS_ROOT / filename)
             except OSError:
                 pass
 
@@ -560,8 +561,8 @@ class Downloader:
 
     async def download(self):
         """Run the complete download/conversion/send workflow with one deadline."""
-        os.makedirs("files/downloads", exist_ok=True)
-        self._job_dir = tempfile.mkdtemp(prefix=".job-", dir="files/downloads")
+        DOWNLOADS_ROOT.mkdir(parents=True, exist_ok=True)
+        self._job_dir = tempfile.mkdtemp(prefix=".job-", dir=DOWNLOADS_ROOT)
         self._deadline = asyncio.get_running_loop().time() + DOWNLOAD_TIMEOUT
         try:
             async with self.ctx.bot.media_semaphore:

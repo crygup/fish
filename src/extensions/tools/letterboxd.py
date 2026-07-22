@@ -15,6 +15,7 @@ from playwright.async_api import async_playwright
 from core import Cog
 from utils import to_thread
 from utils.converters import LetterboxdConverter
+from utils.paths import FILES_ROOT
 from utils.regexes import LBD_URL_RE
 
 if TYPE_CHECKING:
@@ -26,7 +27,7 @@ MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 MAX_IMAGE_DIMENSION = 8_192
 LBD_LOGO = "https://a.ltrbxd.com/logos/letterboxd-decal-dots-pos-rgb-500px.png"
-COOKIE_FILE = "files/cookies/letterboxd-cookies.txt"
+COOKIE_FILE = FILES_ROOT / "cookies" / "letterboxd-cookies.txt"
 
 
 async def _read_remote_image(response: aiohttp.ClientResponse) -> bytes | None:

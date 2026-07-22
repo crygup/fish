@@ -3,19 +3,20 @@ reportPrivateUsage = "none"
 typeCheckingMode = "basic"
 strictParameterNoneValue = false
 pythonVersion = "3.13"
+extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 asyncio_mode = "auto"
-pythonpath = ["."]
+pythonpath = ["src"]
 testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py313"
 line-length = 88
-exclude = ["extensions/fishing"]
+exclude = ["src/extensions/fishing"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]
@@ -28,4 +29,4 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
-"extensions/owner/**" = ["S102"]
+"src/extensions/owner/**" = ["S102"]

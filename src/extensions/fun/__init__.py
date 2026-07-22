@@ -13,6 +13,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import to_image
+from utils.paths import FILES_ROOT
 
 from .about import About
 from .corn import Corn
@@ -234,7 +235,8 @@ class Fun(About, Corn, Images):
 
         await ctx.send(
             file=discord.File(
-                rf"files/monark/monark{random.randint(1,3)}.png", "monark.png"
+                FILES_ROOT / "monark" / f"monark{random.randint(1,3)}.png",
+                "monark.png",
             )
         )
 
@@ -243,7 +245,9 @@ class Fun(About, Corn, Images):
     async def hattori(self, ctx: Context):
         """hattori"""
         name = "hattori2" if random.randint(0, 15) == 6 else "hattori"
-        await ctx.send(file=discord.File(rf"files/images/{name}.png", "hattori.png"))
+        await ctx.send(
+            file=discord.File(FILES_ROOT / "images" / f"{name}.png", "hattori.png")
+        )
 
     @commands.command(name="merica", aliases=("cm",))
     @commands.cooldown(1, 5)
@@ -714,7 +718,7 @@ class Fun(About, Corn, Images):
         async with ctx.typing():
             await ctx.send(
                 file=discord.File(
-                    "files/videos/bad apple.mp4",
+                    FILES_ROOT / "videos" / "bad apple.mp4",
                     filename=f"fishie_loves_{ctx.author.name}.mp4",
                 )
             )
@@ -730,7 +734,9 @@ class Fun(About, Corn, Images):
         async with ctx.typing():
             await ctx.send(
                 file=discord.File(
-                    "files/videos/QIIYHAPWMTMAIYDHMNYDKMWETHAPWM.mp4",
+                    FILES_ROOT
+                    / "videos"
+                    / "QIIYHAPWMTMAIYDHMNYDKMWETHAPWM.mp4",
                     filename=f"fishie_loves_{ctx.author.name}.mp4",
                 )
             )

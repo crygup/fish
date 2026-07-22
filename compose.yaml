@@ -36,8 +36,8 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
     volumes:
       - ./config.toml:/run/secrets/config.toml:ro
-      - ./files/cookies:/app/files/cookies:ro
-      - downloads:/app/files/downloads
+      - ./src/files/cookies:/app/src/files/cookies:ro
+      - downloads:/app/src/files/downloads
     ports:
       - "127.0.0.1:8001:8001"
     depends_on:
