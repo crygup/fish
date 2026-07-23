@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import TYPE_CHECKING, Optional
 
@@ -15,6 +16,32 @@ if TYPE_CHECKING:
 
 class Guilds(Cog):
     allowed_guilds = [1159760133895766049]
+
+    async def get_bot_adder(self, guild: discord.Guild) -> int | None:
+        """Return the user who added Fishie when a recent audit entry is available."""
+        me = guild.me
+        bot_user = self.bot.user
+        if me is None or bot_user is None or not me.guild_permissions.view_audit_log:
+            return None
+
+        for attempt in range(4):
+            try:
+                async for entry in guild.audit_logs(
+                    limit=10,
+                    action=discord.AuditLogAction.bot_add,
+                ):
+                    if getattr(entry.target, "id", None) != bot_user.id:
+                        continue
+                    age = (discord.utils.utcnow() - entry.created_at).total_seconds()
+                    if -2 <= age <= 30 and entry.user is not None:
+                        return entry.user.id
+            except (discord.Forbidden, discord.HTTPException):
+                return None
+
+            if attempt < 3:
+                await asyncio.sleep(0.5)
+
+        return None
 
     async def post_guild(self, embed: discord.Embed, guild: discord.Guild):
         embed.add_field(
@@ -100,14 +127,19 @@ class Guilds(Cog):
         )
 
         await self.post_guild(embed, guild)
+        added_by = await self.get_bot_adder(guild)
 
         sql = """
-        INSERT INTO guild_join_logs(guild_id, owner_id, time) 
-        VALUES($1, $2, $3)
+        INSERT INTO guild_join_logs(guild_id, owner_id, added_by, time)
+        VALUES($1, $2, $3, $4)
         """
 
         await self.bot.pool.execute(
-            sql, guild.id, guild.owner_id, discord.utils.utcnow()
+            sql,
+            guild.id,
+            guild.owner_id,
+            added_by,
+            discord.utils.utcnow(),
         )
 
     @commands.Cog.listener("on_guild_remove")

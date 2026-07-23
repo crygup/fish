@@ -32,7 +32,9 @@ def _fernet() -> Fernet:
     try:
         return Fernet(key.encode("ascii"))
     except (ValueError, UnicodeEncodeError) as error:
-        raise RuntimeError("The configured credential key is not a valid Fernet key") from error
+        raise RuntimeError(
+            "The configured credential key is not a valid Fernet key"
+        ) from error
 
 
 def validate_credential_key() -> None:
@@ -51,8 +53,10 @@ def decrypt_credential(value: str | None) -> str | None:
         # Temporary compatibility for rows created before credential encryption.
         return value
     try:
-        return _fernet().decrypt(value.removeprefix(PREFIX).encode("ascii")).decode(
-            "utf-8"
+        return (
+            _fernet()
+            .decrypt(value.removeprefix(PREFIX).encode("ascii"))
+            .decode("utf-8")
         )
     except InvalidToken as error:
         raise RuntimeError("Stored OAuth credential could not be decrypted") from error

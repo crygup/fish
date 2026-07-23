@@ -39,16 +39,14 @@ async def migrate(connection: Any) -> list[Migration]:
     """Apply pending migrations under a database-wide advisory lock."""
 
     applied: list[Migration] = []
-    await connection.execute(
-        """
+    await connection.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             checksum TEXT NOT NULL,
             applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
         )
-        """
-    )
+        """)
     await connection.execute("SELECT pg_advisory_lock($1)", MIGRATION_LOCK_ID)
     try:
         existing = {
@@ -100,7 +98,9 @@ async def check_migrations(connection: Any) -> None:
 
     exists = await connection.fetchval("SELECT to_regclass('schema_migrations')")
     if not exists:
-        raise RuntimeError("Database is not migrated; run `python src/manage.py migrate`")
+        raise RuntimeError(
+            "Database is not migrated; run `python src/manage.py migrate`"
+        )
     records = {
         row["version"]: row
         for row in await connection.fetch(

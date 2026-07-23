@@ -28,10 +28,9 @@ class CornReacts(Cog):
             return
         if payload.user_id == payload.message_author_id:
             return
-        if (
-            "corn" in self.bot.db_cache.get_opted_out(payload.user_id)
-            or "corn" in self.bot.db_cache.get_opted_out(payload.message_author_id)
-        ):
+        if "corn" in self.bot.db_cache.get_opted_out(
+            payload.user_id
+        ) or "corn" in self.bot.db_cache.get_opted_out(payload.message_author_id):
             return
 
         emoji = str(payload.emoji)

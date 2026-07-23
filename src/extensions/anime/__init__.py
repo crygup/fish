@@ -1084,9 +1084,7 @@ class Anime(Cog):
             )
             username = account["anilist"] if account else None
             access_token = (
-                decrypt_credential(account["anilist_access_token"])
-                if account
-                else None
+                decrypt_credential(account["anilist_access_token"]) if account else None
             )
             if not username:
                 raise commands.BadArgument(
@@ -1208,7 +1206,7 @@ class Anime(Cog):
         )
         if default_media not in {"anime", "manga", "characters"}:
             default_media = "anime"
-        await ctx.send(view=AniListSettingsView(ctx, default_media))
+        await ctx.send(view=AniListSettingsView(ctx, default_media), ephemeral=True)
 
 
 async def setup(bot: Fishie):

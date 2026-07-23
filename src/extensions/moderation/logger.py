@@ -17,10 +17,10 @@ if TYPE_CHECKING:
 
 LOGGER_EVENTS: dict[str, str] = {
     "avatar": "Avatar changes",
-    "member": "Member joins, leaves, and name changes",
+    "member": "Member joins, leaves, name, and tag changes",
     "channel": "Channel changes",
     "role": "Role changes",
-    "server": "Server changes",
+    "server": "Server, emoji, and sticker changes",
     "moderation": "Bans, kicks, unbans, and timeouts",
     "message": "Message edits, deletions, and purges",
 }
@@ -750,7 +750,7 @@ class Logger(Cog):
     async def logger_member(
         self, ctx: GuildContext, channel: discord.TextChannel
     ) -> None:
-        """Log member joins, leaves, and name changes."""
+        """Log member joins, leaves, name, and tag changes."""
         await self._set_logger_channel(ctx, "member", channel)
 
     @logger.command(name="channel", aliases=("channels",))
@@ -771,7 +771,7 @@ class Logger(Cog):
     async def logger_server(
         self, ctx: GuildContext, channel: discord.TextChannel
     ) -> None:
-        """Log server name and icon changes."""
+        """Log server, emoji, and sticker changes."""
         await self._set_logger_channel(ctx, "server", channel)
 
     @logger.command(name="moderation", aliases=("mod", "bans"))
@@ -989,7 +989,10 @@ class Logger(Cog):
         profile_changed = (
             before.name != after.name or before.display_name != after.display_name
         )
-        if not avatar_changed and not profile_changed:
+        before_tag = before.primary_guild.tag
+        after_tag = after.primary_guild.tag
+        tag_changed = before_tag != after_tag
+        if not avatar_changed and not profile_changed and not tag_changed:
             return
 
         for guild in self.bot.guilds:
@@ -1019,6 +1022,16 @@ class Logger(Cog):
                     name="After",
                     value=f"{_display(after.name)} / {_display(after.display_name)}",
                 )
+                self._add_item_id(embed, after)
+                await self._emit_logger(guild, "member", embed)
+            if tag_changed:
+                embed = self._embed(
+                    "Member tag changed",
+                    f"{after.mention} changed their server tag.",
+                    color=discord.Colour.orange(),
+                )
+                embed.add_field(name="Before", value=_display(before_tag))
+                embed.add_field(name="After", value=_display(after_tag))
                 self._add_item_id(embed, after)
                 await self._emit_logger(guild, "member", embed)
 
@@ -1300,6 +1313,171 @@ class Logger(Cog):
             audit_action=discord.AuditLogAction.guild_update,
             audit_target_id=after.id,
         )
+
+    @staticmethod
+    def _emoji_summary(emoji: discord.Emoji) -> str:
+        roles = ", ".join(role.name for role in emoji.roles) or "Everyone"
+        return (
+            f"Name: {_display(emoji.name)}\n"
+            f"Roles: {_display(roles)}\n"
+            f"Animated: {'Yes' if emoji.animated else 'No'}"
+        )
+
+    @commands.Cog.listener("on_guild_emojis_update")
+    async def logger_guild_emojis_update(
+        self,
+        guild: discord.Guild,
+        before: Sequence[discord.Emoji],
+        after: Sequence[discord.Emoji],
+    ) -> None:
+        before_by_id = {emoji.id: emoji for emoji in before}
+        after_by_id = {emoji.id: emoji for emoji in after}
+
+        for emoji_id in after_by_id.keys() - before_by_id.keys():
+            emoji = after_by_id[emoji_id]
+            embed = self._embed(
+                "Emoji created",
+                f"{emoji} `{_display(emoji.name)}` was created.",
+                color=discord.Colour.green(),
+            )
+            embed.set_thumbnail(url=emoji.url)
+            self._add_item_id(embed, discord.Object(emoji.id))
+            await self._emit_logger(
+                guild,
+                "server",
+                embed,
+                audit_action=discord.AuditLogAction.emoji_create,
+                audit_target_id=emoji.id,
+            )
+
+        for emoji_id in before_by_id.keys() - after_by_id.keys():
+            emoji = before_by_id[emoji_id]
+            embed = self._embed(
+                "Emoji deleted",
+                f"`{_display(emoji.name)}` was deleted.",
+                color=discord.Colour.red(),
+            )
+            embed.set_thumbnail(url=emoji.url)
+            self._add_item_id(embed, discord.Object(emoji.id))
+            await self._emit_logger(
+                guild,
+                "server",
+                embed,
+                audit_action=discord.AuditLogAction.emoji_delete,
+                audit_target_id=emoji.id,
+            )
+
+        for emoji_id in before_by_id.keys() & after_by_id.keys():
+            old_emoji = before_by_id[emoji_id]
+            emoji = after_by_id[emoji_id]
+            before_roles = tuple(role.id for role in old_emoji.roles)
+            after_roles = tuple(role.id for role in emoji.roles)
+            if (
+                old_emoji.name == emoji.name
+                and old_emoji.animated == emoji.animated
+                and before_roles == after_roles
+            ):
+                continue
+            embed = self._embed(
+                "Emoji updated",
+                f"{emoji} was updated.",
+                color=discord.Colour.orange(),
+            )
+            embed.add_field(
+                name="Before", value=self._emoji_summary(old_emoji), inline=True
+            )
+            embed.add_field(name="After", value=self._emoji_summary(emoji), inline=True)
+            embed.set_thumbnail(url=emoji.url)
+            self._add_item_id(embed, discord.Object(emoji.id))
+            await self._emit_logger(
+                guild,
+                "server",
+                embed,
+                audit_action=discord.AuditLogAction.emoji_update,
+                audit_target_id=emoji.id,
+            )
+
+    @staticmethod
+    def _sticker_summary(sticker: discord.GuildSticker) -> str:
+        return (
+            f"Name: {_display(sticker.name)}\n"
+            f"Description: {_display(sticker.description)}\n"
+            f"Related emoji: {_display(sticker.emoji)}"
+        )
+
+    @commands.Cog.listener("on_guild_stickers_update")
+    async def logger_guild_stickers_update(
+        self,
+        guild: discord.Guild,
+        before: Sequence[discord.GuildSticker],
+        after: Sequence[discord.GuildSticker],
+    ) -> None:
+        before_by_id = {sticker.id: sticker for sticker in before}
+        after_by_id = {sticker.id: sticker for sticker in after}
+
+        for sticker_id in after_by_id.keys() - before_by_id.keys():
+            sticker = after_by_id[sticker_id]
+            embed = self._embed(
+                "Sticker created",
+                f"`{_display(sticker.name)}` was created.",
+                color=discord.Colour.green(),
+            )
+            embed.set_thumbnail(url=sticker.url)
+            self._add_item_id(embed, discord.Object(sticker.id))
+            await self._emit_logger(
+                guild,
+                "server",
+                embed,
+                audit_action=discord.AuditLogAction.sticker_create,
+                audit_target_id=sticker.id,
+            )
+
+        for sticker_id in before_by_id.keys() - after_by_id.keys():
+            sticker = before_by_id[sticker_id]
+            embed = self._embed(
+                "Sticker deleted",
+                f"`{_display(sticker.name)}` was deleted.",
+                color=discord.Colour.red(),
+            )
+            embed.set_thumbnail(url=sticker.url)
+            self._add_item_id(embed, discord.Object(sticker.id))
+            await self._emit_logger(
+                guild,
+                "server",
+                embed,
+                audit_action=discord.AuditLogAction.sticker_delete,
+                audit_target_id=sticker.id,
+            )
+
+        for sticker_id in before_by_id.keys() & after_by_id.keys():
+            old_sticker = before_by_id[sticker_id]
+            sticker = after_by_id[sticker_id]
+            if (
+                old_sticker.name == sticker.name
+                and old_sticker.description == sticker.description
+                and old_sticker.emoji == sticker.emoji
+            ):
+                continue
+            embed = self._embed(
+                "Sticker updated",
+                f"`{_display(sticker.name)}` was updated.",
+                color=discord.Colour.orange(),
+            )
+            embed.add_field(
+                name="Before", value=self._sticker_summary(old_sticker), inline=True
+            )
+            embed.add_field(
+                name="After", value=self._sticker_summary(sticker), inline=True
+            )
+            embed.set_thumbnail(url=sticker.url)
+            self._add_item_id(embed, discord.Object(sticker.id))
+            await self._emit_logger(
+                guild,
+                "server",
+                embed,
+                audit_action=discord.AuditLogAction.sticker_update,
+                audit_target_id=sticker.id,
+            )
 
     @commands.Cog.listener("on_message_edit")
     async def logger_message_edit(

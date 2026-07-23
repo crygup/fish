@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import textwrap
+from datetime import timedelta
 from time import perf_counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import discord
 import psutil
@@ -14,6 +15,11 @@ from utils import get_or_fetch_user, human_timedelta, natural_size
 
 if TYPE_CHECKING:
     from extensions.context import Context
+
+
+class TableCounts(NamedTuple):
+    total: int
+    last_24_hours: int
 
 
 class About(Cog):
@@ -27,16 +33,21 @@ class About(Cog):
         if ctx.bot.user is None:
             return
 
-        start = discord.utils.utcnow().replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        start = discord.utils.utcnow() - timedelta(hours=24)
         counts = await self.bot.pool.fetchrow(
-            "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE created_at >= $1) AS today "
+            "SELECT COUNT(*) AS total, "
+            "COUNT(*) FILTER (WHERE created_at >= $1) AS last_24_hours "
             "FROM command_logs",
             start,
         )
-        total = int(counts["total"])
-        today = int(counts["today"])
+        command_counts = (
+            TableCounts(total=0, last_24_hours=0)
+            if counts is None
+            else TableCounts(
+                total=int(counts["total"]),
+                last_24_hours=int(counts["last_24_hours"]),
+            )
+        )
         memory_usage = self.process.memory_full_info().uss / 1024**2
         cpu_usage = self.process.cpu_percent() / psutil.cpu_count()  # type: ignore
         liz = await get_or_fetch_user(
@@ -52,7 +63,12 @@ class About(Cog):
         e.set_footer(text="Created at")
         e.set_author(name=f"{liz}", icon_url=liz.display_avatar.url)
 
-        e.add_field(name="Commands ran", value=f"{total:,} total\n{today:,} today")
+        e.add_field(
+            name="Commands ran",
+            value=(
+                f"{command_counts.total:,} total\n" f"{command_counts.last_24_hours:,}"
+            ),
+        )
         e.add_field(
             name="Process", value=f"{memory_usage:.2f} MiB\n{cpu_usage:.2f}% CPU"
         )
@@ -91,21 +107,28 @@ class About(Cog):
         async with ctx.typing():
             # fmt: off
             members_count: int = sum(g.member_count for g in bot.guilds)  # type: ignore
-            start = discord.utils.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            start = discord.utils.utcnow() - timedelta(hours=24)
 
-            async def table_counts(table: str):
-                return await bot.pool.fetchrow(
+            async def table_counts(table: str) -> TableCounts:
+                counts = await bot.pool.fetchrow(
                     f"SELECT COUNT(*) AS total, "
-                    f"COUNT(*) FILTER (WHERE created_at >= $1) AS today FROM {table}",
+                    f"COUNT(*) FILTER (WHERE created_at >= $1) AS last_24_hours FROM {table}",
                     start,
                 )
+                if counts is None:
+                    return TableCounts(total=0, last_24_hours=0)
+                return TableCounts(
+                    total=int(counts["total"]),
+                    last_24_hours=int(counts["last_24_hours"]),
+                )
 
-            avatars, commands, usernames, nicknames, discrims = await asyncio.gather(
+            avatars, commands, usernames, nicknames, discrims, server_tags = await asyncio.gather(
                 table_counts("avatars"),
                 table_counts("command_logs"),
                 table_counts("username_logs"),
                 table_counts("nickname_logs"),
                 table_counts("discrim_logs"),
+                table_counts("stag_logs"),
             )
             # fmt: on
             psql_start = perf_counter()
@@ -131,11 +154,12 @@ class About(Cog):
                cached messages : {len(bot.cached_messages):,}
              websocket latency : {round(bot.latency * 1000, 3)}ms
             postgresql latency : {round(psql_end - psql_start, 3)}ms
-                avatars logged : {avatars['total']:,} - {avatars['today']:,}
-              usernames logged : {usernames['total']:,} - {usernames['today']:,}
-               discrims logged : {discrims['total']:,} - {discrims['today']:,}
-              nicknames logged : {nicknames['total']:,} - {nicknames['today']:,}
-                  commands ran : {commands['total']:,} - {commands['today']:,}
+                avatars logged : {avatars.total:,} - {avatars.last_24_hours:,}
+              usernames logged : {usernames.total:,} - {usernames.last_24_hours:,}
+               discrims logged : {discrims.total:,} - {discrims.last_24_hours:,}
+              nicknames logged : {nicknames.total:,} - {nicknames.last_24_hours:,}
+            server tags logged : {server_tags.total:,} - {server_tags.last_24_hours:,}
+                  commands ran : {commands.total:,} - {commands.last_24_hours:,}
                   """
 
         await ctx.send(f"```yaml{textwrap.dedent(message)}```")

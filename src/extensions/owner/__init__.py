@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import time
@@ -225,6 +226,13 @@ class Owner(Cog):
     @commands.command(name="unlike", aliases=("unfavourite", "unfavorite"))
     async def spotify_unlike(self, ctx: Context):
         await self.spotify.unlike(ctx)
+
+    @commands.command(name="shutdown")
+    async def shutdown(self, ctx: Context) -> None:
+        """Gracefully stop Fishie so Docker can restart it."""
+        await ctx.send("Restarting Fishie...")
+        await asyncio.sleep(1)
+        await self.bot.close()
 
     @commands.command(name="reload")
     async def reload(self, ctx: Context, *extensions: str):

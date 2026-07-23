@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import discord
 from discord.ext import commands
 
@@ -7,6 +9,53 @@ from core import Cog
 
 
 class User(Cog):
+    @staticmethod
+    def _server_tag_values(
+        user: discord.User,
+    ) -> tuple[str | None, int | None, datetime | None, str | None]:
+        primary_guild = user.primary_guild
+        badge = primary_guild.badge
+        return (
+            primary_guild.tag,
+            primary_guild.id,
+            primary_guild.created_at,
+            badge.url if badge is not None else None,
+        )
+
+    async def add_server_tag(self, user: discord.User) -> None:
+        tag, guild_id, guild_created_at, badge_url = self._server_tag_values(user)
+        await self.bot.pool.execute(
+            """
+            INSERT INTO stag_logs(
+                user_id,
+                tag,
+                guild_id,
+                guild_created_at,
+                badge_url,
+                created_at
+            )
+            VALUES($1, $2, $3, $4, $5, $6)
+            """,
+            user.id,
+            tag,
+            guild_id,
+            guild_created_at,
+            badge_url,
+            discord.utils.utcnow(),
+        )
+
+    @commands.Cog.listener("on_user_update")
+    async def server_tag_update(
+        self, before_u: discord.User, after_u: discord.User
+    ) -> None:
+        if self._server_tag_values(before_u) == self._server_tag_values(after_u):
+            return
+
+        if "stag" in self.bot.db_cache.get_opted_out(after_u.id):
+            return
+
+        await self.add_server_tag(after_u)
+
     async def add_username(self, user: discord.User):
         sql = """
         INSERT INTO username_logs(user_id, username, created_at)

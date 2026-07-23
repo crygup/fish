@@ -16,6 +16,7 @@ services:
       XDG_CACHE_HOME: /tmp/.cache
       TZ: Europe/Berlin
     volumes:
+      - ./src:/app/src:ro
       - ./config.toml:/run/secrets/config.toml:ro
       - ./src/files/secrets/credential.key:/run/secrets/credential.key:ro
       - ./src/files/cookies:/app/src/files/cookies:ro

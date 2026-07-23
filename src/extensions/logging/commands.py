@@ -212,6 +212,38 @@ class Commands(Cog):
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
+    @commands.hybrid_command(name="servertags", aliases=("stags",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def server_tags(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ) -> None:
+        """Shows a user's previous primary server tags."""
+
+        results = await self.bot.pool.fetch(
+            "SELECT * FROM stag_logs WHERE user_id = $1 ORDER BY created_at DESC",
+            user.id,
+        )
+
+        if not results:
+            raise commands.BadArgument(f"I have no server tags on record for {user}")
+
+        entries: List[Tuple[str, str]] = []
+        for record in results:
+            tag = discord.utils.escape_markdown(record["tag"] or "Removed tag")
+            details = [
+                f"{discord.utils.format_dt(record['created_at'], 'R')}  |  "
+                f"{discord.utils.format_dt(record['created_at'], 'd')} | "
+                f"`ID: {record['id']}`"
+            ]
+            entries.append((tag, "\n".join(details)))
+
+        source = FieldPageSource(entries=entries)
+        source.embed.color = self.bot.embedcolor
+        source.embed.title = f"Server tags for {user}"
+        pager = Pager(source, ctx=ctx)
+        await pager.start(ctx)
+
     @commands.hybrid_command(name="names", aliases=("display_names", "displaynames"))
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -409,15 +441,15 @@ class Commands(Cog):
     @commands.hybrid_group(  # type: ignore[call-arg]
         name="joins", invoke_without_command=True, fallback="user"  # type: ignore[call-arg]
     )
-    @app_commands.allowed_installs(guilds=True)
-    @app_commands.allowed_contexts(guilds=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def joins(self, ctx: Context, *, user: discord.User = commands.Author):
         """See your or another user's join stats."""
         await self._joins_user_stats(ctx, user)
 
     @joins.command(name="leaderboard", aliases=["lb", "top"])
-    @app_commands.allowed_installs(guilds=True)
-    @app_commands.allowed_contexts(guilds=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def joins_leaderboard(
         self, ctx: Context, *, server: Optional[discord.Guild] = commands.CurrentGuild
     ):
@@ -427,8 +459,8 @@ class Commands(Cog):
         await self._joins_server_leaderboard(ctx, server)
 
     @joins.command(name="global")
-    @app_commands.allowed_installs(guilds=True)
-    @app_commands.allowed_contexts(guilds=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def joins_global(self, ctx: Context):
         """Global join leaderboard across all servers."""
         rows = await ctx.bot.pool.fetch(

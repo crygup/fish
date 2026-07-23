@@ -215,7 +215,9 @@ class Downloader:
             shutil.copyfile(source, cookie_file)
             os.chmod(cookie_file, 0o600)
         except OSError as exc:
-            raise DownloadError("Could not prepare site cookies for this download.") from exc
+            raise DownloadError(
+                "Could not prepare site cookies for this download."
+            ) from exc
 
         self._cookie_file = cookie_file
         return cookie_file

@@ -150,8 +150,10 @@ def extract(
     limit: Optional[int] = 10,
 ) -> list[tuple[str, int]] | list[tuple[str, int, T]]:
     it = _extraction_generator(query, choices, scorer, score_cutoff)
+
     def key(t):
         return t[1]
+
     if limit is not None:
         return heapq.nlargest(limit, it, key=key)  # type: ignore
     return sorted(it, key=key, reverse=True)  # type: ignore
@@ -185,8 +187,10 @@ def extract_one(
     score_cutoff: int = 0,
 ) -> Optional[tuple[str, int]] | Optional[tuple[str, int, T]]:
     it = _extraction_generator(query, choices, scorer, score_cutoff)
+
     def key(t):
         return t[1]
+
     try:
         return max(it, key=key)
     except ValueError:

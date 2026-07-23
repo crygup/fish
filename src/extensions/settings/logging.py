@@ -18,6 +18,7 @@ format_table = {
     "guild_avatars": "member_id",
     "username_logs": "user_id",
     "display_name_logs": "user_id",
+    "stag_logs": "user_id",
     "nickname_logs": "user_id",
     "discrim_logs": "user_id",
     "member_join_logs": "member_id",
@@ -146,6 +147,7 @@ class Logging(Cog):
             "avatar": ["Avatar logging", "\U0001f7e2"],
             "username": ["Username logging", "\U0001f7e2"],
             "display": ["Display name logging", "\U0001f7e2"],
+            "stag": ["Server tag logging", "\U0001f7e2"],
             "nickname": ["Nickname logging", "\U0001f7e2"],
             "discrim": ["Discriminator logging", "\U0001f7e2"],
             "joins": ["Server join logging", "\U0001f7e2"],
@@ -220,6 +222,7 @@ class Logging(Cog):
             "guild_avatars": "Avatars",
             "username_logs": "Usernames",
             "display_name_logs": "Display names",
+            "stag_logs": "Server tags",
             "nickname_logs": "Nicknames",
             "discrim_logs": "Discriminators",
             "member_join_logs": "Server joins",
@@ -239,6 +242,7 @@ class Logging(Cog):
             Literal["guild_avatars"],
             Literal["username_logs"],
             Literal["display_name_logs"],
+            Literal["stag_logs"],
             Literal["nickname_logs"],
             Literal["discrim_logs"],
             Literal["member_join_logs"],
@@ -401,6 +405,57 @@ class Logging(Cog):
             )
             for dname in display_names
             if current.lower() in str(dname["display_name"]).lower()
+        ]
+
+    @logging_delete.command(name="servertag", aliases=("stag", "tag"), hidden=True)
+    @interaction_only()
+    async def ldelete_server_tag(
+        self,
+        ctx: GuildContext,
+        id: int = commands.param(displayed_name="server_tag"),
+    ):
+        """Delete a saved primary server tag."""
+
+        record = await self.bot.pool.fetchrow(
+            "SELECT tag FROM stag_logs WHERE user_id = $1 AND id = $2",
+            ctx.author.id,
+            id,
+        )
+        if record is None:
+            return await ctx.send(
+                "No server tag record found with that ID.", ephemeral=True
+            )
+
+        tag = record["tag"] or "No server tag"
+        message = await ctx.prompt(
+            f"`{tag}` is the server tag saved with the ID `{id}`. "
+            "Are you sure you want to delete it?",
+            ephemeral=True,
+            delete_after=False,
+        )
+
+        if not message:
+            return await ctx.send("Good choice.", ephemeral=True)
+
+        await self.easy_delete(message, "stag_logs", id, ctx.author.id)
+
+    @ldelete_server_tag.autocomplete("id")
+    async def ldst_ac(
+        self, interaction: discord.Interaction, current: str
+    ) -> List[app_commands.Choice[int]]:
+        tags = await self.bot.pool.fetch(
+            "SELECT id, tag FROM stag_logs "
+            "WHERE user_id = $1 ORDER BY created_at DESC LIMIT 25",
+            interaction.user.id,
+        )
+
+        return [
+            app_commands.Choice(
+                name=f'{tag["tag"] or "No server tag"} - {tag["id"]}'[:100],
+                value=tag["id"],
+            )
+            for tag in tags
+            if current.lower() in str(tag["tag"] or "No server tag").lower()
         ]
 
     @logging_delete.command(name="discriminators", hidden=True)

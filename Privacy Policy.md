@@ -9,7 +9,7 @@ This policy explains the data Fishie stores when the Discord bot and its dashboa
 Depending on enabled server features and individual choices, Fishie may store:
 
 - Discord user, guild, channel, message, role, and webhook identifiers;
-- username, display-name, discriminator, nickname, avatar, guild-name, guild-icon, membership, status, command-use, XP, reaction, pinboard, and Pokémon-solve history;
+- username, display-name, discriminator, nickname, server-tags, avatar, guild-name, guild-icon, membership, status, command-use, XP, reaction, pinboard, and Pokémon-solve history;
 - reminders, highlight words, prefixes, moderation/logger settings, honeypot settings, opt-outs, and game state;
 - account identifiers for Last.fm, Spotify, Steam, AniList, Roblox, Genshin, and Letterboxd;
 - OAuth access, refresh, or session credentials needed for explicitly linked services;
@@ -36,9 +36,9 @@ Dashboard and OAuth state records expire automatically. Completed webhook inbox 
 
 ## Choices, access, and deletion
 
-The dashboard and bot settings provide per-category opt-outs for supported history including avatars, names, nicknames, joins, status, XP, commands, Pokémon solves, and corn reactions. An opt-out prevents new collection for that category; it does not erase existing rows.
+The dashboard and bot settings provide per-category opt-outs for supported history including avatars, names, nicknames, primary server tags, joins, status, XP, commands, Pokémon solves, and corn reactions. An opt-out prevents new collection for that category; it does not erase existing rows.
 
-Avatar, username, display-name, and legacy discriminator histories are publicly searchable through the dashboard. Account settings, linked services, and deletion controls remain restricted to the authenticated account owner.
+Avatar, username, display-name, and legacy discriminator histories are publicly searchable through the dashboard. Primary server-tag history is publicly searchable through the bot. Account settings, linked services, and deletion controls remain restricted to the authenticated account owner.
 
 Authenticated users can inspect and delete their own stored data. A full user deletion removes account links, sessions, settings, histories, reminders, game state, subscriptions, and references where the user is an actor or target. Server managers can delete guild-owned history and configuration. Some security or backup records may persist temporarily where needed to prevent abuse or complete backup expiry.
 

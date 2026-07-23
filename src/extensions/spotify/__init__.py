@@ -290,7 +290,9 @@ class Spotify(Cog):
         row = await self.bot.pool.fetchrow(
             "SELECT spotify_refresh_token FROM accounts WHERE user_id = $1", user_id
         )
-        refresh_token = decrypt_credential(row["spotify_refresh_token"]) if row else None
+        refresh_token = (
+            decrypt_credential(row["spotify_refresh_token"]) if row else None
+        )
         if not refresh_token:
             raise commands.BadArgument(
                 "Connect your Spotify account first with `fish refresh spotify login`."

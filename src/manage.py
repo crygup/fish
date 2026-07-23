@@ -16,9 +16,7 @@ from utils.paths import REPOSITORY_ROOT
 def database_url() -> str:
     if value := os.getenv("DATABASE_URL"):
         return value
-    config_path = Path(
-        os.getenv("FISHIE_CONFIG", str(REPOSITORY_ROOT / "config.toml"))
-    )
+    config_path = Path(os.getenv("FISHIE_CONFIG", str(REPOSITORY_ROOT / "config.toml")))
     with config_path.open("rb") as config_file:
         config = tomllib.load(config_file)
     return str(config["databases"]["psql"])
@@ -31,7 +29,9 @@ async def migrate_command() -> None:
     finally:
         await connection.close()
     if applied:
-        print("Applied: " + ", ".join(f"{item.version}_{item.name}" for item in applied))
+        print(
+            "Applied: " + ", ".join(f"{item.version}_{item.name}" for item in applied)
+        )
     else:
         print("Database is up to date")
 
@@ -49,14 +49,19 @@ async def encrypt_credentials_command() -> None:
                 "anilist_access_token",
             )
             rows = await connection.fetch(
-                "SELECT user_id, " + ", ".join(account_columns) + " FROM accounts FOR UPDATE"
+                "SELECT user_id, "
+                + ", ".join(account_columns)
+                + " FROM accounts FOR UPDATE"
             )
             for row in rows:
                 encrypted = [
                     encrypt_credential(row[column]) if row[column] else None
                     for column in account_columns
                 ]
-                if any(encrypted[index] != row[column] for index, column in enumerate(account_columns)):
+                if any(
+                    encrypted[index] != row[column]
+                    for index, column in enumerate(account_columns)
+                ):
                     await connection.execute(
                         "UPDATE accounts SET lastfm_session_key = $2, "
                         "spotify_refresh_token = $3, anilist_access_token = $4 "

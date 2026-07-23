@@ -25,6 +25,7 @@ async def test_full_user_erasure_covers_linked_and_legacy_data() -> None:
         "fishing_accounts",
         "pokemon_solves",
         "corn_reacts",
+        "stag_logs",
     ):
         assert table in sql
     assert all(call[1] == (42,) or call[1] == ("42",) for call in connection.calls)
@@ -42,5 +43,6 @@ async def test_full_guild_erasure_covers_logs_configuration_and_deliveries() -> 
         "twitch_follows",
         "twitch_announcement_deliveries",
         "honeypot_channels",
+        "stag_logs",
     ):
         assert table in sql

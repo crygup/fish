@@ -71,7 +71,9 @@ async def validate_public_url(
 
     resolved = {str(item[4][0]) for item in addresses}
     if not resolved or any(not _is_public_address(address) for address in resolved):
-        raise commands.BadArgument("Private and local network addresses are not allowed.")
+        raise commands.BadArgument(
+            "Private and local network addresses are not allowed."
+        )
     return url
 
 
@@ -105,7 +107,9 @@ def validate_connected_peer(response: aiohttp.ClientResponse) -> None:
     peer = transport.get_extra_info("peername") if transport is not None else None
     if peer and not _is_public_address(str(peer[0])):
         response.close()
-        raise commands.BadArgument("Private and local network addresses are not allowed.")
+        raise commands.BadArgument(
+            "Private and local network addresses are not allowed."
+        )
 
 
 async def fetch_public_bytes(
@@ -128,7 +132,9 @@ async def fetch_public_bytes(
                 if response.status in REDIRECT_STATUSES:
                     location = response.headers.get("Location")
                     if not location:
-                        raise commands.BadArgument("The URL returned an invalid redirect.")
+                        raise commands.BadArgument(
+                            "The URL returned an invalid redirect."
+                        )
                     current = urljoin(current, location)
                     continue
                 if response.status != 200:
@@ -140,7 +146,9 @@ async def fetch_public_bytes(
                 if allowed_content_prefixes and not content_type.startswith(
                     allowed_content_prefixes
                 ):
-                    raise commands.BadArgument("The URL did not return supported media.")
+                    raise commands.BadArgument(
+                        "The URL did not return supported media."
+                    )
 
                 data = await read_bounded_response(response, max_bytes)
                 return FetchedBytes(data, str(response.url), content_type)

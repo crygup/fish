@@ -217,8 +217,16 @@ def _speed_video(data: bytes, speed: float) -> bytes:
             tmp.write(data)
         probe = subprocess.run(
             [
-                "ffprobe", "-v", "error", "-select_streams", "a:0",
-                "-show_entries", "stream=codec_type", "-of", "csv=p=0", tmp_in,
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+                tmp_in,
             ],
             capture_output=True,
             timeout=10,
@@ -231,12 +239,25 @@ def _speed_video(data: bytes, speed: float) -> bytes:
             command += [
                 "-filter_complex",
                 f"[0:v]setpts={1/speed}*PTS[v];[0:a]{audio_filter}[a]",
-                "-map", "[v]", "-map", "[a]", "-c:a", "aac", "-b:a", "64k",
+                "-map",
+                "[v]",
+                "-map",
+                "[a]",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "64k",
             ]
         else:
             command += ["-filter:v", f"setpts={1/speed}*PTS", "-an"]
         command += [
-            "-c:v", "libx264", "-preset", "fast", "-movflags", "+faststart", tmp_out,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-movflags",
+            "+faststart",
+            tmp_out,
         ]
         subprocess.run(
             command,
@@ -261,9 +282,23 @@ def _compress_video(data: bytes) -> bytes:
             output.write(data)
         subprocess.run(
             [
-                "ffmpeg", "-y", "-i", input_path, "-c:v", "libx264",
-                "-crf", "28", "-preset", "fast", "-c:a", "aac",
-                "-b:a", "64k", "-movflags", "+faststart", output_path,
+                "ffmpeg",
+                "-y",
+                "-i",
+                input_path,
+                "-c:v",
+                "libx264",
+                "-crf",
+                "28",
+                "-preset",
+                "fast",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "64k",
+                "-movflags",
+                "+faststart",
+                output_path,
             ],
             capture_output=True,
             timeout=60,

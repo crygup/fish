@@ -389,7 +389,7 @@ CREATE TABLE IF NOT EXISTS sold_fish (
     PRIMARY KEY (user_id)
 );
 
--- Fishing catalog data lives in src/files/data/fishing.json. These tables only
+-- Fishing catalog data lives in files/data/fishing.json. These tables only
 -- contain player state and inventory so catalog balancing does not require a
 -- database migration.
 CREATE TABLE IF NOT EXISTS fishing_accounts (

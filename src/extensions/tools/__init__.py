@@ -538,7 +538,9 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
     ):
         """Screenshot a website from the internet"""
         if flags.delay < 0 or flags.delay > 10:
-            raise commands.BadArgument("Screenshot delay must be between 0 and 10 seconds.")
+            raise commands.BadArgument(
+                "Screenshot delay must be between 0 and 10 seconds."
+            )
         await validate_public_url(website)
         async with self.bot.media_semaphore, ctx.typing():
             async with async_playwright() as playwright:
@@ -559,9 +561,7 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
                         await route.continue_()
 
                 await page.route("**/*", guard_request)
-                await page.goto(
-                    website, wait_until="domcontentloaded", timeout=15_000
-                )
+                await page.goto(website, wait_until="domcontentloaded", timeout=15_000)
                 await asyncio.sleep(flags.delay)
                 if flags.full_page:
                     height = await page.evaluate(
@@ -731,7 +731,9 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
             ) as response:
                 validate_connected_peer(response)
                 if response.status != 200:
-                    raise commands.CommandError("Failed to reach Roblox. Try again later.")
+                    raise commands.CommandError(
+                        "Failed to reach Roblox. Try again later."
+                    )
                 details = json.loads(await read_bounded_response(response, 1_000_000))
             asset_type = details.get("AssetTypeId")
             if asset_type not in (2, 11, 12):

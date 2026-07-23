@@ -734,9 +734,7 @@ class Fun(About, Corn, Images):
         async with ctx.typing():
             await ctx.send(
                 file=discord.File(
-                    FILES_ROOT
-                    / "videos"
-                    / "QIIYHAPWMTMAIYDHMNYDKMWETHAPWM.mp4",
+                    FILES_ROOT / "videos" / "QIIYHAPWMTMAIYDHMNYDKMWETHAPWM.mp4",
                     filename=f"fishie_loves_{ctx.author.name}.mp4",
                 )
             )

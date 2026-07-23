@@ -11,6 +11,7 @@ USER_ID_TABLES = (
     "username_logs",
     "display_name_logs",
     "discrim_logs",
+    "stag_logs",
     "nickname_logs",
     "opted_out",
     "message_xp",
@@ -31,6 +32,7 @@ USER_ID_TABLES = (
 GUILD_ID_TABLES = (
     "guild_icons",
     "guild_name_logs",
+    "stag_logs",
     "guild_avatars",
     "nickname_logs",
     "user_statuses",
@@ -90,9 +92,7 @@ async def erase_user(connection: Any, user_id: int) -> int:
         )
     )
     deleted += _count(
-        await connection.execute(
-            "DELETE FROM user_rep WHERE user_id = $1", user_id
-        )
+        await connection.execute("DELETE FROM user_rep WHERE user_id = $1", user_id)
     )
     deleted += _count(
         await connection.execute(
@@ -134,6 +134,8 @@ async def erase_guild(connection: Any, guild_id: int) -> int:
     deleted = 0
     for table in GUILD_ID_TABLES:
         deleted += _count(
-            await connection.execute(f"DELETE FROM {table} WHERE guild_id = $1", guild_id)
+            await connection.execute(
+                f"DELETE FROM {table} WHERE guild_id = $1", guild_id
+            )
         )
     return deleted

@@ -30,9 +30,7 @@ async def start(testing: bool):
     logger.setLevel(logging.INFO)
     logging.getLogger("discord.http").setLevel(logging.INFO)
 
-    log_path = Path(
-        os.getenv("FISHIE_LOG_PATH", str(REPOSITORY_ROOT / "discord.log"))
-    )
+    log_path = Path(os.getenv("FISHIE_LOG_PATH", str(REPOSITORY_ROOT / "discord.log")))
     handlers = [
         logging.handlers.RotatingFileHandler(
             filename=log_path,
@@ -56,12 +54,14 @@ async def start(testing: bool):
     with open(config_path, "rb") as fileObj:
         config: Config = Config(**tomllib.load(fileObj))
 
-    database_url = os.getenv("DATABASE_URL") or config["databases"][
-        "psql_testing" if testing else "psql"
-    ]
-    token = os.getenv(
-        "DISCORD_TESTING_BOT_TOKEN" if testing else "DISCORD_BOT_TOKEN"
-    ) or config["tokens"]["testing_bot" if testing else "bot"]
+    database_url = (
+        os.getenv("DATABASE_URL")
+        or config["databases"]["psql_testing" if testing else "psql"]
+    )
+    token = (
+        os.getenv("DISCORD_TESTING_BOT_TOKEN" if testing else "DISCORD_BOT_TOKEN")
+        or config["tokens"]["testing_bot" if testing else "bot"]
+    )
     if not database_url:
         raise RuntimeError("A PostgreSQL URL is required")
     if not token:
@@ -98,9 +98,7 @@ async def start(testing: bool):
         )
         api_server = uvicorn.Server(api_cfg)
         api_task = asyncio.create_task(api_server.serve())
-        bot_task = asyncio.create_task(
-            bot.start(token)
-        )
+        bot_task = asyncio.create_task(bot.start(token))
         logger.info("Fishie API server started")
         done, _ = await asyncio.wait(
             {api_task, bot_task}, return_when=asyncio.FIRST_COMPLETED

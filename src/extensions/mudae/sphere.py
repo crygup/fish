@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+from itertools import combinations
 from typing import TYPE_CHECKING, Optional, Set, Tuple
 
 import discord
@@ -8,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
-from utils.emojis import sp, spB, spG, spO, spT, spU, spY
+from utils.emojis import sp, spB, spG, spO, spP, spT, spU, spY
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -25,8 +27,29 @@ SPHERE_MAP: dict[int, str] = {
     spO.id: "orange",  # type: ignore
 }
 
+OQ_SPHERE_MAP: dict[int, str] = {
+    sp.id: "red",  # type: ignore
+    spP.id: "purple",  # type: ignore
+    spB.id: "blue",  # type: ignore
+    spT.id: "teal",  # type: ignore
+    spG.id: "green",  # type: ignore
+    spY.id: "yellow",  # type: ignore
+    spO.id: "orange",  # type: ignore
+}
+
 GRID_SIZE = 5
 CENTER = 12
+OQ_TARGET_TOTAL = 4
+OQ_PURPLES_BEFORE_RED = 3
+OQ_MAX_CLICKS = 7
+OQ_INITIAL_MOVES = (6, 16, 8, 18)
+OQ_CLUE_VALUES = {
+    "blue": 0,
+    "teal": 1,
+    "green": 2,
+    "yellow": 3,
+    "orange": 4,
+}
 
 
 def _to_rc(idx: int) -> Tuple[int, int]:
@@ -37,6 +60,20 @@ def _to_rc(idx: int) -> Tuple[int, int]:
 def _from_rc(row: int, col: int) -> int:
     """Convert (row, col) to linear index."""
     return row * GRID_SIZE + col
+
+
+def _oq_neighbors(position: int) -> Tuple[int, ...]:
+    row, column = _to_rc(position)
+    neighbors = []
+    for row_offset in range(-1, 2):
+        for column_offset in range(-1, 2):
+            if row_offset == 0 and column_offset == 0:
+                continue
+            neighbor_row = row + row_offset
+            neighbor_column = column + column_offset
+            if 0 <= neighbor_row < GRID_SIZE and 0 <= neighbor_column < GRID_SIZE:
+                neighbors.append(_from_rc(neighbor_row, neighbor_column))
+    return tuple(neighbors)
 
 
 def _same_row(a: int, b: int) -> bool:
@@ -57,6 +94,121 @@ def _adjacent(a: int, b: int) -> bool:
     ar, ac = _to_rc(a)
     br, bc = _to_rc(b)
     return max(abs(ar - br), abs(ac - bc)) == 1
+
+
+OQ_NEIGHBORS = tuple(
+    _oq_neighbors(position) for position in range(GRID_SIZE * GRID_SIZE)
+)
+
+
+def _oq_layouts(revealed: dict[int, str]) -> list[frozenset[int]]:
+    """Return every four-target layout compatible with the revealed OQ clues."""
+    targets = {
+        position for position, color in revealed.items() if color in {"purple", "red"}
+    }
+    if len(targets) > OQ_TARGET_TOTAL:
+        return []
+    if sum(color == "red" for color in revealed.values()) > 1:
+        return []
+
+    remaining = OQ_TARGET_TOTAL - len(targets)
+    candidates = [
+        position
+        for position in range(GRID_SIZE * GRID_SIZE)
+        if position not in revealed
+    ]
+    if remaining > len(candidates):
+        return []
+
+    clues = [
+        (position, OQ_CLUE_VALUES[color])
+        for position, color in revealed.items()
+        if color in OQ_CLUE_VALUES
+    ]
+    layouts: list[frozenset[int]] = []
+    for selected in combinations(candidates, remaining):
+        layout = frozenset(targets.union(selected))
+        if all(
+            sum(neighbor in layout for neighbor in OQ_NEIGHBORS[position]) == value
+            for position, value in clues
+        ):
+            layouts.append(layout)
+    return layouts
+
+
+def _oq_outcome(layout: frozenset[int], position: int) -> str | int:
+    if position in layout:
+        return "target"
+    return sum(neighbor in layout for neighbor in OQ_NEIGHBORS[position])
+
+
+def _oq_best_clicks(revealed: dict[int, str]) -> list[int]:
+    """Return up to four equally ranked next clicks for an OQ board."""
+    if not revealed:
+        return list(OQ_INITIAL_MOVES)
+
+    targets = {
+        position for position, color in revealed.items() if color in {"purple", "red"}
+    }
+    purple_count = sum(color == "purple" for color in revealed.values())
+    clicks_used = sum(color != "red" for color in revealed.values())
+    if (
+        len(targets) >= OQ_TARGET_TOTAL
+        or "red" in revealed.values()
+        or purple_count >= OQ_PURPLES_BEFORE_RED
+        or clicks_used >= OQ_MAX_CLICKS
+    ):
+        return []
+
+    layouts = _oq_layouts(revealed)
+    if not layouts:
+        return []
+
+    unknown = [
+        position
+        for position in range(GRID_SIZE * GRID_SIZE)
+        if position not in revealed
+    ]
+    frequencies = {
+        position: sum(position in layout for layout in layouts) for position in unknown
+    }
+    guaranteed = [
+        position
+        for position, frequency in frequencies.items()
+        if frequency == len(layouts)
+    ]
+    if guaranteed:
+        return sorted(
+            guaranteed,
+            key=lambda position: (-len(OQ_NEIGHBORS[position]), position),
+        )[:4]
+
+    ranked: list[Tuple[int, float, float, float]] = []
+    for position in unknown:
+        outcomes: dict[str | int, int] = {}
+        for layout in layouts:
+            outcome = _oq_outcome(layout, position)
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+
+        entropy = 0.0
+        for count in outcomes.values():
+            probability = count / len(layouts)
+            entropy -= probability * math.log2(probability)
+
+        target_chance = frequencies[position] / len(layouts)
+        score = entropy + target_chance * 1.5
+        ranked.append((position, score, target_chance, entropy))
+
+    best_score = max(score for _, score, _, _ in ranked)
+    tied = [entry for entry in ranked if math.isclose(entry[1], best_score)]
+    best_target_chance = max(target_chance for _, _, target_chance, _ in tied)
+    return [
+        position
+        for position, _, _, _ in sorted(
+            (entry for entry in tied if math.isclose(entry[2], best_target_chance)),
+            key=lambda entry: (-entry[3], entry[0]),
+        )[:4]
+    ]
 
 
 def _possible_red_positions(revealed: dict[int, str]) -> Set[int]:
@@ -233,7 +385,78 @@ class SphereView(discord.ui.View):
             self.add_item(btn)
 
 
+class SphereQView(discord.ui.View):
+    """5x5 OQ grid showing revealed colors and recommended clicks."""
+
+    message: Optional[discord.Message]
+
+    def __init__(
+        self, ctx: Context, revealed: dict[int, str], recommendations: list[int]
+    ):
+        super().__init__(timeout=120)
+        self.ctx = ctx
+        self.revealed = revealed
+        self.recommendations = recommendations
+        self.message = None
+        self._build()
+
+    async def _send_location(
+        self, interaction: discord.Interaction, position: int
+    ) -> None:
+        row, column = _to_rc(position)
+        await interaction.response.send_message(
+            f"Click button at **row {row + 1}, column {column + 1}** "
+            "on the Mudae message above.",
+            ephemeral=True,
+        )
+
+    def _recommendation_callback(self, position: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            await self._send_location(interaction, position)
+
+        return callback
+
+    def _build(self) -> None:
+        self.clear_items()
+        emoji_map = {
+            "red": sp,
+            "purple": spP,
+            "orange": spO,
+            "yellow": spY,
+            "green": spG,
+            "teal": spT,
+            "blue": spB,
+        }
+        recommended = set(self.recommendations)
+        for position in range(GRID_SIZE * GRID_SIZE):
+            row = position // GRID_SIZE
+            if position in self.revealed:
+                button = discord.ui.Button(
+                    style=discord.ButtonStyle.blurple,
+                    emoji=emoji_map[self.revealed[position]],
+                    disabled=True,
+                    row=row,
+                )
+            elif position in recommended:
+                button = discord.ui.Button(
+                    style=discord.ButtonStyle.green,
+                    emoji=spU,
+                    disabled=False,
+                    row=row,
+                )
+                button.callback = self._recommendation_callback(position)
+            else:
+                button = discord.ui.Button(
+                    style=discord.ButtonStyle.grey,
+                    emoji=spU,
+                    disabled=True,
+                    row=row,
+                )
+            self.add_item(button)
+
+
 OC_TEXT = "You can click **5** times on the buttons below"
+OQ_TEXT = "You can click **7** times on the buttons below"
 
 
 class SphereCog(Cog):
@@ -276,9 +499,45 @@ class SphereCog(Cog):
                 idx += 1
         return revealed if found_any else None
 
-    @commands.hybrid_command(name="sphere")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    def _parse_oq_components(self, components: list) -> Optional[dict[int, str]]:
+        """Parse an OQ board from raw gateway component data."""
+        revealed: dict[int, str] = {}
+        position = 0
+        found_any = False
+        for action_row in components:
+            for child in action_row.get("components", []):
+                found_any = True
+                emoji = child.get("emoji")
+                if emoji and emoji.get("id"):
+                    color = OQ_SPHERE_MAP.get(int(emoji["id"]))
+                    if color:
+                        revealed[position] = color
+                position += 1
+        return revealed if found_any else None
+
+    def _parse_oq_message(self, message: discord.Message) -> Optional[dict[int, str]]:
+        """Parse an OQ board from a cached Discord message."""
+        revealed: dict[int, str] = {}
+        position = 0
+        found_any = False
+        for action_row in message.components:
+            if not isinstance(action_row, discord.ActionRow):
+                continue
+            for child in action_row.children:
+                if not isinstance(child, discord.Button):
+                    continue
+                found_any = True
+                if child.emoji and child.emoji.id:
+                    color = OQ_SPHERE_MAP.get(child.emoji.id)
+                    if color:
+                        revealed[position] = color
+                position += 1
+        return revealed if found_any else None
+
+    @commands.hybrid_command(name="oc", aliases=("sphere",))
+    @commands.guild_only()
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
     async def sphere(self, ctx: Context):
         """Show the best next move for a Mudae sphere chest game."""
         if not self.bot.user:
@@ -349,8 +608,82 @@ class SphereCog(Cog):
             except discord.HTTPException:
                 break
 
-    @commands.command(name="simsphere")
-    async def simsphere(self, ctx: Context):
+    @commands.hybrid_command(name="oq", aliases=("sphereq",))
+    @commands.guild_only()
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def sphereq(self, ctx: Context):
+        """Show the best next moves for a Mudae OQ sphere game."""
+        if not self.bot.user:
+            raise commands.BadArgument("Bot not fully loaded, please wait.")
+
+        target_ids = [self.bot.user.id, MudaeID]
+        mudae_msg: Optional[discord.Message] = None
+        async for message in ctx.channel.history(limit=8):
+            if message.author.id not in target_ids or not message.components:
+                continue
+            if message.author.bot and OQ_TEXT in message.content:
+                mudae_msg = message
+                break
+
+        if not mudae_msg:
+            raise commands.BadArgument(
+                "No OQ sphere game found. Run `$oq` first, then try again."
+            )
+
+        revealed = self._parse_oq_message(mudae_msg)
+        if revealed is None:
+            raise commands.BadArgument("Could not parse the OQ sphere grid.")
+
+        await self._show_sphereq(ctx, revealed, mudae_msg)
+
+    async def _show_sphereq(
+        self, ctx: Context, revealed: dict[int, str], mudae_msg: discord.Message
+    ) -> None:
+        recommendations = _oq_best_clicks(revealed)
+        view = SphereQView(ctx, revealed, recommendations)
+        view.message = await ctx.send(view=view)
+
+        while True:
+            try:
+                event = await self.bot.wait_for(
+                    "raw_message_edit",
+                    check=lambda payload: payload.message_id == mudae_msg.id,
+                    timeout=120.0,
+                )
+            except asyncio.TimeoutError:
+                break
+
+            components = event.data.get("components", [])
+            if not components:
+                continue
+            new_revealed = self._parse_oq_components(
+                components  # type: ignore[arg-type]
+            )
+            if new_revealed is None or new_revealed == view.revealed:
+                continue
+
+            view.revealed = new_revealed
+            view.recommendations = _oq_best_clicks(new_revealed)
+            view._build()
+            if view.message is None:
+                break
+            try:
+                await view.message.edit(view=view)
+            except discord.HTTPException:
+                break
+
+            targets = sum(color in {"purple", "red"} for color in new_revealed.values())
+            clicks_used = sum(color != "red" for color in new_revealed.values())
+            if (
+                "red" in new_revealed.values()
+                or targets >= OQ_TARGET_TOTAL
+                or clicks_used >= OQ_MAX_CLICKS
+            ):
+                break
+
+    @commands.command(name="simoc")
+    async def simoc(self, ctx: Context):
         """Generate a random sphere chest for testing"""
         import random
 

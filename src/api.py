@@ -72,7 +72,9 @@ async def protect_cookie_requests(request: Request, call_next):
                     status_code=413, content={"detail": "Request body is too large"}
                 )
         except ValueError:
-            return JSONResponse(status_code=400, content={"detail": "Invalid body size"})
+            return JSONResponse(
+                status_code=400, content={"detail": "Invalid body size"}
+            )
     if request.method not in {"GET", "HEAD", "OPTIONS"} and request.cookies.get(
         SESSION_COOKIE
     ):
@@ -105,6 +107,7 @@ TABLE_MAP = {
     "username_logs": "username_logs",
     "display_name_logs": "display_name_logs",
     "discrim_logs": "discrim_logs",
+    "stag_logs": "stag_logs",
     "nickname_logs": "nickname_logs",
     "guild_icons": "guild_icons",
     "guild_name_logs": "guild_name_logs",
@@ -624,6 +627,7 @@ VALID_OPTOUTS = {
     "display",
     "nickname",
     "discrim",
+    "stag",
     "joins",
     "xp",
     "commands",
@@ -700,7 +704,9 @@ async def _verify_token(
     except HTTPException:
         raise
     except (aiohttp.ClientError, asyncio.TimeoutError) as error:
-        raise HTTPException(503, "Discord authentication is temporarily unavailable") from error
+        raise HTTPException(
+            503, "Discord authentication is temporarily unavailable"
+        ) from error
 
 
 async def _require_self(
@@ -1154,9 +1160,11 @@ async def oauth_start(
     redirect_uri = _oauth_redirect_uri(redirect_uri)
     state = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode()).digest()
-    ).decode().rstrip("=")
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .decode()
+        .rstrip("=")
+    )
     pool = _check_pool()
     await pool.execute("DELETE FROM oauth_states WHERE expires_at <= now()")
     await pool.execute(
@@ -1682,10 +1690,11 @@ async def get_user_data(user_id: int):
                (SELECT COUNT(*) FROM avatars WHERE user_id = $1) AS avatars,
                (SELECT COUNT(*) FROM username_logs WHERE user_id = $1) AS usernames,
                (SELECT COUNT(*) FROM display_name_logs WHERE user_id = $1) AS display_names,
-               (SELECT COUNT(*) FROM discrim_logs WHERE user_id = $1) AS discrims""",
+               (SELECT COUNT(*) FROM discrim_logs WHERE user_id = $1) AS discrims,
+               (SELECT COUNT(*) FROM stag_logs WHERE user_id = $1) AS server_tags""",
         user_id,
     )
-    return {"user_id": user_id, "counts": dict(counts)}
+    return {"user_id": user_id, "counts": dict(counts) if counts is not None else {}}
 
 
 @app.get("/user/{user_id}/xp")
@@ -1999,9 +2008,9 @@ _msg_rate_limit = TTLCache[str, bool](maxsize=10_000, ttl=60)
 
 def _client_ip(request: Request) -> str:
     remote = request.client.host if request.client else ""
-    configured = os.environ.get(
-        "FISHIE_TRUSTED_PROXIES", "127.0.0.0/8,::1/128"
-    ).split(",")
+    configured = os.environ.get("FISHIE_TRUSTED_PROXIES", "127.0.0.0/8,::1/128").split(
+        ","
+    )
     try:
         remote_ip = ipaddress.ip_address(remote)
         trusted = any(
@@ -2015,10 +2024,14 @@ def _client_ip(request: Request) -> str:
     candidate = remote
     if trusted:
         candidate = (
-            request.headers.get("CF-Connecting-IP")
-            or request.headers.get("X-Real-IP")
-            or remote
-        ).split(",")[0].strip()
+            (
+                request.headers.get("CF-Connecting-IP")
+                or request.headers.get("X-Real-IP")
+                or remote
+            )
+            .split(",")[0]
+            .strip()
+        )
     try:
         return str(ipaddress.ip_address(candidate))
     except ValueError as error:
@@ -2380,7 +2393,9 @@ async def set_guild_settings(
             if value is not None:
                 channel = await _resolve_guild_text_channel(guild, value)
                 if channel is None:
-                    raise HTTPException(400, f"{key} channel must belong to this server")
+                    raise HTTPException(
+                        400, f"{key} channel must belong to this server"
+                    )
                 if not member.guild_permissions.manage_channels:
                     raise HTTPException(403, "Manage Channels is required")
         gs_updates[key] = value
@@ -2672,7 +2687,8 @@ async def set_twitch_follow(
     async with pool.acquire() as connection:
         async with connection.transaction():
             await connection.execute(
-                "SELECT pg_advisory_xact_lock(hashtext($1))", f"fishie:twitch:{guild_id}"
+                "SELECT pg_advisory_xact_lock(hashtext($1))",
+                f"fishie:twitch:{guild_id}",
             )
             existing = await connection.fetchval(
                 "SELECT 1 FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
@@ -2904,7 +2920,8 @@ async def delete_guild_data(
         raise HTTPException(503, "Bot not ready")
     pool = _check_pool()
     logger_rows = await pool.fetch(
-        "SELECT event, webhook_url FROM guild_log_channels WHERE guild_id = $1", guild_id
+        "SELECT event, webhook_url FROM guild_log_channels WHERE guild_id = $1",
+        guild_id,
     )
     broadcasters = await pool.fetch(
         "SELECT DISTINCT broadcaster_id FROM twitch_follows "
