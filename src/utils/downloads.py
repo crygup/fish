@@ -14,6 +14,7 @@ from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, List, Optional
 from urllib.parse import urlsplit
 
+import aiohttp
 import discord
 from discord import MediaGalleryItem, ui
 
@@ -71,6 +72,7 @@ DOWNLOAD_HOSTS = frozenset(
         "static.klipy.com",
     }
 )
+DISCORD_MEDIA_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})
 
 _COOKIE_MAP: list[tuple[Any, str]] = [
     (YOUTUBE_RE, str(FILES_ROOT / "cookies" / "youtube-cookies.txt")),
@@ -86,6 +88,12 @@ def _get_cookies(url: str) -> Optional[str]:
         if pattern.search(url) and os.path.isfile(path):
             return path
     return None
+
+
+def is_discord_media_url(url: str) -> bool:
+    """Return whether *url* points to a Discord-hosted attachment."""
+    hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
+    return hostname in DISCORD_MEDIA_HOSTS
 
 
 # ffmpeg filter for optimized GIF conversion:
@@ -228,17 +236,27 @@ class Downloader:
         is_youtube = bool(YOUTUBE_RE.search(video) or YT_SHORT_RE.search(video))
         is_audio = SOUNDCLOUD_RE.search(video) or self.format == "mp3"
         is_klipy = bool(KLIPY_RE.search(video))
+        is_instagram = bool(INSTAGRAM_RE.search(video))
+
+        if is_audio:
+            format_selector = "bestaudio/best"
+        elif is_instagram:
+            # Some Reels expose DASH formats whose height metadata cannot be
+            # filtered reliably by yt-dlp's selector. Sort the available
+            # formats by the requested resolution instead.
+            format_selector = "bestvideo+bestaudio/best"
+        else:
+            format_selector = (
+                f"bestvideo[height<={res_target}]+bestaudio/"
+                f"best[height<={res_target}]"
+            )
 
         args = [
             sys.executable,
             "-m",
             "yt_dlp",
             "-f",
-            (
-                "bestaudio/best"
-                if is_audio
-                else f"bestvideo[height<={res_target}]+bestaudio/best[height<={res_target}]"
-            ),
+            format_selector,
             "-o",
             os.path.join(self._job_dir or "", f"{self.filename}.%(ext)s"),
             "--no-playlist",
@@ -254,8 +272,10 @@ class Downloader:
         # Instagram returns different DASH manifests over this host's IPv6
         # route for some Reels.  The IPv4 response includes the matching audio
         # adaptation set that Discord needs for proper playback.
-        if INSTAGRAM_RE.search(video):
+        if is_instagram:
             args.append("--force-ipv4")
+            if not is_audio:
+                args += ["--format-sort", f"res:{res_target}"]
 
         if not is_youtube:
             args += [
@@ -319,20 +339,94 @@ class Downloader:
 
         return output_path
 
-    async def _convert_to_gif(self, input_path: str) -> str:
+    async def _download_direct_media(self, url: str) -> str:
+        """Download a trusted direct media URL without invoking yt-dlp."""
+        if self._job_dir is None:
+            raise DownloadError("The download job was not initialized.")
+
+        suffix = os.path.splitext(urlsplit(url).path)[1].lower()
+        if suffix not in {".gif", ".mp4", ".webm", ".mov"}:
+            suffix = ".mp4"
+        output_path = os.path.join(self._job_dir, f"{self.filename}{suffix}")
+
+        try:
+            async with asyncio.timeout(self._remaining_timeout()):
+                async with self.ctx.session.get(
+                    url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/131.0.0.0 Safari/537.36"
+                        )
+                    },
+                ) as response:
+                    if response.status != 200:
+                        raise DownloadError(
+                            "Klipy did not return the requested media file."
+                        )
+
+                    content_length = response.content_length
+                    if (
+                        content_length is not None
+                        and content_length > self.max_filesize
+                    ):
+                        raise DownloadError(
+                            f"This media exceeds {self.upload_limit_description}."
+                        )
+
+                    size = 0
+                    with open(output_path, "wb") as output:
+                        async for chunk in response.content.iter_chunked(64 * 1024):
+                            size += len(chunk)
+                            if size > self.max_filesize:
+                                raise DownloadError(
+                                    f"This media exceeds {self.upload_limit_description}."
+                                )
+                            output.write(chunk)
+        except DownloadError:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+            raise DownloadError(
+                "Klipy did not return the requested media file."
+            ) from exc
+
+        return output_path
+
+    async def _convert_to_gif(
+        self, input_path: str, *, full_frames: bool = False
+    ) -> str:
         """Convert a video file to an optimized GIF via ffmpeg.
 
         Returns the path to the new ``.gif`` file (the original is removed).
         """
         output_path = input_path.rsplit(".", 1)[0] + ".gif"
-        proc = await asyncio.create_subprocess_exec(
+        args = [
             "ffmpeg",
             "-i",
             input_path,
             "-vf",
             GIF_FILTER,
+        ]
+        if full_frames:
+            # Klipy's native GIFs sometimes use partial-frame rectangles that
+            # Discord renders as corrupted blocks. Encode independent frames
+            # so every client receives a complete image for each animation step.
+            args += ["-gifflags", "-offsetting-transdiff"]
+        args += [
             "-y",
             output_path,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
@@ -361,6 +455,59 @@ class Downloader:
         except OSError:
             pass
         return output_path
+
+    async def _convert_to_mobile_mp4(self, input_path: str) -> str:
+        """Transcode Instagram media to a broadly supported MP4 format."""
+        output_path = input_path.rsplit(".", 1)[0] + ".compatible.mp4"
+        final_path = input_path.rsplit(".", 1)[0] + ".mp4"
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-i",
+            input_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            "-y",
+            output_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        try:
+            _, stderr_raw = await self._communicate_with_timeout(proc)
+        except DownloadError:
+            self._cleanup_output()
+            raise
+
+        if proc.returncode != 0:
+            self._cleanup_output()
+            stderr = stderr_raw.decode(errors="replace").strip() if stderr_raw else ""
+            tail = stderr.rsplit("\n", 1)[-1] if stderr else "unknown error"
+            raise DownloadError(f"Video compatibility conversion failed: {tail}")
+
+        try:
+            os.replace(output_path, final_path)
+            if input_path != final_path:
+                os.remove(input_path)
+        except OSError as exc:
+            self._cleanup_output()
+            raise DownloadError("Video compatibility conversion failed.") from exc
+        return final_path
 
     async def _has_audio(self, path: str) -> bool:
         """Return True if *path* contains an audio stream (ffprobe)."""
@@ -422,7 +569,10 @@ class Downloader:
             and urlsplit(self.url).hostname == "static.klipy.com"
         )
 
-        output_path = await self._yt_dlp_download(self.url, res_target=1080)
+        if is_klipy_media:
+            output_path = await self._download_direct_media(self.url)
+        else:
+            output_path = await self._yt_dlp_download(self.url, res_target=1080)
 
         if is_audio:
             if os.path.getsize(output_path) > self.max_filesize:
@@ -434,6 +584,10 @@ class Downloader:
 
         if os.path.getsize(output_path) > self.max_filesize:
             self._cleanup_output()
+            if is_klipy_media:
+                raise DownloadError(
+                    f"This media exceeds {self.upload_limit_description}."
+                )
             output_path = await self._yt_dlp_download(self.url, res_target=720)
 
             if os.path.getsize(output_path) > self.max_filesize:
@@ -441,6 +595,18 @@ class Downloader:
                 raise DownloadError(
                     f"This video exceeds {self.upload_limit_description} even at "
                     "720p. Try a shorter clip."
+                )
+
+        # Instagram may return VP9 video in an MP4 container. Desktop players
+        # can decode it, but Discord mobile can display only the first frame.
+        # Normalize Instagram downloads to H.264/AAC with fast-start metadata.
+        if INSTAGRAM_RE.search(self.url) and not output_path.lower().endswith(".gif"):
+            output_path = await self._convert_to_mobile_mp4(output_path)
+            if os.path.getsize(output_path) > self.max_filesize:
+                self._cleanup_output()
+                raise DownloadError(
+                    f"This video exceeds {self.upload_limit_description} after "
+                    "mobile compatibility conversion. Try a shorter clip."
                 )
 
         # Twitter GIF conversion:
@@ -483,7 +649,7 @@ class Downloader:
                     "GIF conversion is limited to videos 30 seconds or shorter. "
                     "This video is {:.0f} seconds.".format(dur)
                 )
-            output_path = await self._convert_to_gif(output_path)
+            output_path = await self._convert_to_gif(output_path, full_frames=True)
             self.format = "gif"
 
             if os.path.getsize(output_path) > self.max_filesize:

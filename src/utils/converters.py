@@ -30,6 +30,14 @@ MEDIA_EXTENSIONS = (
     ".mp4",
     ".webm",
     ".mov",
+    ".m4v",
+    ".mp3",
+    ".m4a",
+    ".wav",
+    ".ogg",
+    ".opus",
+    ".flac",
+    ".aac",
 )
 
 
@@ -165,6 +173,70 @@ class TwemojiConverter(commands.Converter):
 
 
 class TenorUrlConverter(commands.Converter):
+    _MEDIA_HOSTS = {"media.tenor.com", "c.tenor.com"}
+    _DISCORD_PROXY_HOST = re.compile(
+        r"^images-ext-\d+\.discordapp\.(?:net|com)$", re.IGNORECASE
+    )
+
+    @classmethod
+    def _unwrap_discord_proxy(cls, url: str) -> str:
+        parsed = urlsplit(url)
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        if not cls._DISCORD_PROXY_HOST.fullmatch(hostname):
+            return url
+
+        parts = parsed.path.split("/", 3)
+        if len(parts) != 4 or parts[1] != "external":
+            raise commands.BadArgument("Invalid Discord media proxy URL.")
+
+        embedded = unquote(parts[3])
+        if embedded.startswith(("https://", "http://")):
+            return embedded
+
+        scheme, separator, remainder = embedded.partition("/")
+        if separator and scheme in {"https", "http"} and remainder:
+            return f"{scheme}://{remainder}"
+
+        raise commands.BadArgument("Invalid Discord media proxy URL.")
+
+    @classmethod
+    async def _direct_gif(cls, ctx: Context, url: str) -> str:
+        parsed = urlsplit(url)
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        if parsed.scheme != "https" or hostname not in cls._MEDIA_HOSTS:
+            raise commands.BadArgument("Invalid Tenor media URL.")
+
+        path = unquote(parsed.path)
+        if path.lower().endswith(".gif"):
+            return f"https://{hostname}{path}"
+        if not path.lower().endswith(".mp4"):
+            raise commands.BadArgument("Invalid Tenor media URL.")
+
+        path_parts = path.split("/")
+        if len(path_parts) < 3 or "AAAPo" not in path_parts[1]:
+            raise commands.BadArgument("Could not find the original Tenor GIF.")
+
+        path_parts[1] = path_parts[1].replace("AAAPo", "AAAAC", 1)
+        path_parts[-1] = path_parts[-1].rsplit(".", 1)[0] + ".gif"
+        gif_url = f"https://{hostname}{'/'.join(path_parts)}"
+
+        try:
+            async with ctx.session.get(
+                gif_url,
+                headers={**base_header, "Range": "bytes=0-0"},
+            ) as response:
+                content_type = response.headers.get("Content-Type", "").lower()
+                if response.status not in {200, 206} or not content_type.startswith(
+                    "image/gif"
+                ):
+                    raise commands.BadArgument("Could not find the original Tenor GIF.")
+        except aiohttp.ClientError as exc:
+            raise commands.BadArgument(
+                "Could not find the original Tenor GIF."
+            ) from exc
+
+        return gif_url
+
     @to_thread
     def get_url(self, text: str) -> str:
         scraper = BeautifulSoup(text, "html.parser")
@@ -184,6 +256,11 @@ class TenorUrlConverter(commands.Converter):
         return element["src"]  # type: ignore
 
     async def convert(self, ctx: Context, url: str) -> str:
+        url = self._unwrap_discord_proxy(url.strip())
+        parsed = urlsplit(url)
+        if (parsed.hostname or "").lower().rstrip(".") in self._MEDIA_HOSTS:
+            return await self._direct_gif(ctx, url)
+
         TUrl = TENOR_PAGE_RE.search(url)
 
         if not TUrl:
@@ -225,7 +302,13 @@ class KlipyUrlConverter(commands.Converter):
         if not isinstance(files, dict):
             return None
 
-        formats = [media_format]
+        if media_format == "gif":
+            # Klipy's pre-optimized GIFs can contain partial-frame updates
+            # that render incorrectly in some Discord clients. Prefer the
+            # clean MP4 source and let Fishie create a compatible GIF.
+            formats = ["mp4", "gif"]
+        else:
+            formats = [media_format]
         if media_format == "mp3":
             formats.append("mp4")
         formats.extend(
@@ -316,7 +399,7 @@ class MediaConverter(commands.Converter[str]):
         if (
             cls._is_media_url(url)
             and isinstance(content_type, str)
-            and (content_type.startswith("image/") or content_type.startswith("video/"))
+            and content_type.startswith(("image/", "video/", "audio/"))
         ):
             return url
 
@@ -393,6 +476,14 @@ class MediaConverter(commands.Converter[str]):
                     return await converter.convert(ctx, argument)
                 except commands.BadArgument:
                     pass
+
+            if ctx.guild is not None:
+                try:
+                    member = await commands.MemberConverter().convert(ctx, argument)
+                except commands.MemberNotFound:
+                    pass
+                else:
+                    return member.display_avatar.url
 
             try:
                 user = await commands.UserConverter().convert(ctx, argument)

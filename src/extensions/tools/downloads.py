@@ -8,7 +8,13 @@ from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
-from utils import Downloader, KlipyUrlConverter, TenorUrlConverter, to_image
+from utils import (
+    Downloader,
+    KlipyUrlConverter,
+    TenorUrlConverter,
+    is_discord_media_url,
+    to_image,
+)
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -32,11 +38,27 @@ class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
 
 
 class Downloads(Cog):
-    @commands.hybrid_command(name="download", aliases=("dl",), enabled=True)
+    @commands.hybrid_command(
+        name="download",
+        aliases=("dl",),
+        enabled=True,
+        extras={"usage": "<url> [-format mp4 -title <name> -hidden]"},
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.describe(
+        url="URL off the internet like Instagram/TikTok/Twitter",
+    )
     async def download(self, ctx: Context, url: str, *, flags: DownloadFlags):
-        """Download a video off the internet"""
+        """Download media from a supported website.
+
+        -# -format    Choose MP4, MP3, WEBM, or GIF. Defaults to MP4.
+        -# -title     Change the downloaded file name.
+        -# -hidden    Hide the response when using the app command.
+        """
+
+        if is_discord_media_url(url):
+            return
 
         async with ctx.typing(ephemeral=flags.hidden):
             try:
