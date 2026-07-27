@@ -29,7 +29,11 @@ class RawCommands(Cog):
     async def raw_channel(self, channel: AllChannels) -> Dict[Any, Any]:
         return dict(await self.bot.http.get_channel(channel.id))
 
-    @commands.group(name="raw", invoke_without_command=True)
+    @commands.group(
+        name="raw",
+        invoke_without_command=True,
+        extras={"usage": "[object]"},
+    )
     @commands.cooldown(1, 30, commands.BucketType.user)
     async def raw(
         self,
@@ -97,6 +101,7 @@ class RawCommands(Cog):
     async def raw_user_command(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
+        """Show the raw Discord API data for a user."""
         data = await self.raw_user(user)
         b = "`" * 3
         data = json.dumps(data, indent=4, sort_keys=True)

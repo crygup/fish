@@ -196,6 +196,7 @@ class Corn(Cog):
     @commands.command(name="crab")
     @crab_command()
     async def crab_corn(self, ctx: Context):
+        """Send a random crab quote."""
         things = [
             "atreus never ever comment that on profile ever again",
             "Frick off atreus",

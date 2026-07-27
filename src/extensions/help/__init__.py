@@ -19,6 +19,36 @@ if TYPE_CHECKING:
 CogMapping: TypeAlias = Mapping[Optional[Cog], List[commands.Command[Any, ..., Any]]]
 
 
+def command_usage(ctx: Context, command: commands.Command[Any, ..., Any]) -> str:
+    """Build the prefix usage shown in command help."""
+    custom_usage = command.extras.get("usage")
+    signature = custom_usage if isinstance(custom_usage, str) else command.signature
+    suffix = f" {signature}" if signature else ""
+    return f"{ctx.get_prefix}{command.qualified_name}{suffix}"
+
+
+def chunk_usage_lines(lines: list[str], limit: int = 1016) -> list[str]:
+    """Split usage lines so each code block fits in a Discord embed field."""
+    chunks: list[str] = []
+    current: list[str] = []
+    current_length = 0
+
+    for line in lines:
+        added_length = len(line) + (1 if current else 0)
+        if current and current_length + added_length > limit:
+            chunks.append("\n".join(current))
+            current = []
+            current_length = 0
+
+        current.append(line)
+        current_length += len(line) + (1 if len(current) > 1 else 0)
+
+    if current:
+        chunks.append("\n".join(current))
+
+    return chunks
+
+
 def make_command_embed(
     ctx: Context,
     command: Union[
@@ -33,7 +63,7 @@ def make_command_embed(
     )
     embed.add_field(
         name="Usage",
-        value=f"`{ctx.get_prefix}{command.name}{f' {command.signature}' if command.signature else ''}`",
+        value=f"`{command_usage(ctx, command)}`",
         inline=False,
     )
     if command.aliases:
@@ -44,13 +74,10 @@ def make_command_embed(
         )
 
     if isinstance(command, commands.Group):
-        text = "\n".join(
-            [
-                f"{ctx.get_prefix}{c.qualified_name} {c.signature}"
-                for c in command.commands
-            ]
-        )
-        embed.add_field(name="Subcommands", value=f"```{text}```", inline=False)
+        lines = [command_usage(ctx, child) for child in command.commands]
+        for index, text in enumerate(chunk_usage_lines(lines)):
+            name = "Subcommands" if index == 0 else "Subcommands (continued)"
+            embed.add_field(name=name, value=f"```{text}```", inline=False)
 
     embed.set_footer(text="\u2800" * 47)
 

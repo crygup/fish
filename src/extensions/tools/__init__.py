@@ -513,6 +513,7 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
         ],
     )
     async def cyrillic(self, ctx: Context, *, words: str):
+        """Replace Latin letters with similar-looking Cyrillic characters."""
         words = discord.utils.escape_markdown(words, ignore_links=False)
         all_letters = [letter for word in words for letter in word]
         new_words = []
@@ -525,7 +526,11 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
         fmt = "".join(new_words)
         await ctx.send(fmt[:2000])
 
-    @commands.command(name="screenshot", aliases=("ss",))
+    @commands.command(
+        name="screenshot",
+        aliases=("ss",),
+        extras={"usage": "<website> [-delay 0 -full-page]"},
+    )
     @commands.cooldown(1, 30, commands.BucketType.user)
     async def screenshot(
         self,
@@ -536,7 +541,11 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
             description="Flags to use while screenshotting."
         ),
     ):
-        """Screenshot a website from the internet"""
+        """Take a screenshot of a website.
+
+        -# -delay        Wait up to 10 seconds before taking the screenshot.
+        -# -full-page    Capture the full page instead of the visible area.
+        """
         if flags.delay < 0 or flags.delay > 10:
             raise commands.BadArgument(
                 "Screenshot delay must be between 0 and 10 seconds."
@@ -590,7 +599,7 @@ class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
 
     @commands.command(name="urban")
     async def urban(self, ctx: Context, *, word: str):
-        """Search for a word on urban
+        """Search for a word on Urban Dictionary.
 
         Warning: could be NSFW"""
 

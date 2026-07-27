@@ -79,15 +79,18 @@ class Owner(Cog):
 
     @commands.group(name="pokemon", invoke_without_command=True)
     async def pokemon(self, ctx: Context):
+        """Show how many Pokémon names are currently cached."""
         await ctx.send(f"There are currently {len(self.bot.pokemon):,} cached.")
 
     @pokemon.command(name="update")
     async def pokemon_update(self, ctx: Context):
+        """Refresh the cached Pokémon name list."""
         await update_pokemon(self.bot)
         await self._add_reaction(ctx, ctx.message)
 
     @pokemon.command(name="add")
     async def pokemon_add(self, ctx: Context, *, name: str):
+        """Add a Pokémon name to the solver cache."""
         sql = """
         INSERT INTO added_pokemon (name, created_at) VALUES ($1, $2)
         """
@@ -101,6 +104,7 @@ class Owner(Cog):
 
     @pokemon.command(name="solve")
     async def pokemon_solve(self, ctx: Context):
+        """Solve a replied Pokétwo hint message."""
         events = self.bot.events
         if not events:
             raise commands.BadArgument(
@@ -174,57 +178,68 @@ class Owner(Cog):
 
     @refresh.group(name="spotify", invoke_without_command=True)
     async def refresh_spotify(self, ctx: Context):
+        """Open the Spotify login refresh link."""
         await self._send_spotify_login(ctx)
 
     @refresh_spotify.command(name="login")
     async def refresh_spotify_login(self, ctx: Context):
+        """Open the Spotify login refresh link."""
         await self._send_spotify_login(ctx)
 
     @commands.command(name="queue")
     async def spotify_queue(self, ctx: Context, *, query: str):
+        """Add a Spotify song or album to the playback queue."""
         await self.spotify.queue(ctx, query=query)
 
     @commands.command(name="shuffle")
     async def spotify_shuffle(self, ctx: Context, state: Optional[str] = None):
+        """Enable, disable, or toggle Spotify shuffle."""
         await self.spotify.shuffle(ctx, state=state)
 
     @commands.command(name="repeat", aliases=("loop",))
     async def spotify_repeat(self, ctx: Context, mode: Optional[str] = None):
+        """Set, disable, or toggle Spotify repeat mode."""
         await self.spotify.repeat(ctx, mode=mode)
 
     @commands.command(name="player")
     @commands.cooldown(1, 30, commands.BucketType.user)
     async def spotify_player(self, ctx: Context):
+        """Show the current Spotify song and playback controls."""
         await self.spotify.player(ctx)
 
     @commands.command(name="skip")
     async def spotify_skip(self, ctx: Context):
+        """Skip the current song on the active Spotify device."""
         await self.spotify.skip(ctx)
 
     @commands.command(name="pause", aliases=("stop",))
     async def spotify_pause(self, ctx: Context):
+        """Pause the current Spotify playback."""
         await self.spotify.pause(ctx)
 
     @commands.command(name="play", aliases=("resume",))
     async def spotify_play(self, ctx: Context):
+        """Resume the current Spotify playback."""
         await self.spotify.play(ctx)
 
     @commands.command(name="restart")
     async def spotify_restart(self, ctx: Context):
+        """Restart the current Spotify song."""
         await self.spotify.restart(ctx)
 
-    @commands.command(
-        name="previous", aliases=("rewind", "backwards", "back", "reverse", "prev")
-    )
+    @commands.command(name="previous", aliases=("rewind", "backwards", "back", "prev"))
     async def spotify_rewind(self, ctx: Context):
+        """Go back to the previous Spotify song."""
         await self.spotify.rewind(ctx)
 
     @commands.command(name="like", aliases=("favourite", "favorite"))
     async def spotify_like(self, ctx: Context):
+        """Save the current Spotify song to Liked Songs."""
         await self.spotify.like(ctx)
 
     @commands.command(name="unlike", aliases=("unfavourite", "unfavorite"))
     async def spotify_unlike(self, ctx: Context):
+        """Remove the current Spotify song from Liked Songs."""
         await self.spotify.unlike(ctx)
 
     @commands.command(name="shutdown")

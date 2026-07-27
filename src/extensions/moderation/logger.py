@@ -778,7 +778,7 @@ class Logger(Cog):
     async def logger_moderation(
         self, ctx: GuildContext, channel: discord.TextChannel
     ) -> None:
-        """Log member bans and unbans."""
+        """Log bans, kicks, timeouts, and other moderation actions."""
         await self._set_logger_channel(ctx, "moderation", channel)
 
     @logger.command(name="message", aliases=("messages",))

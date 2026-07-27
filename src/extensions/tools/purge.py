@@ -60,7 +60,7 @@ class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     def parse_flags(cls, argument: str, *, ignore_extra: bool = True):
         # FlagConverter normally requires a value for boolean flags. Move bare
         # boolean flags to the end so they can safely receive `true`, even when
-        # other flags follow them. Explicit values such as `--bot false` remain
+        # other flags follow them. Explicit values such as `-bot false` remain
         # unchanged.
         boolean_flags = (
             "bot|webhooks|embeds|files|emoji|reactions|left|online|offline|idle|skip"
@@ -84,31 +84,40 @@ class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
 
 
 """
---user          Messages from a specific user
---channel       Messages from a specific channel
---contains      Messages that contains this text (case sensitive)
---starts        Messages that start with this text (case sensitive)
---ends          Messages that end with this text (case sensitive)
---after         Messages that come after this message ID
---before        Messages that come before this message ID
---bot           Messages from bots (not webhooks!)
---webhooks      Messages from webhooks
---embeds        Messages that have embeds
---files         Messages that have attachments
---emoji         Messages that have custom emojis
---reactions     Messages that have reactions
---left          Messages from users who have left the server
---online        Messages from users who are online
---offline       Messages from users who are offline
---idle          Messages from users who are idle
---require       Whether any or all of the flags should be met before deleting messages. Defaults to "all"
---skip          Skip the purge confirmation
+-user          Messages from a specific user
+-channel       Messages from a specific channel
+-contains      Messages that contains this text (case sensitive)
+-starts        Messages that start with this text (case sensitive)
+-ends          Messages that end with this text (case sensitive)
+-after         Messages that come after this message ID
+-before        Messages that come before this message ID
+-bot           Messages from bots (not webhooks!)
+-webhooks      Messages from webhooks
+-embeds        Messages that have embeds
+-files         Messages that have attachments
+-emoji         Messages that have custom emojis
+-reactions     Messages that have reactions
+-left          Messages from users who have left the server
+-online        Messages from users who are online
+-offline       Messages from users who are offline
+-idle          Messages from users who are idle
+-require       Whether any or all of the flags should be met before deleting messages. Defaults to "all"
+-skip          Skip the purge confirmation
 """
 
 
 class PurgeCog(Cog):
     @commands.hybrid_command(
         name="purge",
+        extras={
+            "usage": (
+                "[amount] [-user <user> -channel <channel> -contains <text> "
+                "-starts <text> -ends <text> -after <message-id> "
+                "-before <message-id> -bot -webhooks -embeds -files "
+                "-emoji -reactions -left -online -offline -idle "
+                "-require any|all -skip]"
+            )
+        },
     )
     @commands.bot_has_permissions(manage_messages=True)
     @commands.has_guild_permissions(manage_messages=True)
@@ -121,27 +130,27 @@ class PurgeCog(Cog):
         flags: PurgeFlags,
     ):
         """
-        Mass delete some messages
+        Mass delete messages from the current channel.
 
-        -# --user          Messages from a specific user
-        -# --channel       Messages from a specific channel
-        -# --contains      Messages that contains this text (case sensitive)
-        -# --starts        Messages that start with this text (case sensitive)
-        -# --ends          Messages that end with this text (case sensitive)
-        -# --after         Messages that come after this message ID
-        -# --before        Messages that come before this message ID
-        -# --bot           Messages from bots (not webhooks!)
-        -# --webhooks      Messages from webhooks
-        -# --embeds        Messages that have embeds
-        -# --files         Messages that have attachments
-        -# --emoji         Messages that have custom emojis
-        -# --reactions     Messages that have reactions
-        -# --left          Messages from users who have left the server
-        -# --online        Messages from users who are online
-        -# --offline       Messages from users who are offline
-        -# --idle          Messages from users who are idle
-        -# --require       Whether any or all of the flags should be met before deleting messages.
-        -# --skip          Skip the purge confirmation.
+        -# -user          Messages from a specific user
+        -# -channel       Messages from a specific channel
+        -# -contains      Messages that contain this text (case sensitive)
+        -# -starts        Messages that start with this text (case sensitive)
+        -# -ends          Messages that end with this text (case sensitive)
+        -# -after         Messages that come after this message ID
+        -# -before        Messages that come before this message ID
+        -# -bot           Messages from bots (not webhooks!)
+        -# -webhooks      Messages from webhooks
+        -# -embeds        Messages that have embeds
+        -# -files         Messages that have attachments
+        -# -emoji         Messages that have custom emojis
+        -# -reactions     Messages that have reactions
+        -# -left          Messages from users who have left the server
+        -# -online        Messages from users who are online
+        -# -offline       Messages from users who are offline
+        -# -idle          Messages from users who are idle
+        -# -require       Whether any or all of the flags should be met before deleting messages.
+        -# -skip          Skip the purge confirmation.
         """
         amount_was_given = amount is not None
         has_filter_flags = any(

@@ -143,6 +143,7 @@ class Emojis(Cog):
     @commands.has_permissions(manage_emojis=True)
     @commands.bot_has_permissions(manage_emojis=True)
     async def emoji_create(self, ctx: GuildContext, name: str, url: str):
+        """Create a custom emoji from an image URL."""
         try:
             image = await to_image(ctx.session, url, bytes=True)
             if isinstance(image, BytesIO):
@@ -162,6 +163,7 @@ class Emojis(Cog):
     @commands.has_permissions(manage_emojis=True)
     @commands.bot_has_permissions(manage_emojis=True)
     async def emoji_delete(self, ctx: GuildContext, *emojis: discord.Emoji):
+        """Delete one or more custom emojis from the server."""
         value = await ctx.prompt(
             f"Are you sure you want to delete {plural(len(emojis)):emoji}?"
         )
@@ -184,6 +186,7 @@ class Emojis(Cog):
     @commands.has_permissions(manage_emojis=True)
     @commands.bot_has_permissions(manage_emojis=True)
     async def emoji_rename(self, ctx: GuildContext, emoji: discord.Emoji, *, name: str):
+        """Rename a custom emoji in the server."""
         try:
             emoji = await emoji.edit(name=name)
             await ctx.send(f"Renamed {emoji}")

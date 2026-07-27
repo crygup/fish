@@ -40,7 +40,7 @@ class Google(Cog):
 
     @commands.hybrid_command(name="google")
     async def google(self, ctx: Context, *, query: str):
-        """Search something on the web"""
+        """Search the web with Google."""
 
         url = "https://customsearch.googleapis.com/customsearch/v1"
         params = {
@@ -95,7 +95,7 @@ class Google(Cog):
         extras={"google-command": True},
     )
     async def google_image(self, ctx: Context, *, query: str):
-        """Search google images"""
+        """Search Google Images."""
         url = "https://customsearch.googleapis.com/customsearch/v1"
         params = {
             "cx": self.bot.config["keys"]["google_id"],
@@ -180,14 +180,18 @@ class Google(Cog):
         await self.search_method(ctx, query, "video")
 
     @youtube.command(
-        name="channel", aliases=("ch",), description="Search for a playlist"
+        name="channel",
+        aliases=("ch",),
+        description="Search for a YouTube channel.",
     )
     @app_commands.describe(query="Channel to search for")
     async def youtube_channel(self, ctx: Context, *, query: str):
         await self.search_method(ctx, query, "channel")
 
     @youtube.command(
-        name="playlist", aliases=("pl",), description="Search for a playlist"
+        name="playlist",
+        aliases=("pl",),
+        description="Search for a YouTube playlist.",
     )
     @app_commands.describe(query="Playlist to search for")
     async def youtube_playlist(self, ctx: Context, *, query: str):

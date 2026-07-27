@@ -56,6 +56,7 @@ class Letterboxd(Cog):
             description="A Letterboxd username, profile URL, or Discord user",
         ),
     ):
+        """Show a Letterboxd profile with favourites and recent films."""
         if isinstance(username, str):
             if m := LBD_URL_RE.fullmatch(username.strip().rstrip("/")):
                 username = m.group(1)

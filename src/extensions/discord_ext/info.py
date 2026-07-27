@@ -1193,6 +1193,7 @@ class Info(Cog):
     async def serverinfo(
         self, ctx: GuildContext, *, guild: discord.Guild = commands.CurrentGuild
     ):
+        """Show information and statistics for a server."""
         await self.server_info(ctx, guild)
 
     async def server_icon(self, ctx: Context, guild: discord.Guild):
@@ -1234,34 +1235,40 @@ class Info(Cog):
     async def serverinfo_icon(
         self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
+        """Show a server's icon."""
         await self.server_icon(ctx, guild)
 
     @serverinfo.command(name="banner")
     async def serverinfo_banner(
         self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
+        """Show a server's banner."""
         await self.server_banner(ctx, guild)
 
     @serverinfo.command(name="splash", aliases=("invitebackground", "invitebg", "ibg"))
     async def serverinfo_splash(
         self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
+        """Show a server's invite background."""
         await self.server_splash(ctx, guild)
 
     @commands.command(name="icon")
     async def icon(self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild):
+        """Show a server's icon."""
         await self.server_icon(ctx, guild)
 
     @commands.command(name="serverbanner", aliases=("sbanner",))
     async def server_banner_command(
         self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
+        """Show a server's banner."""
         await self.server_banner(ctx, guild)
 
     @commands.command(name="splash", aliases=("invitebackground", "invitebg", "ibg"))
     async def splash(
         self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
+        """Show a server's invite background."""
         await self.server_splash(ctx, guild)
 
     @commands.hybrid_command(name="reviews")
