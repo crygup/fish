@@ -22,6 +22,7 @@ from utils.credentials import decrypt_credential
 
 from .charts import Charts
 from .top import Top
+from .topster import Topster
 
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
     from extensions.context import Context
 
 
-class Lastfm(Top, Charts):
+class Lastfm(Top, Charts, Topster):
     """Last.fm integration"""
 
     emoji = lfm_emoji
