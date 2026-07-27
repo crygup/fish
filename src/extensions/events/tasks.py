@@ -700,9 +700,49 @@ class Tasks(Cog):
     async def before_set_key_task(self):
         await self.bot.wait_until_ready()
 
+    async def cleanup_status_history(self) -> int:
+        result = await self.bot.pool.execute("""
+            WITH ranked AS (
+                SELECT
+                    id,
+                    row_number() OVER (
+                        PARTITION BY user_id, guild_id, status
+                        ORDER BY started_at DESC, id DESC
+                    ) AS status_rank
+                FROM user_status_history
+            )
+            DELETE FROM user_status_history history
+            USING ranked
+            WHERE history.id = ranked.id
+              AND ranked.status_rank > 1
+              AND history.ended_at < now() - interval '31 days'
+            """)
+        try:
+            return int(result.rsplit(" ", 1)[-1])
+        except (IndexError, ValueError):
+            return 0
+
+    @tasks.loop(hours=6)
+    async def status_history_cleanup_task(self) -> None:
+        try:
+            deleted = await self.cleanup_status_history()
+        except Exception:
+            self.bot.logger.exception("Status history cleanup failed")
+        else:
+            if deleted:
+                self.bot.logger.info(
+                    "Removed %s expired status history rows",
+                    deleted,
+                )
+
+    @status_history_cleanup_task.before_loop
+    async def before_status_history_cleanup_task(self) -> None:
+        await self.bot.wait_until_ready()
+
     async def cog_unload(self):
         self.set_key_task.cancel()
         self.delete_videos_task.cancel()
+        self.status_history_cleanup_task.cancel()
         self.twitch_eventsub_sync_task.cancel()
         self.twitch_reconciliation_task.cancel()
         self.twitch_event_inbox_task.cancel()
@@ -712,6 +752,7 @@ class Tasks(Cog):
         self._twitch_token_expires_at = 0.0
         self.set_key_task.start()
         self.delete_videos_task.start()
+        self.status_history_cleanup_task.start()
         self.twitch_eventsub_sync_task.start()
         self.twitch_reconciliation_task.start()
         self.twitch_event_inbox_task.start()

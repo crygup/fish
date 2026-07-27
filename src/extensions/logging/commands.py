@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-from typing import TYPE_CHECKING, List, Optional, Tuple
+import time
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
 
 import asyncpg
 import discord
@@ -20,6 +21,12 @@ from utils import (
     human_timedelta,
     plural,
     to_image,
+)
+
+from .status_calendar import (
+    StatusInterval,
+    hourly_statuses,
+    render_status_calendar,
 )
 
 if TYPE_CHECKING:
@@ -438,8 +445,91 @@ class Commands(Cog):
         status_nice = status if status != "***dnd***" else "on ***Do Not Disturb***"
         await ctx.send(f"{user} was last seen {status_nice} {delta} ago.")
 
-    @commands.hybrid_group(  # type: ignore[call-arg]
-        name="joins", invoke_without_command=True, fallback="user"  # type: ignore[call-arg]
+    @commands.command(
+        name="statuscalendar",
+        aliases=("statuscal", "statushistory", "statuses", "status"),
+    )
+    async def status_calendar(
+        self,
+        ctx: GuildContext,
+        *,
+        user: Optional[discord.Member] = None,
+    ):
+        """Shows a member's daily status activity over the last 31 days."""
+        started = time.monotonic()
+        target = user or ctx.author
+        if "status" in self.bot.db_cache.get_opted_out(target.id):
+            raise commands.BadArgument(
+                f"{target} has opted out of status tracking."
+            )
+        now = discord.utils.utcnow()
+        cutoff = now - datetime.timedelta(days=31)
+        rows = await self.bot.pool.fetch(
+            """
+            SELECT status, started_at, ended_at
+            FROM user_status_history
+            WHERE user_id = $1
+              AND guild_id = $2
+              AND started_at <= $3
+              AND COALESCE(ended_at, $3) >= $4
+            ORDER BY started_at
+            """,
+            target.id,
+            ctx.guild.id,
+            now,
+            cutoff,
+        )
+        if not rows or not any(row["started_at"] >= cutoff for row in rows):
+            raise commands.BadArgument(
+                f"I have no status activity recorded for {target} in the last 31 days."
+            )
+
+        intervals = [
+            StatusInterval(
+                status=row["status"],
+                started_at=row["started_at"],
+                ended_at=row["ended_at"],
+            )
+            for row in rows
+        ]
+        start_date = now.date() - datetime.timedelta(days=30)
+        statuses = hourly_statuses(
+            intervals,
+            start_date,
+            now=now,
+        )
+        image = await asyncio.to_thread(
+            render_status_calendar,
+            target.display_name,
+            start_date,
+            statuses,
+        )
+        filename = "status-calendar.png"
+        gallery = discord.ui.MediaGallery(
+            discord.MediaGalleryItem(f"attachment://{filename}")
+        )
+        details = discord.ui.TextDisplay(
+            f"-# Invoked by {ctx.author.mention}\n"
+            f"-# Took {time.monotonic() - started:.1f}s"
+        )
+        container = discord.ui.Container(
+            gallery,
+            details,
+            accent_color=self.bot.embedcolor,
+        )
+        view_type = type("StatusCalendarView", (discord.ui.LayoutView,), {})
+        view = view_type(timeout=None)
+        view.add_item(container)
+        await ctx.send(
+            file=discord.File(image, filename),
+            view=view,
+            reference=ctx.message.to_reference(fail_if_not_exists=False),
+        )
+
+    @cast(Any, commands.hybrid_group)(
+        name="joins",
+        invoke_without_command=True,
+        fallback="user",
     )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
