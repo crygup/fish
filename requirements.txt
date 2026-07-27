@@ -55,6 +55,8 @@ discord-py==2.7.1
     #   -r requirements.in
     #   discord-ext-menus
     #   jishaku
+emoji==2.15.0
+    # via -r requirements.in
 fastapi==0.139.2
     # via -r requirements.in
 frozenlist==1.8.0
@@ -86,7 +88,9 @@ multidict==6.7.1
     #   aiohttp
     #   yarl
 numpy==2.5.1
-    # via pandas
+    # via
+    #   -r requirements.in
+    #   pandas
 pandas==3.0.3
     # via -r requirements.in
 parsedatetime==2.6

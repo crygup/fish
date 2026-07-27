@@ -6,7 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ffmpeg librsvg2-bin \
+    && apt-get install --yes --no-install-recommends \
+        ffmpeg \
+        fonts-noto-cjk \
+        fonts-noto-core \
+        fonts-noto-mono \
+        librsvg2-bin \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 fishie
 

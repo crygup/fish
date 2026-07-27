@@ -18,7 +18,6 @@ from utils.paths import FILES_ROOT
 from .about import About
 from .corn import Corn
 from .helpers import RPSView, WTPView, dagpi
-from .images import Images
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -198,7 +197,7 @@ PHONE_LOG_MAX_ENTRIES = 500
 PHONE_LOG_MAX_BYTES = 200_000
 
 
-class Fun(About, Corn, Images):
+class Fun(About, Corn):
     """Fun miscellaneous commands"""
 
     emoji = discord.PartialEmoji(name="\U0001f604")
@@ -425,13 +424,18 @@ class Fun(About, Corn, Images):
         return bool(command and command.name in {"phone", "hangup"})
 
     @commands.hybrid_command(
-        name="phone", aliases=("ring", "userphone", "call", "fishiephone", "fishphone")
+        name="phone",
+        aliases=("ring", "userphone", "call", "fishiephone", "fishphone"),
+        extras={"usage": "[-onlyme]"},
     )
     @commands.guild_only()
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
     async def phone(self, ctx: Context, *, flags: PhoneFlags):
-        """Ring for a user in another server and connect the two channels."""
+        """Ring for a user in another server and connect the two channels.
+
+        -# -onlyme    Only relay messages sent by you from this channel.
+        """
 
         if ctx.guild is None:
             return
@@ -688,6 +692,7 @@ class Fun(About, Corn, Images):
 
     @commands.command(name="wtp", hidden=True, enabled=False)
     async def wtp(self, ctx: Context):
+        """Start a Who's That Pokémon guessing game."""
         await ctx.typing()
 
         data = await dagpi(self.bot, ctx.message, "https://api.dagpi.xyz/data/wtp")
@@ -726,6 +731,7 @@ class Fun(About, Corn, Images):
     @commands.command(
         name="quoteisifyouhaveaproblemwithmetextmeandifyoudonthavemynumberyoudontknowmewellenoughtohaveaproblemwithme",
         aliases=("QIIYHAPWMTMAIYDHMNYDKMWETHAPWM",),
+        hidden=True,
     )
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def QIIYHAPWMTMAIYDHMNYDKMWETHAPWM(self, ctx: Context):

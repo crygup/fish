@@ -8,10 +8,12 @@ deno==2.9.3
 defusedxml==0.7.1
 discord-ext-menus==1.1
 discord.py==2.7.1
+emoji==2.15.0
 fastapi==0.139.2
 jishaku==2.7.5
 lru-dict==1.4.1
 lxml==6.1.1
+numpy==2.5.1
 pandas==3.0.3
 parsedatetime==2.6
 pillow==12.3.0
