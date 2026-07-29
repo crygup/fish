@@ -5,6 +5,7 @@ testing_bot = ""
 [keys]
 client_secret = ""
 fishie_api = ""
+media_api = ""
 lastfm = ""
 lastfm_secret = ""
 lastfm_cb = ""

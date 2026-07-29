@@ -59,6 +59,7 @@ class Ids(TypedDict):
 
 class Keys(TypedDict):
     fishie_api: str
+    media_api: str
     client_secret: str
     lastfm: str
     lastfm_secret: str

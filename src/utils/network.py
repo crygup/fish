@@ -61,15 +61,21 @@ async def validate_public_url(
             raise commands.BadArgument("That website is not supported.")
 
     try:
-        addresses = await asyncio.get_running_loop().getaddrinfo(
-            host,
-            port or (443 if parsed.scheme.lower() == "https" else 80),
-            type=socket.SOCK_STREAM,
-        )
-    except socket.gaierror as error:
-        raise commands.BadArgument("The URL hostname could not be resolved.") from error
-
-    resolved = {str(item[4][0]) for item in addresses}
+        literal_address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            addresses = await asyncio.get_running_loop().getaddrinfo(
+                host,
+                port or (443 if parsed.scheme.lower() == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        except socket.gaierror as error:
+            raise commands.BadArgument(
+                "The URL hostname could not be resolved."
+            ) from error
+        resolved = {str(item[4][0]) for item in addresses}
+    else:
+        resolved = {str(literal_address)}
     if not resolved or any(not _is_public_address(address) for address in resolved):
         raise commands.BadArgument(
             "Private and local network addresses are not allowed."

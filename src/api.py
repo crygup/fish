@@ -10,6 +10,8 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
+import mimetypes
 import os
 import re
 import secrets
@@ -41,8 +43,25 @@ if TYPE_CHECKING:
     from core import Fishie
 
 from core.privacy import erase_guild, erase_user
+from extensions.media_effects.audio_effects import (
+    audio_effect_catalog as bundled_audio_effect_catalog,
+)
+from extensions.media_effects.audio_effects import (
+    find_audio_effect,
+)
+from extensions.media_effects.commands import (
+    PIPELINE_EFFECT_ALIASES,
+    PIPELINE_EFFECTS,
+    _normalize_effect_options,
+    _renderer_effect_options,
+    refresh_discord_attachment_url,
+)
+from extensions.media_effects.processing import (
+    render_image_effect,
+    render_video_effect,
+)
 from utils.credentials import decrypt_credential, encrypt_credential
-from utils.network import validate_public_url
+from utils.network import fetch_public_bytes, validate_public_url
 
 WEB_ORIGINS = frozenset({"https://crygup.com", "https://www.crygup.com"})
 SESSION_COOKIE = "__Host-fishie_session"
@@ -50,6 +69,7 @@ OAUTH_STATE_COOKIE = "__Host-fishie_oauth_state"
 SESSION_MAX_AGE = 7 * 24 * 60 * 60
 OAUTH_STATE_MAX_AGE = 10 * 60
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_MEDIA_API_BYTES = 50 * 1024 * 1024
 
 app = FastAPI(title="Fishie API")
 app.add_middleware(
@@ -67,7 +87,12 @@ async def protect_cookie_requests(request: Request, call_next):
     content_length = request.headers.get("content-length")
     if content_length:
         try:
-            if int(content_length) > MAX_REQUEST_BYTES:
+            request_limit = (
+                MAX_MEDIA_API_BYTES
+                if request.url.path.startswith("/media/effects/")
+                else MAX_REQUEST_BYTES
+            )
+            if int(content_length) > request_limit:
                 return JSONResponse(
                     status_code=413, content={"detail": "Request body is too large"}
                 )
@@ -102,12 +127,28 @@ async def health_ready():
 
 
 bot_ref: "Fishie | None" = None
+MEDIA_API_EFFECTS = frozenset(
+    {
+        name
+        for name, (engine, _, _) in PIPELINE_EFFECTS.items()
+        if engine in {"image", "video"}
+    }
+    | {"meme", "audiooverlay", "audioreplace", "soundeffect"}
+)
+MEDIA_API_ALIASES = {
+    **PIPELINE_EFFECT_ALIASES,
+    "fade-in": "fadein",
+    "fade-out": "fadeout",
+    "slide-in": "slidein",
+    "slide-out": "slideout",
+}
 TABLE_MAP = {
     "avatars": "avatars",
     "username_logs": "username_logs",
     "display_name_logs": "display_name_logs",
     "discrim_logs": "discrim_logs",
     "stag_logs": "stag_logs",
+    "user_status_history": "user_status_history",
     "nickname_logs": "nickname_logs",
     "guild_icons": "guild_icons",
     "guild_name_logs": "guild_name_logs",
@@ -133,6 +174,243 @@ ANILIST_TOKEN_URL = "https://anilist.co/api/v2/oauth/token"
 ANILIST_GRAPHQL_URL = "https://graphql.anilist.co"
 ANILIST_STATE_TTL = 10 * 60
 TWITCH_EVENTSUB_MAX_AGE = 10 * 60
+
+
+async def _read_bounded_request(request: Request, limit: int) -> bytes:
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            raise HTTPException(413, "Request body is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _require_media_api_key(supplied: str | None) -> None:
+    if bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
+    expected = str(bot_ref.config.get("keys", {}).get("media_api", "")).strip()
+    if not expected:
+        raise HTTPException(503, "Media API is not configured")
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(
+            401,
+            "Invalid media API key",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+
+def _media_api_options(value: object) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        if len(value) > 8_192:
+            raise HTTPException(400, "Effect options are too large")
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise HTTPException(400, "Effect options must be valid JSON") from error
+    if not isinstance(value, dict) or len(value) > 20:
+        raise HTTPException(400, "Effect options must be a JSON object")
+    options: dict[str, Any] = {}
+    for key, option in value.items():
+        if (
+            not isinstance(key, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key)
+            or not isinstance(option, (str, int, float, bool))
+            or isinstance(option, float)
+            and not math.isfinite(option)
+            or isinstance(option, str)
+            and len(option) > 256
+        ):
+            raise HTTPException(400, "Effect options contain an invalid value")
+        options[key] = option
+    return options
+
+
+@app.get("/media/effects")
+async def media_effect_catalog():
+    """List the effects accepted by the authenticated media endpoint."""
+    return {
+        "effects": sorted(MEDIA_API_EFFECTS),
+        "max_bytes": MAX_MEDIA_API_BYTES,
+        "authentication": "X-API-Key",
+        "documentation": "docs/media-effects-api.md in the Fish repository",
+    }
+
+
+@app.get("/media/audio-effects")
+async def media_audio_effect_catalog(
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+):
+    """List the bundled audio clips accepted by the sound-effect processor."""
+    _require_media_api_key(x_api_key)
+    return {
+        "effects": [
+            {
+                "id": effect.id,
+                "name": effect.name,
+                "display_name": effect.display_name,
+                "category": effect.category,
+                "duration": effect.duration,
+            }
+            for effect in bundled_audio_effect_catalog()
+        ]
+    }
+
+
+@app.post("/media/effects/{effect}")
+async def apply_media_effect_api(
+    effect: str,
+    request: Request,
+    media_url: str | None = Query(None, max_length=2_048),
+    secondary_media_url: str | None = Query(None, max_length=2_048),
+    options: str = Query("{}"),
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+):
+    """Apply one media effect to a public URL or a raw uploaded file."""
+    _require_media_api_key(x_api_key)
+    normalized = effect.casefold().strip()
+    normalized = MEDIA_API_ALIASES.get(normalized, normalized)
+    if normalized not in MEDIA_API_EFFECTS:
+        raise HTTPException(404, "Unknown media effect")
+    if bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
+
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    body = b""
+    effect_options: dict[str, Any]
+    if content_type == "application/json":
+        raw_json = await _read_bounded_request(request, MAX_REQUEST_BYTES)
+        try:
+            payload = json.loads(raw_json or b"{}")
+        except json.JSONDecodeError as error:
+            raise HTTPException(400, "Request body must be valid JSON") from error
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "Request body must be a JSON object")
+        payload_url = payload.get("media_url")
+        payload_secondary_url = payload.get("secondary_media_url")
+        if payload_url is not None and not isinstance(payload_url, str):
+            raise HTTPException(400, "media_url must be a string")
+        if isinstance(payload_url, str) and len(payload_url) > 2_048:
+            raise HTTPException(400, "media_url is too long")
+        if payload_secondary_url is not None and not isinstance(
+            payload_secondary_url, str
+        ):
+            raise HTTPException(400, "secondary_media_url must be a string")
+        if (
+            isinstance(payload_secondary_url, str)
+            and len(payload_secondary_url) > 2_048
+        ):
+            raise HTTPException(400, "secondary_media_url is too long")
+        media_url = media_url or payload_url
+        secondary_media_url = secondary_media_url or payload_secondary_url
+        effect_options = _media_api_options(payload.get("options", options))
+    else:
+        body = await _read_bounded_request(request, MAX_MEDIA_API_BYTES)
+        effect_options = _media_api_options(options)
+
+    if media_url and body:
+        raise HTTPException(400, "Provide a media URL or an uploaded file, not both")
+    if media_url:
+        try:
+            media_url = await refresh_discord_attachment_url(bot_ref, media_url)
+            fetched = await fetch_public_bytes(
+                bot_ref.session,
+                media_url,
+                max_bytes=MAX_MEDIA_API_BYTES,
+                allowed_content_prefixes=("image/", "video/", "audio/"),
+            )
+        except commands.BadArgument as error:
+            raise HTTPException(400, str(error)) from error
+        body = fetched.data
+    elif not body:
+        raise HTTPException(
+            400,
+            "Provide media_url in JSON/query parameters or upload raw media bytes",
+        )
+    elif content_type and not (
+        content_type.startswith(("image/", "video/", "audio/"))
+        or content_type == "application/octet-stream"
+    ):
+        raise HTTPException(415, "Upload an image, GIF, video, or audio file")
+
+    secondary_data: bytes | None = None
+    if normalized == "soundeffect":
+        try:
+            selected = find_audio_effect(str(effect_options.pop("effect", "random")))
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        secondary_data = await asyncio.to_thread(selected.path.read_bytes)
+    elif secondary_media_url:
+        try:
+            secondary_media_url = await refresh_discord_attachment_url(
+                bot_ref,
+                secondary_media_url,
+            )
+            secondary = await fetch_public_bytes(
+                bot_ref.session,
+                secondary_media_url,
+                max_bytes=MAX_MEDIA_API_BYTES,
+                allowed_content_prefixes=("image/", "video/", "audio/"),
+            )
+        except commands.BadArgument as error:
+            raise HTTPException(400, str(error)) from error
+        secondary_data = secondary.data
+
+    if normalized in {"audiooverlay", "audioreplace"} and secondary_data is None:
+        raise HTTPException(
+            400,
+            "This effect requires secondary_media_url.",
+        )
+
+    effect_options, adjustments = _normalize_effect_options(
+        normalized,
+        effect_options,
+    )
+    renderer_options = _renderer_effect_options(normalized, effect_options)
+    try:
+        async with bot_ref.media_semaphore:
+            async with asyncio.timeout(60):
+                engine = PIPELINE_EFFECTS[normalized][0]
+                if engine == "video" or normalized in {
+                    "audiooverlay",
+                    "audioreplace",
+                    "soundeffect",
+                }:
+                    result = await render_video_effect(
+                        body,
+                        normalized,
+                        second_data=secondary_data,
+                        **renderer_options,
+                    )
+                else:
+                    result = await render_image_effect(
+                        body,
+                        normalized,
+                        **renderer_options,
+                    )
+    except TimeoutError as error:
+        raise HTTPException(408, "The effect took longer than 60 seconds") from error
+    except (KeyError, TypeError, ValueError) as error:
+        raise HTTPException(400, str(error)) from error
+
+    if len(result.data) > MAX_MEDIA_API_BYTES:
+        raise HTTPException(413, "Generated media is too large")
+    filename = result.filename.replace("/", "_").replace("\\", "_")
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store",
+    }
+    if adjustments:
+        headers["X-Fishie-Adjusted"] = json.dumps(adjustments, ensure_ascii=True)[:2048]
+    return Response(
+        result.data,
+        media_type=media_type,
+        headers=headers,
+    )
 
 
 def _lastfm_state(user_id: int, source: str) -> str:
@@ -619,6 +897,16 @@ async def _check_opted_out(user_id: int) -> bool:
         "SELECT 1 FROM opted_out WHERE user_id = $1 AND cardinality(items) > 0", user_id
     )
     return r is not None
+
+
+async def _tracking_opted_out(user_id: int, item: str) -> bool:
+    return bool(
+        await _check_pool().fetchval(
+            "SELECT $2 = ANY(items) FROM opted_out WHERE user_id = $1",
+            user_id,
+            item,
+        )
+    )
 
 
 VALID_OPTOUTS = {
@@ -1691,7 +1979,8 @@ async def get_user_data(user_id: int):
                (SELECT COUNT(*) FROM username_logs WHERE user_id = $1) AS usernames,
                (SELECT COUNT(*) FROM display_name_logs WHERE user_id = $1) AS display_names,
                (SELECT COUNT(*) FROM discrim_logs WHERE user_id = $1) AS discrims,
-               (SELECT COUNT(*) FROM stag_logs WHERE user_id = $1) AS server_tags""",
+               (SELECT COUNT(*) FROM stag_logs WHERE user_id = $1) AS server_tags,
+               (SELECT COUNT(*) FROM user_status_history WHERE user_id = $1) AS statuses""",
         user_id,
     )
     return {"user_id": user_id, "counts": dict(counts) if counts is not None else {}}
@@ -1808,6 +2097,115 @@ async def get_discrims(
                 "created_at": r["created_at"].isoformat(),
             }
             for r in rows
+        ],
+        "total": count,
+        "page": page,
+        "pages": pages,
+    }
+
+
+@app.get("/server-tags/{user_id}")
+async def get_server_tags(
+    user_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=100),
+):
+    """Get a user's public server-tag history unless they disabled tracking."""
+    if await _tracking_opted_out(user_id, "stag"):
+        return {"items": [], "total": 0, "page": page, "pages": 1}
+    pool = _check_pool()
+    async with pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM stag_logs WHERE user_id = $1",
+            user_id,
+        )
+        pages = max(1, (count + per_page - 1) // per_page)
+        rows = await conn.fetch(
+            """
+            SELECT id, tag, guild_id, guild_created_at, badge_url, created_at
+            FROM stag_logs
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            """,
+            user_id,
+            per_page,
+            (page - 1) * per_page,
+        )
+    return {
+        "items": [
+            {
+                "id": row["id"],
+                "value": (
+                    f"{row['tag'] or 'No server tag'}"
+                    + (
+                        f" • Server {row['guild_id']}"
+                        if row["guild_id"] is not None
+                        else ""
+                    )
+                ),
+                "tag": row["tag"],
+                "guild_id": (
+                    str(row["guild_id"]) if row["guild_id"] is not None else None
+                ),
+                "guild_created_at": (
+                    row["guild_created_at"].isoformat()
+                    if row["guild_created_at"] is not None
+                    else None
+                ),
+                "badge_url": row["badge_url"],
+                "created_at": row["created_at"].isoformat(),
+            }
+            for row in rows
+        ],
+        "total": count,
+        "page": page,
+        "pages": pages,
+    }
+
+
+@app.get("/statuses/{user_id}")
+async def get_status_history(
+    user_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=100),
+):
+    """Get a user's public presence history unless they disabled tracking."""
+    if await _tracking_opted_out(user_id, "status"):
+        return {"items": [], "total": 0, "page": page, "pages": 1}
+    pool = _check_pool()
+    async with pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM user_status_history WHERE user_id = $1",
+            user_id,
+        )
+        pages = max(1, (count + per_page - 1) // per_page)
+        rows = await conn.fetch(
+            """
+            SELECT id, guild_id, status, started_at, ended_at
+            FROM user_status_history
+            WHERE user_id = $1
+            ORDER BY started_at DESC
+            LIMIT $2 OFFSET $3
+            """,
+            user_id,
+            per_page,
+            (page - 1) * per_page,
+        )
+    return {
+        "items": [
+            {
+                "id": row["id"],
+                "value": f"{row['status'].title()} • Server {row['guild_id']}",
+                "status": row["status"],
+                "guild_id": str(row["guild_id"]),
+                "created_at": row["started_at"].isoformat(),
+                "started_at": row["started_at"].isoformat(),
+                "ended_at": (
+                    row["ended_at"].isoformat() if row["ended_at"] is not None else None
+                ),
+            }
+            for row in rows
         ],
         "total": count,
         "page": page,

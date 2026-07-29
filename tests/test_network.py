@@ -1,3 +1,4 @@
+import asyncio
 import socket
 
 import pytest
@@ -28,10 +29,10 @@ async def test_host_allowlist_is_exact() -> None:
 
 @pytest.mark.asyncio
 async def test_accepts_only_public_dns_results(monkeypatch: pytest.MonkeyPatch) -> None:
-    def public_result(*args, **kwargs):
+    async def public_result(*args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
 
-    monkeypatch.setattr(socket, "getaddrinfo", public_result)
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", public_result)
     assert await validate_public_url("https://example.com/path") == (
         "https://example.com/path"
     )
@@ -41,13 +42,13 @@ async def test_accepts_only_public_dns_results(monkeypatch: pytest.MonkeyPatch) 
 async def test_rejects_mixed_public_and_private_dns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def mixed_result(*args, **kwargs):
+    async def mixed_result(*args, **kwargs):
         return [
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443)),
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 443)),
         ]
 
-    monkeypatch.setattr(socket, "getaddrinfo", mixed_result)
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", mixed_result)
     with pytest.raises(commands.BadArgument, match="Private"):
         await validate_public_url("https://example.com/path")
 
