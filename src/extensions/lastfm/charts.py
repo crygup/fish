@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import unicodedata
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, TypeAlias, Union
 
 import discord
@@ -28,9 +29,10 @@ topMode: TypeAlias = Union[
     Literal["gettopartists"], Literal["gettopalbums"], Literal["gettoptracks"]
 ]
 modeName = {"gettopartists": "artist", "gettopalbums": "album", "gettoptracks": "track"}
-SPOTIFY_COVER_CACHE: TTLCache[tuple[str, str], str] = TTLCache[tuple[str, str], str](
-    maxsize=512, ttl=3600
-)
+SPOTIFY_COVER_CACHE: TTLCache[tuple[str, str, str], str] = TTLCache[
+    tuple[str, str, str], str
+](maxsize=512, ttl=3600)
+LASTFM_BLANK_COVER = "2a96cbd8b46e442fc41c2b86b821562f.png"
 
 
 class ChartEmbed(ui.LayoutView):
@@ -109,9 +111,12 @@ async def chart_cmd(
 async def search_spotify(
     ctx: Context,
     mode: str,
-    query: str,
-) -> str:
-    cache_key = (mode, " ".join(query.casefold().split()))
+    title: str,
+    artist: str | None = None,
+) -> str | None:
+    normalized_title = _normalize_match(title)
+    normalized_artist = _normalize_match(artist or "")
+    cache_key = (mode, normalized_title, normalized_artist)
     try:
         return SPOTIFY_COVER_CACHE[cache_key]
     except KeyError:
@@ -124,6 +129,11 @@ async def search_spotify(
         "Authorization": f"Bearer {ctx.bot.spotify_key}",
     }
 
+    query = title
+    if mode == "track" and artist:
+        query = f'track:"{title}" artist:"{artist}"'
+    elif mode == "album" and artist:
+        query = f'album:"{title}" artist:"{artist}"'
     api_data = {"q": query, "type": mode, "limit": "10", "market": "US"}
 
     async with ctx.session.get(url, headers=headers, params=api_data) as resp:
@@ -132,15 +142,49 @@ async def search_spotify(
 
         items = data.get(f"{mode}s", {}).get("items", [])
         if not items:
-            raise commands.BadArgument(f"No Spotify results found for `{query}`.")
-        images = items[0].get("images", [])
-        if not images:
-            raise commands.BadArgument(
-                f"No cover image found on Spotify for `{query}`."
+            return None
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if _normalize_match(str(item.get("name") or "")) != normalized_title:
+                continue
+            spotify_artists = item.get("artists")
+            if artist and (
+                not isinstance(spotify_artists, list)
+                or normalized_artist
+                not in {
+                    _normalize_match(str(candidate.get("name") or ""))
+                    for candidate in spotify_artists
+                    if isinstance(candidate, dict)
+                }
+            ):
+                continue
+            image_source = item.get("album") if mode == "track" else item
+            images = (
+                image_source.get("images") if isinstance(image_source, dict) else None
             )
-        cover_url = images[0]["url"]
-        SPOTIFY_COVER_CACHE[cache_key] = cover_url
-        return cover_url
+            if not isinstance(images, list) or not images:
+                continue
+            cover_url = images[0].get("url")
+            if not cover_url:
+                continue
+            SPOTIFY_COVER_CACHE[cache_key] = str(cover_url)
+            return str(cover_url)
+        return None
+
+
+def _normalize_match(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return " ".join(normalized.split())
+
+
+def _lastfm_artist_name(item: dict[str, Any]) -> str | None:
+    artist = item.get("artist")
+    if isinstance(artist, dict):
+        value = artist.get("name") or artist.get("#text")
+        return str(value) if value else None
+    return str(artist) if artist else None
 
 
 async def make_image(
@@ -156,46 +200,67 @@ async def make_image(
     data = {
         "method": f"user.{mode}",
         "user": lfm_user,
-        "limit": max(count, 1),
+        "limit": min(100, max(count * 3, count + 10, 1)),
         "period": time_period,
     }
     response = (await ctx.bot.lfm_get(data))[f"top{modeName[mode]}s"]
-    items: List[Dict[Any, Any]] = response[modeName[mode]][:count]
+    items: List[Dict[Any, Any]] = response[modeName[mode]]
 
     # Phase 1: collect items and resolve Spotify for missing covers in parallel
-    bios: list[str] = []
-    image_urls: list[str] = []
-    spotify_tasks: list[tuple[int, str, str]] = []  # (index, mode, query)
+    image_urls: list[str | None] = []
+    spotify_tasks: list[tuple[int, str, str, str | None]] = []
 
     for i, item in enumerate(items):
         url = re.sub(r"/u/.*/", "/u/", item["image"][-1]["#text"])
-        if re.search("2a96cbd8b46e442fc41c2b86b821562f.png", url):
-            query = item["name"]
-            if item.get("artist"):
-                query += f" artist:{item['artist']}"
-            spotify_tasks.append((i, modeName[mode], query))
+        if LASTFM_BLANK_COVER in url:
+            spotify_tasks.append(
+                (
+                    i,
+                    modeName[mode],
+                    str(item["name"]),
+                    _lastfm_artist_name(item),
+                )
+            )
+            url = ""
         image_urls.append(url)
-
-        name = (
-            f"{item['name']} by {item['artist']['name']}"
-            if item.get("artist")
-            else item["name"]
-        )
-        bios.append(f"#{i + 1} {name}")
 
     if spotify_tasks:
 
         async def _resolve_spotify(
-            idx: int, s_mode: str, query: str
-        ) -> tuple[int, str]:
+            idx: int,
+            spotify_mode: str,
+            title: str,
+            artist: str | None,
+        ) -> tuple[int, str | None]:
             try:
-                return idx, await search_spotify(ctx, s_mode, query)
+                return idx, await search_spotify(
+                    ctx,
+                    spotify_mode,
+                    title,
+                    artist,
+                )
             except Exception:
-                return idx, image_urls[idx]
+                return idx, None
 
         results = await asyncio.gather(*(_resolve_spotify(*t) for t in spotify_tasks))
         for idx, url in results:
             image_urls[idx] = url
+
+    selected = [
+        (item, url) for item, url in zip(items, image_urls, strict=False) if url
+    ][:count]
+    if not selected:
+        raise commands.BadArgument(
+            "No chart entries with matching cover art were found."
+        )
+
+    bios: list[str] = []
+    final_urls: list[str] = []
+    for index, (item, url) in enumerate(selected, start=1):
+        artist = _lastfm_artist_name(item)
+        name = f"{item['name']} by {artist}" if artist else str(item["name"])
+        bios.append(f"#{index} {name}")
+        final_urls.append(str(url))
 
     # Phase 2: download all images in parallel
     async def _fetch_image(url: str) -> bytes:
@@ -206,7 +271,7 @@ async def make_image(
         except Exception:
             return b""
 
-    images = list(await asyncio.gather(*(_fetch_image(u) for u in image_urls)))
+    images = list(await asyncio.gather(*(_fetch_image(url) for url in final_urls)))
     fp = await format_bytes(
         filesize_limit=ctx.guild.filesize_limit if ctx.guild else 10485760,
         images=images,
