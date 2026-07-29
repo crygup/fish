@@ -1,0 +1,8 @@
+{
+ "extraPaths": ["src"],
+ "exclude": ["backup", "wip"],
+ "typeCheckingMode": "basic",
+ "pythonVersion": "3.13",
+ "venvPath": ".",
+ "venv": "venv"
+}
