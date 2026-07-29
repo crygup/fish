@@ -3,7 +3,7 @@ from core.migrations import available_migrations
 
 def test_migrations_are_unique_and_have_content_checksums() -> None:
     migrations = available_migrations()
-    assert [item.version for item in migrations] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [item.version for item in migrations] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     assert len({item.checksum for item in migrations}) == len(migrations)
     assert all(len(item.checksum) == 64 for item in migrations)
 

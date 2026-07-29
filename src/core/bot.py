@@ -27,6 +27,7 @@ import aiohttp
 import asyncpg
 import discord
 from cachetools import TTLCache
+from discord import app_commands
 from discord.abc import Messageable
 from discord.ext import commands
 
@@ -54,6 +55,53 @@ if TYPE_CHECKING:
     from .cog import Cog
 
 FCT = TypeVar("FCT", bound="Context")
+
+APP_PARAMETER_DESCRIPTIONS = {
+    "amount": "Amount to use for this command",
+    "channel": "Discord channel to use",
+    "channel_name": "Channel name to use",
+    "command": "Command to use",
+    "command_name": "Command name to look up",
+    "disabled": "Whether this setting should be disabled",
+    "event": "Event type to configure",
+    "guild": "Discord server to use",
+    "guild_id": "Discord server ID to look up",
+    "hidden": "Whether hidden entries should be included",
+    "id": "Record ID to use",
+    "limit": "Maximum number of results",
+    "member": "Server member to view",
+    "query": "Search query",
+    "server": "Discord server to use",
+    "size": "Grid size such as 3x3",
+    "time_period": "Time period to display",
+    "user": "Discord user to view",
+    "username": "Account username or profile URL",
+}
+
+
+def describe_missing_app_parameters(command: Any) -> None:
+    """Give every app-command option a useful Discord description."""
+    if isinstance(command, app_commands.Group):
+        for child in command.commands:
+            describe_missing_app_parameters(child)
+        return
+    if not isinstance(command, app_commands.Command):
+        return
+    descriptions: dict[str, str] = {}
+    for parameter in command.parameters:
+        if parameter.description and parameter.description not in {
+            "…",
+            "No description provided",
+        }:
+            continue
+        descriptions[parameter.name] = APP_PARAMETER_DESCRIPTIONS.get(
+            parameter.name,
+            f"{parameter.name.replace('_', ' ').capitalize()} for this command",
+        )
+    for name, description in descriptions.items():
+        internal_parameter = command._params.get(name)
+        if internal_parameter is not None:
+            internal_parameter.description = app_commands.locale_str(description)
 
 
 def required_intents() -> discord.Intents:
@@ -141,6 +189,7 @@ class Fishie(commands.Bot):
         self._resources_closed = False
         self._oauth_refresh_tasks: set[asyncio.Task[Any]] = set()
         self._eventsub_tasks: set[asyncio.Task[Any]] = set()
+        self._restart_message_checked = False
         self.testing: bool = testing
         self.error_logs = None
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(
@@ -355,6 +404,9 @@ class Fishie(commands.Bot):
         )
 
         await self.load_extensions()
+        for cog in self.cogs.values():
+            for command in cog.get_app_commands():
+                describe_missing_app_parameters(command)
         await self.populate_cache()
         await update_pokemon(self)
         self.logger.info(f"Added {len(self.pokemon):,} pokemon")
@@ -363,6 +415,55 @@ class Fishie(commands.Bot):
         if not hasattr(self, "start_time"):
             self.start_time = discord.utils.utcnow()
             self.logger.info(f"Logged into {str(self.user)}")
+        if not self._restart_message_checked:
+            try:
+                await self._complete_recent_restart()
+            except asyncpg.PostgresError:
+                self.logger.exception("Could not read the saved restart message")
+            else:
+                self._restart_message_checked = True
+
+    async def _complete_recent_restart(self) -> None:
+        record = await self.pool.fetchrow("""
+            SELECT channel_id, message_id, requested_at
+            FROM bot_restart_state
+            WHERE singleton = TRUE
+            """)
+        if record is None:
+            return
+
+        now = discord.utils.utcnow()
+        requested_at = record["requested_at"]
+        if requested_at.tzinfo is None:
+            requested_at = requested_at.replace(tzinfo=datetime.UTC)
+        if now - requested_at > datetime.timedelta(minutes=15):
+            await self.pool.execute(
+                "DELETE FROM bot_restart_state WHERE singleton = TRUE"
+            )
+            return
+
+        try:
+            channel = self.get_channel(record["channel_id"])
+            if channel is None:
+                channel = await self.fetch_channel(record["channel_id"])
+            if not isinstance(channel, Messageable):
+                raise TypeError("Restart message channel is not messageable")
+            message = await channel.fetch_message(record["message_id"])
+            elapsed = max(0.0, (now - message.created_at).total_seconds())
+            if elapsed < 60:
+                duration = f"{elapsed:.1f} seconds"
+            else:
+                minutes, seconds = divmod(round(elapsed), 60)
+                duration = f"{minutes}m {seconds}s"
+            await message.edit(
+                content=f"Fishie is back online. Restart took {duration}."
+            )
+        except (discord.DiscordException, TypeError):
+            self.logger.exception("Could not update the saved restart message")
+        finally:
+            await self.pool.execute(
+                "DELETE FROM bot_restart_state WHERE singleton = TRUE"
+            )
 
     async def fetch_message(
         self, *, message: Union[str, int], channel: Optional[Messageable] = None

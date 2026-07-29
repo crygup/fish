@@ -191,7 +191,7 @@ class Owner(Cog):
         """Add a Spotify song or album to the playback queue."""
         await self.spotify.queue(ctx, query=query)
 
-    @commands.command(name="shuffle")
+    @commands.command(name="spotifyshuffle", aliases=("spshuffle",))
     async def spotify_shuffle(self, ctx: Context, state: Optional[str] = None):
         """Enable, disable, or toggle Spotify shuffle."""
         await self.spotify.shuffle(ctx, state=state)
@@ -245,7 +245,24 @@ class Owner(Cog):
     @commands.command(name="shutdown")
     async def shutdown(self, ctx: Context) -> None:
         """Gracefully stop Fishie so Docker can restart it."""
-        await ctx.send("Restarting Fishie...")
+        message = await ctx.send("Restarting Fishie...")
+        await self.bot.pool.execute(
+            """
+            INSERT INTO bot_restart_state (
+                singleton,
+                channel_id,
+                message_id,
+                requested_at
+            )
+            VALUES (TRUE, $1, $2, now())
+            ON CONFLICT (singleton) DO UPDATE
+            SET channel_id = EXCLUDED.channel_id,
+                message_id = EXCLUDED.message_id,
+                requested_at = EXCLUDED.requested_at
+            """,
+            message.channel.id,
+            message.id,
+        )
         await asyncio.sleep(1)
         await self.bot.close()
 
