@@ -1,0 +1,805 @@
+{
+  "version": 1,
+  "effects": [
+    {
+      "id": 1,
+      "name": "boo",
+      "display_name": "Boo",
+      "category": "clove",
+      "path": "clove/boo.mp3",
+      "duration": 0.768
+    },
+    {
+      "id": 2,
+      "name": "hello",
+      "display_name": "Hello",
+      "category": "clove",
+      "path": "clove/hello.mp3",
+      "duration": 0.432
+    },
+    {
+      "id": 3,
+      "name": "hello_2",
+      "display_name": "Hello 2",
+      "category": "clove",
+      "path": "clove/hello_2.mp3",
+      "duration": 0.552
+    },
+    {
+      "id": 4,
+      "name": "nah",
+      "display_name": "Nah",
+      "category": "clove",
+      "path": "clove/nah.mp3",
+      "duration": 0.528
+    },
+    {
+      "id": 5,
+      "name": "no_peeking",
+      "display_name": "No Peeking",
+      "category": "clove",
+      "path": "clove/no_peeking.mp3",
+      "duration": 0.912
+    },
+    {
+      "id": 6,
+      "name": "nope",
+      "display_name": "Nope",
+      "category": "clove",
+      "path": "clove/nope.mp3",
+      "duration": 0.432
+    },
+    {
+      "id": 7,
+      "name": "sorry",
+      "display_name": "Sorry",
+      "category": "clove",
+      "path": "clove/sorry.mp3",
+      "duration": 0.528
+    },
+    {
+      "id": 8,
+      "name": "thank_you",
+      "display_name": "Thank You",
+      "category": "clove",
+      "path": "clove/thank_you.mp3",
+      "duration": 0.528
+    },
+    {
+      "id": 9,
+      "name": "ultimate",
+      "display_name": "Ultimate",
+      "category": "clove",
+      "path": "clove/ultimate.mp3",
+      "duration": 4.008
+    },
+    {
+      "id": 10,
+      "name": "ultimate_enemy",
+      "display_name": "Ultimate Enemy",
+      "category": "clove",
+      "path": "clove/ultimate_enemy.mp3",
+      "duration": 3.912
+    },
+    {
+      "id": 11,
+      "name": "yeah",
+      "display_name": "Yeah",
+      "category": "clove",
+      "path": "clove/yeah.mp3",
+      "duration": 0.36
+    },
+    {
+      "id": 12,
+      "name": "808_boom",
+      "display_name": "808 Boom",
+      "category": "misc",
+      "path": "misc/808_boom.mp3",
+      "duration": 1.437
+    },
+    {
+      "id": 13,
+      "name": "among_us_role_reveal",
+      "display_name": "Among Us Role Reveal",
+      "category": "misc",
+      "path": "misc/among_us_role_reveal.mp3",
+      "duration": 4.624
+    },
+    {
+      "id": 14,
+      "name": "anime_wow",
+      "display_name": "Anime Wow",
+      "category": "misc",
+      "path": "misc/anime_wow.mp3",
+      "duration": 4.206
+    },
+    {
+      "id": 15,
+      "name": "applepay",
+      "display_name": "Applepay",
+      "category": "misc",
+      "path": "misc/applepay.mp3",
+      "duration": 1.437
+    },
+    {
+      "id": 16,
+      "name": "awkward_moment",
+      "display_name": "Awkward Moment",
+      "category": "misc",
+      "path": "misc/awkward_moment.mp3",
+      "duration": 1.489
+    },
+    {
+      "id": 17,
+      "name": "bass_drop",
+      "display_name": "Bass Drop",
+      "category": "misc",
+      "path": "misc/bass_drop.mp3",
+      "duration": 3.336
+    },
+    {
+      "id": 18,
+      "name": "bone_crack",
+      "display_name": "Bone Crack",
+      "category": "misc",
+      "path": "misc/bone_crack.mp3",
+      "duration": 1.097
+    },
+    {
+      "id": 19,
+      "name": "camera_flash",
+      "display_name": "Camera Flash",
+      "category": "misc",
+      "path": "misc/camera_flash.mp3",
+      "duration": 2.064
+    },
+    {
+      "id": 20,
+      "name": "chicken_jockey",
+      "display_name": "Chicken Jockey",
+      "category": "misc",
+      "path": "misc/chicken_jockey.mp3",
+      "duration": 2.403
+    },
+    {
+      "id": 21,
+      "name": "clip_1",
+      "display_name": "Clip 1",
+      "category": "misc",
+      "path": "misc/clip_1.mp3",
+      "duration": 8.281
+    },
+    {
+      "id": 22,
+      "name": "clip_2",
+      "display_name": "Clip 2",
+      "category": "misc",
+      "path": "misc/clip_2.mp3",
+      "duration": 1.593
+    },
+    {
+      "id": 23,
+      "name": "clip_3",
+      "display_name": "Clip 3",
+      "category": "misc",
+      "path": "misc/clip_3.mp3",
+      "duration": 2.952
+    },
+    {
+      "id": 24,
+      "name": "cute_vine_boom",
+      "display_name": "Cute Vine Boom",
+      "category": "misc",
+      "path": "misc/cute_vine_boom.mp3",
+      "duration": 2.821
+    },
+    {
+      "id": 25,
+      "name": "daddys_home",
+      "display_name": "Daddys Home",
+      "category": "misc",
+      "path": "misc/daddys_home.mp3",
+      "duration": 6.087
+    },
+    {
+      "id": 26,
+      "name": "danger_alarm",
+      "display_name": "Danger Alarm",
+      "category": "misc",
+      "path": "misc/danger_alarm.mp3",
+      "duration": 15.216
+    },
+    {
+      "id": 27,
+      "name": "dexter",
+      "display_name": "Dexter",
+      "category": "misc",
+      "path": "misc/dexter.mp3",
+      "duration": 10.71
+    },
+    {
+      "id": 28,
+      "name": "ding",
+      "display_name": "Ding",
+      "category": "misc",
+      "path": "misc/ding.mp3",
+      "duration": 2.978
+    },
+    {
+      "id": 29,
+      "name": "discord_join",
+      "display_name": "Discord Join",
+      "category": "misc",
+      "path": "misc/discord_join.mp3",
+      "duration": 1.306
+    },
+    {
+      "id": 30,
+      "name": "discord_notification",
+      "display_name": "Discord Notification",
+      "category": "misc",
+      "path": "misc/discord_notification.mp3",
+      "duration": 0.504
+    },
+    {
+      "id": 31,
+      "name": "dj_stop",
+      "display_name": "Dj Stop",
+      "category": "misc",
+      "path": "misc/dj_stop.mp3",
+      "duration": 1.28
+    },
+    {
+      "id": 32,
+      "name": "dog_clicker",
+      "display_name": "Dog Clicker",
+      "category": "misc",
+      "path": "misc/dog_clicker.mp3",
+      "duration": 0.731
+    },
+    {
+      "id": 33,
+      "name": "donkey_shrek",
+      "display_name": "Donkey Shrek",
+      "category": "misc",
+      "path": "misc/donkey_shrek.mp3",
+      "duration": 1.632
+    },
+    {
+      "id": 34,
+      "name": "dragging_stone",
+      "display_name": "Dragging Stone",
+      "category": "misc",
+      "path": "misc/dragging_stone.mp3",
+      "duration": 3.888
+    },
+    {
+      "id": 35,
+      "name": "dry_fart",
+      "display_name": "Dry Fart",
+      "category": "misc",
+      "path": "misc/dry_fart.mp3",
+      "duration": 0.366
+    },
+    {
+      "id": 36,
+      "name": "du_bist_gut_genug",
+      "display_name": "Du Bist Gut Genug",
+      "category": "misc",
+      "path": "misc/du_bist_gut_genug.mp3",
+      "duration": 7.34
+    },
+    {
+      "id": 37,
+      "name": "dun_dun_dun_brass",
+      "display_name": "Dun Dun Dun Brass",
+      "category": "misc",
+      "path": "misc/dun_dun_dun_brass.mp3",
+      "duration": 5.146
+    },
+    {
+      "id": 38,
+      "name": "ender_pearl",
+      "display_name": "Ender Pearl",
+      "category": "misc",
+      "path": "misc/ender_pearl.mp3",
+      "duration": 1.228
+    },
+    {
+      "id": 39,
+      "name": "error",
+      "display_name": "Error",
+      "category": "misc",
+      "path": "misc/error.mp3",
+      "duration": 1.019
+    },
+    {
+      "id": 40,
+      "name": "faaah",
+      "display_name": "Faaah",
+      "category": "misc",
+      "path": "misc/faaah.mp3",
+      "duration": 1.959
+    },
+    {
+      "id": 41,
+      "name": "fading_scream",
+      "display_name": "Fading Scream",
+      "category": "misc",
+      "path": "misc/fading_scream.mp3",
+      "duration": 5.04
+    },
+    {
+      "id": 42,
+      "name": "fail",
+      "display_name": "Fail",
+      "category": "misc",
+      "path": "misc/fail.mp3",
+      "duration": 5.068
+    },
+    {
+      "id": 43,
+      "name": "fnaf_6_scream",
+      "display_name": "Fnaf 6 Scream",
+      "category": "misc",
+      "path": "misc/fnaf_6_scream.mp3",
+      "duration": 2.403
+    },
+    {
+      "id": 44,
+      "name": "folk_valley",
+      "display_name": "Folk Valley",
+      "category": "misc",
+      "path": "misc/folk_valley.mp3",
+      "duration": 5.568
+    },
+    {
+      "id": 45,
+      "name": "glass_breaking",
+      "display_name": "Glass Breaking",
+      "category": "misc",
+      "path": "misc/glass_breaking.mp3",
+      "duration": 3.161
+    },
+    {
+      "id": 46,
+      "name": "gun_shot",
+      "display_name": "Gun Shot",
+      "category": "misc",
+      "path": "misc/gun_shot.mp3",
+      "duration": 1.728
+    },
+    {
+      "id": 47,
+      "name": "ha_got_eeem",
+      "display_name": "Ha Got Eeem",
+      "category": "misc",
+      "path": "misc/ha_got_eeem.mp3",
+      "duration": 2.22
+    },
+    {
+      "id": 48,
+      "name": "hello_im_mr_frog",
+      "display_name": "Hello Im Mr Frog",
+      "category": "misc",
+      "path": "misc/hello_im_mr_frog.mp3",
+      "duration": 2.534
+    },
+    {
+      "id": 49,
+      "name": "hello_omfg",
+      "display_name": "Hello Omfg",
+      "category": "misc",
+      "path": "misc/hello_omfg.mp3",
+      "duration": 11.494
+    },
+    {
+      "id": 50,
+      "name": "i_am_steve",
+      "display_name": "I Am Steve",
+      "category": "misc",
+      "path": "misc/i_am_steve.mp3",
+      "duration": 3.291
+    },
+    {
+      "id": 51,
+      "name": "i_just_hit_the_jackpot",
+      "display_name": "I Just Hit The Jackpot",
+      "category": "misc",
+      "path": "misc/i_just_hit_the_jackpot.mp3",
+      "duration": 16.98
+    },
+    {
+      "id": 52,
+      "name": "i_just_hit_the_jackpot_2",
+      "display_name": "I Just Hit The Jackpot 2",
+      "category": "misc",
+      "path": "misc/i_just_hit_the_jackpot_2.mp3",
+      "duration": 16.953
+    },
+    {
+      "id": 53,
+      "name": "im_about_to_bust",
+      "display_name": "Im About To Bust",
+      "category": "misc",
+      "path": "misc/im_about_to_bust.mp3",
+      "duration": 31.608
+    },
+    {
+      "id": 54,
+      "name": "its_mr",
+      "display_name": "Its Mr",
+      "category": "misc",
+      "path": "misc/its_mr.mp3",
+      "duration": 8.15
+    },
+    {
+      "id": 55,
+      "name": "law_order_theme",
+      "display_name": "Law Order Theme",
+      "category": "misc",
+      "path": "misc/law_order_theme.mp3",
+      "duration": 16.431
+    },
+    {
+      "id": 56,
+      "name": "lebronnnnn",
+      "display_name": "Lebronnnnn",
+      "category": "misc",
+      "path": "misc/lebronnnnn.mp3",
+      "duration": 2.424
+    },
+    {
+      "id": 57,
+      "name": "lego_breaking",
+      "display_name": "Lego Breaking",
+      "category": "misc",
+      "path": "misc/lego_breaking.mp3",
+      "duration": 1.698
+    },
+    {
+      "id": 58,
+      "name": "mario_jump",
+      "display_name": "Mario Jump",
+      "category": "misc",
+      "path": "misc/mario_jump.mp3",
+      "duration": 0.888
+    },
+    {
+      "id": 59,
+      "name": "metal_pipe_clang",
+      "display_name": "Metal Pipe Clang",
+      "category": "misc",
+      "path": "misc/metal_pipe_clang.mp3",
+      "duration": 2.821
+    },
+    {
+      "id": 60,
+      "name": "mission_failed",
+      "display_name": "Mission Failed",
+      "category": "misc",
+      "path": "misc/mission_failed.mp3",
+      "duration": 3.37
+    },
+    {
+      "id": 61,
+      "name": "movie",
+      "display_name": "Movie",
+      "category": "misc",
+      "path": "misc/movie.mp3",
+      "duration": 0.864
+    },
+    {
+      "id": 62,
+      "name": "nothing_bad_ever_happens",
+      "display_name": "Nothing Bad Ever Happens",
+      "category": "misc",
+      "path": "misc/nothing_bad_ever_happens.mp3",
+      "duration": 5.172
+    },
+    {
+      "id": 63,
+      "name": "obi_wan_hello_there",
+      "display_name": "Obi Wan Hello There",
+      "category": "misc",
+      "path": "misc/obi_wan_hello_there.mp3",
+      "duration": 1.992
+    },
+    {
+      "id": 64,
+      "name": "odyssey_trial_bow",
+      "display_name": "Odyssey Trial Bow",
+      "category": "misc",
+      "path": "misc/odyssey_trial_bow.mp3",
+      "duration": 3.135
+    },
+    {
+      "id": 65,
+      "name": "ohhhh",
+      "display_name": "Ohhhh",
+      "category": "misc",
+      "path": "misc/ohhhh.mp3",
+      "duration": 5.76
+    },
+    {
+      "id": 66,
+      "name": "oof",
+      "display_name": "Oof",
+      "category": "misc",
+      "path": "misc/oof.mp3",
+      "duration": 0.627
+    },
+    {
+      "id": 67,
+      "name": "prowler",
+      "display_name": "Prowler",
+      "category": "misc",
+      "path": "misc/prowler.mp3",
+      "duration": 3.631
+    },
+    {
+      "id": 68,
+      "name": "punch",
+      "display_name": "Punch",
+      "category": "misc",
+      "path": "misc/punch.mp3",
+      "duration": 1.567
+    },
+    {
+      "id": 69,
+      "name": "rat_dance",
+      "display_name": "Rat Dance",
+      "category": "misc",
+      "path": "misc/rat_dance.mp3",
+      "duration": 20.167
+    },
+    {
+      "id": 70,
+      "name": "realistic_knocking",
+      "display_name": "Realistic Knocking",
+      "category": "misc",
+      "path": "misc/realistic_knocking.mp3",
+      "duration": 9.169
+    },
+    {
+      "id": 71,
+      "name": "rizz",
+      "display_name": "Rizz",
+      "category": "misc",
+      "path": "misc/rizz.mp3",
+      "duration": 1.933
+    },
+    {
+      "id": 72,
+      "name": "roblox_death",
+      "display_name": "Roblox Death",
+      "category": "misc",
+      "path": "misc/roblox_death.mp3",
+      "duration": 1.045
+    },
+    {
+      "id": 73,
+      "name": "say_that_again",
+      "display_name": "Say That Again",
+      "category": "misc",
+      "path": "misc/say_that_again.mp3",
+      "duration": 4.704
+    },
+    {
+      "id": 74,
+      "name": "shocked",
+      "display_name": "Shocked",
+      "category": "misc",
+      "path": "misc/shocked.mp3",
+      "duration": 1.463
+    },
+    {
+      "id": 75,
+      "name": "shocked_2",
+      "display_name": "Shocked 2",
+      "category": "misc",
+      "path": "misc/shocked_2.mp3",
+      "duration": 1.584
+    },
+    {
+      "id": 76,
+      "name": "six-one",
+      "display_name": "Six-One",
+      "category": "misc",
+      "path": "misc/six-one.mp3",
+      "duration": 7.392
+    },
+    {
+      "id": 77,
+      "name": "six-seven",
+      "display_name": "Six-Seven",
+      "category": "misc",
+      "path": "misc/six-seven.mp3",
+      "duration": 1.944
+    },
+    {
+      "id": 78,
+      "name": "spiderman_song",
+      "display_name": "Spiderman Song",
+      "category": "misc",
+      "path": "misc/spiderman_song.mp3",
+      "duration": 12.434
+    },
+    {
+      "id": 79,
+      "name": "spongebob_a_few_moments_later",
+      "display_name": "Spongebob A Few Moments Later",
+      "category": "misc",
+      "path": "misc/spongebob_a_few_moments_later.mp3",
+      "duration": 2.04
+    },
+    {
+      "id": 80,
+      "name": "spongebob_fail",
+      "display_name": "Spongebob Fail",
+      "category": "misc",
+      "path": "misc/spongebob_fail.mp3",
+      "duration": 3.408
+    },
+    {
+      "id": 81,
+      "name": "steve_old_hurt",
+      "display_name": "Steve Old Hurt",
+      "category": "misc",
+      "path": "misc/steve_old_hurt.mp3",
+      "duration": 1.097
+    },
+    {
+      "id": 82,
+      "name": "tf2_pan",
+      "display_name": "Tf2 Pan",
+      "category": "misc",
+      "path": "misc/tf2_pan.mp3",
+      "duration": 0.81
+    },
+    {
+      "id": 83,
+      "name": "tutorial_music",
+      "display_name": "Tutorial Music",
+      "category": "misc",
+      "path": "misc/tutorial_music.mp3",
+      "duration": 5.088
+    },
+    {
+      "id": 84,
+      "name": "verity_greeting",
+      "display_name": "Verity Greeting",
+      "category": "misc",
+      "path": "misc/verity_greeting.mp3",
+      "duration": 7.68
+    },
+    {
+      "id": 85,
+      "name": "was_that_the_bite_of_87",
+      "display_name": "Was That The Bite Of 87",
+      "category": "misc",
+      "path": "misc/was_that_the_bite_of_87.mp3",
+      "duration": 5.355
+    },
+    {
+      "id": 86,
+      "name": "we_are_charlie_kirk_phone",
+      "display_name": "We Are Charlie Kirk Phone",
+      "category": "misc",
+      "path": "misc/we_are_charlie_kirk_phone.mp3",
+      "duration": 80.431
+    },
+    {
+      "id": 87,
+      "name": "what_da_dog_doin",
+      "display_name": "What Da Dog Doin",
+      "category": "misc",
+      "path": "misc/what_da_dog_doin.mp3",
+      "duration": 1.28
+    },
+    {
+      "id": 88,
+      "name": "whatsapp_message",
+      "display_name": "Whatsapp Message",
+      "category": "misc",
+      "path": "misc/whatsapp_message.mp3",
+      "duration": 4.676
+    },
+    {
+      "id": 89,
+      "name": "whatsapp_notification",
+      "display_name": "Whatsapp Notification",
+      "category": "misc",
+      "path": "misc/whatsapp_notification.mp3",
+      "duration": 0.862
+    },
+    {
+      "id": 90,
+      "name": "you_are_an_idiot",
+      "display_name": "You Are An Idiot",
+      "category": "misc",
+      "path": "misc/you_are_an_idiot.mp3",
+      "duration": 5.094
+    },
+    {
+      "id": 91,
+      "name": "zelda_bell",
+      "display_name": "Zelda Bell",
+      "category": "misc",
+      "path": "misc/zelda_bell.mp3",
+      "duration": 17.659
+    },
+    {
+      "id": 92,
+      "name": "junkrat_happy_valentines_day",
+      "display_name": "Junkrat Happy Valentines Day",
+      "category": "overwatch",
+      "path": "overwatch/junkrat_happy_valentines_day.mp3",
+      "duration": 2.232
+    },
+    {
+      "id": 93,
+      "name": "junkrat_happy_valentines_day_2",
+      "display_name": "Junkrat Happy Valentines Day 2",
+      "category": "overwatch",
+      "path": "overwatch/junkrat_happy_valentines_day_2.mp3",
+      "duration": 2.232
+    },
+    {
+      "id": 94,
+      "name": "lucio_billion_hit_points",
+      "display_name": "Lucio Billion Hit Points",
+      "category": "overwatch",
+      "path": "overwatch/lucio_billion_hit_points.mp3",
+      "duration": 2.4
+    },
+    {
+      "id": 95,
+      "name": "bloxy_cola",
+      "display_name": "Bloxy Cola",
+      "category": "roblox",
+      "path": "roblox/bloxy_cola.mp3",
+      "duration": 4.248
+    },
+    {
+      "id": 96,
+      "name": "can_i_have_cheeseburgers_please",
+      "display_name": "Can I Have Cheeseburgers Please",
+      "category": "roblox",
+      "path": "roblox/can_i_have_cheeseburgers_please.mp3",
+      "duration": 1.512
+    },
+    {
+      "id": 97,
+      "name": "mmm_chavez",
+      "display_name": "Mmm Chavez",
+      "category": "roblox",
+      "path": "roblox/mmm_chavez.mp3",
+      "duration": 1.44
+    },
+    {
+      "id": 98,
+      "name": "mmm_waffles",
+      "display_name": "Mmm Waffles",
+      "category": "roblox",
+      "path": "roblox/mmm_waffles.mp3",
+      "duration": 1.464
+    },
+    {
+      "id": 99,
+      "name": "turkey_gobble",
+      "display_name": "Turkey Gobble",
+      "category": "roblox",
+      "path": "roblox/turkey_gobble.mp3",
+      "duration": 0.984
+    },
+    {
+      "id": 100,
+      "name": "yum",
+      "display_name": "Yum",
+      "category": "roblox",
+      "path": "roblox/yum.mp3",
+      "duration": 0.72
+    }
+  ]
+}

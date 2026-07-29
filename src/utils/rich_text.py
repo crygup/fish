@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -38,6 +39,19 @@ _CJK_FONT = Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")
 _DEFAULT_FONT_PATHS = (
     _FONT_DIRECTORY / "NotoSans-Bold.ttf",
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+)
+_IMPACT_FONT_PATHS = tuple(
+    path
+    for path in (
+        (
+            Path(os.environ["FISH_IMPACT_FONT"])
+            if os.environ.get("FISH_IMPACT_FONT")
+            else None
+        ),
+        Path("/app/src/files/fonts/Impact.ttf"),
+        Path("/app/src/files/fonts/impact.ttf"),
+    )
+    if path is not None
 )
 _MONO_FONT_PATHS = (
     _FONT_DIRECTORY / "NotoSansMono-Regular.ttf",
@@ -189,6 +203,21 @@ def text_font(
         except OSError:
             continue
     return ImageFont.load_default()
+
+
+def impact_font_path() -> Path | None:
+    """Return a supplied Impact font path, if one is available."""
+    return next((path for path in _IMPACT_FONT_PATHS if path.is_file()), None)
+
+
+def meme_font(text: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Use Impact for Latin meme text and the normal script fallback otherwise."""
+    if not _contains_range(text, _CJK_RANGES) and impact_font_path() is not None:
+        try:
+            return ImageFont.truetype(str(impact_font_path()), size)
+        except OSError:
+            pass
+    return text_font(text, size)
 
 
 def _font_group(character: str) -> str:

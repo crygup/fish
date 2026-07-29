@@ -58,10 +58,11 @@ def test_help_uses_custom_usage_and_qualified_command_names() -> None:
     ctx = cast(Context, SimpleNamespace(get_prefix="fish "))
 
     assert command_usage(ctx, Images.cube) == (
-        "fish cube <input> [-speed 1 -clockwise]"
+        "fish cube <media> [-speed 1 -clockwise]"
     )
     assert command_usage(ctx, Images.overlay_group_image) == (
-        "fish overlay image <input> -overlay <input> [-opacity 0.7 -scale 1]"
+        "fish overlay image <media> -overlay <media> "
+        "[-opacity 70 -scale 1 -position center -x 0 -y 0 -stretch]"
     )
 
 
@@ -158,6 +159,22 @@ def test_command_help_uses_single_dash_flags() -> None:
     assert failures == []
 
 
+def test_media_effect_help_identifies_supported_media_inputs() -> None:
+    failures: list[str] = []
+    for root in Images.__cog_commands__:
+        command_set = (
+            tuple(root.walk_commands()) if isinstance(root, commands.Group) else (root,)
+        )
+        for command in command_set:
+            usage = str(command.extras.get("usage", ""))
+            if "<media>" in usage and "User/Emoji/Media URL" not in (
+                command.help or ""
+            ):
+                failures.append(command.qualified_name)
+
+    assert failures == []
+
+
 def test_standalone_media_commands_remain_text_only() -> None:
     for command in (
         Images.caption,
@@ -165,7 +182,13 @@ def test_standalone_media_commands_remain_text_only() -> None:
         Images.speed,
         Images.spin3d,
         Images.cube,
-        Images.overlay_video,
+        Images.crop_group_circle,
+        Images.crop_group_triangle,
+        Images.fade_group_in,
+        Images.fade_group_out,
+        Images.overlay_group_flag,
+        Images.overlay_group_image,
+        Images.overlay_group_video,
         Images.reverse,
         Images.convert_command,
         Images.volume,

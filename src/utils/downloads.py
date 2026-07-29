@@ -96,6 +96,51 @@ def is_discord_media_url(url: str) -> bool:
     return hostname in DISCORD_MEDIA_HOSTS
 
 
+def is_downloadable_media_page(url: str) -> bool:
+    """Return whether a URL should use the guarded yt-dlp workflow."""
+    parsed = urlsplit(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme.lower() not in {"http", "https"} or hostname not in DOWNLOAD_HOSTS:
+        return False
+    suffix = os.path.splitext(parsed.path)[1].casefold()
+    return suffix not in {
+        ".gif",
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".mp4",
+        ".webm",
+        ".mov",
+        ".mp3",
+        ".wav",
+        ".ogg",
+    }
+
+
+def download_format_selector(
+    url: str,
+    output_format: str,
+    *,
+    res_target: int,
+) -> str:
+    """Choose a yt-dlp format without rejecting X GIFs with unknown dimensions."""
+    if SOUNDCLOUD_RE.search(url) or output_format == "mp3":
+        return "bestaudio/best"
+    if INSTAGRAM_RE.search(url):
+        return "bestvideo+bestaudio/best"
+
+    selector = (
+        f"bestvideo[height<={res_target}]+bestaudio/" f"best[height<={res_target}]"
+    )
+    if TWITTER_RE.search(url):
+        # X sometimes exposes GIF posts as a single progressive MP4 whose
+        # height is unknown to yt-dlp. Without this final fallback, the height
+        # filter removes the post's only downloadable format.
+        selector += "/best"
+    return selector
+
+
 # ffmpeg filter for optimized GIF conversion:
 #   10 fps, 480px wide (AR preserved), lanczos scaling,
 #   palettegen with diff mode + 128 colors,
@@ -238,18 +283,11 @@ class Downloader:
         is_klipy = bool(KLIPY_RE.search(video))
         is_instagram = bool(INSTAGRAM_RE.search(video))
 
-        if is_audio:
-            format_selector = "bestaudio/best"
-        elif is_instagram:
-            # Some Reels expose DASH formats whose height metadata cannot be
-            # filtered reliably by yt-dlp's selector. Sort the available
-            # formats by the requested resolution instead.
-            format_selector = "bestvideo+bestaudio/best"
-        else:
-            format_selector = (
-                f"bestvideo[height<={res_target}]+bestaudio/"
-                f"best[height<={res_target}]"
-            )
+        format_selector = download_format_selector(
+            video,
+            self.format,
+            res_target=res_target,
+        )
 
         args = [
             sys.executable,
@@ -745,6 +783,47 @@ class Downloader:
                 ephemeral=self.hidden,
             )
         finally:
+            if self._job_dir is not None:
+                shutil.rmtree(self._job_dir, ignore_errors=True)
+                self._job_dir = None
+                self._cookie_file = None
+
+    async def download_for_processing(
+        self,
+        *,
+        max_bytes: int = 50 * 1024 * 1024,
+        timeout: float = 60,
+    ) -> tuple[bytes, str]:
+        """Download media for another command without sending it to Discord."""
+        DOWNLOADS_ROOT.mkdir(parents=True, exist_ok=True)
+        self.max_filesize = max_bytes
+        self._job_dir = tempfile.mkdtemp(prefix=".effect-job-", dir=DOWNLOADS_ROOT)
+        deadline = min(DOWNLOAD_TIMEOUT, max(1.0, timeout))
+        self._deadline = asyncio.get_running_loop().time() + deadline
+        file: discord.File | None = None
+        try:
+            file = await asyncio.wait_for(self._download(), timeout=deadline)
+            filename = os.path.basename(file.filename)
+
+            def read_file() -> bytes:
+                file.fp.seek(0)
+                return file.fp.read()
+
+            data = await asyncio.to_thread(read_file)
+            if len(data) > max_bytes:
+                raise DownloadError(
+                    f"This media exceeds the {max_bytes / (1024 * 1024):g} MB "
+                    "effect-processing limit."
+                )
+            return data, filename
+        except asyncio.TimeoutError as error:
+            raise DownloadError(
+                f"This media download took longer than {deadline:g} seconds."
+            ) from error
+        finally:
+            if file is not None:
+                file.close()
+            self._cleanup_output()
             if self._job_dir is not None:
                 shutil.rmtree(self._job_dir, ignore_errors=True)
                 self._job_dir = None

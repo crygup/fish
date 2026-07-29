@@ -8,9 +8,11 @@ from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import aiohttp
 import discord
+import emoji as emoji_lib
 from bs4 import BeautifulSoup
 from discord.ext import commands
 
+from .downloads import is_discord_media_url, is_downloadable_media_page
 from .functions import response_checker, to_thread
 from .regexes import TENOR_PAGE_RE
 from .vars import base_header
@@ -20,6 +22,9 @@ if TYPE_CHECKING:
 
 SVG_URL = (
     "https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/{chars}.svg"
+)
+TWEMOJI_PNG_URL = (
+    "https://raw.githubusercontent.com/jdecked/twemoji/main/" "assets/72x72/{chars}.png"
 )
 MEDIA_EXTENSIONS = (
     ".png",
@@ -39,6 +44,7 @@ MEDIA_EXTENSIONS = (
     ".flac",
     ".aac",
 )
+MESSAGE_URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 
 
 class LastfmTimeConverter(commands.Converter):
@@ -142,6 +148,24 @@ async def render_with_rsvg(blob):
 
 class TwemojiConverter(commands.Converter):
     """Converts str to twemoji bytesio"""
+
+    @staticmethod
+    def is_unicode_emoji(argument: str) -> bool:
+        matches = emoji_lib.emoji_list(argument)
+        return (
+            len(matches) == 1
+            and int(matches[0]["match_start"]) == 0
+            and int(matches[0]["match_end"]) == len(argument)
+        )
+
+    @staticmethod
+    def png_url(argument: str) -> str:
+        chars = "-".join(
+            f"{ord(character):x}"
+            for character in argument
+            if character != "\N{VARIATION SELECTOR-16}"
+        )
+        return TWEMOJI_PNG_URL.format(chars=chars)
 
     async def convert(self, ctx: Context, argument: str) -> BytesIO:
         if len(argument) >= 8:
@@ -381,11 +405,10 @@ class MediaConverter(commands.Converter[str]):
     """Converts user input into a media URL.
 
     Checks in order:
-    1. Attachments on the command message
-    2. Replied message (attachments, embeds, stickers)
-    3. Mentioned user → display avatar
-    4. Tenor link
-    5. Direct image/video URL
+    1. Explicit URL, user, or emoji argument
+    2. Attachments on the command message
+    3. Replied message media or supported URL in its content
+    4. Recent message media or supported URL in its content
     """
 
     @staticmethod
@@ -452,12 +475,43 @@ class MediaConverter(commands.Converter[str]):
             url = cls._component_media_url(component)
             if url:
                 return url
+        for sticker in getattr(message, "stickers", ()):
+            url = getattr(sticker, "url", None)
+            if cls._is_media_url(url):
+                return url
         return None
 
     @staticmethod
     def _direct_media_url(argument: str) -> str | None:
         base = argument.lower().split("?")[0]
         return argument if base.endswith(MEDIA_EXTENSIONS) else None
+
+    @staticmethod
+    def _message_urls(content: str) -> tuple[str, ...]:
+        return tuple(
+            match.group(0).rstrip(".,!?;:'\"`>]}")
+            for match in MESSAGE_URL_RE.finditer(content)
+        )
+
+    async def _message_content_media_url(
+        self,
+        ctx: Context,
+        message: discord.Message,
+    ) -> str | None:
+        for candidate in self._message_urls(message.content):
+            direct = self._direct_media_url(candidate)
+            if direct:
+                return direct
+
+            for converter in (TenorUrlConverter(), KlipyUrlConverter()):
+                try:
+                    return await converter.convert(ctx, candidate)
+                except commands.BadArgument:
+                    pass
+
+            if is_discord_media_url(candidate) or is_downloadable_media_page(candidate):
+                return candidate
+        return None
 
     async def convert(
         self,
@@ -499,6 +553,9 @@ class MediaConverter(commands.Converter[str]):
             else:
                 return emoji.url
 
+            if TwemojiConverter.is_unicode_emoji(argument):
+                return TwemojiConverter.png_url(argument)
+
         if include_message_media and ctx.message.attachments:
             url = self._attachment_url(ctx.message.attachments[0])
             if url:
@@ -515,6 +572,9 @@ class MediaConverter(commands.Converter[str]):
                 url = self._message_media_url(replied)
                 if url:
                     return url
+                url = await self._message_content_media_url(ctx, replied)
+                if url:
+                    return url
         # 2.5. scan recent messages for media
         if include_message_media and not argument:
             try:
@@ -524,15 +584,9 @@ class MediaConverter(commands.Converter[str]):
                     url = self._message_media_url(msg)
                     if url:
                         return url
-                    # also check message content for direct media URLs
-                    lowered = msg.content.lower()
-                    if any(ext in lowered for ext in MEDIA_EXTENSIONS):
-                        # find the actual URL
-                        for word in msg.content.split():
-                            if word.startswith(("http://", "https://")):
-                                base = word.lower().split("?")[0]
-                                if any(base.endswith(e) for e in MEDIA_EXTENSIONS):
-                                    return word
+                    url = await self._message_content_media_url(ctx, msg)
+                    if url:
+                        return url
             except discord.HTTPException:
                 pass
 

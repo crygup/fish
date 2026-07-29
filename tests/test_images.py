@@ -11,6 +11,7 @@ from extensions.media_effects.commands import (
     _encode_spin3d,
     _globe_frame,
     _is_klipy_media_url,
+    _normalize_effect_options,
     _parse_globe_input,
     _parse_spin3d_input,
     _positional_flag,
@@ -95,6 +96,21 @@ def test_gay_is_a_pride_flag_alias() -> None:
     assert flag == "gay"
 
 
+def test_overlay_flag_accepts_a_flag_without_explicit_media() -> None:
+    media, flag = _positional_flag("lesbian")
+
+    assert media == ""
+    assert flag == "lesbian"
+
+
+def test_overlay_flag_keeps_a_lone_media_source() -> None:
+    source = "https://example.com/image.png"
+    media, flag = _positional_flag(source)
+
+    assert media == source
+    assert flag is None
+
+
 def test_spin3d_flags_are_removed_from_media_argument() -> None:
     media, tilt, zoom, speed, clockwise = _parse_spin3d_input(
         "https://example.com/image.png -tilt -20 --zoom 2.25 -s 1.5 -c"
@@ -132,17 +148,31 @@ def test_globe_projects_texture_onto_transparent_sphere() -> None:
 
 
 @pytest.mark.parametrize(
-    ("argument", "message"),
+    ("argument", "field", "expected"),
     (
-        ("-tilt 361", "Tilt must be between"),
-        ("-zoom -3.1", "Zoom must be between"),
-        ("-speed 3.1", "Speed must be between"),
-        ("-tilt nope", "require a number"),
+        ("-tilt 361", "tilt", 360.0),
+        ("-zoom -3.1", "zoom", -3.0),
+        ("-speed 3.1", "speed", 3.0),
     ),
 )
-def test_spin3d_rejects_invalid_flags(argument: str, message: str) -> None:
-    with pytest.raises(ValueError, match=message):
-        _parse_spin3d_input(argument)
+def test_spin3d_clamps_out_of_range_flags(
+    argument: str,
+    field: str,
+    expected: float,
+) -> None:
+    _, tilt, zoom, speed, _ = _parse_spin3d_input(argument)
+    options, adjustments = _normalize_effect_options(
+        "spin3d",
+        {"tilt": tilt, "zoom": zoom, "speed": speed},
+    )
+
+    assert options[field] == expected
+    assert any(f"spin3d {field}" in adjustment for adjustment in adjustments)
+
+
+def test_spin3d_rejects_a_flag_without_a_number() -> None:
+    with pytest.raises(ValueError, match="require a number"):
+        _parse_spin3d_input("-tilt nope")
 
 
 def test_spin3d_renderer_produces_transparent_animated_gif() -> None:

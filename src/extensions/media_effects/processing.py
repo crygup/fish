@@ -16,21 +16,78 @@ from typing import Any, Callable, Literal, Sequence, cast
 import numpy as np
 from PIL import (
     Image,
+    ImageChops,
+    ImageColor,
     ImageDraw,
     ImageEnhance,
     ImageFilter,
+    ImageFont,
     ImageOps,
     UnidentifiedImageError,
 )
 
 from utils import to_thread
+from utils.rich_text import impact_font_path, meme_font, text_font
 
 MAX_FRAME_PIXELS = 25_000_000
 MAX_TOTAL_PIXELS = 150_000_000
 MAX_ANIMATION_FRAMES = 300
 MAX_MEDIA_DURATION = 180.0
 MAX_MEDIA_DIMENSION = 4096
-FFMPEG_TIMEOUT = 180
+FFMPEG_TIMEOUT = 30
+MAGIK_WORKING_SIZE = 320
+MAGIK_GIF_WORKING_SIZE = 320
+MAGIK_MAX_GIF_FRAMES = 40
+SWIRL_WORKING_SIZE = 512
+HEAVY_EFFECT_MAX_GIF_FRAMES = 40
+VIDEO_DISTORTION_SIZE = 480
+VIDEO_DISTORTION_FPS = 12
+VIDEO_SWIRL_SIZE = 360
+VIDEO_SWIRL_FPS = 10
+REFERENCE_EFFECT_SIZE = 300
+REFERENCE_EFFECT_FRAMES = 39
+REFERENCE_EFFECT_DURATION = 50
+TREMBLE_POSITIONS = (
+    (10, 5),
+    (6, 12),
+    (7, 10),
+    (9, 10),
+    (10, 5),
+    (8, 6),
+    (9, 5),
+    (10, 10),
+    (6, 9),
+    (9, 7),
+    (5, 8),
+    (6, 8),
+    (12, 11),
+    (8, 11),
+    (11, 6),
+    (8, 8),
+    (7, 6),
+    (8, 7),
+    (8, 5),
+    (6, 11),
+    (6, 6),
+    (5, 11),
+    (11, 9),
+    (12, 5),
+    (6, 11),
+    (10, 7),
+    (11, 9),
+    (10, 9),
+    (10, 10),
+    (6, 9),
+    (7, 9),
+    (9, 7),
+    (9, 12),
+    (5, 10),
+    (11, 12),
+    (10, 6),
+    (9, 7),
+    (7, 8),
+    (10, 10),
+)
 
 Image.MAX_IMAGE_PIXELS = MAX_FRAME_PIXELS
 
@@ -74,7 +131,7 @@ def _run(command: list[str], *, timeout: int = FFMPEG_TIMEOUT) -> None:
         )
     except subprocess.TimeoutExpired as error:
         raise ValueError(
-            "That effect took longer than 3 minutes. Try a shorter or smaller file."
+            "That effect took longer than 30 seconds. Try a shorter or smaller file."
         ) from error
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode("utf-8", "replace").strip().splitlines()
@@ -140,7 +197,46 @@ def _probe_path(path: str) -> MediaProbe:
     return probe
 
 
-def _load_image_frames(data: bytes) -> tuple[list[Image.Image], list[int], bool]:
+def probe_media_sync(data: bytes) -> MediaProbe:
+    with tempfile.TemporaryDirectory(prefix="fishie-media-probe-") as directory:
+        path = os.path.join(directory, "input.media")
+        Path(path).write_bytes(data)
+        return _probe_path(path)
+
+
+probe_media = to_thread(probe_media_sync)
+
+
+def _recover_edge_transparency(frame: Image.Image) -> Image.Image:
+    """Recover a GIF background that was stored opaque despite transparency metadata."""
+    if frame.getchannel("A").getextrema() != (255, 255):
+        return frame
+
+    recovered = frame.copy()
+    corners = (
+        (0, 0),
+        (recovered.width - 1, 0),
+        (0, recovered.height - 1),
+        (recovered.width - 1, recovered.height - 1),
+    )
+    for corner in corners:
+        pixel = cast(tuple[int, int, int, int], recovered.getpixel(corner))
+        if pixel[3] == 0:
+            continue
+        ImageDraw.floodfill(
+            recovered,
+            corner,
+            (0, 0, 0, 0),
+            thresh=12,
+        )
+    return recovered
+
+
+def _load_image_frames(
+    data: bytes,
+    *,
+    preserve_transparency: bool = False,
+) -> tuple[list[Image.Image], list[int], bool]:
     try:
         opened = Image.open(BytesIO(data))
     except UnidentifiedImageError as error:
@@ -155,11 +251,19 @@ def _load_image_frames(data: bytes) -> tuple[list[Image.Image], list[int], bool]
     if opened.width * opened.height * frame_count > MAX_TOTAL_PIXELS:
         raise ValueError("That animated image has too many decoded pixels.")
 
+    recover_declared_transparency = (
+        preserve_transparency
+        and opened.format == "GIF"
+        and "transparency" in opened.info
+    )
     frames: list[Image.Image] = []
     durations: list[int] = []
     for index in range(frame_count):
         opened.seek(index)
-        frames.append(opened.convert("RGBA"))
+        frame = opened.convert("RGBA")
+        if recover_declared_transparency:
+            frame = _recover_edge_transparency(frame)
+        frames.append(frame)
         durations.append(max(20, int(opened.info.get("duration") or 100)))
     return frames, durations, frame_count > 1
 
@@ -170,21 +274,85 @@ def _save_frames(
     *,
     filename: str,
     jpeg_quality: int | None = None,
+    per_frame_palette: bool = False,
 ) -> EffectResult:
     if not frames:
         raise ValueError("The effect did not produce any frames.")
     output = BytesIO()
     if len(frames) > 1:
-        frames[0].save(
-            output,
-            "GIF",
-            save_all=True,
-            append_images=frames[1:],
-            duration=durations,
-            loop=0,
-            disposal=2,
-            optimize=False,
-        )
+        # Pillow can produce malformed frame rectangles when a GIF ends on a
+        # completely transparent frame and may merge intentional duplicate
+        # frames. Let ffmpeg build one shared palette and encode full frames.
+        # This keeps the requested timing and avoids stale palette artifacts.
+        with tempfile.TemporaryDirectory(prefix="fishie-gif-") as temp:
+            temp_path = Path(temp)
+            manifest = ["ffconcat version 1.0"]
+            for index, (frame, frame_duration) in enumerate(zip(frames, durations)):
+                frame_name = f"{index:04d}.png"
+                frame.convert("RGBA").save(temp_path / frame_name, "PNG")
+                manifest.extend(
+                    (
+                        f"file '{frame_name}'",
+                        "option framerate 100",
+                        f"duration {frame_duration / 1_000:.6f}",
+                    )
+                )
+            # The concat demuxer applies the final duration only when the last
+            # file is repeated. Limit output to the real frame count so the
+            # repeated frame is not encoded.
+            manifest.extend(
+                (
+                    f"file '{len(frames) - 1:04d}.png'",
+                    "option framerate 100",
+                )
+            )
+            manifest_path = temp_path / "frames.ffconcat"
+            manifest_path.write_text("\n".join(manifest) + "\n")
+            gif_path = temp_path / "output.gif"
+            palette_options = (
+                "reserve_transparent=1:"
+                "transparency_color=ffffff:"
+                "stats_mode=single"
+                if per_frame_palette
+                else "reserve_transparent=1:transparency_color=ffffff"
+            )
+            paletteuse_options = (
+                "alpha_threshold=128:dither=sierra2_4a:new=1"
+                if per_frame_palette
+                else "alpha_threshold=128:dither=none"
+            )
+            _run(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(manifest_path),
+                    "-filter_complex",
+                    (
+                        "[0:v]split[palette_input][video_input];"
+                        f"[palette_input]palettegen={palette_options}[palette];"
+                        f"[video_input][palette]paletteuse={paletteuse_options}"
+                    ),
+                    "-frames:v",
+                    str(len(frames)),
+                    "-gifflags",
+                    "-offsetting-transdiff",
+                    "-fps_mode",
+                    "vfr",
+                    "-final_delay",
+                    str(max(2, round(durations[-1] / 10))),
+                    "-loop",
+                    "0",
+                    str(gif_path),
+                ]
+            )
+            output.write(gif_path.read_bytes())
         return EffectResult(output.getvalue(), f"{filename}.gif")
 
     frame = frames[0]
@@ -230,7 +398,27 @@ def _blur(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
     radius = float(options.get("radius", 5))
     if not 0.1 <= radius <= 50:
         raise ValueError("Blur radius must be between 0.1 and 50.")
-    return frame.filter(ImageFilter.GaussianBlur(radius))
+    blur_type = str(options.get("blur_type", "gaussian")).casefold()
+    if blur_type in {"gaussian", "gauss"}:
+        return frame.filter(ImageFilter.GaussianBlur(radius))
+    if blur_type in {"box", "square"}:
+        return frame.filter(ImageFilter.BoxBlur(radius))
+    if blur_type in {"motion", "horizontal"}:
+        # Pillow kernels support 3x3 and 5x5 matrices. A 5-wide horizontal
+        # average gives the expected directional blur while keeping all modes.
+        kernel_size = 3 if radius < 1.5 else 5
+        weights = [0.0] * (kernel_size * kernel_size)
+        center = kernel_size // 2
+        for x in range(kernel_size):
+            weights[center * kernel_size + x] = 1 / kernel_size
+        return frame.filter(
+            ImageFilter.Kernel(
+                (kernel_size, kernel_size),
+                weights,
+                scale=1,
+            )
+        )
+    raise ValueError("Blur type must be gaussian, box, or motion.")
 
 
 def _crop_shape(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
@@ -279,6 +467,285 @@ def _deepfry(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
 
 def _grayscale(frame: Image.Image, _: dict[str, Any]) -> Image.Image:
     return _preserve_alpha(frame, ImageOps.grayscale(frame).convert("RGB"))
+
+
+def _effect_color(value: object) -> tuple[int, int, int] | tuple[int, int, int, int]:
+    try:
+        return ImageColor.getrgb(str(value or "#5865f2"))
+    except ValueError as error:
+        raise ValueError("Color must be a CSS color name or hex value.") from error
+
+
+def _tint(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    amount = float(options.get("amount", 0.35))
+    if not 0 <= amount <= 1:
+        raise ValueError("Tint amount must be between 0 and 1.")
+    overlay = Image.new("RGB", frame.size, _effect_color(options.get("color")))
+    tinted = Image.blend(frame.convert("RGB"), overlay, amount)
+    return _preserve_alpha(frame, tinted)
+
+
+def _radial_warp(
+    frame: Image.Image,
+    strength: float,
+    *,
+    mode: Literal["implode", "explode", "fisheye"],
+) -> Image.Image:
+    if not 0 <= strength <= 1:
+        raise ValueError("Strength must be between 0 and 1.")
+    source = np.asarray(frame.convert("RGBA"))
+    height, width = source.shape[:2]
+    y, x = np.indices((height, width), dtype=np.float32)
+    center_x = (width - 1) / 2
+    center_y = (height - 1) / 2
+    dx = (x - center_x) / max(1.0, width / 2)
+    dy = (y - center_y) / max(1.0, height / 2)
+    radius = np.sqrt(dx * dx + dy * dy)
+    safe_radius = np.maximum(radius, 1e-6)
+    if mode == "implode":
+        source_radius = np.power(safe_radius, max(0.1, 1 + 2.5 * strength))
+    elif mode == "explode":
+        source_radius = np.power(safe_radius, 1 / max(0.1, 1 + 2.5 * strength))
+    else:
+        source_radius = safe_radius * (
+            1 - strength * np.clip(1 - safe_radius * safe_radius, 0, 1)
+        )
+    scale = source_radius / safe_radius
+    source_x = center_x + dx * scale * max(1.0, width / 2)
+    source_y = center_y + dy * scale * max(1.0, height / 2)
+    inside = (
+        (source_x >= 0) & (source_x < width) & (source_y >= 0) & (source_y < height)
+    )
+    source_x = np.clip(np.rint(source_x), 0, width - 1).astype(np.int32)
+    source_y = np.clip(np.rint(source_y), 0, height - 1).astype(np.int32)
+    result = source[source_y, source_x].copy()
+    result[~inside] = (0, 0, 0, 0)
+    return Image.fromarray(result, "RGBA")
+
+
+def _implode(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    return _radial_warp(
+        frame,
+        float(options.get("strength", 0.5)),
+        mode="implode",
+    )
+
+
+def _explode(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    return _radial_warp(
+        frame,
+        float(options.get("strength", 0.5)),
+        mode="explode",
+    )
+
+
+def _fisheye(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    return _radial_warp(
+        frame,
+        float(options.get("strength", 0.65)),
+        mode="fisheye",
+    )
+
+
+def _sharpen(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    amount = float(options.get("amount", 2))
+    if not 0 <= amount <= 5:
+        raise ValueError("Sharpen amount must be between 0 and 5.")
+    sharpened = ImageEnhance.Sharpness(frame.convert("RGB")).enhance(1 + amount)
+    return _preserve_alpha(frame, sharpened)
+
+
+def _legoify(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    size = int(options.get("size", 12))
+    if not 3 <= size <= 64:
+        raise ValueError("Lego block size must be between 3 and 64.")
+    width = max(1, math.ceil(frame.width / size))
+    height = max(1, math.ceil(frame.height / size))
+    blocks = frame.resize((width, height), Image.Resampling.BOX).convert("RGBA")
+    result = blocks.resize(frame.size, Image.Resampling.NEAREST)
+    draw = ImageDraw.Draw(result, "RGBA")
+    radius = max(1, size // 4)
+    for y in range(size // 2, frame.height, size):
+        for x in range(size // 2, frame.width, size):
+            color = cast(
+                tuple[int, int, int, int],
+                result.getpixel((min(x, frame.width - 1), min(y, frame.height - 1))),
+            )
+            if color[3] == 0:
+                continue
+            highlight = tuple(min(255, channel + 35) for channel in color[:3]) + (
+                color[3],
+            )
+            draw.ellipse(
+                (x - radius, y - radius, x + radius, y + radius),
+                fill=highlight,
+            )
+    return result
+
+
+def _sepia(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    amount = float(options.get("amount", 1))
+    if not 0 <= amount <= 1:
+        raise ValueError("Sepia amount must be between 0 and 1.")
+    rgb = np.asarray(frame.convert("RGB"), dtype=np.float32)
+    matrix = np.asarray(
+        ((0.393, 0.769, 0.189), (0.349, 0.686, 0.168), (0.272, 0.534, 0.131)),
+        dtype=np.float32,
+    )
+    sepia = np.clip(rgb @ matrix.T, 0, 255)
+    mixed = np.clip(rgb * (1 - amount) + sepia * amount, 0, 255).astype(np.uint8)
+    return _preserve_alpha(frame, Image.fromarray(mixed, "RGB"))
+
+
+def _pixelate(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    size = int(options.get("size", 12))
+    if not 2 <= size <= 128:
+        raise ValueError("Pixel size must be between 2 and 128.")
+    width = max(1, math.ceil(frame.width / size))
+    height = max(1, math.ceil(frame.height / size))
+    return frame.resize((width, height), Image.Resampling.BOX).resize(
+        frame.size,
+        Image.Resampling.NEAREST,
+    )
+
+
+def _vignette(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    amount = float(options.get("amount", 0.65))
+    if not 0 <= amount <= 1:
+        raise ValueError("Vignette amount must be between 0 and 1.")
+    array = np.asarray(frame.convert("RGBA"), dtype=np.float32)
+    height, width = array.shape[:2]
+    y, x = np.indices((height, width), dtype=np.float32)
+    distance = np.sqrt(
+        ((x - (width - 1) / 2) / max(1, width / 2)) ** 2
+        + ((y - (height - 1) / 2) / max(1, height / 2)) ** 2
+    )
+    factor = np.clip(1 - amount * np.clip(distance, 0, 1) ** 2, 0, 1)
+    array[:, :, :3] *= factor[:, :, None]
+    return Image.fromarray(np.clip(array, 0, 255).astype(np.uint8), "RGBA")
+
+
+def _resize(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    scale = float(options.get("scale", 1))
+    if not 0.1 <= scale <= 4:
+        raise ValueError("Resize scale must be between 0.1 and 4.")
+    ratio = str(options.get("ratio", "")).strip()
+    target = frame
+    if ratio:
+        separator = ":" if ":" in ratio else "/"
+        try:
+            ratio_width, ratio_height = (
+                float(part) for part in ratio.split(separator, 1)
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("Ratio must look like 16:9 or 1:1.") from error
+        if ratio_width <= 0 or ratio_height <= 0:
+            raise ValueError("Ratio values must be positive.")
+        current_area = max(1, frame.width * frame.height)
+        target_width = max(
+            1, round(math.sqrt(current_area * ratio_width / ratio_height))
+        )
+        target_height = max(1, round(target_width * ratio_height / ratio_width))
+        target = ImageOps.fit(
+            frame,
+            (target_width, target_height),
+            Image.Resampling.LANCZOS,
+        )
+    return target.resize(
+        (
+            max(1, round(target.width * scale)),
+            max(1, round(target.height * scale)),
+        ),
+        Image.Resampling.LANCZOS,
+    )
+
+
+def _distort(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    amount = float(options.get("amount", 0.25))
+    if not -1 <= amount <= 1:
+        raise ValueError("Distort amount must be between -1 and 1.")
+    shift = frame.width * amount
+    return frame.transform(
+        frame.size,
+        Image.Transform.AFFINE,
+        (1, amount, -shift / 2, amount * -0.2, 1, shift * 0.1),
+        Image.Resampling.BICUBIC,
+        fillcolor=(0, 0, 0, 0),
+    )
+
+
+def _noise(
+    frame: Image.Image, options: dict[str, Any], *, monochrome: bool
+) -> Image.Image:
+    amount = float(options.get("amount", 20))
+    if not 0 <= amount <= 100:
+        raise ValueError("Noise amount must be between 0 and 100.")
+    array = np.asarray(frame.convert("RGBA"), dtype=np.int16)
+    rng = np.random.default_rng(0)
+    shape = (*array.shape[:2], 1 if monochrome else 3)
+    generated = rng.normal(0, amount, shape)
+    array[:, :, :3] = np.clip(array[:, :, :3] + generated, 0, 255)
+    return Image.fromarray(array.astype(np.uint8), "RGBA")
+
+
+def _grain(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    return _noise(frame, options, monochrome=True)
+
+
+def _color_noise(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    return _noise(frame, options, monochrome=False)
+
+
+def _rotate(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    degrees = float(options.get("degrees", 90))
+    if not -3600 <= degrees <= 3600:
+        raise ValueError("Rotation must be between -3600 and 3600 degrees.")
+    return frame.rotate(
+        -degrees,
+        Image.Resampling.BICUBIC,
+        expand=True,
+        fillcolor=(0, 0, 0, 0),
+    )
+
+
+def _brightness(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    amount = float(options.get("amount", 1))
+    if not 0 <= amount <= 4:
+        raise ValueError("Brightness must be between 0 and 4.")
+    return _preserve_alpha(
+        frame,
+        ImageEnhance.Brightness(frame.convert("RGB")).enhance(amount),
+    )
+
+
+def _contrast(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    amount = float(options.get("amount", 1))
+    if not 0 <= amount <= 4:
+        raise ValueError("Contrast must be between 0 and 4.")
+    return _preserve_alpha(
+        frame,
+        ImageEnhance.Contrast(frame.convert("RGB")).enhance(amount),
+    )
+
+
+def _saturation(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    amount = float(options.get("amount", 1))
+    if not 0 <= amount <= 4:
+        raise ValueError("Saturation must be between 0 and 4.")
+    return _preserve_alpha(
+        frame,
+        ImageEnhance.Color(frame.convert("RGB")).enhance(amount),
+    )
+
+
+def _exposure(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    stops = float(options.get("stops", 0))
+    if not -5 <= stops <= 5:
+        raise ValueError("Exposure must be between -5 and 5 stops.")
+    return _preserve_alpha(
+        frame,
+        ImageEnhance.Brightness(frame.convert("RGB")).enhance(2**stops),
+    )
 
 
 def _mirror(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
@@ -347,10 +814,10 @@ def _seam_energy(array: np.ndarray) -> np.ndarray:
     return energy.astype(np.float64)
 
 
-def _remove_vertical_seam(array: np.ndarray) -> np.ndarray:
+def _find_vertical_seam(array: np.ndarray) -> np.ndarray:
     height, width = array.shape[:2]
     if width <= 2:
-        return array
+        return np.zeros(height, dtype=np.int32)
     energy = _seam_energy(array)
     cost = energy.copy()
     directions = np.zeros((height, width), dtype=np.int8)
@@ -372,10 +839,20 @@ def _remove_vertical_seam(array: np.ndarray) -> np.ndarray:
     seam[-1] = int(np.argmin(cost[-1]))
     for row in range(height - 1, 0, -1):
         seam[row - 1] = seam[row] + int(directions[row, seam[row]])
+    return seam
 
+
+def _remove_vertical_path(array: np.ndarray, seam: np.ndarray) -> np.ndarray:
+    height, width = array.shape[:2]
     keep = np.ones((height, width), dtype=bool)
     keep[np.arange(height), seam] = False
-    return array[keep].reshape(height, width - 1, array.shape[2])
+    return array[keep].reshape((height, width - 1, *array.shape[2:]))
+
+
+def _remove_vertical_seam(array: np.ndarray) -> np.ndarray:
+    if array.shape[1] <= 2:
+        return array
+    return _remove_vertical_path(array, _find_vertical_seam(array))
 
 
 def _carve_to(array: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -389,15 +866,61 @@ def _carve_to(array: np.ndarray, width: int, height: int) -> np.ndarray:
     return array
 
 
-def _magik_working_frame(frame: Image.Image) -> tuple[Image.Image, tuple[int, int]]:
+def _carve_coordinate_map(
+    reference: np.ndarray,
+    width: int,
+    height: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build one content-aware coordinate map that can be reused across GIF frames."""
+    current = reference
+    coordinates = cast(
+        np.ndarray[Any, np.dtype[np.int32]],
+        np.indices(reference.shape[:2], dtype=np.int32),
+    )
+    source_y = coordinates[0]
+    source_x = coordinates[1]
+    while current.shape[1] > width:
+        seam = _find_vertical_seam(current)
+        current = _remove_vertical_path(current, seam)
+        source_x = _remove_vertical_path(source_x, seam)
+        source_y = _remove_vertical_path(source_y, seam)
+    if current.shape[0] > height:
+        current = np.transpose(current, (1, 0, 2))
+        source_x = source_x.T
+        source_y = source_y.T
+        while current.shape[1] > height:
+            seam = _find_vertical_seam(current)
+            current = _remove_vertical_path(current, seam)
+            source_x = _remove_vertical_path(source_x, seam)
+            source_y = _remove_vertical_path(source_y, seam)
+        source_x = source_x.T
+        source_y = source_y.T
+    return source_x, source_y
+
+
+def _magik_working_frame(
+    frame: Image.Image,
+    max_size: int = MAGIK_WORKING_SIZE,
+) -> tuple[Image.Image, tuple[int, int]]:
     original_size = frame.size
-    working = ImageOps.contain(frame, (384, 384), Image.Resampling.LANCZOS)
+    # Seam carving is much more expensive than ordinary resizing. Work on a
+    # compact copy and never upscale small inputs only to carve them again.
+    working = frame.copy()
+    working.thumbnail(
+        (max_size, max_size),
+        Image.Resampling.LANCZOS,
+    )
     return working.convert("RGBA"), original_size
 
 
-def _liquid_rescale(frame: Image.Image, strength: float) -> Image.Image:
+def _liquid_rescale(
+    frame: Image.Image,
+    strength: float,
+    *,
+    working_size: int = MAGIK_WORKING_SIZE,
+) -> Image.Image:
     ratio = _magik_ratio(strength)
-    working, original_size = _magik_working_frame(frame)
+    working, original_size = _magik_working_frame(frame, working_size)
     array = np.asarray(working).copy()
     target_width = max(2, round(array.shape[1] * ratio))
     target_height = max(2, round(array.shape[0] * ratio))
@@ -407,6 +930,39 @@ def _liquid_rescale(frame: Image.Image, strength: float) -> Image.Image:
         Image.Resampling.LANCZOS,
     )
     return result.resize(original_size, Image.Resampling.LANCZOS)
+
+
+def _liquid_rescale_frames(
+    frames: list[Image.Image],
+    strength: float,
+    *,
+    working_size: int,
+) -> list[Image.Image]:
+    """Apply one stable seam map to every frame of an animated image."""
+    if not frames:
+        return []
+
+    ratio = _magik_ratio(strength)
+    prepared = [_magik_working_frame(frame, working_size) for frame in frames]
+    reference = np.asarray(prepared[0][0]).copy()
+    target_width = max(2, round(reference.shape[1] * ratio))
+    target_height = max(2, round(reference.shape[0] * ratio))
+    source_x, source_y = _carve_coordinate_map(
+        reference,
+        target_width,
+        target_height,
+    )
+
+    output: list[Image.Image] = []
+    for working, original_size in prepared:
+        array = np.asarray(working)
+        carved = array[source_y, source_x]
+        rendered = Image.fromarray(carved, "RGBA").resize(
+            working.size,
+            Image.Resampling.LANCZOS,
+        )
+        output.append(rendered.resize(original_size, Image.Resampling.LANCZOS))
+    return output
 
 
 def _liquid_rescale_sequence(
@@ -433,7 +989,15 @@ def _liquid_rescale_sequence(
 def _swirl_frame(frame: Image.Image, strength: float) -> Image.Image:
     if not -720 <= strength <= 720:
         raise ValueError("Swirl strength must be between -720 and 720 degrees.")
-    source = np.asarray(frame)
+    original_size = frame.size
+    working = frame
+    if max(frame.size) > SWIRL_WORKING_SIZE:
+        working = frame.copy()
+        working.thumbnail(
+            (SWIRL_WORKING_SIZE, SWIRL_WORKING_SIZE),
+            Image.Resampling.LANCZOS,
+        )
+    source = np.asarray(working)
     height, width = source.shape[:2]
     y, x = np.indices((height, width), dtype=np.float32)
     center_x = (width - 1) / 2
@@ -448,7 +1012,30 @@ def _swirl_frame(frame: Image.Image, strength: float) -> Image.Image:
     source_y = center_y + radius * np.sin(angle)
     source_x = np.clip(np.rint(source_x), 0, width - 1).astype(np.int32)
     source_y = np.clip(np.rint(source_y), 0, height - 1).astype(np.int32)
-    return Image.fromarray(source[source_y, source_x], "RGBA")
+    result = Image.fromarray(source[source_y, source_x], "RGBA")
+    if result.size != original_size:
+        result = result.resize(original_size, Image.Resampling.LANCZOS)
+    return result
+
+
+def _sample_heavy_animation(
+    frames: list[Image.Image],
+    durations: list[int],
+    *,
+    max_frames: int = HEAVY_EFFECT_MAX_GIF_FRAMES,
+) -> tuple[list[Image.Image], list[int]]:
+    """Bound expensive per-frame effects while preserving total GIF timing."""
+    if len(frames) <= max_frames:
+        return frames, durations
+
+    edges = [round(index * len(frames) / max_frames) for index in range(max_frames + 1)]
+    sampled_frames: list[Image.Image] = []
+    sampled_durations: list[int] = []
+    for start, end in zip(edges, edges[1:]):
+        end = max(start + 1, end)
+        sampled_frames.append(frames[start])
+        sampled_durations.append(sum(durations[start:end]))
+    return sampled_frames, sampled_durations
 
 
 def _overlay(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
@@ -482,11 +1069,511 @@ def _overlay(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
     )
     second.putalpha(alpha)
     result = frame.copy()
+    position = str(options.get("position", "center")).casefold().replace("_", "-")
+    positions = {
+        "center": (
+            (frame.width - second.width) // 2,
+            (frame.height - second.height) // 2,
+        ),
+        "top-left": (0, 0),
+        "top": ((frame.width - second.width) // 2, 0),
+        "top-right": (frame.width - second.width, 0),
+        "left": (0, (frame.height - second.height) // 2),
+        "right": (frame.width - second.width, (frame.height - second.height) // 2),
+        "bottom-left": (0, frame.height - second.height),
+        "bottom": ((frame.width - second.width) // 2, frame.height - second.height),
+        "bottom-right": (
+            frame.width - second.width,
+            frame.height - second.height,
+        ),
+    }
+    if position not in positions:
+        raise ValueError(
+            "Overlay position must be center, top, bottom, left, right, "
+            "or a corner such as top-left."
+        )
+    base_x, base_y = positions[position]
+    base_x += int(options.get("x", 0))
+    base_y += int(options.get("y", 0))
     result.alpha_composite(
         second,
-        ((frame.width - second.width) // 2, (frame.height - second.height) // 2),
+        (base_x, base_y),
     )
     return result
+
+
+def _hue_rotate(frame: Image.Image, degrees: float) -> Image.Image:
+    rgba = frame.convert("RGBA")
+    hsv = np.asarray(rgba.convert("HSV"), dtype=np.uint16)
+    hsv[:, :, 0] = (hsv[:, :, 0] + round(degrees * 255 / 360)) % 256
+    rotated = Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGBA")
+    rotated.putalpha(rgba.getchannel("A"))
+    return rotated
+
+
+def _offset_frame(frame: Image.Image, x: int, y: int) -> Image.Image:
+    result = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    result.alpha_composite(frame, (x, y))
+    return result
+
+
+def _reference_frame(frame: Image.Image) -> Image.Image:
+    return ImageOps.fit(
+        frame.convert("RGBA"),
+        (REFERENCE_EFFECT_SIZE, REFERENCE_EFFECT_SIZE),
+        Image.Resampling.LANCZOS,
+    )
+
+
+def _wrap_frame(frame: Image.Image, x: int = 0, y: int = 0) -> Image.Image:
+    return Image.fromarray(
+        np.roll(
+            np.roll(np.asarray(frame.convert("RGBA")), y, axis=0),
+            x,
+            axis=1,
+        ),
+        "RGBA",
+    )
+
+
+def _zoom_frame(frame: Image.Image, amount: float) -> Image.Image:
+    if amount <= 0:
+        raise ValueError("Zoom must be greater than 0.")
+    width = max(1, round(frame.width * amount))
+    height = max(1, round(frame.height * amount))
+    scaled = frame.resize((width, height), Image.Resampling.LANCZOS)
+    if amount >= 1:
+        left = (width - frame.width) // 2
+        top = (height - frame.height) // 2
+        return scaled.crop((left, top, left + frame.width, top + frame.height))
+    result = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    result.alpha_composite(
+        scaled, ((frame.width - width) // 2, (frame.height - height) // 2)
+    )
+    return result
+
+
+def _recursive_zoom_frame(
+    frame: Image.Image,
+    amount: float,
+    *,
+    scale: float = 0.1,
+) -> Image.Image:
+    """Render each recursive zoom level directly from the source.
+
+    Scaling one already-composited frame repeatedly causes every nested copy
+    to soften as the animation advances. Drawing each level from the original
+    keeps the moving image as sharp as the source allows.
+    """
+
+    result = _zoom_frame(frame, amount)
+    level_scale = amount * scale
+    while level_scale * min(frame.size) >= 1:
+        width = max(1, round(frame.width * level_scale))
+        height = max(1, round(frame.height * level_scale))
+        nested = frame.resize((width, height), Image.Resampling.LANCZOS)
+        result.alpha_composite(
+            nested,
+            ((frame.width - width) // 2, (frame.height - height) // 2),
+        )
+        level_scale *= scale
+    return result
+
+
+def _warp_to_quad(
+    texture: Image.Image,
+    size: tuple[int, int],
+    quad: Sequence[tuple[float, float]],
+) -> Image.Image:
+    width, height = texture.size
+    source = (
+        (0.0, 0.0),
+        (width - 1.0, 0.0),
+        (width - 1.0, height - 1.0),
+        (0.0, height - 1.0),
+    )
+    coefficients = _perspective_coefficients(quad, source)
+    warped = texture.transform(
+        size,
+        Image.Transform.PERSPECTIVE,
+        coefficients,
+        Image.Resampling.BICUBIC,
+        fillcolor=(0, 0, 0, 0),
+    )
+    polygon_mask = Image.new("L", size, 0)
+    ImageDraw.Draw(polygon_mask).polygon(list(quad), fill=255)
+    alpha = ImageChops.multiply(warped.getchannel("A"), polygon_mask)
+    warped.putalpha(alpha)
+    return warped
+
+
+def _hallway_pattern(frame: Image.Image, progress: float = 0.0) -> Image.Image:
+    size = frame.size
+    center_x = frame.width / 2
+    center_y = frame.height / 2
+    ratio = 0.65
+    endpoint_scale = 0.1
+    phase_scale = ratio ** (-progress)
+    scales = [phase_scale / ratio]
+    while scales[-1] * ratio > endpoint_scale:
+        scales.append(scales[-1] * ratio)
+    scales.append(endpoint_scale)
+    rectangles: list[tuple[float, float, float, float]] = []
+    for scale in scales:
+        half_width = frame.width * scale / 2
+        half_height = frame.height * scale / 2
+        rectangles.append(
+            (
+                center_x - half_width,
+                center_y - half_height,
+                center_x + half_width,
+                center_y + half_height,
+            )
+        )
+
+    # Begin with an opaque source layer so perspective rounding at the outer
+    # edges cannot leave transparent wedges. Only the fixed endpoint below is
+    # intentionally transparent.
+    result = frame.copy()
+    for outer, inner in zip(rectangles, rectangles[1:]):
+        left, top, right, bottom = outer
+        inner_left, inner_top, inner_right, inner_bottom = inner
+        quads = (
+            (
+                (left, top),
+                (right, top),
+                (inner_right, inner_top),
+                (inner_left, inner_top),
+            ),
+            (
+                (inner_left, inner_bottom),
+                (inner_right, inner_bottom),
+                (right, bottom),
+                (left, bottom),
+            ),
+            (
+                (left, top),
+                (inner_left, inner_top),
+                (inner_left, inner_bottom),
+                (left, bottom),
+            ),
+            (
+                (inner_right, inner_top),
+                (right, top),
+                (right, bottom),
+                (inner_right, inner_bottom),
+            ),
+        )
+        textures = (
+            frame,
+            ImageOps.flip(frame),
+            frame.rotate(90, expand=False),
+            frame.rotate(-90, expand=False),
+        )
+        for texture, quad in zip(textures, quads):
+            result.alpha_composite(_warp_to_quad(texture, size, quad))
+
+    # The reference animation ends in a fixed transparent opening instead of
+    # filling the vanishing point with another increasingly blurry copy.
+    hole_width = max(1, round(frame.width * endpoint_scale))
+    hole_height = max(1, round(frame.height * endpoint_scale))
+    hole = Image.new("L", size, 255)
+    ImageDraw.Draw(hole).rectangle(
+        (
+            (frame.width - hole_width) // 2,
+            (frame.height - hole_height) // 2,
+            (frame.width + hole_width) // 2 - 1,
+            (frame.height + hole_height) // 2 - 1,
+        ),
+        fill=0,
+    )
+    result.putalpha(ImageChops.multiply(result.getchannel("A"), hole))
+    return result
+
+
+def _glitch_frame(frame: Image.Image, index: int, amount: int) -> Image.Image:
+    if index % 5 in {0, 2, 4}:
+        return frame.copy()
+    rng = random.Random(0xF15E + index)
+    source = np.asarray(frame.convert("RGBA"))
+    result = source.copy()
+    band_count = 3 + rng.randrange(5)
+    for _ in range(band_count):
+        top = rng.randrange(0, frame.height - 4)
+        band_height = rng.randrange(4, max(5, min(55, frame.height - top)))
+        bottom = min(frame.height, top + band_height)
+        shift = rng.randint(-amount * 2, amount * 2)
+        result[top:bottom] = np.roll(result[top:bottom], shift, axis=1)
+        if rng.random() < 0.55:
+            channel_shift = rng.randrange(3)
+            result[top:bottom, :, channel_shift] = np.roll(
+                result[top:bottom, :, channel_shift],
+                rng.randint(-amount, amount),
+                axis=1,
+            )
+        if rng.random() < 0.35:
+            tint = np.asarray(
+                rng.choice(((30, 255, 30), (160, 20, 220), (0, 180, 255))),
+                dtype=np.uint16,
+            )
+            colors = result[top:bottom, :, :3].astype(np.uint16)
+            result[top:bottom, :, :3] = ((colors + tint) // 2).astype(np.uint8)
+    return Image.fromarray(result, "RGBA")
+
+
+def _animated_visual_frames(
+    source_frames: list[Image.Image],
+    durations: list[int],
+    effect: str,
+    options: dict[str, Any],
+) -> tuple[list[Image.Image], list[int]]:
+    count = max(12, min(60, int(options.get("frames", REFERENCE_EFFECT_FRAMES))))
+    speed = float(options.get("speed", 1.0))
+    if not 0.25 <= speed <= 4:
+        raise ValueError("Animation speed must be between 0.25 and 4.")
+    prepared = [_reference_frame(frame) for frame in source_frames]
+    output: list[Image.Image] = []
+    for index in range(count):
+        source_index = index % len(prepared)
+        source = prepared[source_index]
+        phase = 2 * math.pi * index / count
+        if effect == "zoom":
+            target = (
+                10.0 if options.get("forever") else float(options.get("amount", 10.0))
+            )
+            if not 1 <= target <= 12:
+                raise ValueError("Zoom must be between 1 and 12.")
+            progress = ((index + round(count * 0.795)) % count) / count
+            output.append(_recursive_zoom_frame(source, target**progress))
+        elif effect == "hallway":
+            progress = index / count
+            output.append(_hallway_pattern(source, progress))
+        elif effect == "parallax":
+            offset = -round(2 * source.width * index / count)
+            output.append(_wrap_frame(source, offset, 0))
+        elif effect == "squishy":
+            amount = float(options.get("amount", 75))
+            if amount <= 1:
+                amount = 75 * amount / 0.18
+            width = max(1, round(200 + amount * math.sin(phase)))
+            height = max(1, round(200 + amount * math.cos(phase)))
+            squished = source.resize((width, height), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", source.size, (0, 0, 0, 0))
+            canvas.alpha_composite(
+                squished,
+                ((source.width - width) // 2, (source.height - height) // 2),
+            )
+            output.append(canvas)
+        elif effect == "tremble":
+            amount = max(1, min(30, round(float(options.get("amount", 8)))))
+            size = source.width - amount * 2
+            trembled = source.resize((size, size), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", source.size, (0, 0, 0, 0))
+            if amount == 8 and count == REFERENCE_EFFECT_FRAMES:
+                position = TREMBLE_POSITIONS[index]
+            else:
+                rng = random.Random(0x7EAD + index)
+                position = (
+                    amount + rng.randint(-amount // 2, amount // 2),
+                    amount + rng.randint(-amount // 2, amount // 2),
+                )
+            canvas.alpha_composite(
+                trembled,
+                position,
+            )
+            output.append(canvas)
+        elif effect == "glitch":
+            amount = max(1, min(40, round(float(options.get("amount", 12)))))
+            output.append(_glitch_frame(source, index, amount))
+        elif effect == "quilt":
+            tile_size = max(20, min(100, int(options.get("tile_size", 60))))
+            tile = source.resize((tile_size, tile_size), Image.Resampling.LANCZOS)
+            tiled = Image.new("RGBA", source.size)
+            for y in range(0, source.height, tile_size):
+                for x in range(0, source.width, tile_size):
+                    tiled.alpha_composite(tile, (x, y))
+            offset = round(tile_size * index / count)
+            output.append(_wrap_frame(tiled, -offset, offset))
+        elif effect == "huerotate":
+            rgb = np.asarray(source.convert("RGB"), dtype=np.uint16)
+            step = index + 1
+            offsets = np.asarray(
+                (
+                    round(256 * step / count),
+                    round(512 * step / count),
+                    round(768 * step / count),
+                ),
+                dtype=np.uint16,
+            )
+            cycled = ((rgb + offsets) % 256).astype(np.uint8)
+            rotated = Image.fromarray(cycled, "RGB").convert("RGBA")
+            rotated.putalpha(source.getchannel("A"))
+            output.append(rotated)
+        else:
+            output.append(source.copy())
+    frame_duration = max(20, round(REFERENCE_EFFECT_DURATION / speed))
+    return output, [frame_duration] * count
+
+
+def _edge_crop_box(
+    frame: Image.Image,
+    *,
+    caption: bool = False,
+) -> tuple[int, int, int, int] | None:
+    rgba = frame.convert("RGBA")
+    array = np.asarray(rgba.convert("RGB"), dtype=np.float32)
+    brightness = array.mean(axis=2)
+    row_spread = array.std(axis=2).mean(axis=1)
+    if caption:
+        # Caption panels are mostly white but their text makes the row average
+        # and spread vary sharply. Treat a row as part of the panel while most
+        # of its pixels remain near-white.
+        mask = (brightness > 245).mean(axis=1) > 0.8
+    else:
+        mask = (brightness.mean(axis=1) < 12) & (row_spread < 18)
+    top = 0
+    while top < len(mask) // 2 and bool(mask[top]):
+        top += 1
+    bottom = len(mask)
+    while bottom > len(mask) // 2 and bool(mask[bottom - 1]):
+        bottom -= 1
+    if bottom - top < 2 or (top == 0 and bottom == len(mask)):
+        return None
+    return (0, top, rgba.width, bottom)
+
+
+def _remove_bars(frame: Image.Image, *, caption: bool = False) -> Image.Image:
+    rgba = frame.convert("RGBA")
+    crop_box = _edge_crop_box(rgba, caption=caption)
+    if crop_box is None:
+        return rgba
+    return rgba.crop(crop_box)
+
+
+def _stable_edge_crop_box(
+    frames: Sequence[Image.Image],
+    *,
+    caption: bool = False,
+) -> tuple[int, int, int, int] | None:
+    """Choose one crop for an entire animation.
+
+    Detecting bars independently can make adjacent frames differ by one pixel.
+    GIF and video encoders require a stable canvas, and some encoders stop at
+    the first size change. The median detected boundary tolerates those small
+    per-frame compression differences while preserving every frame.
+    """
+
+    boxes = [
+        box
+        for frame in frames
+        if (box := _edge_crop_box(frame, caption=caption)) is not None
+    ]
+    if not boxes:
+        return None
+    middle = len(boxes) // 2
+    return tuple(
+        sorted(box[coordinate] for box in boxes)[middle] for coordinate in range(4)
+    )  # type: ignore[return-value]
+
+
+def _falsecolor(frame: Image.Image) -> Image.Image:
+    gray = np.asarray(ImageOps.grayscale(frame), dtype=np.float32) / 255
+    stops = np.array(
+        ((0, 0, 32), (0, 180, 255), (255, 255, 0), (255, 32, 0)), dtype=np.float32
+    )
+    positions = np.linspace(0, 1, len(stops))
+    channels = [np.interp(gray, positions, stops[:, channel]) for channel in range(3)]
+    result = Image.fromarray(
+        np.stack(channels, axis=-1).astype(np.uint8), "RGB"
+    ).convert("RGBA")
+    result.putalpha(frame.getchannel("A"))
+    return result
+
+
+def _watercolor(frame: Image.Image) -> Image.Image:
+    softened = frame.convert("RGB").filter(ImageFilter.GaussianBlur(1.4))
+    softened = ImageEnhance.Color(softened).enhance(1.5)
+    return _preserve_alpha(frame, softened)
+
+
+def _oilpaint(frame: Image.Image) -> Image.Image:
+    # A broad median pass flattens small color variations while keeping the
+    # strong illustrated contours intact. The reference effect also lifts the
+    # shadows and softens contrast to create its painted finish.
+    painted = frame.convert("RGB").filter(ImageFilter.MedianFilter(9))
+    array = np.asarray(painted, dtype=np.float32)
+    array = np.clip(array * 0.8 + 58, 0, 255).astype(np.uint8)
+    return _preserve_alpha(frame, Image.fromarray(array, "RGB"))
+
+
+def _meme(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
+    text = str(options.get("text", "")).strip()
+    if not text:
+        raise ValueError("Meme requires text.")
+    image = frame.convert("RGBA").copy()
+    # Leave enough room for the outline while keeping the tall, condensed
+    # proportions of the usual meme font at Discord's attachment sizes.
+    size = max(18, min(96, round(image.width / 8 * 0.91)))
+    middle_text = ""
+    if "|" in text:
+        top_text, bottom_text = (part.strip() for part in text.split("|", 1))
+    else:
+        words = text.split()
+        if len(words) < 6:
+            top_text = bottom_text = ""
+            middle_text = text
+        else:
+            midpoint = max(1, len(words) // 2)
+            top_text = " ".join(words[:midpoint])
+            bottom_text = " ".join(words[midpoint:])
+
+    def draw_centered(value: str, bottom: int | None = None) -> None:
+        if not value:
+            return
+        value = value.upper()
+        font = meme_font(value, size)
+        stroke = max(3, round(size * 0.04))
+        box = font.getbbox(value, stroke_width=stroke)
+        padding = stroke + 2
+        layer = Image.new(
+            "RGBA",
+            (
+                round(box[2] - box[0] + padding * 2),
+                round(box[3] - box[1] + padding * 2),
+            ),
+            (0, 0, 0, 0),
+        )
+        layer_draw = ImageDraw.Draw(layer)
+        layer_draw.text(
+            (padding - box[0], padding - box[1]),
+            value,
+            font=font,
+            fill="white",
+            stroke_width=stroke,
+            stroke_fill="black",
+        )
+        # Impact-style meme fonts are much narrower than the general-purpose
+        # multilingual fonts available in the container. Compress only the
+        # horizontal axis so the familiar tall lettering is retained.
+        target_width = max(1, round(layer.width * 0.61))
+        if target_width > image.width - 12:
+            target_width = image.width - 12
+        layer = layer.resize((target_width, layer.height), Image.Resampling.LANCZOS)
+        x = (image.width - layer.width) // 2
+        if bottom is None:
+            y = 8
+        else:
+            y = image.height - layer.height - bottom
+        image.alpha_composite(layer, (x, y))
+
+    draw_centered(top_text)
+    if bottom_text:
+        draw_centered(bottom_text, bottom=4)
+    if middle_text:
+        font = meme_font(middle_text, size)
+        box = font.getbbox(middle_text, stroke_width=max(3, round(size * 0.04)))
+        draw_centered(middle_text, bottom=round((image.height - (box[3] - box[1])) / 2))
+    return image
 
 
 STATIC_EFFECTS: dict[str, Callable[[Image.Image, dict[str, Any]], Image.Image]] = {
@@ -499,6 +1586,33 @@ STATIC_EFFECTS: dict[str, Callable[[Image.Image, dict[str, Any]], Image.Image]] 
     "mirror": _mirror,
     "jpeg": _jpeg,
     "overlay": _overlay,
+    "tint": _tint,
+    "implode": _implode,
+    "explode": _explode,
+    "sharpen": _sharpen,
+    "legoify": _legoify,
+    "fisheye": _fisheye,
+    "sepia": _sepia,
+    "pixelate": _pixelate,
+    "vignette": _vignette,
+    "resize": _resize,
+    "distort": _distort,
+    "grain": _grain,
+    "rotate": _rotate,
+    "noise": _color_noise,
+    "brightness": _brightness,
+    "contrast": _contrast,
+    "saturation": _saturation,
+    "exposure": _exposure,
+    "removebars": lambda frame, _: _remove_bars(frame),
+    "removecaption": lambda frame, _: _remove_bars(frame, caption=True),
+    "enlarge": lambda frame, options: _resize(
+        frame, {"scale": options.get("amount", 2), "ratio": ""}
+    ),
+    "falsecolor": lambda frame, _: _falsecolor(frame),
+    "watercolor": lambda frame, _: _watercolor(frame),
+    "oilpaint": lambda frame, _: _oilpaint(frame),
+    "meme": _meme,
 }
 
 
@@ -594,9 +1708,214 @@ def _animated_distortion(
     return frames, [duration] * count
 
 
+def _fade_frames(
+    source_frames: list[Image.Image],
+    durations: list[int],
+    *,
+    fade_in: bool,
+    duration: float,
+) -> tuple[list[Image.Image], list[int]]:
+    if not 0.1 <= duration <= 10:
+        raise ValueError("Fade duration must be between 0.1 and 10 seconds.")
+    duration_ms = round(duration * 1_000)
+    generated_from_still = len(source_frames) == 1
+    if generated_from_still:
+        count = max(5, min(100, round(duration * 25)))
+        source_frames = [source_frames[0].copy() for _ in range(count)]
+        durations = [max(20, round(duration_ms / count))] * count
+    total_ms = sum(durations)
+    elapsed_ms = 0
+    output: list[Image.Image] = []
+    # GIF has one-bit transparency. Error-diffused alpha represents partial
+    # opacity without darkening the image or producing a visible checkerboard.
+    for index, (source, frame_duration) in enumerate(zip(source_frames, durations)):
+        if generated_from_still:
+            progress = index / max(1, len(source_frames) - 1)
+            opacity = progress if fade_in else 1 - progress
+        elif fade_in:
+            opacity = min(1.0, elapsed_ms / max(1, duration_ms))
+        else:
+            fade_start = max(0, total_ms - duration_ms)
+            opacity = min(
+                1.0,
+                max(
+                    0.0,
+                    (total_ms - elapsed_ms - frame_duration) / max(1, duration_ms),
+                ),
+            )
+            if elapsed_ms < fade_start:
+                opacity = 1.0
+
+        rgba = source.convert("RGBA")
+        if opacity <= 0:
+            frame = Image.new("RGBA", source.size, (0, 0, 0, 0))
+        elif opacity >= 1:
+            frame = rgba
+        else:
+            source_alpha = np.asarray(rgba.getchannel("A"), dtype=np.float32)
+            visible_alpha = np.rint(source_alpha * opacity).astype(np.uint8)
+            binary_alpha = Image.fromarray(visible_alpha, "L").convert(
+                "1",
+                dither=Image.Dither.FLOYDSTEINBERG,
+            )
+            frame = rgba.copy()
+            frame.putalpha(binary_alpha.convert("L"))
+        output.append(frame)
+        elapsed_ms += frame_duration
+    return output, durations
+
+
+def _lag_frames(
+    source_frames: list[Image.Image],
+    durations: list[int],
+    *,
+    amount: int,
+    method: str = "random",
+    multi: bool = False,
+) -> tuple[list[Image.Image], list[int]]:
+    if len(source_frames) <= 1:
+        raise ValueError("Lag requires a GIF or video, not a still image.")
+    if not 2 <= amount <= 12:
+        raise ValueError("Lag amount must be between 2 and 12.")
+    methods = ("freeze", "stutter", "drop", "jitter")
+    normalized = method.casefold().replace("_", "-")
+    if normalized not in {*methods, "random"}:
+        raise ValueError("Lag method must be random, freeze, stutter, drop, or jitter.")
+    rng = random.SystemRandom()
+    selected: list[str] = (
+        [normalized]
+        if normalized != "random"
+        else rng.sample(methods, rng.randint(2, 4) if multi else 1)
+    )
+    if multi and normalized != "random":
+        extras = [candidate for candidate in methods if candidate != normalized]
+        selected.extend(rng.sample(extras, rng.randint(1, min(2, len(extras)))))
+
+    output = [frame.convert("RGBA").copy() for frame in source_frames]
+    frame_count = len(output)
+    for selected_method in selected:
+        changed: list[Image.Image] = []
+        burst_left = 0
+        held_index = 0
+        for index, frame in enumerate(output):
+            if selected_method == "freeze":
+                if burst_left <= 0 and rng.random() < min(0.35, amount / 30):
+                    held_index = index
+                    burst_left = rng.randint(2, amount)
+                if burst_left > 0:
+                    changed.append(output[held_index].copy())
+                    burst_left -= 1
+                else:
+                    changed.append(frame.copy())
+            elif selected_method == "stutter":
+                distance = rng.randint(1, min(amount, index)) if index else 0
+                use_old = index > 0 and rng.random() < min(0.5, amount / 18)
+                changed.append(
+                    output[index - distance].copy() if use_old else frame.copy()
+                )
+            elif selected_method == "drop":
+                jump = rng.randint(1, amount) if rng.random() < amount / 24 else 0
+                changed.append(output[min(frame_count - 1, index + jump)].copy())
+            else:
+                distance = max(1, amount // 2)
+                x = rng.randint(-distance, distance)
+                y = rng.randint(-distance, distance)
+                canvas = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+                canvas.alpha_composite(frame, (x, y))
+                changed.append(canvas)
+        output = changed
+    return output, durations
+
+
+def _shuffle_frames(
+    source_frames: list[Image.Image],
+    durations: list[int],
+) -> tuple[list[Image.Image], list[int]]:
+    if len(source_frames) <= 1:
+        raise ValueError("Shuffle requires a GIF or video, not a still image.")
+    indexes = list(range(len(source_frames)))
+    random.Random(0).shuffle(indexes)
+    return [source_frames[index].copy() for index in indexes], [
+        durations[index] for index in indexes
+    ]
+
+
+def _bounce_frames(
+    source_frames: list[Image.Image],
+    durations: list[int],
+    *,
+    amount: float,
+    speed: float,
+) -> tuple[list[Image.Image], list[int]]:
+    if not 1 <= amount <= 100 or not 0.25 <= speed <= 4:
+        raise ValueError("Bounce amount must be 1 to 100 and speed 0.25 to 4.")
+    count = len(source_frames) if len(source_frames) > 1 else 20
+    output: list[Image.Image] = []
+    for index in range(count):
+        source = source_frames[index % len(source_frames)]
+        canvas = Image.new("RGBA", source.size, (0, 0, 0, 0))
+        distance = round(
+            math.sin(2 * math.pi * index / count) * min(amount, source.height / 3)
+        )
+        canvas.alpha_composite(source, (0, distance))
+        output.append(canvas)
+    generated_durations = (
+        [max(20, round(frame_duration / speed)) for frame_duration in durations]
+        if len(source_frames) > 1
+        else [max(20, round(40 / speed))] * count
+    )
+    return output, generated_durations
+
+
+def _slide_frames(
+    source_frames: list[Image.Image],
+    durations: list[int],
+    *,
+    slide_in: bool,
+    direction: str,
+    duration: float,
+) -> tuple[list[Image.Image], list[int]]:
+    if direction not in {"left", "right", "up", "down"}:
+        raise ValueError("Slide direction must be left, right, up, or down.")
+    if not 0.1 <= duration <= 10:
+        raise ValueError("Slide duration must be between 0.1 and 10 seconds.")
+    duration_ms = round(duration * 1_000)
+    generated_from_still = len(source_frames) == 1
+    if not generated_from_still:
+        count = len(source_frames)
+        generated_durations = durations
+    else:
+        count = max(5, min(100, round(duration * 25)))
+        generated_durations = [max(20, round(duration_ms / count))] * count
+    output: list[Image.Image] = []
+    elapsed_ms = 0
+    for index in range(count):
+        source = source_frames[index % len(source_frames)]
+        progress = (
+            index / max(1, count - 1)
+            if generated_from_still
+            else min(1.0, elapsed_ms / max(1, duration_ms))
+        )
+        if not slide_in:
+            progress = 1 - progress
+        if direction == "left":
+            position = (round((1 - progress) * source.width), 0)
+        elif direction == "right":
+            position = (round((progress - 1) * source.width), 0)
+        elif direction == "up":
+            position = (0, round((1 - progress) * source.height))
+        else:
+            position = (0, round((progress - 1) * source.height))
+        canvas = Image.new("RGBA", source.size, (0, 0, 0, 0))
+        canvas.alpha_composite(source, position)
+        output.append(canvas)
+        elapsed_ms += generated_durations[index]
+    return output, generated_durations
+
+
 def _perspective_coefficients(
-    destination: list[tuple[float, float]],
-    source: list[tuple[float, float]],
+    destination: Sequence[tuple[float, float]],
+    source: Sequence[tuple[float, float]],
 ) -> tuple[float, ...]:
     matrix: list[list[float]] = []
     values: list[float] = []
@@ -804,7 +2123,7 @@ def _render_textured_polyhedron(
                 )
             )
 
-    canvas = Image.new("RGBA", (size, size), "white")
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     for _, destination, points_3d in sorted(face_data, key=lambda item: item[0]):
         if len(destination) == 3:
             rendered_face = _warp_texture_triangle(
@@ -848,7 +2167,106 @@ def _shape_frames(
     return frames, [duration] * count
 
 
-def _video_filter(effect: str, options: dict[str, Any]) -> tuple[str, str]:
+def _video_swirl_filter(
+    strength: float,
+    *,
+    progress: str = "1",
+) -> str:
+    radians = math.radians(strength)
+    radius = "hypot(X-W/2,Y-H/2)"
+    falloff = f"pow(max(0,1-{radius}/(min(W,H)/2)),2)"
+    angle = f"atan2(Y-H/2,X-W/2)-({radians:g})*({progress})*({falloff})"
+    source_x = f"clip(W/2+{radius}*cos({angle}),0,W-1)"
+    source_y = f"clip(H/2+{radius}*sin({angle}),0,H-1)"
+    return (
+        _video_distortion_prefix(size=VIDEO_SWIRL_SIZE, fps=VIDEO_SWIRL_FPS)
+        + "format=rgb24,"
+        f"geq=r='r({source_x},{source_y})':"
+        f"g='g({source_x},{source_y})':"
+        f"b='b({source_x},{source_y})'"
+    )
+
+
+def _video_distortion_prefix(
+    *,
+    size: int = VIDEO_DISTORTION_SIZE,
+    fps: int = VIDEO_DISTORTION_FPS,
+) -> str:
+    return (
+        f"scale=w='min({size},iw)':"
+        f"h='min({size},ih)':"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"fps={fps},"
+    )
+
+
+def _video_magik_filter(strength: float, speed: float | None) -> str:
+    """Create a liquid warp while keeping video output as video."""
+    if not 1 <= strength <= 80:
+        raise ValueError("Magik strength must be between 1 and 80.")
+    if speed is not None and not 0.25 <= speed <= 4:
+        raise ValueError("Animation speed must be between 0.25 and 4.")
+    amount = f"min(W,H)*{strength / 900:g}"
+    phase = "0" if speed is None else f"2*PI*T*{speed:g}"
+    source_x = f"clip(X+sin(Y/max(24,H/5)+({phase}))*({amount}),0,W-1)"
+    source_y = f"clip(Y+sin(X/max(24,W/4)+({phase})+PI/2)*({amount})*0.35,0,H-1)"
+    return (
+        _video_distortion_prefix() + "format=rgb24,"
+        f"geq=r='r({source_x},{source_y})':"
+        f"g='g({source_x},{source_y})':"
+        f"b='b({source_x},{source_y})'"
+    )
+
+
+def _video_lag_filter(options: dict[str, Any]) -> str:
+    amount = int(options.get("amount", 4))
+    if not 2 <= amount <= 12:
+        raise ValueError("Lag amount must be between 2 and 12.")
+    methods = ("freeze", "stutter", "drop", "jitter")
+    method = str(options.get("method", "random")).casefold().replace("_", "-")
+    if method not in {*methods, "random"}:
+        raise ValueError("Lag method must be random, freeze, stutter, drop, or jitter.")
+    multi = bool(options.get("multi"))
+    rng = random.SystemRandom()
+    selected: list[str] = (
+        [method]
+        if method != "random"
+        else rng.sample(methods, rng.randint(2, 4) if multi else 1)
+    )
+    if multi and method != "random":
+        extras = [candidate for candidate in methods if candidate != method]
+        selected.extend(rng.sample(extras, rng.randint(1, min(2, len(extras)))))
+
+    filters: list[str] = []
+    for selected_method in selected:
+        if selected_method == "freeze":
+            filters.append(f"fps={max(2, round(30 / amount))}")
+        elif selected_method == "stutter":
+            frames = max(2, min(8, amount))
+            weights = " ".join(["1"] + ["0"] * (frames - 1))
+            filters.append(f"tmix=frames={frames}:weights='{weights}'")
+        elif selected_method == "drop":
+            chance = min(0.45, amount / 30)
+            filters.append(
+                f"select='gte(random(0),{chance:g})',setpts=N/(FRAME_RATE*TB)"
+            )
+        else:
+            distance = max(2, amount)
+            filters.append(
+                f"crop=iw-{distance * 2}:ih-{distance * 2}:"
+                f"x='{distance}+{distance}*sin(n*1.7)':"
+                f"y='{distance}+{distance}*cos(n*1.3)',"
+                f"scale=iw+{distance * 2}:ih+{distance * 2}"
+            )
+    return ",".join(filters)
+
+
+def _video_filter(
+    effect: str,
+    options: dict[str, Any],
+    *,
+    duration: float = 0,
+) -> tuple[str, str]:
     if effect == "invert":
         return "negate", "effect.mp4"
     if effect == "flip":
@@ -860,7 +2278,15 @@ def _video_filter(effect: str, options: dict[str, Any]) -> tuple[str, str]:
         radius = float(options.get("radius", 5))
         if not 0.1 <= radius <= 50:
             raise ValueError("Blur radius must be between 0.1 and 50.")
-        return f"gblur=sigma={radius:g}", "blur.mp4"
+        blur_type = str(options.get("blur_type", "gaussian")).casefold()
+        if blur_type in {"gaussian", "gauss"}:
+            return f"gblur=sigma={radius:g}", "blur.mp4"
+        if blur_type in {"box", "square"}:
+            return f"boxblur=luma_radius={radius:g}", "blur.mp4"
+        if blur_type in {"motion", "horizontal"}:
+            size = max(1, min(51, round(radius) * 2 + 1))
+            return f"avgblur=sizeX={size}:sizeY=1", "blur.mp4"
+        raise ValueError("Blur type must be gaussian, box, or motion.")
     if effect == "deepfry":
         intensity = float(options.get("intensity", 1.0))
         if not 0.25 <= intensity <= 3:
@@ -872,6 +2298,317 @@ def _video_filter(effect: str, options: dict[str, Any]) -> tuple[str, str]:
         )
     if effect == "grayscale":
         return "hue=s=0", "grayscale.mp4"
+    if effect == "magik":
+        strength = float(options.get("strength", 20))
+        return _video_magik_filter(strength, None), "magik.mp4"
+    if effect == "gifmagik":
+        strength = float(options.get("strength", 20))
+        speed = float(options.get("speed", 1))
+        return _video_magik_filter(strength, speed), "amagik.mp4"
+    if effect == "swirl":
+        strength = float(options.get("strength", 180))
+        if not -720 <= strength <= 720:
+            raise ValueError("Swirl strength must be between -720 and 720 degrees.")
+        return _video_swirl_filter(strength), "swirl.mp4"
+    if effect == "gifswirl":
+        strength = float(options.get("strength", 180))
+        speed = float(options.get("speed", 1))
+        if not -720 <= strength <= 720 or not 0.25 <= speed <= 4:
+            raise ValueError("Swirl strength must be -720 to 720 and speed 0.25 to 4.")
+        frame_total = max(1.0, duration * 30)
+        progress = f"min(1,N/{frame_total:g})*{speed:g}"
+        return _video_swirl_filter(strength, progress=progress), "aswirl.mp4"
+    if effect in {"fadein", "fadeout"}:
+        fade_duration = float(options.get("duration", 1))
+        if not 0.1 <= fade_duration <= 10:
+            raise ValueError("Fade duration must be between 0.1 and 10 seconds.")
+        start = 0 if effect == "fadein" else max(0, duration - fade_duration)
+        direction = "in" if effect == "fadein" else "out"
+        return (
+            f"fade=t={direction}:st={start:g}:d={fade_duration:g}",
+            f"{effect}.mp4",
+        )
+    if effect == "lag":
+        return _video_lag_filter(options), "lag.mp4"
+    if effect == "shuffle":
+        return "shuffleframes=2 0 3 1", "shuffle.mp4"
+    if effect == "tint":
+        color = _effect_color(options.get("color"))
+        amount = float(options.get("amount", 0.35))
+        if not 0 <= amount <= 1:
+            raise ValueError("Tint amount must be between 0 and 1.")
+        keep = 1 - amount
+        return (
+            "lutrgb="
+            f"r='val*{keep:g}+{color[0]}*{amount:g}':"
+            f"g='val*{keep:g}+{color[1]}*{amount:g}':"
+            f"b='val*{keep:g}+{color[2]}*{amount:g}'",
+            "tint.mp4",
+        )
+    if effect in {"implode", "explode", "fisheye"}:
+        strength = float(options.get("strength", 0.5))
+        if not 0 <= strength <= 1:
+            raise ValueError("Strength must be between 0 and 1.")
+        sign = -1 if effect == "implode" else 1
+        if effect == "fisheye":
+            sign = 1
+            strength = max(strength, 0.1) * 0.75
+        return (
+            f"lenscorrection=k1={sign * strength:g}:k2={sign * strength * 0.25:g}",
+            f"{effect}.mp4",
+        )
+    if effect == "sharpen":
+        amount = float(options.get("amount", 2))
+        if not 0 <= amount <= 5:
+            raise ValueError("Sharpen amount must be between 0 and 5.")
+        return f"unsharp=5:5:{amount:g}:5:5:0", "sharpen.mp4"
+    if effect in {"legoify", "pixelate"}:
+        size = int(options.get("size", 12))
+        minimum, maximum = (3, 64) if effect == "legoify" else (2, 128)
+        if not minimum <= size <= maximum:
+            raise ValueError(
+                f"{effect.title()} size must be between {minimum} and {maximum}."
+            )
+        return (
+            f"scale=iw/{size}:ih/{size}:flags=area,"
+            f"scale=iw*{size}:ih*{size}:flags=neighbor",
+            f"{effect}.mp4",
+        )
+    if effect == "bounce":
+        amount = float(options.get("amount", 20))
+        speed = float(options.get("speed", 1))
+        if not 1 <= amount <= 100 or not 0.25 <= speed <= 4:
+            raise ValueError("Bounce amount must be 1 to 100 and speed 0.25 to 4.")
+        return (
+            "format=rgba,split[fg][bg];"
+            "[bg]colorchannelmixer=aa=0[clear];"
+            f"[clear][fg]overlay=x=0:y='{amount:g}*sin(2*PI*t*{speed:g})'",
+            "bounce.mp4",
+        )
+    if effect == "sepia":
+        amount = float(options.get("amount", 1))
+        if not 0 <= amount <= 1:
+            raise ValueError("Sepia amount must be between 0 and 1.")
+        return (
+            "colorchannelmixer=" ".393:.769:.189:0:.349:.686:.168:0:.272:.534:.131",
+            "sepia.mp4",
+        )
+    if effect in {"slidein", "slideout"}:
+        direction = str(options.get("direction", "left")).casefold()
+        if direction not in {"left", "right", "up", "down"}:
+            raise ValueError("Slide direction must be left, right, up, or down.")
+        progress = (
+            f"min(1,t/{max(0.1, float(options.get('duration', 1))):g})"
+            if effect == "slidein"
+            else f"max(0,1-t/{max(0.1, float(options.get('duration', 1))):g})"
+        )
+        x = "0"
+        y = "0"
+        if direction == "left":
+            x = f"W*(1-({progress}))"
+        elif direction == "right":
+            x = f"-W*(1-({progress}))"
+        elif direction == "up":
+            y = f"H*(1-({progress}))"
+        else:
+            y = f"-H*(1-({progress}))"
+        return (
+            "format=rgba,split[fg][bg];"
+            "[bg]colorchannelmixer=aa=0[clear];"
+            f"[clear][fg]overlay=x='{x}':y='{y}'",
+            f"{effect}.mp4",
+        )
+    if effect == "vignette":
+        amount = float(options.get("amount", 0.65))
+        if not 0 <= amount <= 1:
+            raise ValueError("Vignette amount must be between 0 and 1.")
+        return f"vignette=angle={math.pi / 2 * amount:g}", "vignette.mp4"
+    if effect == "resize":
+        scale = float(options.get("scale", 1))
+        if not 0.1 <= scale <= 4:
+            raise ValueError("Resize scale must be between 0.1 and 4.")
+        filters: list[str] = []
+        ratio = str(options.get("ratio", "")).strip()
+        if ratio:
+            separator = ":" if ":" in ratio else "/"
+            try:
+                ratio_width, ratio_height = (
+                    float(part) for part in ratio.split(separator, 1)
+                )
+            except (TypeError, ValueError) as error:
+                raise ValueError("Ratio must look like 16:9 or 1:1.") from error
+            if ratio_width <= 0 or ratio_height <= 0:
+                raise ValueError("Ratio values must be positive.")
+            ratio_value = ratio_width / ratio_height
+            filters.append(
+                "crop="
+                f"'if(gt(a,{ratio_value:g}),ih*{ratio_value:g},iw)':"
+                f"'if(gt(a,{ratio_value:g}),ih,iw/{ratio_value:g})'"
+            )
+        filters.append(f"scale=trunc(iw*{scale:g}/2)*2:trunc(ih*{scale:g}/2)*2")
+        return ",".join(filters), "resize.mp4"
+    if effect == "distort":
+        amount = float(options.get("amount", 0.25))
+        if not -1 <= amount <= 1:
+            raise ValueError("Distort amount must be between -1 and 1.")
+        shift = abs(amount) * 0.45
+        if amount >= 0:
+            coordinates = (
+                f"x0=0:y0=0:x1=W:y1=H*{shift:g}:" f"x2=0:y2=H:x3=W:y3=H*(1-{shift:g})"
+            )
+        else:
+            coordinates = (
+                f"x0=0:y0=H*{shift:g}:x1=W:y1=0:" f"x2=0:y2=H*(1-{shift:g}):x3=W:y3=H"
+            )
+        return f"perspective={coordinates}:sense=destination", "distort.mp4"
+    if effect in {"grain", "noise"}:
+        amount = float(options.get("amount", 20))
+        if not 0 <= amount <= 100:
+            raise ValueError("Noise amount must be between 0 and 100.")
+        flags = "t" if effect == "grain" else "t+u"
+        return f"noise=alls={amount:g}:allf={flags}", f"{effect}.mp4"
+    if effect == "rotate":
+        degrees = float(options.get("degrees", 90))
+        if not -3600 <= degrees <= 3600:
+            raise ValueError("Rotation must be between -3600 and 3600 degrees.")
+        return (
+            f"rotate={math.radians(-degrees):g}:"
+            "ow='ceil(hypot(iw,ih)/2)*2':oh='ceil(hypot(iw,ih)/2)*2':c=black",
+            "rotate.mp4",
+        )
+    if effect in {"brightness", "contrast", "saturation"}:
+        amount = float(options.get("amount", 1))
+        if not 0 <= amount <= 4:
+            raise ValueError(f"{effect.title()} must be between 0 and 4.")
+        option = {
+            "brightness": "brightness",
+            "contrast": "contrast",
+            "saturation": "saturation",
+        }[effect]
+        value = (
+            (amount - 1 if amount <= 1 else (amount - 1) / 3)
+            if effect == "brightness"
+            else amount
+        )
+        return f"eq={option}={value:g}", f"{effect}.mp4"
+    if effect == "exposure":
+        stops = float(options.get("stops", 0))
+        if not -5 <= stops <= 5:
+            raise ValueError("Exposure must be between -5 and 5 stops.")
+        return f"eq=brightness={max(-1, min(1, 2**stops - 1)):g}", "exposure.mp4"
+    if effect == "huerotate":
+        degrees = float(options.get("degrees", 180))
+        if not -3600 <= degrees <= 3600:
+            raise ValueError("Hue rotation must be between -3600 and 3600 degrees.")
+        return f"hue=h={degrees:g}", "huerotate.mp4"
+    if effect == "zoom":
+        amount = float(options.get("amount", 2))
+        if not 1 <= amount <= 4:
+            raise ValueError("Zoom must be between 1 and 4.")
+        return (
+            f"scale=iw*{amount:g}:ih*{amount:g},crop=iw/{amount:g}:ih/{amount:g}:"
+            f"(iw-ow)/2+(iw-ow)*0.1*sin(2*PI*t):"
+            f"(ih-oh)/2+(ih-oh)*0.1*cos(2*PI*t)",
+            "zoom.mp4",
+        )
+    if effect in {"hallway", "parallax", "tremble", "glitch", "squishy", "quilt"}:
+        if effect == "quilt":
+            return "split=2[a][b];[a]hflip[af];[b][af]hstack", "quilt.mp4"
+        if effect == "hallway":
+            return (
+                "scale=iw*1.25:ih*1.25,crop=iw/1.25:ih/1.25:(iw-ow)/2:(ih-oh)/2+30*sin(2*PI*t)",
+                "hallway.mp4",
+            )
+        if effect == "parallax":
+            return (
+                "scale=iw*1.15:ih*1.15,crop=iw/1.15:ih/1.15:(iw-ow)/2+20*sin(2*PI*t):(ih-oh)/2+8*cos(2*PI*t)",
+                "parallax.mp4",
+            )
+        if effect == "tremble":
+            amount = max(1, min(30, round(float(options.get("amount", 8)))))
+            return (
+                f"crop=iw-2*{amount}:ih-2*{amount}:{amount}+{amount}*sin(40*PI*t):{amount}+{amount}*cos(37*PI*t),scale=iw:ih",
+                "tremble.mp4",
+            )
+        if effect == "glitch":
+            return "rgbashift=rh=3:rv=0:bh=-3:bv=0,noise=alls=8:allf=t+u", "glitch.mp4"
+        return (
+            "scale=iw:ih,geq=r='r(X+8*sin(2*PI*T),Y)':g='g(X,Y)':b='b(X-8*sin(2*PI*T),Y)'",
+            "squishy.mp4",
+        )
+    if effect == "removebars":
+        return "crop=iw:ih*0.8:0:ih*0.1", "remove-bars.mp4"
+    if effect == "removecaption":
+        return "crop=iw:ih*0.8:0:ih*0.1", "remove-caption.mp4"
+    if effect == "enlarge":
+        amount = float(options.get("amount", 2))
+        if not 1 <= amount <= 4:
+            raise ValueError("Enlarge must be between 1 and 4.")
+        return (
+            f"scale=trunc(iw*{amount:g}/2)*2:trunc(ih*{amount:g}/2)*2:flags=lanczos",
+            "enlarge.mp4",
+        )
+    if effect == "falsecolor":
+        return "hue=s=0,lutrgb=r='val*2':g='val*0.6':b='255-val'", "falsecolor.mp4"
+    if effect == "watercolor":
+        return "gblur=sigma=1.4,eq=saturation=1.5", "watercolor.mp4"
+    if effect == "oilpaint":
+        return (
+            "convolution='0 0 0 0 1 0 0 0 0',eq=contrast=1.2:saturation=1.3",
+            "oilpaint.mp4",
+        )
+    if effect == "meme":
+        text = str(options.get("text", "")).strip().upper()
+        if not text:
+            raise ValueError("Meme requires text.")
+        middle_text = ""
+        if "|" in text:
+            top_text, bottom_text = (part.strip() for part in text.split("|", 1))
+        else:
+            words = text.split()
+            if len(words) < 6:
+                top_text = bottom_text = ""
+                middle_text = text
+            else:
+                midpoint = max(1, len(words) // 2)
+                top_text = " ".join(words[:midpoint])
+                bottom_text = " ".join(words[midpoint:])
+
+        def quote_drawtext(value: str) -> str:
+            return value.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+        font_path = impact_font_path() or Path(
+            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"
+        )
+        fontfile = (
+            str(font_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        )
+        filters: list[str] = []
+        if top_text:
+            filters.append(
+                f"drawtext=fontfile={fontfile}:"
+                f"text='{quote_drawtext(top_text)}':x=(w-text_w)/2:y=8:fontsize=min(w/8\\,96):"
+                "fontcolor=white:borderw=3:bordercolor=black"
+            )
+        if bottom_text:
+            filters.append(
+                f"drawtext=fontfile={fontfile}:"
+                f"text='{quote_drawtext(bottom_text)}':x=(w-text_w)/2:y=h-text_h-12:fontsize=min(w/8\\,96):"
+                "fontcolor=white:borderw=3:bordercolor=black"
+            )
+        if middle_text:
+            filters.append(
+                f"drawtext=fontfile={fontfile}:"
+                f"text='{quote_drawtext(middle_text)}':x=(w-text_w)/2:y=(h-text_h)/2:fontsize=min(w/8\\,96):"
+                "fontcolor=white:borderw=3:bordercolor=black"
+            )
+        return ",".join(filters), "meme.mp4"
+    if effect == "random":
+        return _video_filter(
+            random.choice(("glitch", "parallax", "huerotate")),
+            options,
+            duration=duration,
+        )
     if effect == "spin":
         speed = float(options.get("speed", 1))
         direction = -1 if options.get("clockwise") else 1
@@ -927,6 +2664,66 @@ def _video_filter(effect: str, options: dict[str, Any]) -> tuple[str, str]:
     raise ValueError("That effect currently supports images and GIFs, not video.")
 
 
+def _visual_effect_window(
+    options: dict[str, Any],
+    total_duration: float,
+) -> tuple[float, float | None]:
+    start = float(options.get("start", 0) or 0)
+    stop = float(options.get("stop", 0) or 0)
+    if not 0 <= start <= MAX_MEDIA_DURATION:
+        raise ValueError("Effect start must be between 0 and 180 seconds.")
+    if not 0 <= stop <= MAX_MEDIA_DURATION:
+        raise ValueError("Effect stop must be between 0 and 180 seconds.")
+    end: float | None = stop or None
+    if end is not None and end <= start:
+        raise ValueError("Effect stop must be after its start time.")
+    if total_duration > 0:
+        if start >= total_duration:
+            raise ValueError("Effect start must be before the end of the media.")
+        if end is not None:
+            end = min(end, total_duration)
+    return start, end
+
+
+def _timed_visual_filter(
+    filter_value: str,
+    *,
+    start: float,
+    end: float | None,
+    duration: float,
+    width: int,
+    height: int,
+) -> str:
+    width = max(2, width - width % 2)
+    height = max(2, height - height % 2)
+    segments: list[tuple[float, float | None, bool]] = []
+    if start > 0:
+        segments.append((0.0, start, False))
+    segments.append((start, end, True))
+    if end is not None and (duration <= 0 or end < duration - 0.001):
+        segments.append((end, None, False))
+
+    inputs = "".join(f"[timed{index}]" for index in range(len(segments)))
+    filters = [f"[0:v]split={len(segments)}{inputs}"]
+    outputs: list[str] = []
+    for index, (segment_start, segment_end, changed) in enumerate(segments):
+        trim = f"trim=start={segment_start:g}"
+        if segment_end is not None:
+            trim += f":end={segment_end:g}"
+        chain = f"[timed{index}]{trim},setpts=PTS-STARTPTS"
+        if changed:
+            chain += f",{filter_value}"
+        # Geometry-changing effects still need to concatenate with the
+        # untouched sections. Normalize every segment back to the source size.
+        chain += (
+            f",scale={width}:{height}:" "force_original_aspect_ratio=disable,setsar=1"
+        )
+        filters.append(f"{chain}[segment{index}]")
+        outputs.append(f"[segment{index}]")
+    filters.append(f"{''.join(outputs)}concat=n={len(outputs)}:v=1:a=0[v]")
+    return ";".join(filters)
+
+
 def _render_video_visual(
     data: bytes, effect: str, options: dict[str, Any]
 ) -> EffectResult:
@@ -941,25 +2738,11 @@ def _render_video_visual(
             opacity=float(options.get("opacity", 0.5)),
             scale=float(options.get("scale", 1.0)),
             stretch=bool(options.get("stretch")),
+            position=str(options.get("position", "center")),
+            x=int(options.get("x", 0)),
+            y=int(options.get("y", 0)),
         )
 
-    if effect == "crop":
-        shape = options.get("shape")
-        if shape == "circle":
-            inside = "lte(pow((X-W/2)/(W/2),2)+pow((Y-H/2)/(H/2),2),1)"
-            filename = "crop-circle.mp4"
-        elif shape == "triangle":
-            inside = "gte(Y,abs(2*X-W)*H/W)"
-            filename = "crop-triangle.mp4"
-        else:
-            raise ValueError("Unknown crop shape.")
-
-        def channel(plane: str) -> str:
-            return f"if({inside},{plane}(X,Y),0)"
-
-        filter_value = f"geq=r='{channel('r')}':g='{channel('g')}':b='{channel('b')}'"
-    else:
-        filter_value, filename = _video_filter(effect, options)
     with tempfile.TemporaryDirectory(prefix="fishie-image-effect-") as directory:
         input_path = os.path.join(directory, "input.media")
         output_path = os.path.join(directory, "output.mp4")
@@ -967,22 +2750,148 @@ def _render_video_visual(
         probe = _probe_path(input_path)
         if not probe.has_video:
             raise ValueError("That effect requires an image, GIF, or video.")
-        _run(
+        if effect in {"removebars", "removecaption"}:
+            preview_path = os.path.join(directory, "crop-preview.png")
+            _run(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-y",
+                    "-i",
+                    input_path,
+                    "-frames:v",
+                    "1",
+                    preview_path,
+                ]
+            )
+            with Image.open(preview_path) as preview:
+                crop_box = _edge_crop_box(
+                    preview,
+                    caption=effect == "removecaption",
+                )
+                preview_height = preview.height
+            if crop_box is None:
+                filter_value = "null"
+            else:
+                left, top, right, bottom = crop_box
+                if effect == "removebars":
+                    # Keep a small safety edge around encoded video content.
+                    # Letterbox boundaries often contain a couple of blended
+                    # rows and subtitles can extend slightly into the lower
+                    # bar. This matches the visible crop instead of cutting
+                    # those pixels away.
+                    content_height = bottom - top
+                    top = min(bottom - 2, top + (2 if top else 0))
+                    bottom = min(
+                        preview_height,
+                        bottom + round(content_height * 0.04),
+                    )
+                width = right - left
+                height = bottom - top
+                # H.264 requires even crop geometry.
+                left -= left % 2
+                top -= top % 2
+                width -= width % 2
+                height -= height % 2
+                filter_value = f"crop={width}:{height}:{left}:{top}"
+            filename = (
+                "remove-caption.mp4" if effect == "removecaption" else "remove-bars.mp4"
+            )
+        elif effect == "crop":
+            shape = options.get("shape")
+            if shape == "circle":
+                inside = "lte(pow((X-W/2)/(W/2),2)+pow((Y-H/2)/(H/2),2),1)"
+                filename = "crop-circle.mp4"
+            elif shape == "triangle":
+                inside = "gte(Y,abs(2*X-W)*H/W)"
+                filename = "crop-triangle.mp4"
+            else:
+                raise ValueError("Unknown crop shape.")
+
+            def channel(plane: str) -> str:
+                return f"if({inside},{plane}(X,Y),0)"
+
+            filter_value = (
+                f"geq=r='{channel('r')}':g='{channel('g')}':b='{channel('b')}'"
+            )
+        else:
+            filter_value, filename = _video_filter(
+                effect,
+                options,
+                duration=probe.duration,
+            )
+
+        start, end = _visual_effect_window(options, probe.duration)
+        reaches_end = end is None or (
+            probe.duration > 0 and end >= probe.duration - 0.001
+        )
+        if start <= 0 and reaches_end:
+            filter_complex = f"[0:v]{filter_value}[v]"
+        else:
+            filter_complex = _timed_visual_filter(
+                filter_value,
+                start=start,
+                end=end,
+                duration=probe.duration,
+                width=probe.width,
+                height=probe.height,
+            )
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            input_path,
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[v]",
+            "-map",
+            "0:a?",
+        ]
+        if probe.has_audio and effect == "lag":
+            amount = int(options.get("amount", 4))
+            method = str(options.get("method", "random")).casefold()
+            if method == "random":
+                method = random.SystemRandom().choice(
+                    ("freeze", "stutter", "drop", "jitter")
+                )
+            period = max(0.08, amount * 0.04)
+            audio_filters = {
+                "freeze": (
+                    "volume="
+                    f"'if(lt(mod(t,{period * 3:g}),{period:g}),0.15,1)'"
+                    ":eval=frame"
+                ),
+                "stutter": (
+                    f"aecho=0.8:0.6:{max(20, amount * 12)}:"
+                    f"{min(0.75, amount / 16):g}"
+                ),
+                "drop": (
+                    "volume="
+                    f"'if(lt(mod(t,{period:g}),{period / 3:g}),0,1)'"
+                    ":eval=frame"
+                ),
+                "jitter": f"tremolo=f={max(2, amount / 2):g}:d=0.7",
+            }
+            command.extend(["-af", audio_filters[method]])
+        elif probe.has_audio and effect in {"fadein", "fadeout"}:
+            fade_duration = float(options.get("duration", 1))
+            start = 0 if effect == "fadein" else max(0, probe.duration - fade_duration)
+            command.extend(
+                [
+                    "-af",
+                    f"afade=t={'in' if effect == 'fadein' else 'out'}:"
+                    f"st={start:g}:d={fade_duration:g}",
+                ]
+            )
+        command.extend(
             [
-                "ffmpeg",
-                "-y",
-                "-i",
-                input_path,
-                "-filter_complex",
-                f"[0:v]{filter_value}[v]",
-                "-map",
-                "[v]",
-                "-map",
-                "0:a?",
                 "-c:v",
                 "libx264",
                 "-preset",
-                "fast",
+                "veryfast",
                 "-crf",
                 "22",
                 "-pix_fmt",
@@ -996,6 +2905,7 @@ def _render_video_visual(
                 output_path,
             ]
         )
+        _run(command)
         return EffectResult(Path(output_path).read_bytes(), filename)
 
 
@@ -1005,9 +2915,32 @@ def render_image_effect_sync(
     **options: Any,
 ) -> EffectResult:
     try:
-        frames, durations, animated = _load_image_frames(data)
+        frames, durations, animated = _load_image_frames(
+            data,
+            preserve_transparency=bool(options.get("preserve_transparency")),
+        )
     except NotPillowMedia:
         return _render_video_visual(data, effect, options)
+
+    if effect in {"gifmagik", "gifswirl"} and animated and sum(durations) > 30_000:
+        raise ValueError(
+            "Animated magik and animated swirl only support GIFs up to 30 seconds."
+        )
+
+    if effect in {"removebars", "removecaption"}:
+        crop_box = _stable_edge_crop_box(
+            frames,
+            caption=effect == "removecaption",
+        )
+        transformed = [
+            (
+                frame.convert("RGBA").crop(crop_box)
+                if crop_box is not None
+                else frame.convert("RGBA")
+            )
+            for frame in frames
+        ]
+        return _save_frames(transformed, durations, filename=effect)
 
     if effect in STATIC_EFFECTS:
         transformed = [STATIC_EFFECTS[effect](frame, options) for frame in frames]
@@ -1018,14 +2951,104 @@ def render_image_effect_sync(
             filename=effect,
             jpeg_quality=jpeg_quality if not animated else None,
         )
+    if effect == "random":
+        candidates = (
+            "huerotate",
+            "falsecolor",
+            "watercolor",
+            "oilpaint",
+            "glitch",
+            "parallax",
+        )
+        return render_image_effect_sync(data, random.choice(candidates), **options)
+    if effect in {
+        "hallway",
+        "parallax",
+        "zoom",
+        "squishy",
+        "glitch",
+        "tremble",
+        "quilt",
+        "huerotate",
+    }:
+        generated, generated_durations = _animated_visual_frames(
+            frames,
+            durations,
+            effect,
+            options,
+        )
+        return _save_frames(
+            generated,
+            generated_durations,
+            filename=effect,
+            per_frame_palette=effect in {"hallway", "zoom"},
+        )
     if effect == "magik":
         strength = float(options.get("strength", 20))
-        transformed = [_liquid_rescale(frame, strength) for frame in frames]
-        return _save_frames(transformed, durations, filename="magik")
+        effect_frames, effect_durations = _sample_heavy_animation(
+            frames,
+            durations,
+            max_frames=MAGIK_MAX_GIF_FRAMES,
+        )
+        working_size = MAGIK_GIF_WORKING_SIZE if animated else MAGIK_WORKING_SIZE
+        if animated:
+            transformed = _liquid_rescale_frames(
+                effect_frames,
+                strength,
+                working_size=working_size,
+            )
+        else:
+            transformed = [
+                _liquid_rescale(
+                    frame,
+                    strength,
+                    working_size=working_size,
+                )
+                for frame in effect_frames
+            ]
+        return _save_frames(transformed, effect_durations, filename="magik")
     if effect == "swirl":
         strength = float(options.get("strength", 180))
-        transformed = [_swirl_frame(frame, strength) for frame in frames]
-        return _save_frames(transformed, durations, filename="swirl")
+        effect_frames, effect_durations = _sample_heavy_animation(frames, durations)
+        transformed = [_swirl_frame(frame, strength) for frame in effect_frames]
+        return _save_frames(transformed, effect_durations, filename="swirl")
+    if effect in {"fadein", "fadeout"}:
+        generated, generated_durations = _fade_frames(
+            frames,
+            durations,
+            fade_in=effect == "fadein",
+            duration=float(options.get("duration", 2)),
+        )
+        return _save_frames(generated, generated_durations, filename=effect)
+    if effect == "lag":
+        generated, generated_durations = _lag_frames(
+            frames,
+            durations,
+            amount=int(options.get("amount", 4)),
+            method=str(options.get("method", "random")),
+            multi=bool(options.get("multi")),
+        )
+        return _save_frames(generated, generated_durations, filename="lag")
+    if effect == "shuffle":
+        generated, generated_durations = _shuffle_frames(frames, durations)
+        return _save_frames(generated, generated_durations, filename="shuffle")
+    if effect == "bounce":
+        generated, generated_durations = _bounce_frames(
+            frames,
+            durations,
+            amount=float(options.get("amount", 20)),
+            speed=float(options.get("speed", 1)),
+        )
+        return _save_frames(generated, generated_durations, filename="bounce")
+    if effect in {"slidein", "slideout"}:
+        generated, generated_durations = _slide_frames(
+            frames,
+            durations,
+            slide_in=effect == "slidein",
+            direction=str(options.get("direction", "left")).casefold(),
+            duration=float(options.get("duration", 1)),
+        )
+        return _save_frames(generated, generated_durations, filename=effect)
     if effect == "spin":
         generated, generated_durations = _spin_frames(
             frames,
@@ -1049,7 +3072,8 @@ def render_image_effect_sync(
             ),
             speed=float(options.get("speed", 1)),
         )
-        return _save_frames(generated, generated_durations, filename=effect)
+        filename = "amagik" if effect == "gifmagik" else "aswirl"
+        return _save_frames(generated, generated_durations, filename=filename)
     if effect in {"cube", "pyramid"}:
         generated, generated_durations = _shape_frames(
             frames,
@@ -1210,6 +3234,380 @@ def _video_command_output(
         )
 
 
+def _audio_effect_window(
+    options: dict[str, Any],
+    total_duration: float,
+) -> tuple[float, float | None]:
+    start = float(options.get("start", 0) or 0)
+    stop = float(options.get("stop", 0) or 0)
+    duration = float(options.get("duration", 0) or 0)
+    if not 0 <= start <= MAX_MEDIA_DURATION:
+        raise ValueError("Audio effect start must be between 0 and 180 seconds.")
+    if not 0 <= stop <= MAX_MEDIA_DURATION:
+        raise ValueError("Audio effect stop must be between 0 and 180 seconds.")
+    if not 0 <= duration <= MAX_MEDIA_DURATION:
+        raise ValueError("Audio effect duration must be between 0 and 180 seconds.")
+    end: float | None = start + duration if duration > 0 else stop or None
+    if end is not None and end <= start:
+        raise ValueError("Audio effect stop must be after its start time.")
+    if total_duration > 0:
+        start = min(start, total_duration)
+        if end is not None:
+            end = min(end, total_duration)
+    return start, end
+
+
+def _timed_audio_output(
+    input_data: bytes,
+    probe: MediaProbe,
+    *,
+    filename: str,
+    audio_filter: str,
+    options: dict[str, Any],
+) -> EffectResult:
+    start, end = _audio_effect_window(options, probe.duration)
+    output_extension = "mp4" if probe.has_video else "mp3"
+    reaches_end = end is None or (probe.duration > 0 and end >= probe.duration - 0.001)
+    if start <= 0 and reaches_end:
+        return _video_command_output(
+            input_data,
+            filename=filename,
+            audio_filter=audio_filter,
+            output_extension=output_extension,
+        )
+
+    segments: list[tuple[float, float | None, str | None]] = []
+    if start > 0:
+        segments.append((0, start, None))
+    segments.append((start, end, audio_filter))
+    if end is not None and (probe.duration <= 0 or end < probe.duration - 0.001):
+        segments.append((end, None, None))
+
+    split_labels = "".join(f"[source{index}]" for index in range(len(segments)))
+    filters = [f"[0:a]asplit={len(segments)}{split_labels}"]
+    output_labels: list[str] = []
+    for index, (segment_start, segment_end, effect_filter) in enumerate(segments):
+        trim = f"atrim=start={segment_start:g}"
+        if segment_end is not None:
+            trim += f":end={segment_end:g}"
+        chain = f"[source{index}]{trim},asetpts=PTS-STARTPTS"
+        if effect_filter:
+            chain += f",{effect_filter}"
+        chain += ",aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo"
+        label = f"segment{index}"
+        filters.append(f"{chain}[{label}]")
+        output_labels.append(f"[{label}]")
+    filters.append(f"{''.join(output_labels)}concat=n={len(output_labels)}:v=0:a=1[a]")
+    return _video_command_output(
+        input_data,
+        filename=filename,
+        filter_complex=";".join(filters),
+        map_arguments=["-map", "0:v?", "-map", "[a]"],
+        output_extension=output_extension,
+    )
+
+
+def _atempo_chain(speed: float) -> str:
+    remaining = speed
+    factors: list[float] = []
+    while remaining < 0.5:
+        factors.append(0.5)
+        remaining /= 0.5
+    while remaining > 2:
+        factors.append(2.0)
+        remaining /= 2
+    factors.append(remaining)
+    return ",".join(f"atempo={factor:.6f}" for factor in factors)
+
+
+def _audio_overlay_output(
+    input_data: bytes,
+    second_data: bytes,
+    probe: MediaProbe,
+    options: dict[str, Any],
+) -> EffectResult:
+    with tempfile.TemporaryDirectory(prefix="fishie-audio-overlay-probe-") as directory:
+        second_path = os.path.join(directory, "second.media")
+        Path(second_path).write_bytes(second_data)
+        second_probe = _probe_path(second_path)
+    if not second_probe.has_audio:
+        raise ValueError("The overlay file does not contain audio.")
+
+    at = float(options.get("at", 0) or 0)
+    source_start = float(options.get("source_start", 0) or 0)
+    source_stop = float(options.get("source_stop", 0) or 0)
+    duration = float(options.get("duration", 0) or 0)
+    volume = float(options.get("volume", 1) or 0)
+    pitch = float(options.get("pitch", 0) or 0)
+    speed = float(options.get("speed", 1) or 0)
+    loop = bool(options.get("loop"))
+    fade_in = float(options.get("fade_in", 0) or 0)
+    fade_out = float(options.get("fade_out", 0) or 0)
+    if bool(options.get("random_time")):
+        available = max(0.0, probe.duration - min(second_probe.duration, 10))
+        at = random.SystemRandom().uniform(0, available) if available else 0
+    if not 0 <= at <= MAX_MEDIA_DURATION:
+        raise ValueError("Overlay time must be between 0 and 180 seconds.")
+    if not 0 <= source_start <= MAX_MEDIA_DURATION:
+        raise ValueError("Audio source start must be between 0 and 180 seconds.")
+    if not 0 <= source_stop <= MAX_MEDIA_DURATION:
+        raise ValueError("Audio source stop must be between 0 and 180 seconds.")
+    if not 0 <= duration <= MAX_MEDIA_DURATION:
+        raise ValueError("Audio duration must be between 0 and 180 seconds.")
+    if not 0 <= volume <= 5:
+        raise ValueError("Audio overlay volume must be between 0 and 5.")
+    if not -12 <= pitch <= 12:
+        raise ValueError("Audio overlay pitch must be between -12 and 12.")
+    if not 0.25 <= speed <= 4:
+        raise ValueError("Audio overlay speed must be between 0.25 and 4.")
+    if not 0 <= fade_in <= 30 or not 0 <= fade_out <= 30:
+        raise ValueError("Sound-effect fades must be between 0 and 30 seconds.")
+    source_end = source_start + duration if duration > 0 else source_stop or None
+    if source_end is not None and source_end <= source_start:
+        raise ValueError("Audio source stop must be after its start time.")
+
+    trim = f"atrim=start={source_start:g}"
+    if source_end is not None:
+        trim += f":end={source_end:g}"
+    overlay_chain = f"[1:a]{trim},asetpts=PTS-STARTPTS"
+    if pitch:
+        ratio = 2 ** (pitch / 12)
+        overlay_chain += (
+            f",asetrate=44100*{ratio:g},aresample=44100,atempo={1 / ratio:g}"
+        )
+    if speed != 1:
+        overlay_chain += f",{_atempo_chain(speed)}"
+    source_duration = max(0.0, second_probe.duration - source_start)
+    if source_end is not None:
+        source_duration = min(source_duration, source_end - source_start)
+    remaining_duration = max(0.0, probe.duration - at)
+    effective_duration = (
+        remaining_duration if loop else min(remaining_duration, source_duration / speed)
+    )
+    if loop and remaining_duration:
+        overlay_chain += f",atrim=duration={remaining_duration:g}"
+    if fade_in and effective_duration:
+        fade_duration = min(fade_in, effective_duration)
+        overlay_chain += f",afade=t=in:st=0:d={fade_duration:g}"
+    if fade_out and effective_duration:
+        fade_duration = min(fade_out, effective_duration)
+        fade_start = max(0.0, effective_duration - fade_duration)
+        overlay_chain += f",afade=t=out:st={fade_start:g}:d={fade_duration:g}"
+    overlay_chain += f",volume={volume:g},adelay={round(at * 1000)}:all=1[overlay]"
+
+    if probe.has_audio:
+        if probe.duration > 0:
+            base_chain = (
+                f"[0:a]apad=whole_dur={probe.duration:g},"
+                f"atrim=duration={probe.duration:g}[base]"
+            )
+        else:
+            base_chain = "[0:a]anull[base]"
+        audio_graph = (
+            f"{overlay_chain};{base_chain};[base][overlay]"
+            "amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
+            "alimiter=limit=0.95:latency=1[a]"
+        )
+    else:
+        duration_chain = (
+            f"apad=whole_dur={probe.duration:g}," f"atrim=duration={probe.duration:g}"
+            if probe.duration > 0
+            else "anull"
+        )
+        audio_graph = f"{overlay_chain};[overlay]{duration_chain}[a]"
+    return _video_command_output(
+        input_data,
+        filename="audio-overlay",
+        second_data=second_data,
+        second_loop=loop,
+        filter_complex=audio_graph,
+        map_arguments=["-map", "0:v?", "-map", "[a]"],
+        output_extension="mp4" if probe.has_video else "mp3",
+    )
+
+
+def _adhd_output(input_data: bytes, probe: MediaProbe) -> EffectResult:
+    if not probe.has_video and not probe.has_audio:
+        raise ValueError("ADHD requires a video or audio file.")
+    if probe.duration <= 0:
+        raise ValueError("Could not determine the media duration.")
+
+    rng = random.SystemRandom()
+    segments: list[tuple[float, float, float, bool]] = []
+    position = 0.0
+    faster = bool(rng.getrandbits(1))
+    while position < probe.duration - 0.001:
+        end = min(probe.duration, position + rng.uniform(0.75, 1.75))
+        factor = rng.uniform(1.15, 3.0) if faster else rng.uniform(0.5, 0.9)
+        segments.append((position, end, factor, faster))
+        position = end
+        faster = not faster
+
+    filters: list[str] = []
+    map_arguments: list[str] = []
+    if probe.has_video:
+        split = "".join(f"[vsrc{index}]" for index in range(len(segments)))
+        filters.append(f"[0:v]split={len(segments)}{split}")
+        video_outputs: list[str] = []
+        for index, (start, end, factor, _) in enumerate(segments):
+            label = f"v{index}"
+            filters.append(
+                f"[vsrc{index}]trim=start={start:g}:end={end:g},"
+                f"setpts=(PTS-STARTPTS)/{factor:g}[{label}]"
+            )
+            video_outputs.append(f"[{label}]")
+        filters.append(
+            f"{''.join(video_outputs)}concat=n={len(video_outputs)}:v=1:a=0[v]"
+        )
+        map_arguments.extend(["-map", "[v]"])
+
+    if probe.has_audio:
+        split = "".join(f"[asrc{index}]" for index in range(len(segments)))
+        filters.append(f"[0:a]asplit={len(segments)}{split}")
+        audio_outputs: list[str] = []
+        for index, (start, end, factor, is_faster) in enumerate(segments):
+            label = f"a{index}"
+            voice = (
+                "asetrate=44100*1.25,aresample=44100,atempo=0.8"
+                if is_faster
+                else "asetrate=44100*0.8,aresample=44100,atempo=1.25"
+            )
+            filters.append(
+                f"[asrc{index}]atrim=start={start:g}:end={end:g},"
+                f"asetpts=PTS-STARTPTS,{voice},{_atempo_chain(factor)},"
+                "aresample=44100,aformat=sample_fmts=fltp:"
+                f"channel_layouts=stereo[{label}]"
+            )
+            audio_outputs.append(f"[{label}]")
+        filters.append(
+            f"{''.join(audio_outputs)}concat=n={len(audio_outputs)}:v=0:a=1[a]"
+        )
+        map_arguments.extend(["-map", "[a]"])
+
+    return _video_command_output(
+        input_data,
+        filename="adhd",
+        filter_complex=";".join(filters),
+        map_arguments=map_arguments,
+        output_extension="mp4" if probe.has_video else "mp3",
+    )
+
+
+def _detect_platform_outro(path: str, duration: float, platform: str) -> float:
+    if duration < 3:
+        raise ValueError("That video is too short to contain the selected outro.")
+
+    sample_start = max(0.0, duration - 6.0)
+    command = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-ss",
+        f"{sample_start:g}",
+        "-i",
+        path,
+        "-vf",
+        (
+            "fps=10,scale=96:96:force_original_aspect_ratio=decrease,"
+            "pad=96:96:(ow-iw)/2:(oh-ih)/2:black"
+        ),
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            timeout=15,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise ValueError("Could not inspect that video for an outro.") from error
+
+    frame_size = 96 * 96 * 3
+    frame_count = len(result.stdout) // frame_size
+    if frame_count < 8:
+        raise ValueError("Could not read enough video frames to find an outro.")
+    frames = np.frombuffer(
+        result.stdout[: frame_count * frame_size],
+        dtype=np.uint8,
+    ).reshape(frame_count, 96, 96, 3)
+    frame_values = frames.astype(np.float32)
+    differences = np.abs(np.diff(frame_values, axis=0)).mean(axis=(1, 2, 3))
+
+    candidates = [
+        index
+        for index in range(1, frame_count)
+        if 2.5 <= duration - (sample_start + index / 10) <= 5.5
+    ]
+    if not candidates:
+        raise ValueError("Could not find the selected outro.")
+    transition = max(candidates, key=lambda index: float(differences[index - 1]))
+    transition_strength = float(differences[transition - 1])
+    before = frame_values[max(0, transition - 5) : transition]
+    after = frame_values[transition : min(frame_count, transition + 15)]
+    before_brightness = float(before.mean())
+    after_brightness = float(after.mean())
+    dark_fraction = float((after.mean(axis=3) < 35).mean())
+
+    minimum_change = 25.0 if platform == "tiktok" else 10.0
+    darkened = after_brightness <= max(12.0, before_brightness * 0.78)
+    if transition_strength < minimum_change or dark_fraction < 0.85 or not darkened:
+        raise ValueError(
+            f"Could not confidently find a {platform.title()} outro in that video."
+        )
+    return sample_start + transition / 10
+
+
+def _remove_platform_outro(
+    input_data: bytes,
+    probe: MediaProbe,
+    platform: str,
+) -> EffectResult:
+    if not probe.has_video:
+        raise ValueError("Outro removal requires a video.")
+    with tempfile.TemporaryDirectory(prefix="fishie-remove-outro-") as directory:
+        input_path = os.path.join(directory, "input.media")
+        output_path = os.path.join(directory, "output.mp4")
+        Path(input_path).write_bytes(input_data)
+        trim_at = _detect_platform_outro(input_path, probe.duration, platform)
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            input_path,
+            "-t",
+            f"{trim_at:g}",
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            output_path,
+        ]
+        _run(command)
+        return EffectResult(
+            Path(output_path).read_bytes(),
+            f"remove-outro-{platform}.mp4",
+        )
+
+
 def _reverse_video_chunked(input_data: bytes, probe: MediaProbe) -> EffectResult:
     """Reverse video in bounded chunks so ffmpeg never buffers the full clip."""
 
@@ -1321,11 +3719,22 @@ def render_video_effect_sync(
                     list(reversed(image_durations)),
                     filename="reverse",
                 )
+            raise ValueError(
+                "Reverse requires a GIF, video, or audio file. "
+                "A still image has no frames to reverse."
+            )
 
     with tempfile.TemporaryDirectory(prefix="fishie-video-probe-") as directory:
         path = os.path.join(directory, "input.media")
         Path(path).write_bytes(input_data)
         probe = _probe_path(path)
+
+    if effect == "adhd":
+        return _adhd_output(input_data, probe)
+
+    if effect in {"removeoutrotiktok", "removeoutroreels"}:
+        platform = "tiktok" if effect == "removeoutrotiktok" else "reels"
+        return _remove_platform_outro(input_data, probe, platform)
 
     if effect == "reverse":
         if probe.has_video:
@@ -1340,23 +3749,88 @@ def render_video_effect_sync(
     if effect == "overlay":
         if second_data is None:
             raise ValueError("A second video or image is required.")
+        input_is_animated_image: bool | None
+        try:
+            _, _, input_is_animated_image = _load_image_frames(input_data)
+        except NotPillowMedia:
+            input_is_animated_image = None
+        if input_is_animated_image is False:
+            raise ValueError("The first input has to be a video.")
+        if not probe.has_video:
+            raise ValueError("The first input has to be a video.")
         opacity = float(options.get("opacity", 0.7))
-        scale = float(options.get("scale", 0.5))
+        scale = float(options.get("scale", 1.0))
         stretch = bool(options.get("stretch"))
         if not 0 <= opacity <= 1 or not 0.05 <= scale <= 2:
             raise ValueError("Opacity must be 0 to 1 and scale must be 0.05 to 2.")
-        scale_filter = "w=main_w:h=main_h" if stretch else f"w=main_w*{scale:g}:h=-1"
+        position = str(options.get("position", "center")).casefold().replace("_", "-")
+        position_map = {
+            "center": ("(W-w)/2", "(H-h)/2"),
+            "top-left": ("0", "0"),
+            "top": ("(W-w)/2", "0"),
+            "top-right": ("W-w", "0"),
+            "left": ("0", "(H-h)/2"),
+            "right": ("W-w", "(H-h)/2"),
+            "bottom-left": ("0", "H-h"),
+            "bottom": ("(W-w)/2", "H-h"),
+            "bottom-right": ("W-w", "H-h"),
+        }
+        if position not in position_map:
+            raise ValueError(
+                "Overlay position must be center, top, bottom, left, right, "
+                "or a corner such as top-left."
+            )
+        x_expression, y_expression = position_map[position]
+        x_offset = int(options.get("x", 0))
+        y_offset = int(options.get("y", 0))
+        x_expression = f"({x_expression})+{x_offset}"
+        y_expression = f"({y_expression})+{y_offset}"
+        scale_filter = (
+            "w=iw:h=ih"
+            if stretch
+            else (
+                f"w=iw*{scale:g}:h=ih*{scale:g}:" "force_original_aspect_ratio=decrease"
+            )
+        )
+        overlay_audio = bool(options.get("overlay_audio", True))
+        second_probe: MediaProbe | None = None
+        if overlay_audio:
+            with tempfile.TemporaryDirectory(
+                prefix="fishie-overlay-probe-"
+            ) as directory:
+                second_path = os.path.join(directory, "overlay.media")
+                Path(second_path).write_bytes(second_data)
+                try:
+                    second_probe = _probe_path(second_path)
+                except ValueError:
+                    second_probe = None
+        audio_label = ""
+        map_arguments = ["-map", "[v]"]
+        if overlay_audio and second_probe is not None and second_probe.has_audio:
+            if probe.has_audio:
+                audio_label = (
+                    "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[a];"
+                )
+                map_arguments.extend(["-map", "[a]"])
+            else:
+                map_arguments.extend(["-map", "1:a:0"])
+        else:
+            map_arguments.extend(["-map", "0:a?"])
+        overlay_filter = (
+            f"[1:v][0:v]scale2ref={scale_filter}[over][base];"
+            f"[over]format=rgba,colorchannelmixer=aa={opacity:g}[overa];"
+            f"[base][overa]overlay=x='{x_expression}':y='{y_expression}':"
+            "shortest=1[v]"
+        )
+        if audio_label:
+            overlay_filter += f";{audio_label.rstrip(';')}"
         return _video_command_output(
             input_data,
             filename="overlay-video",
             second_data=second_data,
             second_loop=True,
-            filter_complex=(
-                f"[1:v][0:v]scale2ref={scale_filter}[over][base];"
-                f"[over]format=rgba,colorchannelmixer=aa={opacity:g}[overa];"
-                "[base][overa]overlay=(W-w)/2:(H-h)/2:shortest=1[v]"
-            ),
-            map_arguments=["-map", "[v]", "-map", "0:a?"],
+            filter_complex=overlay_filter,
+            map_arguments=map_arguments,
             shortest=True,
         )
 
@@ -1368,21 +3842,23 @@ def render_video_effect_sync(
             raise ValueError("Bass gain must be between 1 and 30 dB.")
         if effect == "basslower":
             gain = -gain
-        return _video_command_output(
+        return _timed_audio_output(
             input_data,
+            probe,
             filename="bass-boost" if gain > 0 else "bass-lower",
             audio_filter=f"bass=g={gain:g}:f=110:w=0.6",
-            output_extension="mp4" if probe.has_video else "mp3",
+            options=options,
         )
 
     if effect == "audioreverse":
         if not probe.has_audio:
             raise ValueError("That file does not contain audio.")
-        return _video_command_output(
+        return _timed_audio_output(
             input_data,
+            probe,
             filename="audio-reverse",
             audio_filter="areverse",
-            output_extension="mp4" if probe.has_video else "mp3",
+            options=options,
         )
 
     if effect == "audioreverb":
@@ -1393,11 +3869,54 @@ def render_video_effect_sync(
             raise ValueError("Reverb room size must be between 0.1 and 1.")
         decay_one = min(0.9, room * 0.7)
         decay_two = min(0.8, room * 0.45)
-        return _video_command_output(
+        return _timed_audio_output(
             input_data,
+            probe,
             filename="audio-reverb",
             audio_filter=f"aecho=0.8:0.8:60|120:{decay_one:g}|{decay_two:g}",
-            output_extension="mp4" if probe.has_video else "mp3",
+            options=options,
+        )
+
+    if effect in {
+        "audiopitch",
+        "audiounderwater",
+        "audionightcore",
+        "audiodeepvoice",
+        "audiosurround",
+        "audioecho",
+    }:
+        if not probe.has_audio:
+            raise ValueError("That file does not contain audio.")
+        if effect == "audiopitch":
+            semitones = float(options.get("semitones", 3))
+            if not -12 <= semitones <= 12:
+                raise ValueError("Audio pitch must be between -12 and 12 semitones.")
+            ratio = 2 ** (semitones / 12)
+            audio_filter = (
+                f"asetrate=44100*{ratio:g},aresample=44100,atempo={1 / ratio:g}"
+            )
+            filename = "audio-pitch"
+        elif effect == "audiounderwater":
+            audio_filter = "lowpass=f=900,highpass=f=80,aecho=0.8:0.8:120|240:0.35|0.2"
+            filename = "audio-underwater"
+        elif effect == "audionightcore":
+            audio_filter = "asetrate=44100*1.25,aresample=44100,atempo=0.8"
+            filename = "audio-nightcore"
+        elif effect == "audiodeepvoice":
+            audio_filter = "asetrate=44100*0.8,aresample=44100,atempo=1.25"
+            filename = "audio-deepvoice"
+        elif effect == "audiosurround":
+            audio_filter = "extrastereo=m=2.5"
+            filename = "audio-surround"
+        else:
+            audio_filter = "aecho=0.8:0.88:60|120:0.4|0.25"
+            filename = "audio-echo"
+        return _timed_audio_output(
+            input_data,
+            probe,
+            filename=filename,
+            audio_filter=audio_filter,
+            options=options,
         )
 
     if effect == "audioreplace":
@@ -1413,20 +3932,28 @@ def render_video_effect_sync(
             shortest=True,
         )
 
+    if effect in {"audiooverlay", "soundeffect"}:
+        if second_data is None:
+            raise ValueError("An audio or video overlay file is required.")
+        if effect == "soundeffect":
+            options.setdefault("random_time", True)
+        return _audio_overlay_output(input_data, second_data, probe, options)
+
     if effect == "audiodestroy":
         if not probe.has_audio:
             raise ValueError("That file does not contain audio.")
         amount = int(options.get("amount", 6))
         if not 2 <= amount <= 12:
             raise ValueError("Destroy amount must be between 2 and 12.")
-        return _video_command_output(
+        return _timed_audio_output(
             input_data,
+            probe,
             filename="audio-destroyed",
             audio_filter=(
                 f"acrusher=bits={max(2, 14 - amount)}:mix=1:mode=lin,"
                 f"aresample={max(4000, 22000 - amount * 1500)},aresample=44100"
             ),
-            output_extension="mp4" if probe.has_video else "mp3",
+            options=options,
         )
 
     if effect == "audiocompress":
@@ -1435,24 +3962,26 @@ def render_video_effect_sync(
         ratio = float(options.get("ratio", 4))
         if not 1 <= ratio <= 20:
             raise ValueError("Compression ratio must be between 1 and 20.")
-        return _video_command_output(
+        return _timed_audio_output(
             input_data,
+            probe,
             filename="audio-compressed",
             audio_filter=(
                 f"acompressor=threshold=-18dB:ratio={ratio:g}:"
                 "attack=20:release=250:makeup=4"
             ),
-            output_extension="mp4" if probe.has_video else "mp3",
+            options=options,
         )
 
     if effect == "channelscombine":
         if not probe.has_audio:
             raise ValueError("That file does not contain audio.")
-        return _video_command_output(
+        return _timed_audio_output(
             input_data,
+            probe,
             filename="mono",
             audio_filter="aformat=channel_layouts=mono",
-            output_extension="mp4" if probe.has_video else "mp3",
+            options=options,
         )
 
     if effect == "volume":
@@ -1461,11 +3990,12 @@ def render_video_effect_sync(
         volume = float(options.get("volume", 1))
         if not 0 <= volume <= 10:
             raise ValueError("Volume must be between 0 and 10.")
-        return _video_command_output(
+        return _timed_audio_output(
             input_data,
+            probe,
             filename="volume",
             audio_filter=f"volume={volume:g}",
-            output_extension="mp4" if probe.has_video else "mp3",
+            options=options,
         )
 
     if effect == "extract":
