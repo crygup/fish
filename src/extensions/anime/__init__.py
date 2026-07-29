@@ -100,6 +100,32 @@ query ($search: String!, $type: MediaType!) {
   }
 }
 """
+ANILIST_CHARACTER_QUERY = """
+query ($search: String!) {
+  Page(perPage: 1) {
+    characters(search: $search, sort: SEARCH_MATCH) {
+      id
+      siteUrl
+      name { full native alternative }
+      image { large }
+      description
+      gender
+      age
+      bloodType
+      dateOfBirth { year month day }
+      favourites
+      media(perPage: 6, sort: POPULARITY_DESC) {
+        nodes {
+          id
+          type
+          siteUrl
+          title { userPreferred english romaji native }
+        }
+      }
+    }
+  }
+}
+"""
 ANILIST_SAVE_MEDIA_MUTATION = """
 mutation (
   $mediaId: Int!,
@@ -198,6 +224,35 @@ def _anime_title(media: dict[str, Any]) -> str:
         if value:
             return str(value)
     return "Unknown anime"
+
+
+def _clean_character_description(value: str | None) -> str:
+    if not value:
+        return "No character description provided."
+    text = re.sub(r"<br\s*/?>", "\n", html.unescape(value), flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    text = discord.utils.escape_mentions(discord.utils.escape_markdown(text))
+    return text[:1797].rstrip() + "..." if len(text) > 1800 else text
+
+
+def _character_media_text(character: dict[str, Any]) -> str | None:
+    connection = character.get("media")
+    nodes = connection.get("nodes") if isinstance(connection, dict) else None
+    if not isinstance(nodes, list):
+        return None
+    entries: list[str] = []
+    for media in nodes[:6]:
+        if not isinstance(media, dict):
+            continue
+        title = _anime_title(media)
+        url = media.get("siteUrl")
+        media_type = str(media.get("type") or "MEDIA").title()
+        escaped = discord.utils.escape_markdown(title)
+        entries.append(
+            f"[{escaped}]({url}) ({media_type})" if url else f"{escaped} ({media_type})"
+        )
+    return "\n".join(entries) or None
 
 
 def _media_status_label(status: str | None, media_kind: str) -> str:
@@ -513,6 +568,100 @@ class AniListProfileView(discord.ui.LayoutView):
             *children, accent_color=self.ctx.bot.embedcolor
         )
         self.add_item(container)
+
+
+class CharacterLookupView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        ctx: Context,
+        character: dict[str, Any],
+    ) -> None:
+        super().__init__(timeout=300)
+        names = character.get("name")
+        names = names if isinstance(names, dict) else {}
+        name = str(names.get("full") or "Unknown character")
+        native_name = names.get("native")
+        site_url = str(
+            character.get("siteUrl")
+            or f"https://anilist.co/character/{character.get('id')}"
+        )
+        image = character.get("image")
+        image_url = image.get("large") if isinstance(image, dict) else None
+
+        title = (
+            f"## [{discord.utils.escape_markdown(name)}]({site_url})\n"
+            f"-# ID: {character.get('id')}"
+        )
+        if native_name and str(native_name) != name:
+            title += f"\n-# {discord.utils.escape_markdown(str(native_name))}"
+
+        children: list[discord.ui.Item[Any]] = []
+        description = _clean_character_description(character.get("description"))
+        if image_url:
+            children.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(title),
+                    discord.ui.TextDisplay(description),
+                    accessory=discord.ui.Thumbnail(str(image_url)),
+                )
+            )
+        else:
+            children.extend(
+                (
+                    discord.ui.TextDisplay(title),
+                    discord.ui.TextDisplay(description),
+                )
+            )
+
+        details: list[str] = []
+        for label, value in (
+            ("Gender", character.get("gender")),
+            ("Age", character.get("age")),
+            ("Blood type", character.get("bloodType")),
+        ):
+            if value:
+                details.append(f"**{label}:** {_display_character_value(value)}")
+        birthday = character.get("dateOfBirth")
+        if isinstance(birthday, dict):
+            date_parts = [
+                str(birthday.get(key))
+                for key in ("year", "month", "day")
+                if birthday.get(key)
+            ]
+            if date_parts:
+                details.append(f"**Birthday:** {'-'.join(date_parts)}")
+        favourites = character.get("favourites")
+        if favourites is not None:
+            details.append(f"**Favourites:** {_number(favourites)}")
+        alternatives = names.get("alternative")
+        if isinstance(alternatives, list) and alternatives:
+            alternative_text = ", ".join(str(value) for value in alternatives[:5])
+            details.append(
+                f"**Other names:** "
+                f"{discord.utils.escape_markdown(alternative_text)}"
+            )
+        if details:
+            children.extend(
+                (
+                    discord.ui.Separator(),
+                    discord.ui.TextDisplay("\n".join(details)),
+                )
+            )
+
+        related_media = _character_media_text(character)
+        if related_media:
+            children.extend(
+                (
+                    discord.ui.Separator(),
+                    discord.ui.TextDisplay(f"### Appears in\n{related_media}"),
+                )
+            )
+
+        self.add_item(discord.ui.Container(*children, accent_color=ctx.bot.embedcolor))
+
+
+def _display_character_value(value: object) -> str:
+    return discord.utils.escape_mentions(discord.utils.escape_markdown(str(value)))
 
 
 class MediaProgressModal(discord.ui.Modal, title="Set Progress"):
@@ -1027,6 +1176,54 @@ class Anime(Cog):
             )
         await ctx.send(
             view=MediaLookupView(self, ctx, media, access_token, media_type.lower()),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @commands.hybrid_command(
+        name="character",
+        aliases=("anime-character", "animecharacter", "acharacter", "achar"),
+    )
+    @app_commands.describe(search="The AniList character name to look up")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def character(self, ctx: Context, *, search: str):
+        """Look up an anime or manga character on AniList."""
+        search = search.strip()
+        if not search:
+            raise commands.BadArgument("Provide a character name to search for.")
+
+        async with ctx.typing():
+            response_status, payload = await self._anilist_request(
+                ANILIST_CHARACTER_QUERY,
+                {"search": search},
+            )
+        error_message = _graphql_error(payload)
+        if response_status == 429:
+            raise commands.BadArgument(
+                "AniList is currently rate limited. Please try again in a minute."
+            )
+        if response_status >= 500:
+            raise commands.BadArgument(
+                "AniList is temporarily unavailable. Please try again shortly."
+            )
+        if response_status != 200:
+            detail = (
+                f" ({discord.utils.escape_markdown(error_message)})"
+                if error_message
+                else ""
+            )
+            raise commands.BadArgument(
+                f"AniList rejected the character search{detail}."
+            )
+
+        data = payload.get("data") if isinstance(payload, dict) else None
+        page = data.get("Page") if isinstance(data, dict) else None
+        results = page.get("characters") if isinstance(page, dict) else None
+        character = results[0] if isinstance(results, list) and results else None
+        if not isinstance(character, dict):
+            raise commands.BadArgument(f"No AniList character found for **{search}**.")
+        await ctx.send(
+            view=CharacterLookupView(ctx, character),
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
