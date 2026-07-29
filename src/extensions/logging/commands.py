@@ -459,9 +459,7 @@ class Commands(Cog):
         started = time.monotonic()
         target = user or ctx.author
         if "status" in self.bot.db_cache.get_opted_out(target.id):
-            raise commands.BadArgument(
-                f"{target} has opted out of status tracking."
-            )
+            raise commands.BadArgument(f"{target} has opted out of status tracking.")
         now = discord.utils.utcnow()
         cutoff = now - datetime.timedelta(days=31)
         rows = await self.bot.pool.fetch(

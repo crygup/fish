@@ -40,6 +40,110 @@ def _display(value: object | None) -> str:
     return value if len(value) <= 1000 else value[:997] + "..."
 
 
+def _permission_name(name: str) -> str:
+    aliases = {
+        "read_messages": "View Channel",
+        "external_emojis": "Use External Emojis",
+        "external_stickers": "Use External Stickers",
+        "manage_guild": "Manage Server",
+    }
+    if name in aliases:
+        return aliases[name]
+    return name.replace("_", " ").title()
+
+
+def _role_permission_changes(
+    before: discord.Permissions,
+    after: discord.Permissions,
+) -> list[str]:
+    changes: list[str] = []
+    for name, enabled in after:
+        previous = bool(getattr(before, name))
+        if previous == enabled:
+            continue
+        action = "Allowed" if enabled else "Removed"
+        changes.append(f"**{action}:** {_permission_name(name)}")
+    return changes
+
+
+def _overwrite_key(
+    target: discord.Role | discord.Member | discord.Object,
+) -> tuple[str, int]:
+    if isinstance(target, discord.Member):
+        kind = "user"
+    elif isinstance(target, discord.Role):
+        kind = "role"
+    else:
+        kind = "object"
+    return kind, target.id
+
+
+def _channel_permission_changes(
+    before: discord.abc.GuildChannel,
+    after: discord.abc.GuildChannel,
+) -> tuple[list[str], discord.AuditLogAction]:
+    before_targets = {_overwrite_key(target): target for target in before.overwrites}
+    after_targets = {_overwrite_key(target): target for target in after.overwrites}
+    keys = before_targets.keys() | after_targets.keys()
+    changes: list[str] = []
+    created = False
+    deleted = False
+
+    for key in sorted(keys):
+        previous_target = before_targets.get(key)
+        current_target = after_targets.get(key)
+        target = current_target or previous_target
+        if target is None:
+            continue
+        previous = (
+            before.overwrites_for(previous_target)
+            if previous_target is not None
+            else discord.PermissionOverwrite()
+        )
+        current = (
+            after.overwrites_for(current_target)
+            if current_target is not None
+            else discord.PermissionOverwrite()
+        )
+        if previous == current:
+            continue
+        created = created or previous_target is None
+        deleted = deleted or current_target is None
+
+        if isinstance(target, discord.Role) and target.is_default():
+            label = "Overall (`@everyone`)"
+        elif isinstance(target, discord.Member):
+            label = f"{target.mention} (User)"
+        elif isinstance(target, discord.Role):
+            label = f"{target.mention} (Role)"
+        else:
+            label = f"`{target.id}` (Unknown target)"
+
+        previous_values = dict(previous)
+        current_values = dict(current)
+        target_changes: list[str] = []
+        for name in sorted(previous_values.keys() | current_values.keys()):
+            old_value = previous_values.get(name)
+            new_value = current_values.get(name)
+            if old_value == new_value:
+                continue
+            state = {
+                True: "Allowed",
+                False: "Denied",
+                None: "Reset",
+            }[new_value]
+            target_changes.append(f"{state} {_permission_name(name)}")
+        if target_changes:
+            changes.append(f"**{label}**\n" + "\n".join(target_changes))
+
+    action = discord.AuditLogAction.overwrite_update
+    if created and not deleted:
+        action = discord.AuditLogAction.overwrite_create
+    elif deleted and not created:
+        action = discord.AuditLogAction.overwrite_delete
+    return changes, action
+
+
 class _LoggerView(discord.ui.LayoutView):
     def __init__(self, ctx: GuildContext, *, timeout: float = 300) -> None:
         super().__init__(timeout=timeout)
@@ -1178,26 +1282,48 @@ class Logger(Cog):
     ) -> None:
         before_category = before.category.id if before.category else None
         after_category = after.category.id if after.category else None
-        if before.name == after.name and before_category == after_category:
+        metadata_changed = (
+            before.name != after.name or before_category != after_category
+        )
+        permission_changes, overwrite_action = _channel_permission_changes(
+            before,
+            after,
+        )
+        if not metadata_changed and not permission_changes:
             return
         embed = self._embed(
             "Channel updated",
             f"{after.mention} was updated.",
             color=discord.Colour.orange(),
         )
-        embed.add_field(
-            name="Before",
-            value=f"{_display(before.name)} / {_display(before.category)}",
-        )
-        embed.add_field(
-            name="After", value=f"{_display(after.name)} / {_display(after.category)}"
-        )
+        if metadata_changed:
+            embed.add_field(
+                name="Before",
+                value=f"{_display(before.name)} / {_display(before.category)}",
+            )
+            embed.add_field(
+                name="After",
+                value=f"{_display(after.name)} / {_display(after.category)}",
+            )
+        if permission_changes:
+            permission_text = "\n\n".join(permission_changes)
+            if len(permission_text) > 1024:
+                permission_text = permission_text[:1021] + "..."
+            embed.add_field(
+                name="Permission changes",
+                value=permission_text,
+                inline=False,
+            )
         self._add_item_id(embed, after)
         await self._emit_logger(
             after.guild,
             "channel",
             embed,
-            audit_action=discord.AuditLogAction.channel_update,
+            audit_action=(
+                overwrite_action
+                if permission_changes
+                else discord.AuditLogAction.channel_update
+            ),
             audit_target_id=after.id,
         )
 
@@ -1270,15 +1396,29 @@ class Logger(Cog):
     async def logger_role_update(
         self, before: discord.Role, after: discord.Role
     ) -> None:
-        if before.name == after.name and before.permissions == after.permissions:
+        permission_changes = _role_permission_changes(
+            before.permissions,
+            after.permissions,
+        )
+        if before.name == after.name and not permission_changes:
             return
         embed = self._embed(
             "Role updated",
             f"{after.mention} was updated.",
             color=discord.Colour.orange(),
         )
-        embed.add_field(name="Before", value=_display(before.name))
-        embed.add_field(name="After", value=_display(after.name))
+        if before.name != after.name:
+            embed.add_field(name="Before", value=_display(before.name))
+            embed.add_field(name="After", value=_display(after.name))
+        if permission_changes:
+            permission_text = "\n".join(permission_changes)
+            if len(permission_text) > 1024:
+                permission_text = permission_text[:1021] + "..."
+            embed.add_field(
+                name="Permission changes",
+                value=permission_text,
+                inline=False,
+            )
         self._add_item_id(embed, after)
         await self._emit_logger(
             after.guild,
