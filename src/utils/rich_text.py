@@ -362,14 +362,12 @@ def draw_inline_tokens(
     draw = ImageDraw.Draw(image)
     x, y = position
     line_box = font.getbbox("Ag")
-    line_height = int(max(image_size, line_box[3] - line_box[1]))
+    image_y = round(y + (line_box[1] + line_box[3] - image_size) / 2)
     for token in tokens:
         data = assets.get(token.value) if token.kind == "image" else None
         if data is not None:
             emoji_image = _asset_frame(data, timestamp_ms, image_size)
-            image.alpha_composite(
-                emoji_image, (round(x), y + (line_height - image_size) // 2)
-            )
+            image.alpha_composite(emoji_image, (round(x), image_y))
             x += image_size
             continue
         for run in _text_runs(token.value):

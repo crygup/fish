@@ -113,6 +113,8 @@ pydantic==2.13.4
     #   fastapi
 pydantic-core==2.46.4
     # via pydantic
+pycountry==24.6.1
+    # via -r requirements.in
 pyee==13.0.1
     # via playwright
 pygments==2.20.0

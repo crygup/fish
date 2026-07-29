@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 import discord
 import numpy as np
+import pycountry
 from discord import MediaGalleryItem, app_commands, ui
 from discord.ext import commands
 from discord.http import Route
@@ -65,10 +66,15 @@ MEDIA_INPUT_DESCRIPTION = "User/Emoji/Media URL"
 MEDIA_EFFECT_TIMEOUT = 30
 RANDOM_EFFECTS = (
     "blur",
+    "brightness",
+    "contrast",
     "deepfry",
     "distort",
+    "enlarge",
+    "exposure",
     "falsecolor",
     "fisheye",
+    "flip",
     "glitch",
     "grain",
     "grayscale",
@@ -79,11 +85,16 @@ RANDOM_EFFECTS = (
     "oilpaint",
     "parallax",
     "pixelate",
+    "resize",
+    "rotate",
+    "saturation",
     "sepia",
     "sharpen",
     "swirl",
+    "tint",
     "vignette",
     "watercolor",
+    "zoom",
 )
 RANDOM_AUDIO_EFFECTS = (
     "adhd",
@@ -878,12 +889,12 @@ def make_caption(
             duration = float(info.get("format", {}).get("duration") or 0)
             if vw > 4096 or vh > 4096 or duration > 60:
                 raise ValueError("Videos are limited to 4096px and 60 seconds.")
-            dummy = Image.new("RGBA", (vw, 1), (0, 0, 0, 0))
             if animated_caption:
                 frame_duration = 50
                 overlay_frames = [
-                    _caption_frame(
-                        dummy,
+                    _caption_panel(
+                        vw,
+                        vh,
                         caption_text,
                         inline_images or {},
                         timestamp_ms,
@@ -900,12 +911,16 @@ def make_caption(
                     disposal=2,
                 )
             else:
-                overlay = _caption_frame(
-                    dummy,
+                overlay = _caption_panel(
+                    vw,
+                    vh,
                     caption_text,
                     inline_images or {},
                 )
                 overlay.save(overlay_path)
+            caption_height = (
+                overlay_frames[0].height if animated_caption else overlay.height
+            )
             command = ["ffmpeg", "-y", "-i", tmp_path]
             if animated_caption:
                 command.extend(["-stream_loop", "-1"])
@@ -914,9 +929,21 @@ def make_caption(
                     "-i",
                     overlay_path,
                     "-filter_complex",
-                    "[0:v][1:v]overlay=0:0:eof_action=repeat",
+                    (
+                        f"[0:v]pad=iw:ih+{caption_height}:0:{caption_height}:"
+                        "color=white[base];"
+                        "[base][1:v]overlay=0:0:eof_action=repeat[v]"
+                    ),
+                    "-map",
+                    "[v]",
+                    "-map",
+                    "0:a?",
                     "-t",
                     str(min(60, duration) if duration > 0 else 60),
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
                     "-c:a",
                     "copy",
                     "-movflags",
@@ -1036,48 +1063,109 @@ def _caption_frame(
     inline_images: dict[str, bytes] | None = None,
     timestamp_ms: int = 0,
 ) -> Image.Image:
-    inline_images = inline_images or {}
-    padding = max(10, int(img.width * 0.04))
-    max_w = max(1, img.width - padding * 2)
-
-    font_size = max(12, min(96, img.width // 10))
-    font = text_font(caption_text, font_size)
-    lines = wrap_inline_text(
+    panel = _caption_panel(
+        img.width,
+        img.height,
         caption_text,
-        font,
-        font_size,
         inline_images,
-        max_w,
+        timestamp_ms,
     )
-    while font_size > 12 and any(
-        measure_inline_tokens(line, font, font_size, inline_images) > max_w
-        for line in lines
-    ):
-        font_size -= 1
-        font = text_font(caption_text, font_size)
-        lines = wrap_inline_text(
+    new_img = Image.new(
+        "RGBA",
+        (img.width, img.height + panel.height),
+        (255, 255, 255, 255),
+    )
+    new_img.alpha_composite(panel, (0, 0))
+    new_img.alpha_composite(img.convert("RGBA"), (0, panel.height))
+    return new_img
+
+
+def _caption_panel(
+    width: int,
+    media_height: int,
+    caption_text: str,
+    inline_images: dict[str, bytes] | None = None,
+    timestamp_ms: int = 0,
+) -> Image.Image:
+    inline_images = inline_images or {}
+    padding = max(8, int(width * 0.035))
+    max_w = max(1, width - padding * 2)
+    max_panel_height = max(
+        48,
+        min(
+            round(max(1, media_height) * 0.45),
+            round(width * 0.45),
+        ),
+    )
+
+    def layout(size: int) -> tuple[Any, list[Any], int, int, int]:
+        selected_font = text_font(caption_text, size)
+        selected_lines = wrap_inline_text(
             caption_text,
-            font,
-            font_size,
+            selected_font,
+            size,
             inline_images,
             max_w,
         )
+        font_box = selected_font.getbbox("Ag")
+        selected_line_h = int(max(size, font_box[3] - font_box[1]))
+        selected_gap = max(2, selected_line_h // 5)
+        selected_height = (
+            len(selected_lines) * selected_line_h
+            + max(0, len(selected_lines) - 1) * selected_gap
+            + padding * 2
+        )
+        return (
+            selected_font,
+            selected_lines,
+            selected_line_h,
+            selected_gap,
+            selected_height,
+        )
 
-    font_box = font.getbbox("Ag")
-    line_h = int(max(font_size, font_box[3] - font_box[1]))
-    gap = max(2, line_h // 5)
-    box_h = len(lines) * (line_h + gap) + padding * 2
+    minimum_size = 12
+    maximum_size = max(minimum_size, min(96, width // 10))
+    low = minimum_size
+    high = maximum_size
+    font, lines, line_h, gap, box_h = layout(minimum_size)
+    while low <= high:
+        candidate = (low + high) // 2
+        candidate_layout = layout(candidate)
+        if candidate_layout[-1] <= max_panel_height:
+            font_size = candidate
+            font, lines, line_h, gap, box_h = candidate_layout
+            low = candidate + 1
+        else:
+            high = candidate - 1
+    font_size = int(getattr(font, "size", minimum_size))
 
-    new_img = Image.new("RGBA", (img.width, img.height + box_h), (255, 255, 255, 255))
-    new_img.paste(img, (0, box_h))
+    maximum_lines = max(1, (max_panel_height - padding * 2 + gap) // (line_h + gap))
+    if len(lines) > maximum_lines:
+        lines = lines[:maximum_lines]
+        ellipsis = "…"
+        while lines[-1] and (
+            measure_inline_tokens(lines[-1], font, font_size, inline_images)
+            + font.getlength(ellipsis)
+            > max_w
+        ):
+            lines[-1] = lines[-1][:-1]
+        lines[-1] = [
+            *lines[-1],
+            *wrap_inline_text(ellipsis, font, font_size, inline_images, max_w)[0],
+        ]
+    box_h = len(lines) * line_h + max(0, len(lines) - 1) * gap + padding * 2
+    if box_h % 2:
+        box_h += 1
+
+    panel = Image.new("RGBA", (width, box_h), (255, 255, 255, 255))
 
     y = padding
     for line in lines:
         width = measure_inline_tokens(line, font, font_size, inline_images)
         draw_inline_tokens(
-            new_img,
+            panel,
             line,
-            (round((new_img.width - width) / 2), y),
+            (round((panel.width - width) / 2), y),
             font=font,
             image_size=font_size,
             assets=inline_images,
@@ -1086,7 +1174,7 @@ def _caption_frame(
         )
         y += line_h + gap
 
-    return new_img
+    return panel
 
 
 def _atempo_filter(speed: float) -> str:
@@ -2331,11 +2419,47 @@ def _parse_effect_pipeline(
 COUNTRY_FLAG_ALIASES = {
     "usa": "us",
     "unitedstates": "us",
+    "unitedstatesofamerica": "us",
     "america": "us",
     "uk": "gb",
     "unitedkingdom": "gb",
     "england": "gb",
+    "southkorea": "kr",
+    "northkorea": "kp",
+    "russia": "ru",
+    "vatican": "va",
+    "vaticancity": "va",
+    "palestine": "ps",
+    "taiwan": "tw",
 }
+RESTRICTED_FLAG_USER_ID = 766953372309127168
+
+
+def _country_flag_code(flag: str) -> str | None:
+    normalized = re.sub(r"[^a-z0-9]", "", flag.casefold())
+    alias = COUNTRY_FLAG_ALIASES.get(normalized)
+    if alias is not None:
+        return alias
+    if re.fullmatch(r"[a-z]{2}", normalized):
+        return normalized
+    try:
+        country = pycountry.countries.lookup(flag.strip())
+    except LookupError:
+        return None
+    code = str(getattr(country, "alpha_2", "")).casefold()
+    return code if re.fullmatch(r"[a-z]{2}", code) else None
+
+
+def _restricted_flag_media(source: str, media_url: str) -> bool:
+    user_id = str(RESTRICTED_FLAG_USER_ID)
+    normalized_source = source.strip()
+    if re.fullmatch(rf"(?:<@!?)?{user_id}>?", normalized_source):
+        return True
+    path = urlsplit(media_url).path.casefold()
+    return bool(
+        re.search(rf"/avatars/{user_id}/", path)
+        or re.search(rf"/guilds/\d+/users/{user_id}(?:/|$)", path)
+    )
 
 
 def _effect_name_from_qualified(qualified_name: str) -> str:
@@ -2651,6 +2775,9 @@ class Images(Cog):
         **options: Any,
     ) -> None:
         media_url = await self._resolve_effect_media(ctx, source, attachment)
+        flag_name = str(options.pop("_flag_name", "")).strip()
+        if flag_name:
+            self._validate_flag_media(flag_name, source, media_url)
         second_url = ""
         if second_source or second_attachment is not None:
             second_url = await self._resolve_effect_media(
@@ -2801,11 +2928,11 @@ class Images(Cog):
         local = make_flag_asset(flag)
         if local is not None:
             return local
-        normalized = flag.casefold().strip().replace(" ", "").replace("-", "")
-        country = COUNTRY_FLAG_ALIASES.get(normalized, normalized)
-        if not re.fullmatch(r"[a-z]{2}", country):
+        country = _country_flag_code(flag)
+        if country is None:
             raise commands.BadArgument(
-                "Unknown flag. Use a two-letter country code, pride flag, or pirate."
+                "Unknown flag. Use a country name, two-letter country code, "
+                "pride flag, or pirate."
             )
         try:
             response = await fetch_public_bytes(
@@ -2820,6 +2947,14 @@ class Images(Cog):
                 "That country flag could not be found."
             ) from error
         return response.data
+
+    @staticmethod
+    def _validate_flag_media(flag: str, source: str, media_url: str) -> None:
+        if _country_flag_code(flag) == "il" and _restricted_flag_media(
+            source,
+            media_url,
+        ):
+            raise commands.BadArgument("no")
 
     @media_effect_timeout
     async def _globe_effect(self, ctx: Context, *, argument: str = "") -> None:
@@ -4121,7 +4256,7 @@ class Images(Cog):
     async def overlay_group_flag(self, ctx: Context, *, argument: str = "") -> None:
         """Overlay a pride, country, or pirate flag on a User/Emoji/Media URL.
 
-        -# -flag       Choose a pride flag, pirate flag, or country code.
+        -# -flag       Choose a pride flag, pirate flag, country name, or code.
         -# -opacity    Change the flag opacity from 0 to 100%. Defaults to 35.
         """
         media, options = _parse_effect_flags(
@@ -4139,6 +4274,7 @@ class Images(Cog):
             if positional is not None:
                 flag = positional
         options["overlay_data"] = await self._flag_data(ctx, flag)
+        options["_flag_name"] = flag
         options["stretch"] = True
         await self._apply_image_effect(ctx, "overlay", source=media, **options)
 
@@ -4781,6 +4917,12 @@ class Images(Cog):
                     effect,
                     options,
                 )
+                if effect == "overlayflag":
+                    self._validate_flag_media(
+                        str(normalized_options.get("flag", "")),
+                        source or parsed_source,
+                        media_url,
+                    )
                 if effect == "soundeffect":
                     try:
                         selected = _select_pipeline_sound_effect(
@@ -6099,7 +6241,7 @@ class Images(Cog):
 
     @image_effect_overlay.command(name="flag")
     @app_commands.describe(
-        flag="Pride flag, pirate, or two-letter country code",
+        flag="Pride flag, pirate, country name, or two-letter country code",
         opacity="Overlay opacity from 0 to 100%",
     )
     async def image_effect_overlay_flag(
@@ -6118,6 +6260,7 @@ class Images(Cog):
             source=media or "",
             attachment=attachment,
             overlay_data=flag_data,
+            _flag_name=flag,
             opacity=opacity,
             scale=1.0,
             stretch=True,

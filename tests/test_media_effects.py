@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import random
 import shutil
 import subprocess
 from array import array
@@ -29,6 +30,7 @@ from extensions.media_effects.commands import (
     PIPELINE_EFFECTS,
     RANDOM_EFFECTS,
     Images,
+    _country_flag_code,
     _extract_sound_effect_selector,
     _finalize_pipeline_result,
     _normalize_effect_options,
@@ -37,6 +39,7 @@ from extensions.media_effects.commands import (
     _playback_factor,
     _prepare_sound_effect_options,
     _random_effect_choices,
+    _restricted_flag_media,
     _resolve_pipeline_random_effects,
     _select_pipeline_sound_effect,
     _sound_effect_autocomplete,
@@ -48,6 +51,7 @@ from extensions.media_effects.processing import (
     MAGIK_GIF_WORKING_SIZE,
     MAGIK_MAX_GIF_FRAMES,
     MAGIK_WORKING_SIZE,
+    _adhd_segments,
     _magik_working_frame,
     _overlay,
     _recursive_zoom_frame,
@@ -1929,6 +1933,45 @@ def test_remove_caption_crops_the_panel_without_resizing_the_image() -> None:
         assert output.convert("RGBA").tobytes() == body.tobytes()
 
 
+def test_remove_caption_tolerates_multiple_rows_of_caption_text() -> None:
+    body = Image.new("RGBA", (120, 70), (30, 80, 140, 255))
+    captioned = Image.new("RGBA", (120, 130), "white")
+    captioned.alpha_composite(body, (0, 60))
+    captioned.paste(Image.new("RGBA", (80, 8), "black"), (20, 12))
+    captioned.paste(Image.new("RGBA", (92, 8), "black"), (14, 38))
+    source = BytesIO()
+    captioned.save(source, "PNG")
+
+    result = render_image_effect_sync(source.getvalue(), "removecaption")
+    with Image.open(BytesIO(result.data)) as output:
+        assert output.size == body.size
+        assert output.convert("RGBA").tobytes() == body.tobytes()
+
+
+def test_huerotate_preserves_animated_source_geometry_and_timing() -> None:
+    source = BytesIO()
+    first = Image.new("RGBA", (24, 40), "red")
+    second = Image.new("RGBA", (24, 40), "blue")
+    first.save(
+        source,
+        "GIF",
+        save_all=True,
+        append_images=[second],
+        duration=[80, 120],
+        loop=0,
+    )
+
+    result = render_image_effect_sync(source.getvalue(), "huerotate")
+    with Image.open(BytesIO(result.data)) as output:
+        assert output.size == (24, 40)
+        assert int(getattr(output, "n_frames", 1)) == 2
+        durations = []
+        for index in range(2):
+            output.seek(index)
+            durations.append(int(output.info["duration"]))
+        assert sum(durations) == 200
+
+
 def test_remove_bars_detects_video_crop_instead_of_using_a_fixed_percentage() -> None:
     result = render_image_effect_sync(_sample_letterboxed_video(), "removebars")
     output = _first_video_frame(result.data)
@@ -2155,6 +2198,20 @@ def test_sound_effect_keeps_video_when_base_audio_ends_early() -> None:
     assert probe_media_sync(result.data).duration >= 1.8
 
 
+def test_sound_effect_converts_a_gif_without_shortening_its_animation() -> None:
+    result = render_video_effect_sync(
+        _gif_bytes(),
+        "soundeffect",
+        second_data=_sample_audio("sine=frequency=440:duration=0.1"),
+        random_time=False,
+    )
+    probe = probe_media_sync(result.data)
+    assert result.filename == "audio-overlay.mp4"
+    assert probe.has_video is True
+    assert probe.has_audio is True
+    assert probe.duration >= 0.19
+
+
 def test_sound_effect_does_not_normalize_the_base_audio_quietly() -> None:
     base = _sample_audio("sine=frequency=440:duration=1")
     silence = _sample_audio("anullsrc=r=44100:cl=stereo:d=0.25")
@@ -2173,6 +2230,61 @@ def test_adhd_processes_video_and_audio_together() -> None:
     assert result.filename == "adhd.mp4"
     assert probe.has_video is True
     assert probe.has_audio is True
+
+
+def test_adhd_segments_scale_short_media_and_include_varied_modes() -> None:
+    segments = _adhd_segments(3.0, random.Random(42))
+    assert segments[0][0] == 0
+    assert segments[-1][1] == 3.0
+    assert all(0 < end - start <= 1.05 for start, end, _, _ in segments)
+    assert len({mode for _, _, _, mode in segments}) > 1
+
+    long_segments = _adhd_segments(30.0, random.Random(42))
+    assert all(2 <= end - start <= 7 for start, end, _, _ in long_segments[:-1])
+    assert {"normal", "lowered", "nightcore"} & {
+        mode for _, _, _, mode in long_segments
+    }
+
+
+def test_random_effect_pool_includes_size_and_volume_effects() -> None:
+    assert {"zoom", "resize", "enlarge"} <= set(RANDOM_EFFECTS)
+    assert "volume" in media_effect_commands.RANDOM_AUDIO_EFFECTS
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    (
+        ("United States", "us"),
+        ("South Korea", "kr"),
+        ("Israel", "il"),
+        ("Japan", "jp"),
+    ),
+)
+def test_country_flag_names_resolve_to_codes(name: str, expected: str) -> None:
+    assert _country_flag_code(name) == expected
+
+
+def test_israel_flag_restriction_detects_user_and_avatar_urls() -> None:
+    user_id = "766953372309127168"
+    assert _restricted_flag_media(f"<@{user_id}>", "")
+    assert _restricted_flag_media(
+        "",
+        f"https://cdn.discordapp.com/avatars/{user_id}/hash.png",
+    )
+    assert _restricted_flag_media(
+        "",
+        f"https://cdn.discordapp.com/guilds/1/users/{user_id}/avatars/hash.png",
+    )
+    assert not _restricted_flag_media(
+        "<@123456789012345678>",
+        "https://cdn.discordapp.com/avatars/123456789012345678/hash.png",
+    )
+    with pytest.raises(commands.BadArgument, match="^no$"):
+        Images._validate_flag_media(
+            "Israel",
+            f"<@{user_id}>",
+            f"https://cdn.discordapp.com/avatars/{user_id}/hash.png",
+        )
 
 
 @pytest.mark.parametrize(

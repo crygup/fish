@@ -8,6 +8,7 @@ from extensions.media_effects.commands import (
     Images,
     _atempo_filter,
     _caption_frame,
+    _caption_panel,
     _encode_spin3d,
     _globe_frame,
     _is_klipy_media_url,
@@ -75,6 +76,18 @@ def test_caption_supports_multilingual_text_and_inline_emoji() -> None:
     assert caption.getcolors(maxcolors=result.width * caption_height) != [
         (result.width * caption_height, (255, 255, 255, 255))
     ]
+
+
+def test_long_caption_panel_does_not_cover_the_media_canvas() -> None:
+    panel = _caption_panel(
+        480,
+        264,
+        "test " * 100,
+    )
+
+    assert panel.width == 480
+    assert panel.height <= round(264 * 0.45) + 1
+    assert panel.height % 2 == 0
 
 
 def test_caption_recognizes_direct_klipy_media() -> None:

@@ -1327,11 +1327,19 @@ def _animated_visual_frames(
     effect: str,
     options: dict[str, Any],
 ) -> tuple[list[Image.Image], list[int]]:
-    count = max(12, min(60, int(options.get("frames", REFERENCE_EFFECT_FRAMES))))
     speed = float(options.get("speed", 1.0))
     if not 0.25 <= speed <= 4:
         raise ValueError("Animation speed must be between 0.25 and 4.")
-    prepared = [_reference_frame(frame) for frame in source_frames]
+    preserve_source_timing = effect == "huerotate" and len(source_frames) > 1
+    count = (
+        len(source_frames)
+        if preserve_source_timing
+        else max(12, min(60, int(options.get("frames", REFERENCE_EFFECT_FRAMES))))
+    )
+    prepared = [
+        frame.convert("RGBA") if preserve_source_timing else _reference_frame(frame)
+        for frame in source_frames
+    ]
     output: list[Image.Image] = []
     for index in range(count):
         source_index = index % len(prepared)
@@ -1411,6 +1419,8 @@ def _animated_visual_frames(
             output.append(rotated)
         else:
             output.append(source.copy())
+    if preserve_source_timing:
+        return output, [max(20, round(duration / speed)) for duration in durations]
     frame_duration = max(20, round(REFERENCE_EFFECT_DURATION / speed))
     return output, [frame_duration] * count
 
@@ -1425,10 +1435,32 @@ def _edge_crop_box(
     brightness = array.mean(axis=2)
     row_spread = array.std(axis=2).mean(axis=1)
     if caption:
-        # Caption panels are mostly white but their text makes the row average
-        # and spread vary sharply. Treat a row as part of the panel while most
-        # of its pixels remain near-white.
-        mask = (brightness > 245).mean(axis=1) > 0.8
+        # Caption text can fill most of a row, but generated caption panels
+        # keep their side margins white. Find the first sustained transition
+        # where both the margins and the full row stop resembling the panel.
+        near_white = np.all(array > 240, axis=2)
+        margin = max(2, min(rgba.width // 8, 64))
+        margin_white = np.concatenate(
+            (near_white[:, :margin], near_white[:, -margin:]),
+            axis=1,
+        ).mean(axis=1)
+        row_white = near_white.mean(axis=1)
+        window = max(3, min(12, rgba.height // 60))
+        top = 0
+        if margin_white[0] >= 0.9:
+            for candidate in range(1, len(margin_white) // 2):
+                end = min(len(margin_white), candidate + window)
+                if (
+                    float(margin_white[candidate]) < 0.86
+                    and float(row_white[candidate]) < 0.8
+                    and float(margin_white[candidate:end].mean()) < 0.86
+                    and float(row_white[candidate:end].mean()) < 0.8
+                ):
+                    top = candidate
+                    break
+        if top <= 0 or rgba.height - top < 2:
+            return None
+        return (0, top, rgba.width, rgba.height)
     else:
         mask = (brightness.mean(axis=1) < 12) & (row_spread < 18)
     top = 0
@@ -3381,11 +3413,14 @@ def _audio_overlay_output(
     if source_end is not None:
         source_duration = min(source_duration, source_end - source_start)
     remaining_duration = max(0.0, probe.duration - at)
-    effective_duration = (
-        remaining_duration if loop else min(remaining_duration, source_duration / speed)
-    )
-    if loop and remaining_duration:
-        overlay_chain += f",atrim=duration={remaining_duration:g}"
+    overlay_duration = remaining_duration if loop else source_duration / speed
+    target_duration = max(probe.duration, at + overlay_duration)
+    target_duration = min(MAX_MEDIA_DURATION, target_duration)
+    effective_duration = max(0.0, min(overlay_duration, target_duration - at))
+    if loop and effective_duration:
+        overlay_chain += f",atrim=duration={effective_duration:g}"
+    elif effective_duration and effective_duration < overlay_duration:
+        overlay_chain += f",atrim=duration={effective_duration:g}"
     if fade_in and effective_duration:
         fade_duration = min(fade_in, effective_duration)
         overlay_chain += f",afade=t=in:st=0:d={fade_duration:g}"
@@ -3396,34 +3431,88 @@ def _audio_overlay_output(
     overlay_chain += f",volume={volume:g},adelay={round(at * 1000)}:all=1[overlay]"
 
     if probe.has_audio:
-        if probe.duration > 0:
+        if target_duration > 0:
             base_chain = (
-                f"[0:a]apad=whole_dur={probe.duration:g},"
-                f"atrim=duration={probe.duration:g}[base]"
+                f"[0:a]apad=whole_dur={target_duration:g},"
+                f"atrim=duration={target_duration:g}[base]"
             )
         else:
             base_chain = "[0:a]anull[base]"
         audio_graph = (
             f"{overlay_chain};{base_chain};[base][overlay]"
-            "amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
-            "alimiter=limit=0.95:latency=1[a]"
+            "amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,"
+            "alimiter=limit=0.95:level=0:latency=1,"
+            f"apad=whole_dur={target_duration:g},"
+            f"atrim=duration={target_duration:g}[a]"
         )
     else:
         duration_chain = (
-            f"apad=whole_dur={probe.duration:g}," f"atrim=duration={probe.duration:g}"
-            if probe.duration > 0
+            f"apad=whole_dur={target_duration:g}," f"atrim=duration={target_duration:g}"
+            if target_duration > 0
             else "anull"
         )
         audio_graph = f"{overlay_chain};[overlay]{duration_chain}[a]"
+    map_arguments: list[str] = []
+    if probe.has_video:
+        extension = max(0.0, target_duration - probe.duration)
+        if extension > 0.001:
+            audio_graph += (
+                f";[0:v]tpad=stop_mode=clone:stop_duration={extension:g}[video]"
+            )
+            map_arguments.extend(["-map", "[video]"])
+        else:
+            map_arguments.extend(["-map", "0:v:0"])
+    map_arguments.extend(["-map", "[a]"])
     return _video_command_output(
         input_data,
         filename="audio-overlay",
         second_data=second_data,
         second_loop=loop,
         filter_complex=audio_graph,
-        map_arguments=["-map", "0:v?", "-map", "[a]"],
+        map_arguments=map_arguments,
         output_extension="mp4" if probe.has_video else "mp3",
     )
+
+
+AdhdMode = Literal["fast", "slow", "normal", "lowered", "nightcore"]
+
+
+def _adhd_segments(
+    duration: float,
+    rng: random.Random | random.SystemRandom,
+) -> list[tuple[float, float, float, AdhdMode]]:
+    """Build varied ADHD sections while scaling short clips below two seconds."""
+    if duration <= 0:
+        return []
+    if duration < 8:
+        minimum = max(0.25, duration * 0.12)
+        maximum = max(minimum, duration * 0.35)
+    else:
+        minimum = 2.0
+        maximum = min(7.0, max(minimum, duration * 0.25))
+
+    modes: list[AdhdMode] = ["fast", "slow", "normal", "lowered", "nightcore"]
+    available = modes.copy()
+    segments: list[tuple[float, float, float, AdhdMode]] = []
+    position = 0.0
+    previous: AdhdMode | None = None
+    while position < duration - 0.001:
+        if not available:
+            available = modes.copy()
+        candidates = [mode for mode in available if mode != previous] or available
+        mode = rng.choice(candidates)
+        available.remove(mode)
+        segment_length = rng.uniform(minimum, maximum)
+        end = min(duration, position + segment_length)
+        factor = (
+            rng.uniform(1.15, 3.0)
+            if mode == "fast"
+            else rng.uniform(0.5, 0.9) if mode == "slow" else 1.0
+        )
+        segments.append((position, end, factor, mode))
+        position = end
+        previous = mode
+    return segments
 
 
 def _adhd_output(input_data: bytes, probe: MediaProbe) -> EffectResult:
@@ -3432,16 +3521,7 @@ def _adhd_output(input_data: bytes, probe: MediaProbe) -> EffectResult:
     if probe.duration <= 0:
         raise ValueError("Could not determine the media duration.")
 
-    rng = random.SystemRandom()
-    segments: list[tuple[float, float, float, bool]] = []
-    position = 0.0
-    faster = bool(rng.getrandbits(1))
-    while position < probe.duration - 0.001:
-        end = min(probe.duration, position + rng.uniform(0.75, 1.75))
-        factor = rng.uniform(1.15, 3.0) if faster else rng.uniform(0.5, 0.9)
-        segments.append((position, end, factor, faster))
-        position = end
-        faster = not faster
+    segments = _adhd_segments(probe.duration, random.SystemRandom())
 
     filters: list[str] = []
     map_arguments: list[str] = []
@@ -3465,13 +3545,15 @@ def _adhd_output(input_data: bytes, probe: MediaProbe) -> EffectResult:
         split = "".join(f"[asrc{index}]" for index in range(len(segments)))
         filters.append(f"[0:a]asplit={len(segments)}{split}")
         audio_outputs: list[str] = []
-        for index, (start, end, factor, is_faster) in enumerate(segments):
+        for index, (start, end, factor, mode) in enumerate(segments):
             label = f"a{index}"
-            voice = (
-                "asetrate=44100*1.25,aresample=44100,atempo=0.8"
-                if is_faster
-                else "asetrate=44100*0.8,aresample=44100,atempo=1.25"
-            )
+            voice = {
+                "fast": "asetrate=44100*1.25,aresample=44100,atempo=0.8",
+                "slow": "asetrate=44100*0.8,aresample=44100,atempo=1.25",
+                "normal": "anull",
+                "lowered": "asetrate=44100*0.72,aresample=44100,atempo=1.388889",
+                "nightcore": "asetrate=44100*1.35,aresample=44100,atempo=0.740741",
+            }[mode]
             filters.append(
                 f"[asrc{index}]atrim=start={start:g}:end={end:g},"
                 f"asetpts=PTS-STARTPTS,{voice},{_atempo_chain(factor)},"
@@ -3950,8 +4032,16 @@ def render_video_effect_sync(
             probe,
             filename="audio-destroyed",
             audio_filter=(
-                f"acrusher=bits={max(2, 14 - amount)}:mix=1:mode=lin,"
-                f"aresample={max(4000, 22000 - amount * 1500)},aresample=44100"
+                f"acrusher=bits={max(2, 13 - amount)}:mix=1:mode=lin:"
+                f"aa={max(0.05, 0.45 - amount * 0.03):g},"
+                f"aresample={max(3000, 18000 - amount * 1200)},"
+                f"acompressor=threshold=-{min(40, 16 + amount * 2)}dB:"
+                f"ratio={min(20, 4 + amount)}:attack=2:release=60:makeup=6,"
+                f"aecho=0.72:0.82:{max(35, amount * 18)}|"
+                f"{max(70, amount * 37)}:"
+                f"{min(0.8, 0.22 + amount * 0.04):g}|"
+                f"{min(0.65, 0.12 + amount * 0.03):g},"
+                "aresample=44100"
             ),
             options=options,
         )
