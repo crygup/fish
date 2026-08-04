@@ -40,7 +40,7 @@ click==8.4.2
     # via
     #   jishaku
     #   uvicorn
-cryptography==49.0.0
+cryptography==50.0.0
     # via -r requirements.in
 curl-cffi==0.15.0
     # via -r requirements.in
@@ -105,6 +105,8 @@ propcache==0.5.2
     #   yarl
 psutil==7.2.2
     # via -r requirements.in
+pycountry==24.6.1
+    # via -r requirements.in
 pycparser==3.0
     # via cffi
 pydantic==2.13.4
@@ -113,8 +115,6 @@ pydantic==2.13.4
     #   fastapi
 pydantic-core==2.46.4
     # via pydantic
-pycountry==24.6.1
-    # via -r requirements.in
 pyee==13.0.1
     # via playwright
 pygments==2.20.0

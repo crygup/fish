@@ -52,7 +52,7 @@ click==8.4.2
     # via
     #   jishaku
     #   uvicorn
-cryptography==49.0.0
+cryptography==50.0.0
     # via -r requirements.in
 curl-cffi==0.15.0
     # via -r requirements.in
@@ -71,6 +71,8 @@ discord-py==2.7.1
     #   -r requirements.in
     #   discord-ext-menus
     #   jishaku
+emoji==2.15.0
+    # via -r requirements.in
 fastapi==0.139.2
     # via -r requirements.in
 filelock==3.31.1
@@ -120,7 +122,9 @@ multidict==6.7.1
 nodeenv==1.10.0
     # via pyright
 numpy==2.5.1
-    # via pandas
+    # via
+    #   -r requirements.in
+    #   pandas
 packageurl-python==0.17.6
     # via cyclonedx-python-lib
 packaging==26.2
@@ -154,6 +158,8 @@ psutil==7.2.2
     # via -r requirements.in
 py-serializable==2.1.0
     # via cyclonedx-python-lib
+pycountry==24.6.1
+    # via -r requirements.in
 pycparser==3.0
     # via cffi
 pydantic==2.13.4
