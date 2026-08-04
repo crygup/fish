@@ -71,7 +71,7 @@ class Tasks(Cog):
 
     def _twitch_eventsub_secret(self) -> str | None:
         keys = self.bot.config["keys"]
-        secret = keys.get("twitch_eventsub_secret") or keys.get("twitch_secret")
+        secret = keys.get("twitch_eventsub_secret")
         if not secret:
             self.bot.logger.warning(
                 "Twitch EventSub is disabled: twitch_eventsub_secret is not configured"
@@ -673,7 +673,7 @@ class Tasks(Cog):
     def delete_videos(self):
         # Normal jobs clean themselves in ``Downloader.download``. Remove only
         # crash-orphaned job directories old enough that no valid job can still
-        # be running (the hard job timeout is three minutes).
+        # be running (the hard job timeout is ten minutes).
         root = DOWNLOADS_ROOT
         if not os.path.isdir(root):
             return
@@ -746,6 +746,9 @@ class Tasks(Cog):
         self.twitch_eventsub_sync_task.cancel()
         self.twitch_reconciliation_task.cancel()
         self.twitch_event_inbox_task.cancel()
+        self.youtube_websub_sync_task.cancel()
+        self.youtube_event_inbox_task.cancel()
+        self.youtube_community_task.cancel()
 
     async def cog_load(self) -> None:
         self._twitch_access_token: str | None = None
@@ -756,6 +759,9 @@ class Tasks(Cog):
         self.twitch_eventsub_sync_task.start()
         self.twitch_reconciliation_task.start()
         self.twitch_event_inbox_task.start()
+        self.youtube_websub_sync_task.start()
+        self.youtube_event_inbox_task.start()
+        self.youtube_community_task.start()
 
     @tasks.loop(minutes=10.0)
     async def delete_videos_task(self):
@@ -791,4 +797,36 @@ class Tasks(Cog):
 
     @twitch_event_inbox_task.before_loop
     async def before_twitch_event_inbox_task(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(hours=6.0)
+    async def youtube_websub_sync_task(self):
+        try:
+            await cast(Any, self).sync_youtube_subscriptions()
+        except Exception:
+            self.bot.logger.exception("YouTube WebSub sync failed")
+
+    @youtube_websub_sync_task.before_loop
+    async def before_youtube_websub_sync_task(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(seconds=30.0)
+    async def youtube_event_inbox_task(self):
+        for _ in range(25):
+            if not await cast(Any, self).process_youtube_event():
+                break
+
+    @youtube_event_inbox_task.before_loop
+    async def before_youtube_event_inbox_task(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=2.0)
+    async def youtube_community_task(self):
+        try:
+            await cast(Any, self).check_youtube_community_posts()
+        except Exception:
+            self.bot.logger.exception("YouTube community post check failed")
+
+    @youtube_community_task.before_loop
+    async def before_youtube_community_task(self):
         await self.bot.wait_until_ready()

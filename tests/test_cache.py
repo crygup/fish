@@ -27,3 +27,16 @@ def test_removals_tolerate_stale_cache() -> None:
     cache.remove_adl(3)
     cache.remove_poketwo(3)
     cache.remove_reaction_guilds(3)
+
+
+def test_global_tracking_and_history_settings_are_separate() -> None:
+    cache = db_cache()
+    cache.add_opt_out(42, "avatar")
+    assert cache.user_tracking_opted_out(42, "avatar")
+    assert not cache.user_tracking_opted_out(42, "status")
+    assert cache.user_history_is_public(42)
+
+    cache.tracking_disabled_users.add(42)
+    cache.private_history_users.add(42)
+    assert cache.user_tracking_opted_out(42, "status")
+    assert not cache.user_history_is_public(42)

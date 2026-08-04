@@ -104,6 +104,37 @@ def describe_missing_app_parameters(command: Any) -> None:
             internal_parameter.description = app_commands.locale_str(description)
 
 
+class FirstUseNoticeView(discord.ui.View):
+    def __init__(self, ctx: commands.Context[Any]) -> None:
+        super().__init__(timeout=180)
+        self.ctx = ctx
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.ctx.author.id:
+            return True
+        await interaction.response.send_message(
+            "These settings belong to the person who ran the command.",
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(label="Open settings", style=discord.ButtonStyle.primary)
+    async def open_settings(
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
+    ) -> None:
+        cog = self.ctx.bot.get_cog("Settings")
+        callback = getattr(cog, "send_privacy_settings_interaction", None)
+        if callback is None:
+            await interaction.response.send_message(
+                "Settings are temporarily unavailable.",
+                ephemeral=True,
+            )
+            return
+        await callback(self.ctx, interaction)
+
+
 def required_intents() -> discord.Intents:
     """Enable only gateway events used by Fishie's loaded extensions."""
 
@@ -116,6 +147,7 @@ def required_intents() -> discord.Intents:
     intents.messages = True
     intents.reactions = True
     intents.typing = True
+    intents.voice_states = True
     intents.message_content = True
     intents.presences = True
     return intents
@@ -219,8 +251,18 @@ class Fishie(commands.Bot):
         cog = command.cog
         module = getattr(cog.__class__, "__module__", "") if cog is not None else ""
         return (
-            root_name in {"enable", "disable", "invite", "about", "help"}
-            or qualified_name.startswith("logging-delete")
+            root_name
+            in {
+                "enable",
+                "disable",
+                "invite",
+                "about",
+                "help",
+                "settings",
+                "tracking",
+                "logging",
+            }
+            or qualified_name.startswith(("logging-delete", "tracking-delete"))
             or root_name == "jsk"
             or module.startswith("extensions.owner")
             or module.startswith("extensions.jishaku")
@@ -252,6 +294,38 @@ class Fishie(commands.Bot):
                     f"The `{command_name}` command is disabled in this channel."
                 )
         return True
+
+    async def invoke(self, ctx: commands.Context[Fishie]) -> None:
+        if (
+            ctx.command is not None
+            and not ctx.author.bot
+            and ctx.author.id not in self.db_cache.first_use_notice_users
+        ):
+            newly_marked = await self.pool.fetchval(
+                """
+                INSERT INTO user_settings (user_id, first_use_notice_shown)
+                VALUES ($1, TRUE)
+                ON CONFLICT (user_id) DO UPDATE
+                SET first_use_notice_shown = TRUE
+                WHERE user_settings.first_use_notice_shown = FALSE
+                RETURNING TRUE
+                """,
+                ctx.author.id,
+            )
+            self.db_cache.first_use_notice_users.add(ctx.author.id)
+            if newly_marked:
+                await ctx.send(
+                    "Before using Fishie for the first time, please review your "
+                    "privacy settings. Tracking is enabled by default and your "
+                    "saved history is public by default. You can change either "
+                    "setting whenever you want. Changing a setting does not "
+                    "delete data that is already saved.",
+                    view=FirstUseNoticeView(ctx),
+                    ephemeral=ctx.interaction is not None,
+                )
+                return
+
+        await super().invoke(ctx)
 
     # thanks leo
     async def on_message_edit(
@@ -524,6 +598,9 @@ class Fishie(commands.Bot):
         self.db_cache.pinboard.clear()
         self.db_cache.lastfm.clear()
         self.db_cache.disabled_commands.clear()
+        self.db_cache.tracking_disabled_users.clear()
+        self.db_cache.private_history_users.clear()
+        self.db_cache.first_use_notice_users.clear()
         self.cached_roblox_templates.clear()
         self.cached_mudae_consent.clear()
         self.cached_honeypots.clear()
@@ -559,6 +636,23 @@ class Fishie(commands.Bot):
                 guild_id = row["guild_id"]
                 self.db_cache.add_opt_out(guild_id, item)
                 self.logger.info(f'Added "{item}" to opted out for guild "{guild_id}"')
+
+        user_privacy_settings = await self.pool.fetch("""
+            SELECT
+                user_id,
+                tracking_enabled,
+                history_public,
+                first_use_notice_shown
+            FROM user_settings
+            """)
+        for row in user_privacy_settings:
+            user_id = row["user_id"]
+            if not row["tracking_enabled"]:
+                self.db_cache.tracking_disabled_users.add(user_id)
+            if not row["history_public"]:
+                self.db_cache.private_history_users.add(user_id)
+            if row["first_use_notice_shown"]:
+                self.db_cache.first_use_notice_users.add(user_id)
 
         guild_settings = await self.pool.fetch("SELECT * FROM guild_settings")
         for row in guild_settings:

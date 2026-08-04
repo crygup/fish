@@ -12,6 +12,9 @@ class db_cache:
         self.pinboard: Dict[int, int] = {}
         self.lastfm: dict[int, str] = {}
         self.disabled_commands: set[tuple[int, str, int]] = set()
+        self.tracking_disabled_users: set[int] = set()
+        self.private_history_users: set[int] = set()
+        self.first_use_notice_users: set[int] = set()
 
     def add_account(
         self, user_id: int, last_fm: str
@@ -107,3 +110,11 @@ class db_cache:
             return self.opted_out[object_id]
         except KeyError:
             return []
+
+    def user_tracking_opted_out(self, user_id: int, item: str) -> bool:
+        return user_id in self.tracking_disabled_users or item in self.get_opted_out(
+            user_id
+        )
+
+    def user_history_is_public(self, user_id: int) -> bool:
+        return user_id not in self.private_history_users

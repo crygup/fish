@@ -44,6 +44,8 @@ async def test_full_guild_erasure_covers_logs_configuration_and_deliveries() -> 
         "nickname_logs",
         "twitch_follows",
         "twitch_announcement_deliveries",
+        "youtube_follows",
+        "youtube_announcement_deliveries",
         "honeypot_channels",
         "stag_logs",
         "user_statuses_legacy_backup",

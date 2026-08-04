@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
@@ -43,6 +44,10 @@ if TYPE_CHECKING:
     from core import Fishie
 
 from core.privacy import erase_guild, erase_user
+from extensions.events.youtube import (
+    normalize_youtube_events,
+    youtube_websub_verify_token,
+)
 from extensions.media_effects.audio_effects import (
     audio_effect_catalog as bundled_audio_effect_catalog,
 )
@@ -57,11 +62,15 @@ from extensions.media_effects.commands import (
     refresh_discord_attachment_url,
 )
 from extensions.media_effects.processing import (
+    render_combine_effect,
     render_image_effect,
+    render_overlay_effect,
+    render_text_effect,
     render_video_effect,
 )
 from utils.credentials import decrypt_credential, encrypt_credential
 from utils.network import fetch_public_bytes, validate_public_url
+from utils.rich_text import resolve_inline_images
 
 WEB_ORIGINS = frozenset({"https://crygup.com", "https://www.crygup.com"})
 SESSION_COOKIE = "__Host-fishie_session"
@@ -133,7 +142,15 @@ MEDIA_API_EFFECTS = frozenset(
         for name, (engine, _, _) in PIPELINE_EFFECTS.items()
         if engine in {"image", "video"}
     }
-    | {"meme", "audiooverlay", "audioreplace", "soundeffect"}
+    | {
+        "meme",
+        "text",
+        "combine",
+        "overlay",
+        "audiooverlay",
+        "audioreplace",
+        "soundeffect",
+    }
 )
 MEDIA_API_ALIASES = {
     **PIPELINE_EFFECT_ALIASES,
@@ -359,7 +376,10 @@ async def apply_media_effect_api(
             raise HTTPException(400, str(error)) from error
         secondary_data = secondary.data
 
-    if normalized in {"audiooverlay", "audioreplace"} and secondary_data is None:
+    if (
+        normalized in {"overlay", "audiooverlay", "audioreplace", "combine"}
+        and secondary_data is None
+    ):
         raise HTTPException(
             400,
             "This effect requires secondary_media_url.",
@@ -374,7 +394,29 @@ async def apply_media_effect_api(
         async with bot_ref.media_semaphore:
             async with asyncio.timeout(60):
                 engine = PIPELINE_EFFECTS[normalized][0]
-                if engine == "video" or normalized in {
+                if normalized == "text":
+                    text = str(renderer_options.get("text", ""))
+                    renderer_options["inline_images"] = await resolve_inline_images(
+                        bot_ref.session, [text]
+                    )
+                    result = await render_text_effect(body, **renderer_options)
+                elif normalized == "combine":
+                    if secondary_data is None:
+                        raise ValueError("Combine requires secondary media.")
+                    result = await render_combine_effect(
+                        body,
+                        secondary_data,
+                        **renderer_options,
+                    )
+                elif normalized == "overlay":
+                    if secondary_data is None:
+                        raise ValueError("Overlay requires secondary media.")
+                    result = await render_overlay_effect(
+                        body,
+                        secondary_data,
+                        **renderer_options,
+                    )
+                elif engine == "video" or normalized in {
                     "audiooverlay",
                     "audioreplace",
                     "soundeffect",
@@ -783,7 +825,7 @@ def _verify_twitch_eventsub(request: Request, body: bytes) -> None:
     if not bot_ref:
         raise HTTPException(503, "Bot not ready")
     keys = bot_ref.config["keys"]
-    secret = keys.get("twitch_eventsub_secret") or keys.get("twitch_secret")
+    secret = keys.get("twitch_eventsub_secret")
     if not secret:
         raise HTTPException(503, "Twitch EventSub is not configured")
 
@@ -891,10 +933,182 @@ async def twitch_eventsub(request: Request):
     return {"ok": True}
 
 
+def _youtube_channel_from_topic(topic: str) -> str | None:
+    parsed = urlsplit(topic)
+    if parsed.scheme != "https" or parsed.hostname not in {
+        "www.youtube.com",
+        "youtube.com",
+    }:
+        return None
+    if parsed.path != "/feeds/videos.xml":
+        return None
+    values = parse_qs(parsed.query).get("channel_id", [])
+    channel_id = values[0] if len(values) == 1 else ""
+    if not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", channel_id):
+        return None
+    return channel_id
+
+
+def _verify_youtube_websub_signature(body: bytes, supplied: str | None) -> None:
+    if bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
+    keys = bot_ref.config.get("keys", {})
+    secret = keys.get("youtube_websub_secret")
+    if not secret:
+        raise HTTPException(503, "YouTube WebSub is not configured")
+    if not supplied or "=" not in supplied:
+        raise HTTPException(403, "Missing YouTube WebSub signature")
+    algorithm, signature = supplied.split("=", 1)
+    digest = {"sha1": hashlib.sha1, "sha256": hashlib.sha256}.get(algorithm.lower())
+    if digest is None:
+        raise HTTPException(403, "Unsupported YouTube WebSub signature")
+    expected = hmac.new(str(secret).encode(), body, digest).hexdigest()
+    if not hmac.compare_digest(signature.lower(), expected):
+        raise HTTPException(403, "Invalid YouTube WebSub signature")
+
+
+@app.get("/youtube/websub", include_in_schema=False)
+async def verify_youtube_websub(request: Request):
+    if bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
+    mode = request.query_params.get("hub.mode", "")
+    topic = request.query_params.get("hub.topic", "")
+    challenge = request.query_params.get("hub.challenge", "")
+    channel_id = _youtube_channel_from_topic(topic)
+    if mode not in {"subscribe", "unsubscribe"} or not challenge or not channel_id:
+        raise HTTPException(400, "Invalid YouTube WebSub verification")
+    keys = bot_ref.config.get("keys", {})
+    secret = keys.get("youtube_websub_secret")
+    if not secret:
+        raise HTTPException(503, "YouTube WebSub is not configured")
+    supplied_token = request.query_params.get("hub.verify_token", "")
+    expected_token = youtube_websub_verify_token(str(secret), channel_id)
+    if not hmac.compare_digest(supplied_token, expected_token):
+        raise HTTPException(403, "Invalid YouTube WebSub verification token")
+    known = await bot_ref.pool.fetchval(
+        "SELECT 1 FROM youtube_websub_subscriptions "
+        "WHERE youtube_channel_id = $1 "
+        "UNION ALL SELECT 1 FROM youtube_follows "
+        "WHERE youtube_channel_id = $1 LIMIT 1",
+        channel_id,
+    )
+    if not known:
+        raise HTTPException(404, "Unknown YouTube subscription")
+    if mode == "unsubscribe":
+        await bot_ref.pool.execute(
+            "DELETE FROM youtube_websub_subscriptions " "WHERE youtube_channel_id = $1",
+            channel_id,
+        )
+    else:
+        try:
+            lease_seconds = min(
+                864000,
+                max(
+                    60,
+                    int(request.query_params.get("hub.lease_seconds", "864000")),
+                ),
+            )
+        except ValueError:
+            raise HTTPException(400, "Invalid YouTube WebSub lease")
+        await bot_ref.pool.execute(
+            "INSERT INTO youtube_websub_subscriptions "
+            "(youtube_channel_id, status, lease_expires_at, updated_at, last_error) "
+            "VALUES ($1, 'enabled', now() + ($2 * interval '1 second'), now(), NULL) "
+            "ON CONFLICT (youtube_channel_id) DO UPDATE SET status = 'enabled', "
+            "lease_expires_at = EXCLUDED.lease_expires_at, updated_at = now(), "
+            "last_error = NULL",
+            channel_id,
+            lease_seconds,
+        )
+    return PlainTextResponse(challenge)
+
+
+@app.post("/youtube/websub", include_in_schema=False)
+async def youtube_websub(request: Request):
+    body = await request.body()
+    if len(body) > 1_000_000:
+        raise HTTPException(413, "YouTube WebSub payload is too large")
+    _verify_youtube_websub_signature(
+        body,
+        request.headers.get("X-Hub-Signature-256")
+        or request.headers.get("X-Hub-Signature"),
+    )
+    if b"<!DOCTYPE" in body.upper() or b"<!ENTITY" in body.upper():
+        raise HTTPException(400, "Unsafe YouTube WebSub XML")
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError:
+        raise HTTPException(400, "Invalid YouTube WebSub XML")
+    if bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
+    events_cog: Any = bot_ref.get_cog("Events")
+    if events_cog is None or not hasattr(events_cog, "process_youtube_event"):
+        raise HTTPException(503, "YouTube event handler is not ready")
+    namespaces = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "yt": "http://www.youtube.com/xml/schemas/2015",
+    }
+    inserted: list[str] = []
+    body_hash = hashlib.sha256(body).hexdigest()
+    for entry in root.findall("atom:entry", namespaces):
+        video_id = (entry.findtext("yt:videoId", "", namespaces) or "").strip()
+        channel_id = (entry.findtext("yt:channelId", "", namespaces) or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id) or not re.fullmatch(
+            r"UC[A-Za-z0-9_-]{22}", channel_id
+        ):
+            continue
+        followed = await bot_ref.pool.fetchval(
+            "SELECT 1 FROM youtube_follows WHERE youtube_channel_id = $1 LIMIT 1",
+            channel_id,
+        )
+        if not followed:
+            continue
+        updated = entry.findtext("atom:updated", "", namespaces) or ""
+        event_id = hashlib.sha256(
+            f"{body_hash}:{channel_id}:{video_id}:{updated}".encode()
+        ).hexdigest()
+        payload = {
+            "channel_id": channel_id,
+            "video_id": video_id,
+            "title": entry.findtext("atom:title", "", namespaces) or "",
+            "published": entry.findtext("atom:published", "", namespaces) or "",
+            "updated": updated,
+        }
+        result = await bot_ref.pool.execute(
+            "INSERT INTO youtube_events "
+            "(event_id, youtube_channel_id, video_id, payload) "
+            "VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (event_id) DO NOTHING",
+            event_id,
+            channel_id,
+            video_id,
+            payload,
+        )
+        if result != "INSERT 0 0":
+            inserted.append(event_id)
+    for event_id in inserted:
+        task = asyncio.create_task(events_cog.process_youtube_event(event_id))
+        bot_ref._eventsub_tasks.add(task)
+        task.add_done_callback(bot_ref._eventsub_tasks.discard)
+    return {"ok": True, "accepted": len(inserted)}
+
+
 async def _check_opted_out(user_id: int) -> bool:
     pool = _check_pool()
     r = await pool.fetchval(
-        "SELECT 1 FROM opted_out WHERE user_id = $1 AND cardinality(items) > 0", user_id
+        """
+        SELECT 1
+        WHERE EXISTS (
+            SELECT 1
+            FROM user_settings
+            WHERE user_id = $1 AND tracking_enabled = FALSE
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM opted_out
+            WHERE user_id = $1 AND cardinality(items) > 0
+        )
+        """,
+        user_id,
     )
     return r is not None
 
@@ -902,11 +1116,63 @@ async def _check_opted_out(user_id: int) -> bool:
 async def _tracking_opted_out(user_id: int, item: str) -> bool:
     return bool(
         await _check_pool().fetchval(
-            "SELECT $2 = ANY(items) FROM opted_out WHERE user_id = $1",
+            """
+            SELECT
+                COALESCE(
+                    (
+                        SELECT NOT tracking_enabled
+                        FROM user_settings
+                        WHERE user_id = $1
+                    ),
+                    FALSE
+                )
+                OR COALESCE(
+                    (
+                        SELECT $2 = ANY(items)
+                        FROM opted_out
+                        WHERE user_id = $1
+                    ),
+                    FALSE
+                )
+            """,
             user_id,
             item,
         )
     )
+
+
+async def _history_visible_to(
+    user_id: int,
+    authorization: str | None,
+    session_id: str | None,
+) -> None:
+    history_public = await _check_pool().fetchval(
+        "SELECT history_public FROM user_settings WHERE user_id = $1",
+        user_id,
+    )
+    if history_public is not False:
+        return
+
+    viewer_id: int | None = None
+    if session_id:
+        viewer_id = await _check_pool().fetchval(
+            """
+            SELECT user_id
+            FROM web_sessions
+            WHERE session_id_hash = $1 AND expires_at > now()
+            """,
+            _session_hash(session_id),
+        )
+    elif authorization:
+        try:
+            viewer = await _verify_token(authorization, None)
+        except HTTPException:
+            viewer = None
+        if viewer is not None:
+            viewer_id = int(viewer["id"])
+
+    if viewer_id != user_id:
+        raise HTTPException(403, "This user has made their saved history private")
 
 
 VALID_OPTOUTS = {
@@ -920,8 +1186,10 @@ VALID_OPTOUTS = {
     "xp",
     "commands",
     "status",
+    "activity",
     "pokemon",
     "corn",
+    "emoji",
 }
 
 
@@ -966,6 +1234,71 @@ async def set_opted_out(
             bot_ref.db_cache.opted_out.pop(user_id, None)
 
     return {"items": items}
+
+
+@app.get("/user/{user_id}/privacy-settings")
+async def get_user_privacy_settings(
+    user_id: int,
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    """Get the authenticated user's global tracking and history settings."""
+    await _require_self(user_id, authorization, session_id)
+    row = await _check_pool().fetchrow(
+        """
+        SELECT tracking_enabled, history_public
+        FROM user_settings
+        WHERE user_id = $1
+        """,
+        user_id,
+    )
+    return {
+        "tracking_enabled": row["tracking_enabled"] if row else True,
+        "history_public": row["history_public"] if row else True,
+    }
+
+
+@app.post("/user/{user_id}/privacy-settings")
+async def set_user_privacy_settings(
+    user_id: int,
+    payload: dict = Body(...),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    """Update global tracking and saved-history visibility without deleting data."""
+    await _require_self(user_id, authorization, session_id)
+    tracking_enabled = payload.get("tracking_enabled")
+    history_public = payload.get("history_public")
+    if not isinstance(tracking_enabled, bool) or not isinstance(history_public, bool):
+        raise HTTPException(
+            400,
+            "tracking_enabled and history_public must both be booleans",
+        )
+    await _check_pool().execute(
+        """
+        INSERT INTO user_settings (user_id, tracking_enabled, history_public)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id) DO UPDATE
+        SET tracking_enabled = EXCLUDED.tracking_enabled,
+            history_public = EXCLUDED.history_public
+        """,
+        user_id,
+        tracking_enabled,
+        history_public,
+    )
+    if bot_ref:
+        if tracking_enabled:
+            bot_ref.db_cache.tracking_disabled_users.discard(user_id)
+        else:
+            bot_ref.db_cache.tracking_disabled_users.add(user_id)
+        if history_public:
+            bot_ref.db_cache.private_history_users.discard(user_id)
+        else:
+            bot_ref.db_cache.private_history_users.add(user_id)
+    return {
+        "tracking_enabled": tracking_enabled,
+        "history_public": history_public,
+    }
 
 
 async def _verify_token(
@@ -1971,7 +2304,12 @@ async def anilist_callback(code: str = Query(...), state: str = Query(...)):
 
 
 @app.get("/user/{user_id}")
-async def get_user_data(user_id: int):
+async def get_user_data(
+    user_id: int,
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    await _history_visible_to(user_id, authorization, session_id)
     pool = _check_pool()
     counts = await pool.fetchrow(
         """SELECT
@@ -2010,7 +2348,10 @@ async def get_usernames(
     user_id: int,
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
+    await _history_visible_to(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -2043,7 +2384,10 @@ async def get_display_names(
     user_id: int,
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
+    await _history_visible_to(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -2076,7 +2420,10 @@ async def get_discrims(
     user_id: int,
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
+    await _history_visible_to(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -2109,10 +2456,11 @@ async def get_server_tags(
     user_id: int,
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
-    """Get a user's public server-tag history unless they disabled tracking."""
-    if await _tracking_opted_out(user_id, "stag"):
-        return {"items": [], "total": 0, "page": page, "pages": 1}
+    """Get server-tag history when the user permits public history lookup."""
+    await _history_visible_to(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -2169,10 +2517,11 @@ async def get_status_history(
     user_id: int,
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=100),
+    authorization: str | None = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
 ):
-    """Get a user's public presence history unless they disabled tracking."""
-    if await _tracking_opted_out(user_id, "status"):
-        return {"items": [], "total": 0, "page": page, "pages": 1}
+    """Get presence history when the user permits public history lookup."""
+    await _history_visible_to(user_id, authorization, session_id)
     pool = _check_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -2980,6 +3329,8 @@ async def set_command_disable(
 LOGGER_EVENT_LABELS = {
     "avatar": "Avatar changes",
     "member": "Member joins, leaves, and name changes",
+    "activity": "Member game and activity changes",
+    "voice": "Voice channel joins, leaves, moves, mutes, deafens, and disconnects",
     "channel": "Channel changes",
     "role": "Role changes",
     "server": "Server changes",
@@ -3150,6 +3501,154 @@ async def delete_twitch_follow(
     if broadcaster_id and events is not None:
         await events.remove_twitch_eventsub_subscription(str(broadcaster_id))
     return {"channel_name": channel_name}
+
+
+@app.get("/guild/{guild_id}/youtube-follows")
+async def get_youtube_follows(
+    guild_id: int,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    rows = await _check_pool().fetch(
+        "SELECT youtube_channel_id, channel_name, channel_handle, "
+        "announce_channel_id, message_template, event_types "
+        "FROM youtube_follows WHERE guild_id = $1 ORDER BY channel_name",
+        guild_id,
+    )
+    channels = {str(channel.id): channel.name for channel in guild.text_channels}
+    return {
+        "follows": [
+            {
+                "youtube_channel_id": row["youtube_channel_id"],
+                "channel_name": row["channel_name"],
+                "channel_handle": row["channel_handle"],
+                "announce_channel_id": str(row["announce_channel_id"]),
+                "announce_channel_name": channels.get(
+                    str(row["announce_channel_id"]), "Unknown channel"
+                ),
+                "message_template": row["message_template"],
+                "event_types": list(row["event_types"]),
+            }
+            for row in rows
+        ],
+        "channels": [
+            {"id": str(channel.id), "name": channel.name}
+            for channel in guild.text_channels
+        ],
+        "event_types": ["video", "live", "short", "community"],
+    }
+
+
+@app.post("/guild/{guild_id}/youtube-follows")
+async def set_youtube_follow(
+    guild_id: int,
+    payload: dict = Body(...),
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    raw_channel_id = payload.get("announce_channel_id")
+    if not isinstance(raw_channel_id, (str, int)):
+        raise HTTPException(400, "announce_channel_id must be a text channel ID")
+    try:
+        announce_channel_id = int(raw_channel_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "announce_channel_id must be a text channel ID")
+    announce_channel = await _resolve_guild_text_channel(guild, announce_channel_id)
+    if announce_channel is None:
+        raise HTTPException(400, "Announcement channel must belong to this server")
+    message_template = str(payload.get("message_template") or "").strip() or None
+    if message_template and len(message_template) > 2000:
+        raise HTTPException(400, "The YouTube message cannot exceed 2000 characters")
+    event_types = normalize_youtube_events(payload.get("event_types"))
+    if not event_types:
+        raise HTTPException(
+            400, "Choose at least one of: video, live, short, community"
+        )
+    events: Any = bot_ref.get_cog("Events") if bot_ref else None
+    if events is None or not hasattr(events, "resolve_youtube_channel"):
+        raise HTTPException(503, "YouTube notifications are unavailable")
+    query = str(
+        payload.get("youtube_channel_id") or payload.get("channel") or ""
+    ).strip()
+    youtube_channel = await events.resolve_youtube_channel(query)
+    if youtube_channel is None:
+        raise HTTPException(404, "YouTube channel not found")
+    youtube_channel_id = str(youtube_channel["id"])
+    pool = _check_pool()
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))",
+                f"fishie:youtube:{guild_id}",
+            )
+            existing = await connection.fetchval(
+                "SELECT 1 FROM youtube_follows "
+                "WHERE guild_id = $1 AND youtube_channel_id = $2",
+                guild_id,
+                youtube_channel_id,
+            )
+            if not existing:
+                count = await connection.fetchval(
+                    "SELECT COUNT(*) FROM youtube_follows WHERE guild_id = $1",
+                    guild_id,
+                )
+                if count >= 3:
+                    raise HTTPException(
+                        400, "You can follow up to 3 YouTube channels per server"
+                    )
+            await connection.execute(
+                """
+                INSERT INTO youtube_follows
+                    (guild_id, youtube_channel_id, channel_name, channel_handle,
+                     announce_channel_id, message_template, event_types)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (guild_id, youtube_channel_id) DO UPDATE SET
+                    channel_name = EXCLUDED.channel_name,
+                    channel_handle = EXCLUDED.channel_handle,
+                    announce_channel_id = EXCLUDED.announce_channel_id,
+                    message_template = EXCLUDED.message_template,
+                    event_types = EXCLUDED.event_types,
+                    updated_at = now()
+                """,
+                guild_id,
+                youtube_channel_id,
+                youtube_channel["name"],
+                youtube_channel.get("handle"),
+                announce_channel_id,
+                message_template,
+                list(event_types),
+            )
+    await events.ensure_youtube_subscription(youtube_channel_id)
+    return {
+        "youtube_channel_id": youtube_channel_id,
+        "channel_name": youtube_channel["name"],
+    }
+
+
+@app.delete("/guild/{guild_id}/youtube-follows/{youtube_channel_id}")
+async def delete_youtube_follow(
+    guild_id: int,
+    youtube_channel_id: str,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    await _managed_guild(guild_id, authorization, session_id)
+    if not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", youtube_channel_id):
+        raise HTTPException(400, "Invalid YouTube channel ID")
+    result = await _check_pool().execute(
+        "DELETE FROM youtube_follows "
+        "WHERE guild_id = $1 AND youtube_channel_id = $2",
+        guild_id,
+        youtube_channel_id,
+    )
+    if result == "DELETE 0":
+        raise HTTPException(404, "YouTube channel is not followed")
+    events: Any = bot_ref.get_cog("Events") if bot_ref else None
+    if events is not None and hasattr(events, "remove_youtube_subscription"):
+        await events.remove_youtube_subscription(youtube_channel_id)
+    return {"youtube_channel_id": youtube_channel_id}
 
 
 @app.get("/guild/{guild_id}/logger")
@@ -3326,6 +3825,11 @@ async def delete_guild_data(
         "WHERE guild_id = $1 AND broadcaster_id IS NOT NULL",
         guild_id,
     )
+    youtube_channels = await pool.fetch(
+        "SELECT DISTINCT youtube_channel_id FROM youtube_follows "
+        "WHERE guild_id = $1",
+        guild_id,
+    )
     auto_download_channel = await pool.fetchval(
         "SELECT auto_download FROM guild_settings WHERE guild_id = $1", guild_id
     )
@@ -3343,6 +3847,8 @@ async def delete_guild_data(
     if events is not None:
         for row in broadcasters:
             await events.remove_twitch_eventsub_subscription(str(row["broadcaster_id"]))
+        for row in youtube_channels:
+            await events.remove_youtube_subscription(str(row["youtube_channel_id"]))
 
     cache = bot_ref.db_cache
     cache.prefixes.pop(guild_id, None)

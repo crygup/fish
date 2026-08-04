@@ -53,6 +53,8 @@ GUILD_ID_TABLES = (
     "highlights",
     "twitch_follows",
     "twitch_announcement_deliveries",
+    "youtube_follows",
+    "youtube_announcement_deliveries",
     "pinboard_pins",
     "pokemon_solves",
     "mudae_timers",
@@ -60,6 +62,8 @@ GUILD_ID_TABLES = (
     "mudae_channels",
     "honeypot_channels",
     "corn_reacts",
+    "tags",
+    "emoji_stats",
 )
 
 
@@ -83,6 +87,8 @@ async def erase_user(connection: Any, user_id: int) -> int:
         ("guild_avatars", "member_id"),
         ("member_join_logs", "member_id"),
         ("pokemon_guesses", "author_id"),
+        ("tags", "author_id"),
+        ("emoji_stats", "author_id"),
     ):
         deleted += _count(
             await connection.execute(
