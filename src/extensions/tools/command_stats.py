@@ -90,7 +90,7 @@ class CommandStats(Cog):
             for r in user_rows:
                 user = await get_or_fetch_user(ctx.bot, r["user_id"])
                 lines.append(
-                    f"**{r['total']:,}** {user.display_name if user else r['user_id']}"
+                    f"**{r['total']:,}** {user.name if user else r['user_id']}"
                 )
             embed.add_field(name="Top Users", value="\n".join(lines), inline=True)
         await ctx.send(embed=embed)

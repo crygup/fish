@@ -51,7 +51,7 @@ class User(Cog):
         if self._server_tag_values(before_u) == self._server_tag_values(after_u):
             return
 
-        if "stag" in self.bot.db_cache.get_opted_out(after_u.id):
+        if self.bot.db_cache.user_tracking_opted_out(after_u.id, "stag"):
             return
 
         await self.add_server_tag(after_u)
@@ -69,7 +69,7 @@ class User(Cog):
         if before_u.name == after_u.name:
             return
 
-        if "username" in self.bot.db_cache.get_opted_out(after_u.id):
+        if self.bot.db_cache.user_tracking_opted_out(after_u.id, "username"):
             return
 
         await self.add_username(after_u)
@@ -89,7 +89,7 @@ class User(Cog):
         if before_u.display_name == after_u.display_name:
             return
 
-        if "display" in self.bot.db_cache.get_opted_out(after_u.id):
+        if self.bot.db_cache.user_tracking_opted_out(after_u.id, "display"):
             return
 
         await self.add_display_name(after_u)
@@ -112,7 +112,7 @@ class User(Cog):
         if not after_m.nick:
             return
 
-        if "nickname" in self.bot.db_cache.get_opted_out(after_m.id):
+        if self.bot.db_cache.user_tracking_opted_out(after_m.id, "nickname"):
             return
 
         await self.add_nickname(after_m)
@@ -129,7 +129,7 @@ class User(Cog):
 
     @commands.Cog.listener("on_member_join")
     async def member_join_logs(self, member: discord.Member):
-        if "joins" in self.bot.db_cache.get_opted_out(member.id):
+        if self.bot.db_cache.user_tracking_opted_out(member.id, "joins"):
             return
 
         await self.add_join(member)

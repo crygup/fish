@@ -10,6 +10,12 @@ import discord
 from discord.ext import commands
 
 from core import Cog
+from utils.activities import (
+    activity_image_url,
+    activity_identity,
+    activity_summary,
+    loggable_activities,
+)
 
 if TYPE_CHECKING:
     from extensions.context import GuildContext
@@ -18,11 +24,19 @@ if TYPE_CHECKING:
 LOGGER_EVENTS: dict[str, str] = {
     "avatar": "Avatar changes",
     "member": "Member joins, leaves, name, and tag changes",
+    "activity": "Member game and activity changes",
+    "voice": "Voice channel joins, leaves, moves, mutes, deafens, and disconnects",
     "channel": "Channel changes",
     "role": "Role changes",
     "server": "Server, emoji, and sticker changes",
     "moderation": "Bans, kicks, unbans, and timeouts",
     "message": "Message edits, deletions, and purges",
+}
+LOGGER_EVENT_ALIASES = {
+    "vc": "voice",
+    "voice": "voice",
+    "voice_channel": "voice",
+    "voicechannel": "voice",
 }
 LOGGER_AVATAR_PATH = (
     Path(__file__).resolve().parents[2] / "files" / "images" / "pfp.jpg"
@@ -38,6 +52,25 @@ def _display(value: object | None) -> str:
         return "None"
     value = discord.utils.escape_mentions(discord.utils.escape_markdown(str(value)))
     return value if len(value) <= 1000 else value[:997] + "..."
+
+
+def _canonical_logger_event(event: str) -> str:
+    normalized = event.strip().casefold().replace("-", "_")
+    return LOGGER_EVENT_ALIASES.get(normalized, normalized)
+
+
+def _activity_identity_sort_key(
+    identity: tuple[int, str, int | None],
+) -> tuple[int, str, int]:
+    """Return a consistently sortable key for an activity identity.
+
+    Discord activities do not all have an application ID.  Sorting the raw
+    identity tuple would therefore compare ``None`` with an integer when two
+    activities share the same type and name.
+    """
+
+    activity_type, name, application_id = identity
+    return activity_type, name, application_id if application_id is not None else -1
 
 
 def _permission_name(name: str) -> str:
@@ -301,10 +334,9 @@ class LoggerChannelPickerView(_LoggerView):
         ) as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
-        await interaction.response.send_message(
-            f"{LOGGER_EVENTS[self.event]} will now be logged in {channel.mention}.",
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+        configured = await self.cog._configured_logger_channels(self.ctx.guild.id)
+        await interaction.response.edit_message(
+            view=LoggerPanelView(self.cog, self.ctx, configured),
         )
 
 
@@ -353,10 +385,9 @@ class LoggerSetCurrentButton(discord.ui.Button):
         ) as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
-        await interaction.response.send_message(
-            f"{LOGGER_EVENTS[self.event]} will now be logged in {channel.mention}.",
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+        configured = await self.cog._configured_logger_channels(self.ctx.guild.id)
+        await interaction.response.edit_message(
+            view=LoggerPanelView(self.cog, self.ctx, configured),
         )
 
 
@@ -611,7 +642,10 @@ class Logger(Cog):
             "WHERE guild_id = $1 ORDER BY event",
             ctx.guild.id,
         )
-        configured = {str(row["event"]): int(row["channel_id"]) for row in rows}
+        configured = {
+            _canonical_logger_event(str(row["event"])): int(row["channel_id"])
+            for row in rows
+        }
         description = "\n".join(
             f"**{label}** — <#{configured[event]}>"
             for event, label in LOGGER_EVENTS.items()
@@ -630,6 +664,16 @@ class Logger(Cog):
         )
         await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
+    async def _configured_logger_channels(self, guild_id: int) -> dict[str, int]:
+        rows = await self.bot.pool.fetch(
+            "SELECT event, channel_id FROM guild_log_channels WHERE guild_id = $1",
+            guild_id,
+        )
+        return {
+            _canonical_logger_event(str(row["event"])): int(row["channel_id"])
+            for row in rows
+        }
+
     async def _set_logger_channel(
         self,
         ctx: GuildContext,
@@ -639,7 +683,7 @@ class Logger(Cog):
         announce: bool = True,
         actor_id: int | None = None,
     ) -> None:
-        event = event.casefold()
+        event = _canonical_logger_event(event)
         if event not in LOGGER_EVENTS:
             available = ", ".join(LOGGER_EVENTS)
             raise commands.BadArgument(f"Unknown event. Choose one of: {available}.")
@@ -784,7 +828,7 @@ class Logger(Cog):
             )
             return
 
-        event = event.casefold()
+        event = _canonical_logger_event(event)
         if event not in LOGGER_EVENTS:
             available = ", ".join(LOGGER_EVENTS)
             raise commands.BadArgument(f"Unknown event. Choose one of: {available}.")
@@ -818,11 +862,7 @@ class Logger(Cog):
     @commands.has_guild_permissions(manage_guild=True)
     async def logger(self, ctx: GuildContext) -> None:
         """Configure per-server event logging channels."""
-        rows = await self.bot.pool.fetch(
-            "SELECT event, channel_id FROM guild_log_channels WHERE guild_id = $1",
-            ctx.guild.id,
-        )
-        configured = {str(row["event"]): int(row["channel_id"]) for row in rows}
+        configured = await self._configured_logger_channels(ctx.guild.id)
         await ctx.send(
             view=LoggerPanelView(self, ctx, configured),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -856,6 +896,20 @@ class Logger(Cog):
     ) -> None:
         """Log member joins, leaves, name, and tag changes."""
         await self._set_logger_channel(ctx, "member", channel)
+
+    @logger.command(name="activity", aliases=("activities", "games"))
+    async def logger_activity(
+        self, ctx: GuildContext, channel: discord.TextChannel
+    ) -> None:
+        """Log member game and activity changes."""
+        await self._set_logger_channel(ctx, "activity", channel)
+
+    @logger.command(name="vc", aliases=("voice", "voicechannel"))
+    async def logger_voice(
+        self, ctx: GuildContext, channel: discord.TextChannel
+    ) -> None:
+        """Log voice channel joins, leaves, moves, mute, deafen, and disconnects."""
+        await self._set_logger_channel(ctx, "voice", channel)
 
     @logger.command(name="channel", aliases=("channels",))
     async def logger_channel(
@@ -1198,6 +1252,149 @@ class Logger(Cog):
                 audit_target=after,
                 audit_actor_label="Moderator",
             )
+
+    @commands.Cog.listener("on_presence_update")
+    async def logger_activity_update(
+        self,
+        before: discord.Member,
+        after: discord.Member,
+    ) -> None:
+        if self.bot.db_cache.user_tracking_opted_out(after.id, "activity"):
+            return
+        before_activities = loggable_activities(before.activities)
+        after_activities = loggable_activities(after.activities)
+        before_identity = sorted(
+            map(activity_identity, before_activities),
+            key=_activity_identity_sort_key,
+        )
+        after_identity = sorted(
+            map(activity_identity, after_activities),
+            key=_activity_identity_sort_key,
+        )
+        if before_identity == after_identity:
+            return
+
+        embed = self._embed(
+            "Member activity changed",
+            f"{after.mention} updated their current activity.",
+            color=discord.Colour.blurple(),
+        )
+        before_text = "\n\n".join(map(activity_summary, before_activities)) or "None"
+        after_text = "\n\n".join(map(activity_summary, after_activities)) or "None"
+        embed.add_field(
+            name="Before",
+            value=discord.utils.escape_mentions(before_text[:1024]),
+            inline=False,
+        )
+        embed.add_field(
+            name="After",
+            value=discord.utils.escape_mentions(after_text[:1024]),
+            inline=False,
+        )
+        if after_activities:
+            image_url = activity_image_url(after_activities[0])
+            if image_url:
+                embed.set_thumbnail(url=image_url)
+        embed.set_author(name=str(after), icon_url=after.display_avatar.url)
+        self._add_item_id(embed, after)
+        await self._emit_logger(after.guild, "activity", embed)
+
+    @commands.Cog.listener("on_voice_state_update")
+    async def logger_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        changes: list[str] = []
+        channel_changed = before.channel != after.channel
+        if channel_changed:
+            before_channel = (
+                before.channel.mention
+                if before.channel is not None
+                else "Not connected"
+            )
+            after_channel = (
+                after.channel.mention if after.channel is not None else "Not connected"
+            )
+            if before.channel is None:
+                changes.append(f"Joined {after_channel}")
+            elif after.channel is None:
+                changes.append(f"Left {before_channel}")
+            else:
+                changes.append(f"Moved from {before_channel} to {after_channel}")
+
+        voice_flags = (
+            ("mute", "Server mute"),
+            ("deaf", "Server deafen"),
+            ("self_mute", "Self mute"),
+            ("self_deaf", "Self deafen"),
+            ("self_stream", "Stream"),
+            ("self_video", "Camera"),
+            ("suppress", "Stage suppression"),
+        )
+        server_state_changed = False
+        for attribute, label in voice_flags:
+            previous = getattr(before, attribute, False)
+            current = getattr(after, attribute, False)
+            if previous == current:
+                continue
+            state = "enabled" if current else "disabled"
+            changes.append(f"{label} {state}")
+            if attribute in {"mute", "deaf", "suppress"}:
+                server_state_changed = True
+
+        if not changes:
+            return
+
+        embed = self._embed(
+            "Voice channel updated",
+            f"{member.mention}'s voice state was updated.",
+            color=(
+                discord.Colour.green()
+                if before.channel is None and after.channel is not None
+                else (
+                    discord.Colour.red()
+                    if after.channel is None and before.channel is not None
+                    else discord.Colour.orange()
+                )
+            ),
+        )
+        audit_action: discord.AuditLogAction | None = None
+        if channel_changed:
+            audit_action = (
+                discord.AuditLogAction.member_disconnect
+                if after.channel is None
+                else (
+                    discord.AuditLogAction.member_move
+                    if before.channel is not None and after.channel is not None
+                    else None
+                )
+            )
+        elif server_state_changed:
+            audit_action = discord.AuditLogAction.member_update
+
+        if audit_action is None:
+            embed.add_field(
+                name="Member",
+                value=f"{_display(member.name)}\n{member.mention}",
+                inline=True,
+            )
+        embed.add_field(
+            name="Changes",
+            value="\n".join(changes)[:1024],
+            inline=False,
+        )
+        self._add_item_id(embed, member)
+        await self._emit_logger(
+            member.guild,
+            "voice",
+            embed,
+            audit_action=audit_action,
+            audit_target_id=member.id if audit_action is not None else None,
+            audit_target=member if audit_action is not None else None,
+            audit_actor_label="Moderator" if audit_action is not None else "Changed by",
+        )
 
     @commands.Cog.listener("on_member_join")
     async def logger_member_join(self, member: discord.Member) -> None:

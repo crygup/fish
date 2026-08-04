@@ -22,6 +22,8 @@ format_table = {
     "nickname_logs": "user_id",
     "discrim_logs": "user_id",
     "member_join_logs": "member_id",
+    "tags": "author_id",
+    "emoji_stats": "author_id",
 }
 
 
@@ -40,7 +42,7 @@ class Dropdown(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder="Choose which logging to opt out from",
+            placeholder="Choose which tracking to opt out from",
             min_values=1,
             max_values=1,
             options=options,
@@ -66,7 +68,7 @@ class Dropdown(discord.ui.Select):
             sql = """UPDATE opted_out SET items = array_remove(opted_out.items, $1) WHERE user_id = $2"""
 
             await ctx.bot.pool.execute(sql, value, ctx.author.id)
-            results.remove(value)
+            ctx.bot.db_cache.remove_opt_out(ctx.author.id, value)
             emoji = "\U0001f7e2"
         else:
             sql = """
@@ -77,7 +79,7 @@ class Dropdown(discord.ui.Select):
             """
 
             await ctx.bot.pool.execute(sql, ctx.author.id, value)
-            results.append(value)
+            ctx.bot.db_cache.add_opt_out(ctx.author.id, value)
             emoji = "\U0001f534"
 
         self.data.update({value: [self.data[value][0], emoji]})
@@ -137,25 +139,169 @@ class DropdownView(AuthorView):
         self.add_item(Dropdown(ctx, data, guild_id=guild_id))
 
 
+class PrivacySettingsView(AuthorView):
+    def __init__(
+        self,
+        ctx: Context,
+        *,
+        tracking_enabled: bool,
+        history_public: bool,
+    ) -> None:
+        super().__init__(ctx, timeout=180)
+        self.tracking_enabled = tracking_enabled
+        self.history_public = history_public
+        self._update_buttons()
+
+    @property
+    def content(self) -> str:
+        tracking = "Enabled" if self.tracking_enabled else "Disabled"
+        history = "Public" if self.history_public else "Private"
+        return (
+            f"**Tracking:** {tracking}\n"
+            f"**Saved history:** {history}\n\n"
+            "Tracking controls whether Fishie saves new personal activity. "
+            "History visibility controls whether other users can look up data "
+            "that is already saved. You can change either setting whenever "
+            "you want. These settings never delete existing data."
+        )
+
+    def _update_buttons(self) -> None:
+        self.toggle_tracking.label = (
+            "Disable tracking" if self.tracking_enabled else "Enable tracking"
+        )
+        self.toggle_tracking.style = (
+            discord.ButtonStyle.danger
+            if self.tracking_enabled
+            else discord.ButtonStyle.success
+        )
+        self.toggle_history.label = (
+            "Make history private" if self.history_public else "Make history public"
+        )
+        self.toggle_history.style = (
+            discord.ButtonStyle.secondary
+            if self.history_public
+            else discord.ButtonStyle.primary
+        )
+
+    async def _save(
+        self,
+        interaction: discord.Interaction,
+        *,
+        setting: Literal["tracking_enabled", "history_public"],
+        value: bool,
+    ) -> None:
+        await self.ctx.bot.pool.execute(
+            f"""
+            INSERT INTO user_settings (user_id, {setting})
+            VALUES ($1, $2)
+            ON CONFLICT (user_id) DO UPDATE
+            SET {setting} = EXCLUDED.{setting}
+            """,
+            self.ctx.author.id,
+            value,
+        )
+        cache = self.ctx.bot.db_cache
+        target = (
+            cache.tracking_disabled_users
+            if setting == "tracking_enabled"
+            else cache.private_history_users
+        )
+        if value:
+            target.discard(self.ctx.author.id)
+        else:
+            target.add(self.ctx.author.id)
+        self._update_buttons()
+        await interaction.response.edit_message(content=self.content, view=self)
+
+    @discord.ui.button(label="Disable tracking")
+    async def toggle_tracking(
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
+    ) -> None:
+        self.tracking_enabled = not self.tracking_enabled
+        await self._save(
+            interaction,
+            setting="tracking_enabled",
+            value=self.tracking_enabled,
+        )
+
+    @discord.ui.button(label="Make history private")
+    async def toggle_history(
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
+    ) -> None:
+        self.history_public = not self.history_public
+        await self._save(
+            interaction,
+            setting="history_public",
+            value=self.history_public,
+        )
+
+
 class Logging(Cog):
-    @commands.hybrid_group(name="logging", fallback="user")
+    async def privacy_settings_view(self, ctx: Context) -> PrivacySettingsView:
+        row = await self.bot.pool.fetchrow(
+            """
+            SELECT tracking_enabled, history_public
+            FROM user_settings
+            WHERE user_id = $1
+            """,
+            ctx.author.id,
+        )
+        return PrivacySettingsView(
+            ctx,
+            tracking_enabled=row["tracking_enabled"] if row else True,
+            history_public=row["history_public"] if row else True,
+        )
+
+    async def send_privacy_settings_interaction(
+        self,
+        ctx: Context,
+        interaction: discord.Interaction,
+    ) -> None:
+        view = await self.privacy_settings_view(ctx)
+        await interaction.response.send_message(
+            view.content,
+            view=view,
+            ephemeral=True,
+        )
+
+    @commands.hybrid_command(name="settings")
+    async def settings(self, ctx: Context) -> None:
+        """Manage your Fishie privacy and tracking settings."""
+        view = await self.privacy_settings_view(ctx)
+        view.message = await ctx.send(
+            view.content,
+            view=view,
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @commands.hybrid_group(
+        name="tracking",
+        aliases=("logging",),
+        fallback="user",
+    )
     async def logging(self, ctx: Context):
-        """Manage your logging settings for the bot"""
+        """Manage your personal tracking settings for the bot."""
         sql = """SELECT * FROM opted_out WHERE user_id = $1"""
         records = await self.bot.pool.fetchrow(sql, ctx.author.id)
         data = {
-            "avatar": ["Avatar logging", "\U0001f7e2"],
-            "username": ["Username logging", "\U0001f7e2"],
-            "display": ["Display name logging", "\U0001f7e2"],
-            "stag": ["Server tag logging", "\U0001f7e2"],
-            "nickname": ["Nickname logging", "\U0001f7e2"],
-            "discrim": ["Discriminator logging", "\U0001f7e2"],
-            "joins": ["Server join logging", "\U0001f7e2"],
+            "avatar": ["Avatar tracking", "\U0001f7e2"],
+            "username": ["Username tracking", "\U0001f7e2"],
+            "display": ["Display name tracking", "\U0001f7e2"],
+            "stag": ["Server tag tracking", "\U0001f7e2"],
+            "nickname": ["Nickname tracking", "\U0001f7e2"],
+            "discrim": ["Discriminator tracking", "\U0001f7e2"],
+            "joins": ["Server join tracking", "\U0001f7e2"],
             "xp": ["XP and message count tracking", "\U0001f7e2"],
             "commands": ["Command usage tracking", "\U0001f7e2"],
             "status": ["Presence status tracking", "\U0001f7e2"],
+            "activity": ["Game and activity tracking", "\U0001f7e2"],
             "pokemon": ["Pokémon solve tracking", "\U0001f7e2"],
             "corn": ["Corn reaction tracking", "\U0001f7e2"],
+            "emoji": ["Emoji statistics tracking", "\U0001f7e2"],
         }
 
         if bool(records):
@@ -172,12 +318,13 @@ class Logging(Cog):
     @commands.guild_only()
     @commands.has_guild_permissions(administrator=True)
     async def logging_server(self, ctx: GuildContext):
-        """Manage logging for the server"""
+        """Manage tracking for the server."""
         sql = """SELECT * FROM guild_opted_out WHERE guild_id = $1"""
         records = await self.bot.pool.fetchrow(sql, ctx.guild.id)
         data = {
-            "name": ["Name logging", "\U0001f7e2"],
-            "icon": ["Icon logging", "\U0001f7e2"],
+            "name": ["Name tracking", "\U0001f7e2"],
+            "icon": ["Icon tracking", "\U0001f7e2"],
+            "emoji": ["Emoji statistics tracking", "\U0001f7e2"],
         }
 
         if bool(records):
@@ -190,10 +337,15 @@ class Logging(Cog):
             view=DropdownView(ctx, data, guild_id=ctx.guild.id),
         )
 
-    @commands.hybrid_group(name="logging-delete", fallback="all", hidden=True)
+    @commands.hybrid_group(
+        name="tracking-delete",
+        aliases=("logging-delete",),
+        fallback="all",
+        hidden=True,
+    )
     @interaction_only()
     async def logging_delete(self, ctx: GuildContext, data: str):
-        """Delete your saved logging data."""
+        """Delete your saved tracking data."""
 
         msg = await ctx.prompt(
             f"Are you sure you want to delete ALL your data for {data}? **THIS CANNOT BE UNDONE**",
@@ -226,6 +378,8 @@ class Logging(Cog):
             "nickname_logs": "Nicknames",
             "discrim_logs": "Discriminators",
             "member_join_logs": "Server joins",
+            "tags": "Tags",
+            "emoji_stats": "Emoji statistics",
         }
 
         return [
@@ -246,6 +400,8 @@ class Logging(Cog):
             Literal["nickname_logs"],
             Literal["discrim_logs"],
             Literal["member_join_logs"],
+            Literal["tags"],
+            Literal["emoji_stats"],
         ],
         id: int,
         author_id: int,

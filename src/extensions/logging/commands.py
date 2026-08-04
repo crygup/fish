@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import re
 import time
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
 
 import asyncpg
 import discord
 from discord import app_commands, utils
-from discord.ext import commands
+from discord.ext import commands, menus
 from discord.http import Route
 
 from core import Cog
@@ -22,6 +23,15 @@ from utils import (
     plural,
     to_image,
 )
+from utils.activities import (
+    ActivityLike,
+    activity_details,
+    activity_identity,
+    activity_image_url,
+    activity_matches,
+    activity_name,
+    activity_type_name,
+)
 
 from .status_calendar import (
     StatusInterval,
@@ -33,7 +43,53 @@ if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
 
 
+class ActivityPageSource(menus.ListPageSource):
+    def __init__(
+        self,
+        entries: list[tuple[ActivityLike, list[discord.Member]]],
+        *,
+        color: discord.Color,
+    ) -> None:
+        super().__init__(entries, per_page=1)
+        self.color = color
+
+    async def format_page(
+        self,
+        menu: Pager,
+        entry: tuple[ActivityLike, list[discord.Member]],
+    ) -> discord.Embed:
+        activity, members = entry
+        embed = discord.Embed(
+            title=f"{activity_type_name(activity)} • {activity_name(activity)}",
+            color=self.color,
+        )
+        for label, value in activity_details(activity):
+            embed.add_field(name=label, value=value[:1024], inline=True)
+        embed.add_field(
+            name=f"Members sharing this activity ({len(members)})",
+            value="\n".join(member.mention for member in members) or "None",
+            inline=False,
+        )
+        image_url = activity_image_url(activity)
+        if image_url:
+            embed.set_thumbnail(url=image_url)
+        maximum = self.get_max_pages()
+        if maximum and maximum > 1:
+            embed.set_footer(text=f"Page {menu.current_page + 1}/{maximum}")
+        return embed
+
+
 class Commands(Cog):
+    def ensure_history_visible(
+        self,
+        ctx: Context,
+        user: discord.User | discord.Member,
+    ) -> None:
+        if user.id != ctx.author.id and not self.bot.db_cache.user_history_is_public(
+            user.id
+        ):
+            raise commands.BadArgument(f"{user} has made their saved history private.")
+
     async def refresh_urls(self, attachment_urls: List[str]) -> List[str]:
         json = {"attachment_urls": attachment_urls}
 
@@ -45,9 +101,106 @@ class Commands(Cog):
         refreshed_urls = req.get("refreshed_urls", [])
         return [url["refreshed"] for url in refreshed_urls]
 
+    @staticmethod
+    async def _activity_member(
+        ctx: GuildContext,
+        query: str,
+    ) -> discord.Member | None:
+        raw = query.strip()
+        mention = re.fullmatch(r"<@!?(\d+)>", raw)
+        user_id = (
+            int(mention.group(1)) if mention else int(raw) if raw.isdigit() else None
+        )
+        if user_id is not None:
+            member = ctx.guild.get_member(user_id)
+            if member is not None:
+                return member
+            try:
+                return await ctx.guild.fetch_member(user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return None
+
+        lowered = raw.casefold()
+        return next(
+            (
+                member
+                for member in ctx.guild.members
+                if lowered
+                in {
+                    member.name.casefold(),
+                    member.display_name.casefold(),
+                    (member.global_name or "").casefold(),
+                }
+            ),
+            None,
+        )
+
+    @commands.hybrid_command(name="activity", aliases=("game", "playing"))
+    @commands.guild_only()
+    @app_commands.describe(query="Activity name or server member to look up")
+    async def activity(
+        self,
+        ctx: GuildContext,
+        *,
+        query: str | None = None,
+    ) -> None:
+        """Shows activity details and members sharing that activity."""
+        target = (
+            ctx.author if query is None else await self._activity_member(ctx, query)
+        )
+        grouped: dict[
+            tuple[int, str, int | None],
+            tuple[ActivityLike, list[discord.Member]],
+        ] = {}
+
+        if target is not None:
+            if not target.activities:
+                raise commands.BadArgument(f"{target} is not showing an activity.")
+            for activity in target.activities:
+                key = activity_identity(activity)
+                members = [
+                    member
+                    for member in ctx.guild.members
+                    if any(
+                        activity_identity(candidate) == key
+                        for candidate in member.activities
+                    )
+                ]
+                grouped[key] = (activity, members)
+        else:
+            assert query is not None
+            candidates: dict[
+                tuple[int, str, int | None],
+                tuple[ActivityLike, list[discord.Member]],
+            ] = {}
+            exact: set[tuple[int, str, int | None]] = set()
+            for member in ctx.guild.members:
+                for activity in member.activities:
+                    if not activity_matches(activity, query):
+                        continue
+                    key = activity_identity(activity)
+                    if key not in candidates:
+                        candidates[key] = (activity, [])
+                    if member not in candidates[key][1]:
+                        candidates[key][1].append(member)
+                    if activity_name(activity).casefold() == query.casefold():
+                        exact.add(key)
+            grouped = {key: candidates[key] for key in exact} if exact else candidates
+
+        if not grouped:
+            raise commands.BadArgument("I could not find anyone using that activity.")
+
+        pages: list[tuple[ActivityLike, list[discord.Member]]] = []
+        for activity, members in grouped.values():
+            for chunk in discord.utils.as_chunks(members, max_size=15):
+                pages.append((activity, list(chunk)))
+        source = ActivityPageSource(pages, color=discord.Color(self.bot.embedcolor))
+        await Pager(source, ctx=ctx).start(ctx)
+
     async def avatars_func(
         self, ctx: Context, user: discord.User, guild_id: Optional[int] = None
     ):
+        self.ensure_history_visible(ctx, user)
         sql = (
             """SELECT * FROM guild_avatars WHERE member_id = $1 AND guild_id = $2 ORDER BY created_at DESC"""
             if guild_id
@@ -90,6 +243,7 @@ class Commands(Cog):
     async def avatars_grid(
         self, ctx: Context, user: discord.User, guild_id: Optional[int] = None
     ):
+        self.ensure_history_visible(ctx, user)
         sql = (
             """SELECT * FROM guild_avatars WHERE member_id = $1 AND guild_id = $2 ORDER BY created_at DESC LIMIT 100"""
             if guild_id
@@ -196,6 +350,7 @@ class Commands(Cog):
     async def usernames(self, ctx: Context, *, user: discord.User = commands.Author):
         """Shows a user's previous usernames"""
 
+        self.ensure_history_visible(ctx, user)
         results = await self.bot.pool.fetch(
             "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC",
             user.id,
@@ -227,6 +382,7 @@ class Commands(Cog):
     ) -> None:
         """Shows a user's previous primary server tags."""
 
+        self.ensure_history_visible(ctx, user)
         results = await self.bot.pool.fetch(
             "SELECT * FROM stag_logs WHERE user_id = $1 ORDER BY created_at DESC",
             user.id,
@@ -259,6 +415,7 @@ class Commands(Cog):
     ):
         """Shows a user's previous display names"""
 
+        self.ensure_history_visible(ctx, user)
         results = await self.bot.pool.fetch(
             "SELECT * FROM display_name_logs WHERE user_id = $1 ORDER BY created_at DESC",
             user.id,
@@ -292,6 +449,7 @@ class Commands(Cog):
     ):
         """Shows a user's previous nicknames"""
 
+        self.ensure_history_visible(ctx, member)
         results = await self.bot.pool.fetch(
             "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC",
             member.id,
@@ -322,6 +480,7 @@ class Commands(Cog):
     async def discrims(self, ctx: Context, *, member: discord.Member = commands.Author):
         """Shows a user's previous discrims"""
 
+        self.ensure_history_visible(ctx, member)
         results = await self.bot.pool.fetch(
             "SELECT * FROM discrim_logs WHERE user_id = $1 ORDER BY created_at DESC",
             member.id,
@@ -420,6 +579,7 @@ class Commands(Cog):
                 )
             return
 
+        self.ensure_history_visible(ctx, user)
         row = None
 
         if ctx.guild:
@@ -458,8 +618,7 @@ class Commands(Cog):
         """Shows a member's daily status activity over the last 31 days."""
         started = time.monotonic()
         target = user or ctx.author
-        if "status" in self.bot.db_cache.get_opted_out(target.id):
-            raise commands.BadArgument(f"{target} has opted out of status tracking.")
+        self.ensure_history_visible(ctx, target)
         now = discord.utils.utcnow()
         cutoff = now - datetime.timedelta(days=31)
         rows = await self.bot.pool.fetch(
@@ -511,6 +670,11 @@ class Commands(Cog):
             f"-# Took {time.monotonic() - started:.1f}s"
         )
         container = discord.ui.Container(
+            discord.ui.TextDisplay(
+                "## "
+                f"{utils.escape_mentions(utils.escape_markdown(target.display_name))}"
+                "'s status calendar"
+            ),
             gallery,
             details,
             accent_color=self.bot.embedcolor,
@@ -562,9 +726,18 @@ class Commands(Cog):
         embed.set_author(name="Join Leaderboard  •  Global")
         lines = []
         for r in rows:
+            if r[
+                "member_id"
+            ] != ctx.author.id and not self.bot.db_cache.user_history_is_public(
+                r["member_id"]
+            ):
+                continue
             user = await get_or_fetch_user(ctx.bot, r["member_id"])
             name = user.display_name if user else str(r["member_id"])
             lines.append(f"**{r['total']:,}** {name}")
+        if not lines:
+            await ctx.send("No public join data yet!")
+            return
         embed.description = "\n".join(lines)
         await ctx.send(embed=embed)
 
@@ -586,18 +759,25 @@ class Commands(Cog):
         )
         lines = []
         for r in rows:
+            if r[
+                "member_id"
+            ] != ctx.author.id and not self.bot.db_cache.user_history_is_public(
+                r["member_id"]
+            ):
+                continue
             user = guild.get_member(r["member_id"]) or await get_or_fetch_user(
                 ctx.bot, r["member_id"]
             )
             name = user.name if user else str(r["member_id"])
             lines.append(f"**{r['total']:,}** {name}")
+        if not lines:
+            await ctx.send(f"No public join data for **{guild.name}** yet!")
+            return
         embed.description = "\n".join(lines)
         await ctx.send(embed=embed)
 
     async def _joins_user_stats(self, ctx: Context, user: discord.User) -> None:
-        if "joins" in ctx.bot.db_cache.get_opted_out(user.id):
-            await ctx.send(f"{user} has opted out of join logs.")
-            return
+        self.ensure_history_visible(ctx, user)
 
         guild_total = (
             await ctx.bot.pool.fetchval(
@@ -617,7 +797,11 @@ class Commands(Cog):
         )
 
         if not guild_total and not global_total:
-            if ctx.guild and self.bot.logging:
+            if (
+                ctx.guild
+                and self.bot.logging
+                and not self.bot.db_cache.user_tracking_opted_out(user.id, "joins")
+            ):
                 member = ctx.guild.get_member(user.id)
                 if member is not None:
                     await self.bot.logging.add_join(member)

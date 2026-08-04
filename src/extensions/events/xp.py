@@ -34,7 +34,7 @@ class XPCog(Cog):
     async def xp_message(self, message: discord.Message):
         if message.author.bot:
             return
-        if "xp" in self.bot.db_cache.get_opted_out(message.author.id):
+        if self.bot.db_cache.user_tracking_opted_out(message.author.id, "xp"):
             return
 
         bucket = self.xp_cd.get_bucket(message)

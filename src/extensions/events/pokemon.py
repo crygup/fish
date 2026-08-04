@@ -23,7 +23,7 @@ class Pokemon(Cog):
         method: str,
         guild_id: Optional[int] = None,
     ) -> None:
-        if "pokemon" in self.bot.db_cache.get_opted_out(user_id):
+        if self.bot.db_cache.user_tracking_opted_out(user_id, "pokemon"):
             return
         sql = """
         INSERT INTO pokemon_solves (user_id, pokemon_name, method, guild_id)

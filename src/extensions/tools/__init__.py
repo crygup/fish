@@ -34,12 +34,14 @@ from utils import (
     validate_public_url,
 )
 
+from .calculator import Calculator
 from .command_stats import CommandStats
 from .downloads import Downloads
 from .google import Google
 from .letterboxd import Letterboxd
 from .purge import PurgeCog
 from .reminders import Reminder
+from .tags import Tags
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -91,7 +93,16 @@ class GameView(discord.ui.View):
         self.give_up_flag.set()
 
 
-class Tools(Downloads, Reminder, Google, PurgeCog, CommandStats, Letterboxd):
+class Tools(
+    Tags,
+    Downloads,
+    Reminder,
+    Google,
+    PurgeCog,
+    CommandStats,
+    Letterboxd,
+    Calculator,
+):
     """Quality of life tools"""
 
     emoji = discord.PartialEmoji(name="\U0001f6e0")

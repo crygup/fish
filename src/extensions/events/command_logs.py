@@ -37,7 +37,7 @@ class CommandLogs(Cog):
             ctx.command.qualified_name.casefold(), frozenset()
         ):
             return
-        if "commands" in self.bot.db_cache.get_opted_out(ctx.author.id):
+        if self.bot.db_cache.user_tracking_opted_out(ctx.author.id, "commands"):
             return
 
         sql = """

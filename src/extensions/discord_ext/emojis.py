@@ -4,6 +4,7 @@ import zipfile
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
+import emoji as emoji_lib
 import discord
 from discord.ext import commands
 
@@ -17,6 +18,29 @@ from utils import (
     to_image,
     to_thread,
 )
+
+
+def _emoji_occurrences(content: str) -> list[tuple[str, bool]]:
+    """Return custom and Twemoji-supported Unicode emoji occurrences."""
+    occurrences: list[tuple[str, bool]] = []
+    custom_spans: list[tuple[int, int]] = []
+    for match in EMOJI_RE.finditer(content):
+        custom_spans.append((match.start(), match.end()))
+        occurrences.append((match.group(0).split(":")[-1][:-1], False))
+
+    for item in emoji_lib.emoji_list(content):
+        start = int(item["match_start"])
+        end = int(item["match_end"])
+        if any(
+            start < custom_end and end > custom_start
+            for custom_start, custom_end in custom_spans
+        ):
+            continue
+        value = str(item["emoji"])
+        if TwemojiConverter.is_unicode_emoji(value):
+            occurrences.append((value, True))
+    return occurrences
+
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
@@ -32,6 +56,29 @@ def _create_emoji_zip(emoji_data: list[tuple[str, bytes]]) -> bytes:
 
 
 class Emojis(Cog):
+
+    @commands.Cog.listener("on_message")
+    async def _record_emoji_stats(self, message: discord.Message) -> None:
+        """Record emoji identifiers without retaining message content."""
+        if message.guild is None or message.author.bot or not message.content:
+            return
+        if self.bot.db_cache.user_tracking_opted_out(message.author.id, "emoji"):
+            return
+        if "emoji" in self.bot.db_cache.get_opted_out(message.guild.id):
+            return
+
+        occurrences = _emoji_occurrences(message.content)
+        if not occurrences:
+            return
+
+        await self.bot.pool.executemany(
+            "INSERT INTO emoji_stats (author_id, emoji_id, guild_id, unicode) "
+            "VALUES ($1, $2, $3, $4)",
+            [
+                (message.author.id, emoji_id, message.guild.id, is_unicode)
+                for emoji_id, is_unicode in occurrences
+            ],
+        )
 
     async def steal_stickers(
         self, ctx: GuildContext, stickers: List[discord.StickerItem]
@@ -138,6 +185,114 @@ class Emojis(Cog):
         embed.set_image(url=f"attachment://{file.filename}")
 
         await ctx.send(embed=embed, file=file)
+
+    async def _resolve_stats_user(
+        self, ctx: Context, value: str | None
+    ) -> discord.User | discord.Member:
+        if value is None:
+            return ctx.author
+
+        if ctx.guild is not None:
+            try:
+                return await commands.MemberConverter().convert(ctx, value)
+            except commands.CommandError:
+                pass
+
+        try:
+            return await commands.UserConverter().convert(ctx, value)
+        except commands.CommandError as exc:
+            raise commands.BadArgument("I could not find that Discord user.") from exc
+
+    async def _send_emoji_stats(
+        self,
+        ctx: Context,
+        *,
+        title: str,
+        guild_id: int | None = None,
+        author_id: int | None = None,
+    ) -> None:
+        if (
+            author_id is not None
+            and author_id != ctx.author.id
+            and not self.bot.db_cache.user_history_is_public(author_id)
+        ):
+            await ctx.send("That user's emoji statistics are private.")
+            return
+        clauses: list[str] = []
+        arguments: list[int] = []
+        if guild_id is not None:
+            arguments.append(guild_id)
+            clauses.append(f"guild_id = ${len(arguments)}")
+        if author_id is not None:
+            arguments.append(author_id)
+            clauses.append(f"author_id = ${len(arguments)}")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = await self.bot.pool.fetch(
+            "SELECT emoji_id, unicode, COUNT(*) AS uses FROM emoji_stats "
+            f"{where} GROUP BY emoji_id, unicode ORDER BY uses DESC, emoji_id LIMIT 50",
+            *arguments,
+        )
+        if not rows:
+            await ctx.send(f"{title}\nNo emoji usage has been recorded yet.")
+            return
+
+        lines: list[str] = []
+        for row in rows:
+            emoji_id = str(row["emoji_id"])
+            if row["unicode"]:
+                display = emoji_id
+            else:
+                custom = self.bot.get_emoji(int(emoji_id))
+                display = (
+                    str(custom) if custom is not None else f"Custom emoji `{emoji_id}`"
+                )
+            lines.append(f"{display} ({int(row['uses']):,} uses)")
+        embed = discord.Embed(
+            title=title,
+            description="\n".join(lines),
+            color=self.bot.embedcolor,
+        )
+        embed.set_footer(text="Only valid Twemoji emoji and custom emoji are counted.")
+        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+    @emoji_group.group(name="stats", invoke_without_command=True)
+    async def emoji_stats(self, ctx: Context, target: Optional[str] = None) -> None:
+        """Show emoji usage for a server or a member."""
+        if target is not None:
+            try:
+                guild = await commands.GuildConverter().convert(ctx, target)
+            except commands.CommandError:
+                guild = None
+            if guild is not None:
+                await self._send_emoji_stats(
+                    ctx, title=f"Emoji stats for {guild.name}", guild_id=guild.id
+                )
+                return
+        elif ctx.guild is not None:
+            await self._send_emoji_stats(
+                ctx,
+                title=f"Emoji stats for {ctx.guild.name}",
+                guild_id=ctx.guild.id,
+            )
+            return
+
+        user = await self._resolve_stats_user(ctx, target)
+        await self._send_emoji_stats(
+            ctx,
+            title=f"Emoji stats for {user}",
+            author_id=user.id,
+            guild_id=ctx.guild.id if ctx.guild is not None else None,
+        )
+
+    @emoji_stats.command(name="global")
+    async def emoji_stats_global(
+        self, ctx: Context, target: Optional[str] = None
+    ) -> None:
+        """Show a user's emoji usage across all servers."""
+        user = await self._resolve_stats_user(ctx, target)
+        await self._send_emoji_stats(
+            ctx, title=f"Global emoji stats for {user}", author_id=user.id
+        )
 
     @emoji_group.command(name="create")
     @commands.has_permissions(manage_emojis=True)

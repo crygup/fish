@@ -60,9 +60,10 @@ def test_help_uses_custom_usage_and_qualified_command_names() -> None:
     assert command_usage(ctx, Images.cube) == (
         "fish cube <media> [-speed 1 -clockwise]"
     )
-    assert command_usage(ctx, Images.overlay_group_image) == (
-        "fish overlay image <media> -overlay <media> "
-        "[-opacity 70 -scale 1 -position center -x 0 -y 0 -stretch]"
+    assert command_usage(ctx, Images.overlay_group) == (
+        "fish overlay <media> <user|media|emoji|asset|flag> [name|random] "
+        "[-opacity 70 -scale 1 -size 100x100 -start 0 -stop 0 "
+        "-position center -x 0 -y 0 -stretch -extend -no-audio -fr]"
     )
 
 
@@ -187,8 +188,7 @@ def test_standalone_media_commands_remain_text_only() -> None:
         Images.fade_group_in,
         Images.fade_group_out,
         Images.overlay_group_flag,
-        Images.overlay_group_image,
-        Images.overlay_group_video,
+        Images.overlay_group,
         Images.reverse,
         Images.convert_command,
         Images.volume,

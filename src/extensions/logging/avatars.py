@@ -81,7 +81,7 @@ class Avatars(Cog):
         if before_u.display_avatar.key == after_u.display_avatar.key:
             return
 
-        if "avatar" in self.bot.db_cache.get_opted_out(after_u.id):
+        if self.bot.db_cache.user_tracking_opted_out(after_u.id, "avatar"):
             return
 
         await self.add_avatar(after_u, after_u.display_avatar)
@@ -94,7 +94,7 @@ class Avatars(Cog):
         if before_m.display_avatar.key == after_m.display_avatar.key:
             return
 
-        if "avatar" in self.bot.db_cache.get_opted_out(after_m.id):
+        if self.bot.db_cache.user_tracking_opted_out(after_m.id, "avatar"):
             return
 
         await self.add_avatar(before_m, after_m.display_avatar, after_m.guild.id)

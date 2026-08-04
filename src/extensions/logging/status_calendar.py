@@ -99,24 +99,18 @@ def render_status_calendar(
     margin = 42
     gap = 10
     cell_width = (width - margin * 2 - gap * (columns - 1)) // columns
-    cell_height = 72
-    grid_y = 108
-    height = grid_y + rows * cell_height + (rows - 1) * gap + 105
+    cell_height = 86
+    grid_y = 92
+    height = grid_y + rows * cell_height + (rows - 1) * gap + 94
     canvas = Image.new("RGB", (width, height), (17, 18, 20))
     draw = ImageDraw.Draw(canvas)
-    title_font = text_font(username, 30)
-    small_font = text_font("", 12)
-
-    draw.text(
-        (margin, 30),
-        f"{username}'s status calendar",
-        font=title_font,
-        fill=(245, 245, 245),
-    )
+    label_font = text_font("", 17)
+    date_font = text_font("", 16)
+    legend_font = text_font("", 16)
 
     for column, label in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")):
         x = margin + column * (cell_width + gap)
-        draw.text((x + 4, 79), label, font=small_font, fill=(174, 177, 185))
+        draw.text((x + 4, 50), label, font=label_font, fill=(174, 177, 185))
 
     for index, hours in enumerate(statuses):
         slot = first_weekday + index
@@ -145,36 +139,36 @@ def render_status_calendar(
         day = start_date + datetime.timedelta(days=index)
         text_color = (250, 250, 250) if observed else (136, 139, 147)
         draw.text(
-            (x + 10, y + 8),
+            (x + 10, y + 9),
             day.strftime("%b %d"),
-            font=small_font,
+            font=date_font,
             fill=text_color,
             stroke_width=2,
             stroke_fill=(17, 18, 20),
         )
         if not observed:
             draw.text(
-                (x + 10, y + 40),
+                (x + 10, y + 49),
                 "No data",
-                font=small_font,
+                font=date_font,
                 fill=text_color,
             )
 
-    legend_y = height - 58
+    legend_y = height - 62
     legend_x = margin
     for status in STATUS_ORDER:
         draw.rounded_rectangle(
-            (legend_x, legend_y, legend_x + 18, legend_y + 18),
-            radius=4,
+            (legend_x, legend_y, legend_x + 22, legend_y + 22),
+            radius=5,
             fill=STATUS_COLORS[status],
         )
         draw.text(
-            (legend_x + 27, legend_y - 1),
+            (legend_x + 31, legend_y - 2),
             status.title(),
-            font=small_font,
+            font=legend_font,
             fill=(220, 221, 225),
         )
-        legend_x += 126
+        legend_x += 142
 
     output = BytesIO()
     canvas.save(output, "PNG", optimize=True)

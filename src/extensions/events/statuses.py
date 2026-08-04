@@ -77,7 +77,7 @@ class StatusCog(Cog):
     async def _on_presence_update(self, before: discord.Member, after: discord.Member):
         if self.bot.user and after.id == self.bot.user.id:
             return
-        if "status" in self.bot.db_cache.get_opted_out(after.id):
+        if self.bot.db_cache.user_tracking_opted_out(after.id, "status"):
             return
 
         if before.status == after.status:
