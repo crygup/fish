@@ -28,14 +28,8 @@ LASTFM_CALLBACK_URL = "https://crygup.com/fishie"
 LASTFM_STATE_TTL = 10 * 60
 STEAM_CALLBACK_URL = "https://crygup.com/fishie"
 STEAM_STATE_TTL = 10 * 60
-SPOTIFY_CALLBACK_URL = "https://crygup.com/fishie"
-SPOTIFY_STATE_TTL = 10 * 60
 ANILIST_CALLBACK_URL = "https://crygup.com/fishie"
 ANILIST_STATE_TTL = 10 * 60
-SPOTIFY_SCOPES = (
-    "user-read-private user-read-playback-state user-modify-playback-state "
-    "user-library-modify user-library-read"
-)
 
 
 def _oauth_state_secret(bot: Fishie) -> bytes:
@@ -151,42 +145,6 @@ def _steam_link_view(url: str) -> discord.ui.View:
     return view
 
 
-def _spotify_authorization_url(
-    bot: Fishie,
-    user_id: int,
-    *,
-    channel_id: int | None = None,
-    message_id: int | None = None,
-) -> str:
-    now = int(time.time())
-    states = getattr(bot, "_spotify_oauth_states", None)
-    if states is None:
-        states = bot._spotify_oauth_states = {}
-    for token, state_data in list(states.items()):
-        if int(state_data.get("expires", 0)) < now:
-            states.pop(token, None)
-    token = secrets.token_urlsafe(24)
-    state_data = {
-        "user_id": int(user_id),
-        "source": "discord",
-        "expires": now + SPOTIFY_STATE_TTL,
-    }
-    if channel_id is not None and message_id is not None:
-        state_data["channel_id"] = int(channel_id)
-        state_data["message_id"] = int(message_id)
-    states[token] = state_data
-    return "https://accounts.spotify.com/authorize?" + urlencode(
-        {
-            "client_id": bot.config["keys"]["spotify_id"],
-            "response_type": "code",
-            "redirect_uri": SPOTIFY_CALLBACK_URL,
-            "scope": SPOTIFY_SCOPES,
-            "state": f"spotify_{token}",
-            "show_dialog": "true",
-        }
-    )
-
-
 def _anilist_authorization_url(
     bot: Fishie,
     user_id: int,
@@ -235,18 +193,6 @@ async def _send_steam_link(ctx: Context, interaction: discord.Interaction) -> No
         view=_steam_link_view(url),
         ephemeral=True,
     )
-
-
-def _spotify_link_view(url: str) -> discord.ui.View:
-    view = discord.ui.View(timeout=10 * 60)
-    view.add_item(
-        discord.ui.Button(
-            label="Authorize on Spotify",
-            style=discord.ButtonStyle.link,
-            url=url,
-        )
-    )
-    return view
 
 
 def _anilist_link_view(url: str) -> discord.ui.View:

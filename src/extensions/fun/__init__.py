@@ -192,7 +192,7 @@ class PhoneReportView(discord.ui.View):
                 pass
 
 
-PHONE_IDLE_TIMEOUT = 30.0
+PHONE_IDLE_TIMEOUT = 60.0
 PHONE_LOG_MAX_ENTRIES = 500
 PHONE_LOG_MAX_BYTES = 200_000
 
@@ -413,7 +413,7 @@ class Fun(About, Corn):
                 continue
             await self._close_phone(
                 connection,
-                reason="☎️ This phone call ended after 30 seconds without any messages.",
+                reason="☎️ This phone call ended after 60 seconds without any messages.",
             )
             return
 
@@ -623,7 +623,10 @@ class Fun(About, Corn):
 
         content = f"**{author_name}**"
         if message.content:
-            content += f": {message.content}"
+            safe_content = discord.utils.escape_mentions(
+                discord.utils.escape_markdown(message.content)
+            )
+            content += f": {safe_content}"
         if attachment_links:
             content += "".join(f"\n{url}" for url in attachment_links)
 

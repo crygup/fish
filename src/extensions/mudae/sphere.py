@@ -52,6 +52,11 @@ OQ_CLUE_VALUES = {
 }
 
 
+def _oq_clicks_used(revealed: dict[int, str]) -> int:
+    """Count only non-target clicks toward OQ's seven-click limit."""
+    return sum(color in OQ_CLUE_VALUES for color in revealed.values())
+
+
 def _to_rc(idx: int) -> Tuple[int, int]:
     """Convert linear index to (row, col)."""
     return divmod(idx, GRID_SIZE)
@@ -151,7 +156,7 @@ def _oq_best_clicks(revealed: dict[int, str]) -> list[int]:
         position for position, color in revealed.items() if color in {"purple", "red"}
     }
     purple_count = sum(color == "purple" for color in revealed.values())
-    clicks_used = sum(color != "red" for color in revealed.values())
+    clicks_used = _oq_clicks_used(revealed)
     if (
         len(targets) >= OQ_TARGET_TOTAL
         or "red" in revealed.values()
@@ -200,12 +205,20 @@ def _oq_best_clicks(revealed: dict[int, str]) -> list[int]:
         ranked.append((position, score, target_chance, entropy))
 
     best_score = max(score for _, score, _, _ in ranked)
-    tied = [entry for entry in ranked if math.isclose(entry[1], best_score)]
+    tied = [
+        entry
+        for entry in ranked
+        if math.isclose(entry[1], best_score, rel_tol=0.0, abs_tol=1e-9)
+    ]
     best_target_chance = max(target_chance for _, _, target_chance, _ in tied)
     return [
         position
         for position, _, _, _ in sorted(
-            (entry for entry in tied if math.isclose(entry[2], best_target_chance)),
+            (
+                entry
+                for entry in tied
+                if math.isclose(entry[2], best_target_chance, rel_tol=0.0, abs_tol=1e-9)
+            ),
             key=lambda entry: (-entry[3], entry[0]),
         )[:4]
     ]
@@ -674,7 +687,7 @@ class SphereCog(Cog):
                 break
 
             targets = sum(color in {"purple", "red"} for color in new_revealed.values())
-            clicks_used = sum(color != "red" for color in new_revealed.values())
+            clicks_used = _oq_clicks_used(new_revealed)
             if (
                 "red" in new_revealed.values()
                 or targets >= OQ_TARGET_TOTAL

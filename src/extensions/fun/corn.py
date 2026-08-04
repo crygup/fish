@@ -4,11 +4,11 @@ import random
 from typing import TYPE_CHECKING, Optional
 
 import discord
-from discord import app_commands
 from discord.ext import commands
 
 from core import SILENT_COMMAND_USERS, Cog
 from utils import get_or_fetch_user
+from utils.paths import FILES_ROOT
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -30,9 +30,7 @@ class Corn(Cog):
 
     emoji = discord.PartialEmoji(name="\U0001f33d")
 
-    @commands.hybrid_group(name="corn", fallback="guild")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.group(name="corn", invoke_without_command=True)
     async def corn(
         self,
         ctx: Context,
@@ -61,8 +59,6 @@ class Corn(Cog):
         await self._user_stats(ctx, user)
 
     @corn.command(name="global")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def corn_global(self, ctx: Context):
         """Global corn leaderboard, totals across all servers."""
         givers = await ctx.bot.pool.fetch(
@@ -219,9 +215,25 @@ class Corn(Cog):
             "https://crygup.com/images/crab/crab3.png",
             'I know that 69 means ||" sex number" ||, but what does 420 mean?',
             "I just say I'm 15 sometimes cuz irl I look like I'm 20",
+            'I know that 69 means ||" sex number" ||, but what does 420 mean?',
+            "Here's who I am:|| IAm the one who cares about the people and  very kind||",
+            "VIDEO",
+            "https://discord.com/channels/848507662437449750/884188416835723285/993962175318216846",
+            "Mf hattori not accepting the friend rwq",
+            "If I don't get beginner before I sleep I will commit unalive",
+            "3 things I need to do with my ggf\n\n-HEAD SHOULDERS KNEE\n\n-HUG HER\n\n-KILL HER",
+            "The diary of a wimpy kid is the coolest thing I've ever read",
         ]
 
-        await ctx.send(random.choice(things))
+        choice = random.choice(things)
+
+        if choice == "VIDEO":
+            videos = [FILES_ROOT / "videos" / "crab_rock.mp4"]
+            return await ctx.send(
+                file=discord.File(random.choice(videos), filename="crab.mp4")
+            )
+
+        await ctx.send(choice)
 
 
 async def setup(bot: Fishie):
