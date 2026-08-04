@@ -5,6 +5,7 @@ import json
 import math
 import os
 import random
+import re
 import subprocess
 import tempfile
 import zipfile
@@ -27,12 +28,23 @@ from PIL import (
 )
 
 from utils import to_thread
-from utils.rich_text import impact_font_path, meme_font, text_font
+from utils.rich_text import (
+    draw_inline_tokens,
+    impact_font_path,
+    inline_animation_duration,
+    measure_inline_tokens,
+    meme_font,
+    text_font,
+    wrap_inline_text,
+)
+
+from .fonts import load_effect_font
 
 MAX_FRAME_PIXELS = 25_000_000
 MAX_TOTAL_PIXELS = 150_000_000
 MAX_ANIMATION_FRAMES = 300
-MAX_MEDIA_DURATION = 180.0
+MAX_MEDIA_DURATION = 10 * 60.0
+MAX_MEDIA_DURATION_MINUTES = int(MAX_MEDIA_DURATION // 60)
 MAX_MEDIA_DIMENSION = 4096
 FFMPEG_TIMEOUT = 30
 MAGIK_WORKING_SIZE = 320
@@ -97,6 +109,12 @@ class EffectResult:
     data: bytes
     filename: str
     displayable: bool = True
+
+
+@dataclass(slots=True, frozen=True)
+class AverageColor:
+    rgb: tuple[int, int, int]
+    percentage: float
 
 
 class NotPillowMedia(ValueError):
@@ -191,7 +209,10 @@ def _probe_path(path: str) -> MediaProbe:
     if not probe.has_video and not probe.has_audio:
         raise ValueError("That file does not contain video or audio.")
     if duration > MAX_MEDIA_DURATION:
-        raise ValueError("Media effects are limited to files 3 minutes or shorter.")
+        raise ValueError(
+            f"Media effects are limited to files {MAX_MEDIA_DURATION_MINUTES} "
+            "minutes or shorter."
+        )
     if width > MAX_MEDIA_DIMENSION or height > MAX_MEDIA_DIMENSION:
         raise ValueError("Media effects are limited to 4096 pixels per side.")
     return probe
@@ -631,7 +652,10 @@ def _resize(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
         raise ValueError("Resize scale must be between 0.1 and 4.")
     ratio = str(options.get("ratio", "")).strip()
     target = frame
-    if ratio:
+    exact_size = _resize_dimensions(str(options.get("size", "")))
+    if exact_size is not None:
+        target = frame.resize(exact_size, Image.Resampling.LANCZOS)
+    elif ratio:
         separator = ":" if ":" in ratio else "/"
         try:
             ratio_width, ratio_height = (
@@ -658,6 +682,24 @@ def _resize(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
         ),
         Image.Resampling.LANCZOS,
     )
+
+
+def _resize_dimensions(value: str) -> tuple[int, int] | None:
+    value = value.strip().lower().replace("×", "x")
+    if not value:
+        return None
+    match = re.fullmatch(r"(?P<width>\d{1,4})x(?P<height>\d{1,4})", value)
+    if match is None:
+        raise ValueError("Resize dimensions must look like 640x480.")
+    width = int(match.group("width"))
+    height = int(match.group("height"))
+    if not 1 <= width <= MAX_MEDIA_DIMENSION or not 1 <= height <= MAX_MEDIA_DIMENSION:
+        raise ValueError(
+            f"Resize dimensions must be between 1 and {MAX_MEDIA_DIMENSION} pixels."
+        )
+    if width * height > MAX_FRAME_PIXELS:
+        raise ValueError("The requested resize dimensions are too large.")
+    return width, height
 
 
 def _distort(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
@@ -694,6 +736,105 @@ def _grain(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
 
 def _color_noise(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
     return _noise(frame, options, monochrome=False)
+
+
+def _average_colors_data(
+    frame: Image.Image,
+) -> tuple[Image.Image, list[AverageColor]]:
+    """Build a compact palette image and its dominant-color measurements."""
+    source = frame.convert("RGBA")
+    # Quantizing a small copy is substantially faster for large uploads and
+    # keeps the palette representative without changing the source media.
+    sample = ImageOps.contain(source, (256, 256), Image.Resampling.BILINEAR)
+    background = Image.new("RGB", sample.size, "white")
+    background.paste(sample.convert("RGB"), mask=sample.getchannel("A"))
+    quantized = background.quantize(colors=6, method=Image.Quantize.MEDIANCUT)
+    palette = [int(value) for value in (quantized.getpalette() or [])]
+    counts = cast(
+        list[tuple[int, int]],
+        quantized.getcolors(maxcolors=256) or [],
+    )
+    total_pixels = max(1, sum(count for count, _ in counts))
+    colors: list[AverageColor] = []
+    for count, palette_index in sorted(counts, reverse=True):
+        offset = int(palette_index) * 3
+        if offset + 2 >= len(palette):
+            continue
+        color = (
+            palette[offset],
+            palette[offset + 1],
+            palette[offset + 2],
+        )
+        if any(item.rgb == color for item in colors):
+            continue
+        colors.append(
+            AverageColor(
+                rgb=color,
+                percentage=(count / total_pixels) * 100,
+            )
+        )
+    if not colors:
+        colors = [AverageColor((255, 255, 255), 100.0)]
+    colors = colors[:6]
+
+    width = max(320, min(960, source.width))
+    swatch_height = max(64, min(120, width // 6))
+    output = Image.new("RGBA", (width, swatch_height * len(colors)), "white")
+    draw = ImageDraw.Draw(output)
+    font_size = max(18, min(36, swatch_height // 3))
+    for index, item in enumerate(colors):
+        color = item.rgb
+        top = index * swatch_height
+        draw.rectangle((0, top, width, top + swatch_height), fill=(*color, 255))
+        luminance = (color[0] * 299 + color[1] * 587 + color[2] * 114) / 1000
+        fill = "black" if luminance > 150 else "white"
+        label = "#%02X%02X%02X" % color
+        font = text_font(label, font_size)
+        box = draw.textbbox((0, 0), label, font=font)
+        draw.text(
+            (
+                (width - (box[2] - box[0])) // 2,
+                top + (swatch_height - (box[3] - box[1])) // 2,
+            ),
+            label,
+            font=font,
+            fill=fill,
+        )
+    return output, colors
+
+
+def _average_colors_image(frame: Image.Image) -> Image.Image:
+    """Render a compact, labeled palette made from the image's dominant colors."""
+    output, _ = _average_colors_data(frame)
+    return output
+
+
+def render_average_colors_sync(
+    data: bytes,
+) -> tuple[EffectResult, list[AverageColor]]:
+    """Extract dominant colors from one still image and render its palette."""
+    try:
+        with Image.open(BytesIO(data)) as opened:
+            if str(opened.format).upper() == "GIF":
+                raise ValueError(
+                    "Average colors only supports still images, not GIFs or videos."
+                )
+    except UnidentifiedImageError as error:
+        raise NotPillowMedia(
+            "Average colors only supports still images, not GIFs or videos."
+        ) from error
+
+    frames, _, animated = _load_image_frames(data)
+    if animated:
+        raise ValueError(
+            "Average colors only supports still images, not GIFs or videos."
+        )
+    palette, colors = _average_colors_data(frames[0])
+    output = _save_frames([palette], [1000], filename="averagecolors")
+    return output, colors
+
+
+render_average_colors = to_thread(render_average_colors_sync)
 
 
 def _rotate(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
@@ -1038,32 +1179,71 @@ def _sample_heavy_animation(
     return sampled_frames, sampled_durations
 
 
+OVERLAY_SIZE_RE = re.compile(r"^(?P<width>\d{1,4})[xX×](?P<height>\d{1,4})$")
+
+
+def _overlay_dimensions(
+    options: dict[str, Any],
+    *,
+    base_width: int,
+    base_height: int,
+    overlay_width: int,
+    overlay_height: int,
+) -> tuple[int, int]:
+    requested_size = str(options.get("size", "") or "").strip()
+    if requested_size:
+        match = OVERLAY_SIZE_RE.fullmatch(requested_size)
+        if match is None:
+            raise ValueError("Overlay size must look like 100x100.")
+        width = int(match.group("width"))
+        height = int(match.group("height"))
+        if (
+            not 1 <= width <= MAX_MEDIA_DIMENSION
+            or not 1 <= height <= MAX_MEDIA_DIMENSION
+        ):
+            raise ValueError(
+                f"Overlay size must be between 1 and {MAX_MEDIA_DIMENSION} pixels per side."
+            )
+        return width, height
+
+    scale = float(options.get("scale", 1.0))
+    if not 0.05 <= scale <= 2:
+        raise ValueError("Overlay scale must be between 0.05 and 2.")
+    if bool(options.get("stretch")):
+        return max(1, base_width), max(1, base_height)
+
+    target_width = max(1, round(base_width * scale))
+    target_height = max(1, round(base_height * scale))
+    if overlay_width <= 0 or overlay_height <= 0:
+        return target_width, target_height
+    ratio = min(target_width / overlay_width, target_height / overlay_height)
+    return (
+        max(1, round(overlay_width * ratio)),
+        max(1, round(overlay_height * ratio)),
+    )
+
+
 def _overlay(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
     overlay_data = options.get("overlay_data")
     if not isinstance(overlay_data, bytes):
         raise ValueError("A second image is required.")
     opacity = float(options.get("opacity", 0.5))
-    scale = float(options.get("scale", 1.0))
-    stretch = bool(options.get("stretch"))
     if not 0 <= opacity <= 1:
         raise ValueError("Opacity must be between 0 and 1.")
-    if not 0.05 <= scale <= 2:
-        raise ValueError("Overlay scale must be between 0.05 and 2.")
     try:
         with Image.open(BytesIO(overlay_data)) as opened:
             second = opened.convert("RGBA")
     except UnidentifiedImageError as error:
         raise ValueError("The overlay must be an image.") from error
 
-    target_width = max(1, round(frame.width * scale))
-    target_height = max(1, round(frame.height * scale))
-    if stretch:
-        second = second.resize(
-            (target_width, target_height),
-            Image.Resampling.LANCZOS,
-        )
-    else:
-        second.thumbnail((target_width, target_height), Image.Resampling.LANCZOS)
+    target_size = _overlay_dimensions(
+        options,
+        base_width=frame.width,
+        base_height=frame.height,
+        overlay_width=second.width,
+        overlay_height=second.height,
+    )
+    second = second.resize(target_size, Image.Resampling.LANCZOS)
     alpha = second.getchannel("A").point(
         [round(value * opacity) for value in range(256)]
     )
@@ -2461,7 +2641,15 @@ def _video_filter(
             raise ValueError("Resize scale must be between 0.1 and 4.")
         filters: list[str] = []
         ratio = str(options.get("ratio", "")).strip()
-        if ratio:
+        exact_size = _resize_dimensions(str(options.get("size", "")))
+        if exact_size is not None:
+            width, height = exact_size
+            # H.264/yuv420p requires even dimensions. Only the video renderer
+            # needs this one-pixel normalization; still images keep exact size.
+            width = max(2, width - width % 2)
+            height = max(2, height - height % 2)
+            filters.append(f"scale={width}:{height}")
+        elif ratio:
             separator = ":" if ":" in ratio else "/"
             try:
                 ratio_width, ratio_height = (
@@ -2477,7 +2665,8 @@ def _video_filter(
                 f"'if(gt(a,{ratio_value:g}),ih*{ratio_value:g},iw)':"
                 f"'if(gt(a,{ratio_value:g}),ih,iw/{ratio_value:g})'"
             )
-        filters.append(f"scale=trunc(iw*{scale:g}/2)*2:trunc(ih*{scale:g}/2)*2")
+        if scale != 1 or exact_size is None:
+            filters.append(f"scale=trunc(iw*{scale:g}/2)*2:trunc(ih*{scale:g}/2)*2")
         return ",".join(filters), "resize.mp4"
     if effect == "distort":
         amount = float(options.get("amount", 0.25))
@@ -2703,9 +2892,13 @@ def _visual_effect_window(
     start = float(options.get("start", 0) or 0)
     stop = float(options.get("stop", 0) or 0)
     if not 0 <= start <= MAX_MEDIA_DURATION:
-        raise ValueError("Effect start must be between 0 and 180 seconds.")
+        raise ValueError(
+            f"Effect start must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+        )
     if not 0 <= stop <= MAX_MEDIA_DURATION:
-        raise ValueError("Effect stop must be between 0 and 180 seconds.")
+        raise ValueError(
+            f"Effect stop must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+        )
     end: float | None = stop or None
     if end is not None and end <= start:
         raise ValueError("Effect stop must be after its start time.")
@@ -2754,6 +2947,158 @@ def _timed_visual_filter(
         outputs.append(f"[segment{index}]")
     filters.append(f"{''.join(outputs)}concat=n={len(outputs)}:v=1:a=0[v]")
     return ";".join(filters)
+
+
+def _render_video_overlay_sync(
+    input_data: bytes,
+    second_data: bytes,
+    *,
+    allow_image_base: bool,
+    **options: Any,
+) -> EffectResult:
+    with tempfile.TemporaryDirectory(prefix="fishie-overlay-") as directory:
+        input_path = os.path.join(directory, "input.media")
+        second_path = os.path.join(directory, "overlay.media")
+        Path(input_path).write_bytes(input_data)
+        Path(second_path).write_bytes(second_data)
+
+        try:
+            _, _, base_animated = _load_image_frames(input_data)
+        except NotPillowMedia:
+            base_is_image = False
+            base_animated = False
+        else:
+            base_is_image = True
+        try:
+            _load_image_frames(second_data)
+        except NotPillowMedia:
+            second_is_image = False
+        else:
+            second_is_image = True
+
+        base_probe = _probe_path(input_path)
+        second_probe = _probe_path(second_path)
+        if not second_probe.has_video:
+            raise ValueError("The overlay must contain an image, GIF, or video.")
+        if base_is_image and not allow_image_base:
+            raise ValueError("The first input has to be a video.")
+
+        if base_is_image:
+            target_duration = second_probe.duration
+            if target_duration <= 0:
+                raise ValueError("A video or animated overlay is required.")
+        else:
+            if not base_probe.has_video:
+                raise ValueError("The first input has to contain video.")
+            target_duration = base_probe.duration
+            if target_duration <= 0:
+                raise ValueError("The first video has no usable duration.")
+            if bool(options.get("extend")) and second_probe.duration > target_duration:
+                target_duration = second_probe.duration
+
+        start, end = _visual_effect_window(options, target_duration)
+        opacity = float(options.get("opacity", 0.7))
+        if not 0 <= opacity <= 1:
+            raise ValueError("Opacity must be between 0 and 1.")
+        overlay_width, overlay_height = _overlay_dimensions(
+            options,
+            base_width=base_probe.width,
+            base_height=base_probe.height,
+            overlay_width=second_probe.width,
+            overlay_height=second_probe.height,
+        )
+        position = str(options.get("position", "center")).casefold().replace("_", "-")
+        position_map = {
+            "center": ("(W-w)/2", "(H-h)/2"),
+            "top-left": ("0", "0"),
+            "top": ("(W-w)/2", "0"),
+            "top-right": ("W-w", "0"),
+            "left": ("0", "(H-h)/2"),
+            "right": ("W-w", "(H-h)/2"),
+            "bottom-left": ("0", "H-h"),
+            "bottom": ("(W-w)/2", "H-h"),
+            "bottom-right": ("W-w", "H-h"),
+        }
+        if position not in position_map:
+            raise ValueError(
+                "Overlay position must be center, top, bottom, left, right, "
+                "or a corner such as top-left."
+            )
+        x_expression, y_expression = position_map[position]
+        x_expression = f"({x_expression})+{int(options.get('x', 0))}"
+        y_expression = f"({y_expression})+{int(options.get('y', 0))}"
+
+        command = ["ffmpeg", "-y"]
+        if base_is_image:
+            command.extend(["-stream_loop", "-1"] if base_animated else ["-loop", "1"])
+        elif (
+            bool(options.get("extend")) and second_probe.duration > base_probe.duration
+        ):
+            command.extend(["-stream_loop", "-1"])
+        command.extend(["-i", input_path])
+
+        second_needs_loop = second_is_image or second_probe.duration < target_duration
+        if second_needs_loop:
+            command.extend(["-stream_loop", "-1"])
+        command.extend(["-i", second_path])
+
+        filter_complex = (
+            f"[0:v]setpts=PTS-STARTPTS[base];"
+            f"[1:v]setpts=PTS-STARTPTS,scale={overlay_width}:{overlay_height}:"
+            "flags=lanczos,format=rgba,colorchannelmixer="
+            f"aa={opacity:g}[over];"
+            f"[base][over]overlay=x='{x_expression}':y='{y_expression}':"
+            "eof_action=repeat:shortest=0"
+        )
+        if start > 0 or end is not None:
+            enable = (
+                f"between(t,{start:g},{end:g})"
+                if end is not None
+                else f"gte(t,{start:g})"
+            )
+            filter_complex += f":enable='{enable}'"
+        filter_complex += "[v]"
+
+        command.extend(["-filter_complex", filter_complex, "-map", "[v]"])
+        overlay_audio = bool(options.get("overlay_audio", True))
+        audio_mapped = False
+        if overlay_audio and base_probe.has_audio and second_probe.has_audio:
+            filter_complex += (
+                ";[0:a:0][1:a:0]amix=inputs=2:duration=longest:"
+                "dropout_transition=2[a]"
+            )
+            command[command.index("-filter_complex") + 1] = filter_complex
+            command.extend(["-map", "[a]"])
+            audio_mapped = True
+        elif overlay_audio and second_probe.has_audio and not base_probe.has_audio:
+            command.extend(["-map", "1:a:0"])
+            audio_mapped = True
+        elif base_probe.has_audio:
+            command.extend(["-map", "0:a:0"])
+            audio_mapped = True
+
+        output_path = os.path.join(directory, "overlay-video.mp4")
+        command.extend(
+            [
+                "-t",
+                f"{target_duration:g}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "24",
+                "-pix_fmt",
+                "yuv420p",
+            ]
+        )
+        if audio_mapped:
+            command.extend(["-c:a", "aac", "-b:a", "96k"])
+        else:
+            command.append("-an")
+        command.extend(["-movflags", "+faststart", output_path])
+        _run(command)
+        return EffectResult(Path(output_path).read_bytes(), "overlay-video.mp4")
 
 
 def _render_video_visual(
@@ -2974,6 +3319,11 @@ def render_image_effect_sync(
         ]
         return _save_frames(transformed, durations, filename=effect)
 
+    if effect == "averagecolors":
+        # A palette describes the supplied image as a whole. For an animated
+        # input use its first frame so the command remains a quick PNG result.
+        return _save_frames([_average_colors_image(frames[0])], [1000], filename=effect)
+
     if effect in STATIC_EFFECTS:
         transformed = [STATIC_EFFECTS[effect](frame, options) for frame in frames]
         jpeg_quality = int(options.get("quality", 8)) if effect == "jpeg" else None
@@ -3117,7 +3467,42 @@ def render_image_effect_sync(
     raise ValueError("Unknown image effect.")
 
 
+def render_overlay_effect_sync(
+    input_data: bytes,
+    second_data: bytes,
+    **options: Any,
+) -> EffectResult:
+    try:
+        _load_image_frames(input_data)
+    except NotPillowMedia:
+        base_is_image = False
+    else:
+        base_is_image = True
+    try:
+        _, _, second_animated = _load_image_frames(second_data)
+    except NotPillowMedia:
+        second_is_image = False
+        second_animated = False
+    else:
+        second_is_image = True
+
+    if base_is_image and second_is_image and not second_animated:
+        return render_image_effect_sync(
+            input_data,
+            "overlay",
+            overlay_data=second_data,
+            **options,
+        )
+    return _render_video_overlay_sync(
+        input_data,
+        second_data,
+        allow_image_base=True,
+        **options,
+    )
+
+
 render_image_effect = to_thread(render_image_effect_sync)
+render_overlay_effect = to_thread(render_overlay_effect_sync)
 
 
 PRIDE_FLAGS: dict[str, tuple[str, ...]] = {
@@ -3202,6 +3587,10 @@ def _video_command_output(
     output_extension: str = "mp4",
     map_arguments: list[str] | None = None,
     shortest: bool = False,
+    output_duration: float | None = None,
+    video_crf: int = 22,
+    video_preset: str = "fast",
+    audio_bitrate: str = "128k",
 ) -> EffectResult:
     with tempfile.TemporaryDirectory(prefix="fishie-video-effect-") as directory:
         input_path = os.path.join(directory, "input.media")
@@ -3225,6 +3614,8 @@ def _video_command_output(
             command.extend(map_arguments)
         if shortest:
             command.append("-shortest")
+        if output_duration is not None and output_duration > 0:
+            command.extend(["-t", f"{output_duration:g}"])
 
         if output_extension == "mp4":
             if probe.has_video:
@@ -3233,15 +3624,15 @@ def _video_command_output(
                         "-c:v",
                         "libx264",
                         "-preset",
-                        "fast",
+                        video_preset,
                         "-crf",
-                        "22",
+                        str(video_crf),
                         "-pix_fmt",
                         "yuv420p",
                     ]
                 )
             if probe.has_audio or second_data is not None:
-                command.extend(["-c:a", "aac", "-b:a", "128k"])
+                command.extend(["-c:a", "aac", "-b:a", audio_bitrate])
             command.extend(["-movflags", "+faststart"])
         elif output_extension == "webm":
             if probe.has_video:
@@ -3266,6 +3657,700 @@ def _video_command_output(
         )
 
 
+def _fit_video_dimensions(
+    probe: MediaProbe,
+    max_dimension: int | None,
+) -> tuple[int, int] | None:
+    if max_dimension is None or not probe.has_video:
+        return None
+    largest = max(probe.width, probe.height)
+    if largest <= max_dimension:
+        return None
+    scale = max_dimension / largest
+    width = max(2, int(probe.width * scale) // 2 * 2)
+    height = max(2, int(probe.height * scale) // 2 * 2)
+    return width, height
+
+
+def compress_media_to_size_sync(
+    data: bytes,
+    filename: str,
+    max_bytes: int,
+) -> EffectResult:
+    """Re-encode oversized video results until they fit an upload limit.
+
+    Effects are intentionally rendered at their normal quality first. This
+    fallback only runs when the finished file is too large, progressively
+    increasing CRF and then reducing the longest video edge. It preserves the
+    original container and audio whenever possible instead of silently
+    changing a video into a GIF or dropping its soundtrack.
+    """
+    extension = Path(filename).suffix.casefold().lstrip(".")
+    if max_bytes <= 0 or extension not in {"mp4", "webm"}:
+        return EffectResult(data, filename, displayable=True)
+
+    probe = probe_media_sync(data)
+    if not probe.has_video:
+        return EffectResult(data, filename, displayable=True)
+
+    # Leave a small margin for Discord's multipart overhead and future changes
+    # to the upload path. The API limit itself applies to the file bytes, but
+    # targeting 98% prevents borderline results from being rejected.
+    target_bytes = max(1, round(max_bytes * 0.98))
+    attempts = (
+        (26, None),
+        (29, None),
+        (31, 1920),
+        (33, 1440),
+        (35, 1080),
+        (37, 720),
+    )
+    current = EffectResult(data, filename, displayable=True)
+    for crf, max_dimension in attempts:
+        dimensions = _fit_video_dimensions(probe, max_dimension)
+        video_filter = (
+            f"scale={dimensions[0]}:{dimensions[1]}:flags=lanczos"
+            if dimensions is not None
+            else None
+        )
+        try:
+            current = _video_command_output(
+                data,
+                filename=Path(filename).stem,
+                video_filter=video_filter,
+                output_extension=extension,
+                video_crf=crf,
+                video_preset="fast",
+                audio_bitrate="96k",
+            )
+        except ValueError:
+            continue
+        if len(current.data) <= target_bytes:
+            return current
+
+    # Discord clients have much broader playback support for H.264/AAC MP4
+    # than for VP9/WebM. Make the final rescue attempt a compatible MP4 even
+    # when the original result used a WebM container.
+    dimensions = _fit_video_dimensions(probe, 720)
+    video_filter = (
+        f"scale={dimensions[0]}:{dimensions[1]}:flags=lanczos"
+        if dimensions is not None
+        else None
+    )
+    try:
+        current = _video_command_output(
+            data,
+            filename=Path(filename).stem,
+            video_filter=video_filter,
+            output_extension="mp4",
+            video_crf=37,
+            video_preset="fast",
+            audio_bitrate="96k",
+        )
+    except ValueError:
+        pass
+    return current
+
+
+compress_media_to_size = to_thread(compress_media_to_size_sync)
+
+
+def _text_effect_color(
+    value: str,
+    *,
+    default: str,
+    opacity: int = 255,
+) -> tuple[int, int, int, int]:
+    try:
+        parsed = ImageColor.getrgb(value or default)
+    except ValueError as error:
+        raise ValueError(f"`{value}` is not a valid color.") from error
+    red, green, blue = parsed[:3]
+    return red, green, blue, max(0, min(255, opacity))
+
+
+def _text_overlay(
+    frame: Image.Image,
+    options: dict[str, Any],
+    *,
+    timestamp_ms: int = 0,
+) -> Image.Image:
+    text = str(options.get("text", "")).replace("\\n", "\n").strip()
+    if not text:
+        raise ValueError("Text cannot be empty.")
+    if len(text) > 1000:
+        raise ValueError("Text cannot exceed 1,000 characters.")
+    size = int(options.get("size", max(16, round(min(frame.size) * 0.1))) or 0)
+    if not 8 <= size <= 512:
+        raise ValueError("Text size must be between 8 and 512.")
+    font = load_effect_font(
+        str(options.get("font", "Roboto")),
+        size,
+        bold=bool(options.get("bold")),
+    )
+    assets = cast(dict[str, bytes], options.get("inline_images") or {})
+    padding = max(0, min(256, int(options.get("padding", max(4, size // 5)))))
+    max_width = max(1, frame.width - padding * 2)
+    lines = []
+    for paragraph in text.splitlines() or [""]:
+        lines.extend(wrap_inline_text(paragraph or " ", font, size, assets, max_width))
+    line_box = font.getbbox("Ag")
+    line_height = max(size, round(line_box[3] - line_box[1]))
+    gap = max(1, round(size * 0.18))
+    widths = [round(measure_inline_tokens(line, font, size, assets)) for line in lines]
+    content_width = min(max_width, max(widths, default=1))
+    content_height = len(lines) * line_height + max(0, len(lines) - 1) * gap
+    box_width = min(frame.width, content_width + padding * 2)
+    box_height = min(frame.height, content_height + padding * 2)
+
+    position = str(options.get("position", "center")).casefold().replace("_", "-")
+    positions: dict[str, tuple[int, int]] = {
+        "top-left": (0, 0),
+        "top": ((frame.width - box_width) // 2, 0),
+        "top-right": (frame.width - box_width, 0),
+        "left": (0, (frame.height - box_height) // 2),
+        "center": (
+            (frame.width - box_width) // 2,
+            (frame.height - box_height) // 2,
+        ),
+        "right": (frame.width - box_width, (frame.height - box_height) // 2),
+        "bottom-left": (0, frame.height - box_height),
+        "bottom": ((frame.width - box_width) // 2, frame.height - box_height),
+        "bottom-right": (frame.width - box_width, frame.height - box_height),
+    }
+    if position not in positions:
+        raise ValueError(
+            "Text position must be top-left, top, top-right, left, center, "
+            "right, bottom-left, bottom, or bottom-right."
+        )
+    box_x, box_y = positions[position]
+    custom_x = int(options.get("x", -1))
+    custom_y = int(options.get("y", -1))
+    if custom_x >= 0:
+        box_x = min(frame.width - box_width, custom_x)
+    if custom_y >= 0:
+        box_y = min(frame.height - box_height, custom_y)
+
+    style = str(options.get("style", "outline")).casefold()
+    if style not in {"normal", "outline", "shadow", "box"}:
+        raise ValueError("Text style must be normal, outline, shadow, or box.")
+    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    background = str(options.get("background", "")).strip()
+    if style == "box" and not background:
+        background = "#000000"
+    if background:
+        background_opacity = int(options.get("background_opacity", 160))
+        draw.rounded_rectangle(
+            (box_x, box_y, box_x + box_width, box_y + box_height),
+            radius=max(0, round(size * 0.15)),
+            fill=_text_effect_color(
+                background,
+                default="#000000",
+                opacity=background_opacity,
+            ),
+        )
+    color = _text_effect_color(str(options.get("color", "#ffffff")), default="#ffffff")
+    stroke_width = int(options.get("stroke_width", 0) or 0)
+    if style == "outline" and stroke_width == 0:
+        stroke_width = max(1, round(size * 0.06))
+    if bool(options.get("bold")) and stroke_width == 0:
+        stroke_width = 1
+    if not 0 <= stroke_width <= 32:
+        raise ValueError("Text stroke width must be between 0 and 32.")
+    stroke_color = _text_effect_color(
+        str(options.get("stroke_color", "#000000")), default="#000000"
+    )
+    align = str(options.get("align", "center")).casefold()
+    if align not in {"left", "center", "right"}:
+        raise ValueError("Text alignment must be left, center, or right.")
+    y = box_y + padding
+    for line, width in zip(lines, widths):
+        if align == "left":
+            x = box_x + padding
+        elif align == "right":
+            x = box_x + box_width - padding - width
+        else:
+            x = box_x + (box_width - width) // 2
+        if style == "shadow":
+            shadow_offset = max(1, round(size * 0.08))
+            draw_inline_tokens(
+                overlay,
+                line,
+                (x + shadow_offset, y + shadow_offset),
+                font=font,
+                image_size=size,
+                assets=assets,
+                timestamp_ms=timestamp_ms,
+                fill=_text_effect_color(
+                    str(options.get("shadow_color", "#000000")),
+                    default="#000000",
+                    opacity=190,
+                ),
+            )
+        draw_inline_tokens(
+            overlay,
+            line,
+            (x, y),
+            font=font,
+            image_size=size,
+            assets=assets,
+            timestamp_ms=timestamp_ms,
+            fill=color,
+            stroke_width=stroke_width,
+            stroke_fill=stroke_color,
+        )
+        y += line_height + gap
+    opacity = float(options.get("opacity", 1))
+    if not 0 <= opacity <= 1:
+        raise ValueError("Text opacity must be between 0 and 1.")
+    if opacity < 1:
+        alpha = overlay.getchannel("A").point(
+            [round(value * opacity) for value in range(256)]
+        )
+        overlay.putalpha(alpha)
+    result = frame.convert("RGBA").copy()
+    result.alpha_composite(overlay)
+    return result
+
+
+def render_text_effect_sync(data: bytes, **options: Any) -> EffectResult:
+    assets = cast(dict[str, bytes], options.get("inline_images") or {})
+    try:
+        frames, durations, animated = _load_image_frames(
+            data, preserve_transparency=True
+        )
+    except NotPillowMedia:
+        with tempfile.TemporaryDirectory(prefix="fishie-text-video-") as directory:
+            input_path = Path(directory) / "input.media"
+            input_path.write_bytes(data)
+            probe = _probe_path(str(input_path))
+            if not probe.has_video:
+                raise ValueError("Text requires an image, GIF, or video.")
+            animation_duration = inline_animation_duration(assets)
+            overlay_data: bytes
+            animated_overlay = animation_duration > 0
+            if animated_overlay:
+                frame_duration = 50
+                overlays = [
+                    _text_overlay(
+                        Image.new("RGBA", (probe.width, probe.height), (0, 0, 0, 0)),
+                        options,
+                        timestamp_ms=timestamp,
+                    )
+                    for timestamp in range(0, animation_duration, frame_duration)
+                ]
+                buffer = BytesIO()
+                overlays[0].save(
+                    buffer,
+                    format="GIF",
+                    save_all=True,
+                    append_images=overlays[1:],
+                    duration=frame_duration,
+                    loop=0,
+                    disposal=2,
+                )
+                overlay_data = buffer.getvalue()
+            else:
+                overlay = _text_overlay(
+                    Image.new("RGBA", (probe.width, probe.height), (0, 0, 0, 0)),
+                    options,
+                )
+                buffer = BytesIO()
+                overlay.save(buffer, "PNG")
+                overlay_data = buffer.getvalue()
+            return _video_command_output(
+                data,
+                filename="text",
+                second_data=overlay_data,
+                second_loop=animated_overlay,
+                filter_complex="[0:v][1:v]overlay=0:0:eof_action=repeat[v]",
+                map_arguments=["-map", "[v]", "-map", "0:a?"],
+                output_duration=probe.duration or MAX_MEDIA_DURATION,
+            )
+
+    animation_duration = inline_animation_duration(assets)
+    if not animated and animation_duration:
+        frame_duration = 50
+        source = frames[0]
+        durations = [frame_duration] * max(1, animation_duration // frame_duration)
+        frames = [source] * len(durations)
+        animated = True
+    elapsed = 0
+    transformed: list[Image.Image] = []
+    for frame, duration in zip(frames, durations):
+        transformed.append(_text_overlay(frame, options, timestamp_ms=elapsed))
+        elapsed += duration
+    return _save_frames(transformed, durations, filename="text")
+
+
+render_text_effect = to_thread(render_text_effect_sync)
+
+
+def _combine_mode(value: object) -> str:
+    mode = str(value or "resize").casefold().strip().replace("_", "-")
+    aliases = {
+        "fit": "resize",
+        "scale": "resize",
+        "original-size": "original",
+        "originalsize": "original",
+        "none": "original",
+        "fill": "stretch",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in {"resize", "stretch", "original"}:
+        raise ValueError("Combine mode must be resize, stretch, or original.")
+    return mode
+
+
+def _combine_position(value: object) -> str:
+    position = str(value or "right").casefold().strip()
+    if position not in {"top", "bottom", "left", "right"}:
+        raise ValueError("Combine position must be top, bottom, left, or right.")
+    return position
+
+
+def _combine_audio(value: object) -> str:
+    audio = str(value or "mix").casefold().strip()
+    aliases = {"both": "mix", "mute": "none", "silent": "none"}
+    audio = aliases.get(audio, audio)
+    if audio not in {"mix", "first", "second", "none"}:
+        raise ValueError("Combine audio must be mix, first, second, or none.")
+    return audio
+
+
+def _combine_resize_second(
+    first: Image.Image,
+    second: Image.Image,
+    *,
+    position: str,
+    mode: str,
+) -> Image.Image:
+    if mode == "original":
+        return second
+    if mode == "stretch":
+        target = first.size
+    elif position in {"left", "right"}:
+        target = (
+            max(1, round(second.width * first.height / second.height)),
+            first.height,
+        )
+    else:
+        target = (
+            first.width,
+            max(1, round(second.height * first.width / second.width)),
+        )
+    if target == second.size:
+        return second
+    return second.resize(target, Image.Resampling.LANCZOS)
+
+
+def _combine_pillow_frames(
+    first: Image.Image,
+    second: Image.Image,
+    *,
+    position: str,
+    mode: str,
+) -> Image.Image:
+    first = first.convert("RGBA")
+    second = _combine_resize_second(
+        first,
+        second.convert("RGBA"),
+        position=position,
+        mode=mode,
+    )
+    if position in {"left", "right"}:
+        size = (first.width + second.width, max(first.height, second.height))
+    else:
+        size = (max(first.width, second.width), first.height + second.height)
+    if size[0] > MAX_MEDIA_DIMENSION or size[1] > MAX_MEDIA_DIMENSION:
+        raise ValueError("The combined canvas cannot exceed 4096 pixels per side.")
+    if size[0] * size[1] > MAX_FRAME_PIXELS:
+        raise ValueError("The combined canvas is too large.")
+    canvas = Image.new("RGBA", size, (0, 0, 0, 0))
+    first_xy = (0, 0)
+    second_xy = (0, 0)
+    if position == "right":
+        second_xy = (first.width, 0)
+    elif position == "left":
+        first_xy = (second.width, 0)
+    elif position == "bottom":
+        second_xy = (0, first.height)
+    else:
+        first_xy = (0, second.height)
+    canvas.alpha_composite(first, first_xy)
+    canvas.alpha_composite(second, second_xy)
+    return canvas
+
+
+def _animation_frame_at(
+    frames: Sequence[Image.Image],
+    durations: Sequence[int],
+    timestamp: int,
+) -> Image.Image:
+    if len(frames) == 1:
+        return frames[0]
+    total = sum(durations)
+    if total <= 0:
+        return frames[0]
+    position = timestamp % total
+    elapsed = 0
+    for frame, duration in zip(frames, durations):
+        elapsed += duration
+        if position < elapsed:
+            return frame
+    return frames[-1]
+
+
+def _combined_timeline(
+    first_durations: Sequence[int],
+    second_durations: Sequence[int],
+    *,
+    first_animated: bool,
+    second_animated: bool,
+) -> tuple[list[int], list[int]]:
+    first_total = sum(first_durations) if first_animated else 0
+    second_total = sum(second_durations) if second_animated else 0
+    total = max(first_total, second_total)
+    if total <= 0:
+        return [0], [100]
+    if total > round(MAX_MEDIA_DURATION * 1_000):
+        raise ValueError(
+            f"Combined animations are limited to {MAX_MEDIA_DURATION_MINUTES} minutes."
+        )
+    source_durations = [
+        duration
+        for duration in (list(first_durations) if first_animated else [])
+        + (list(second_durations) if second_animated else [])
+        if duration > 0
+    ]
+    interval = math.gcd(*source_durations) if source_durations else 50
+    interval = max(20, interval)
+    if math.ceil(total / interval) > MAX_ANIMATION_FRAMES:
+        interval = max(20, math.ceil(total / MAX_ANIMATION_FRAMES / 10) * 10)
+    timestamps = list(range(0, total, interval))
+    durations = [max(20, min(interval, total - timestamp)) for timestamp in timestamps]
+    return timestamps, durations
+
+
+def _pillow_media_info(data: bytes) -> tuple[bool, int] | None:
+    try:
+        _, durations, animated = _load_image_frames(data, preserve_transparency=True)
+    except NotPillowMedia:
+        return None
+    return animated, sum(durations) if animated else 0
+
+
+def _video_combine_dimensions(
+    first: MediaProbe,
+    second: MediaProbe,
+    *,
+    position: str,
+    mode: str,
+) -> tuple[int, int, int, int]:
+    first_width = max(1, first.width)
+    first_height = max(1, first.height)
+    second_width = max(1, second.width)
+    second_height = max(1, second.height)
+    if mode == "stretch":
+        second_width, second_height = first_width, first_height
+    elif mode == "resize":
+        if position in {"left", "right"}:
+            second_width = max(1, round(second_width * first_height / second_height))
+            second_height = first_height
+        else:
+            second_height = max(1, round(second_height * first_width / second_width))
+            second_width = first_width
+    canvas_width = (
+        first_width + second_width
+        if position in {"left", "right"}
+        else max(first_width, second_width)
+    )
+    canvas_height = (
+        max(first_height, second_height)
+        if position in {"left", "right"}
+        else first_height + second_height
+    )
+    if (
+        canvas_width > MAX_MEDIA_DIMENSION
+        or canvas_height > MAX_MEDIA_DIMENSION
+        or canvas_width * canvas_height > MAX_FRAME_PIXELS
+    ):
+        raise ValueError("The combined canvas is too large.")
+    return second_width, second_height, canvas_width, canvas_height
+
+
+def _render_video_combine(
+    first_data: bytes,
+    second_data: bytes,
+    *,
+    position: str,
+    mode: str,
+    audio: str,
+    first_pillow: tuple[bool, int] | None,
+    second_pillow: tuple[bool, int] | None,
+) -> EffectResult:
+    with tempfile.TemporaryDirectory(prefix="fishie-combine-") as directory:
+        first_path = Path(directory) / "first.media"
+        second_path = Path(directory) / "second.media"
+        output_path = Path(directory) / "combine.mp4"
+        first_path.write_bytes(first_data)
+        second_path.write_bytes(second_data)
+        first_probe = _probe_path(str(first_path))
+        second_probe = _probe_path(str(second_path))
+        second_width, second_height, _, _ = _video_combine_dimensions(
+            first_probe,
+            second_probe,
+            position=position,
+            mode=mode,
+        )
+        first_duration = (
+            first_pillow[1] / 1_000
+            if first_pillow is not None and first_pillow[0]
+            else first_probe.duration
+        )
+        second_duration = (
+            second_pillow[1] / 1_000
+            if second_pillow is not None and second_pillow[0]
+            else second_probe.duration
+        )
+        duration = max(first_duration, second_duration)
+        if duration <= 0:
+            raise ValueError("Could not determine the combined media duration.")
+        if duration > MAX_MEDIA_DURATION:
+            raise ValueError(
+                f"Combined media is limited to {MAX_MEDIA_DURATION_MINUTES} minutes."
+            )
+
+        command = ["ffmpeg", "-v", "error", "-y"]
+        for path, source_duration, pillow_info in (
+            (first_path, first_duration, first_pillow),
+            (second_path, second_duration, second_pillow),
+        ):
+            if (
+                pillow_info is not None
+                and not pillow_info[0]
+                or source_duration + 0.01 < duration
+            ):
+                command.extend(["-stream_loop", "-1"])
+            command.extend(["-i", str(path)])
+
+        filters = [
+            "[0:v]setpts=PTS-STARTPTS,format=rgba[v0]",
+            "[1:v]setpts=PTS-STARTPTS,format=rgba"
+            + (
+                f",scale={second_width}:{second_height}:flags=lanczos"
+                if mode != "original"
+                else ""
+            )
+            + "[v1]",
+        ]
+        if position == "left":
+            layout = "0_0|w0_0"
+            inputs = "[v1][v0]"
+        elif position == "right":
+            layout = "0_0|w0_0"
+            inputs = "[v0][v1]"
+        elif position == "top":
+            layout = "0_0|0_h0"
+            inputs = "[v1][v0]"
+        else:
+            layout = "0_0|0_h0"
+            inputs = "[v0][v1]"
+        filters.append(
+            f"{inputs}xstack=inputs=2:layout={layout}:fill=black,"
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p[v]"
+        )
+
+        map_arguments = ["-map", "[v]"]
+        if audio == "mix" and first_probe.has_audio and second_probe.has_audio:
+            filters.append(
+                "[0:a][1:a]amix=inputs=2:duration=longest:"
+                "dropout_transition=0:normalize=1[a]"
+            )
+            map_arguments.extend(["-map", "[a]"])
+        elif audio in {"mix", "first"} and first_probe.has_audio:
+            map_arguments.extend(["-map", "0:a:0?"])
+        elif audio in {"mix", "second"} and second_probe.has_audio:
+            map_arguments.extend(["-map", "1:a:0?"])
+
+        command.extend(
+            [
+                "-filter_complex",
+                ";".join(filters),
+                *map_arguments,
+                "-t",
+                f"{duration:g}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "22",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+        )
+        _run(command, timeout=60)
+        return EffectResult(output_path.read_bytes(), "combine.mp4")
+
+
+def render_combine_effect_sync(
+    first_data: bytes,
+    second_data: bytes,
+    **options: Any,
+) -> EffectResult:
+    position = _combine_position(options.get("position"))
+    mode = _combine_mode(options.get("mode"))
+    audio = _combine_audio(options.get("audio"))
+    first_pillow = _pillow_media_info(first_data)
+    second_pillow = _pillow_media_info(second_data)
+    if first_pillow is not None and second_pillow is not None:
+        first_frames, first_durations, first_animated = _load_image_frames(
+            first_data,
+            preserve_transparency=True,
+        )
+        second_frames, second_durations, second_animated = _load_image_frames(
+            second_data,
+            preserve_transparency=True,
+        )
+        timestamps, durations = _combined_timeline(
+            first_durations,
+            second_durations,
+            first_animated=first_animated,
+            second_animated=second_animated,
+        )
+        frames = [
+            _combine_pillow_frames(
+                _animation_frame_at(first_frames, first_durations, timestamp),
+                _animation_frame_at(second_frames, second_durations, timestamp),
+                position=position,
+                mode=mode,
+            )
+            for timestamp in timestamps
+        ]
+        return _save_frames(frames, durations, filename="combine")
+    return _render_video_combine(
+        first_data,
+        second_data,
+        position=position,
+        mode=mode,
+        audio=audio,
+        first_pillow=first_pillow,
+        second_pillow=second_pillow,
+    )
+
+
+render_combine_effect = to_thread(render_combine_effect_sync)
+
+
 def _audio_effect_window(
     options: dict[str, Any],
     total_duration: float,
@@ -3274,11 +4359,17 @@ def _audio_effect_window(
     stop = float(options.get("stop", 0) or 0)
     duration = float(options.get("duration", 0) or 0)
     if not 0 <= start <= MAX_MEDIA_DURATION:
-        raise ValueError("Audio effect start must be between 0 and 180 seconds.")
+        raise ValueError(
+            f"Audio effect start must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+        )
     if not 0 <= stop <= MAX_MEDIA_DURATION:
-        raise ValueError("Audio effect stop must be between 0 and 180 seconds.")
+        raise ValueError(
+            f"Audio effect stop must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+        )
     if not 0 <= duration <= MAX_MEDIA_DURATION:
-        raise ValueError("Audio effect duration must be between 0 and 180 seconds.")
+        raise ValueError(
+            f"Audio effect duration must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+        )
     end: float | None = start + duration if duration > 0 else stop or None
     if end is not None and end <= start:
         raise ValueError("Audio effect stop must be after its start time.")
@@ -3375,17 +4466,26 @@ def _audio_overlay_output(
     loop = bool(options.get("loop"))
     fade_in = float(options.get("fade_in", 0) or 0)
     fade_out = float(options.get("fade_out", 0) or 0)
+    preserve_base_duration = bool(options.get("_preserve_base_duration"))
     if bool(options.get("random_time")):
         available = max(0.0, probe.duration - min(second_probe.duration, 10))
         at = random.SystemRandom().uniform(0, available) if available else 0
     if not 0 <= at <= MAX_MEDIA_DURATION:
-        raise ValueError("Overlay time must be between 0 and 180 seconds.")
+        raise ValueError(
+            f"Overlay time must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+        )
     if not 0 <= source_start <= MAX_MEDIA_DURATION:
-        raise ValueError("Audio source start must be between 0 and 180 seconds.")
+        raise ValueError(
+            f"Audio source start must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+        )
     if not 0 <= source_stop <= MAX_MEDIA_DURATION:
-        raise ValueError("Audio source stop must be between 0 and 180 seconds.")
+        raise ValueError(
+            f"Audio source stop must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+        )
     if not 0 <= duration <= MAX_MEDIA_DURATION:
-        raise ValueError("Audio duration must be between 0 and 180 seconds.")
+        raise ValueError(
+            f"Audio duration must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+        )
     if not 0 <= volume <= 5:
         raise ValueError("Audio overlay volume must be between 0 and 5.")
     if not -12 <= pitch <= 12:
@@ -3414,7 +4514,11 @@ def _audio_overlay_output(
         source_duration = min(source_duration, source_end - source_start)
     remaining_duration = max(0.0, probe.duration - at)
     overlay_duration = remaining_duration if loop else source_duration / speed
-    target_duration = max(probe.duration, at + overlay_duration)
+    target_duration = (
+        probe.duration
+        if preserve_base_duration and probe.duration > 0
+        else max(probe.duration, at + overlay_duration)
+    )
     target_duration = min(MAX_MEDIA_DURATION, target_duration)
     effective_duration = max(0.0, min(overlay_duration, target_duration - at))
     if loop and effective_duration:
@@ -3500,7 +4604,7 @@ def _adhd_segments(
         if not available:
             available = modes.copy()
         candidates = [mode for mode in available if mode != previous] or available
-        mode = rng.choice(candidates)
+        mode = cast(AdhdMode, rng.choice(candidates))
         available.remove(mode)
         segment_length = rng.uniform(minimum, maximum)
         end = min(duration, position + segment_length)
@@ -3831,89 +4935,11 @@ def render_video_effect_sync(
     if effect == "overlay":
         if second_data is None:
             raise ValueError("A second video or image is required.")
-        input_is_animated_image: bool | None
-        try:
-            _, _, input_is_animated_image = _load_image_frames(input_data)
-        except NotPillowMedia:
-            input_is_animated_image = None
-        if input_is_animated_image is False:
-            raise ValueError("The first input has to be a video.")
-        if not probe.has_video:
-            raise ValueError("The first input has to be a video.")
-        opacity = float(options.get("opacity", 0.7))
-        scale = float(options.get("scale", 1.0))
-        stretch = bool(options.get("stretch"))
-        if not 0 <= opacity <= 1 or not 0.05 <= scale <= 2:
-            raise ValueError("Opacity must be 0 to 1 and scale must be 0.05 to 2.")
-        position = str(options.get("position", "center")).casefold().replace("_", "-")
-        position_map = {
-            "center": ("(W-w)/2", "(H-h)/2"),
-            "top-left": ("0", "0"),
-            "top": ("(W-w)/2", "0"),
-            "top-right": ("W-w", "0"),
-            "left": ("0", "(H-h)/2"),
-            "right": ("W-w", "(H-h)/2"),
-            "bottom-left": ("0", "H-h"),
-            "bottom": ("(W-w)/2", "H-h"),
-            "bottom-right": ("W-w", "H-h"),
-        }
-        if position not in position_map:
-            raise ValueError(
-                "Overlay position must be center, top, bottom, left, right, "
-                "or a corner such as top-left."
-            )
-        x_expression, y_expression = position_map[position]
-        x_offset = int(options.get("x", 0))
-        y_offset = int(options.get("y", 0))
-        x_expression = f"({x_expression})+{x_offset}"
-        y_expression = f"({y_expression})+{y_offset}"
-        scale_filter = (
-            "w=iw:h=ih"
-            if stretch
-            else (
-                f"w=iw*{scale:g}:h=ih*{scale:g}:" "force_original_aspect_ratio=decrease"
-            )
-        )
-        overlay_audio = bool(options.get("overlay_audio", True))
-        second_probe: MediaProbe | None = None
-        if overlay_audio:
-            with tempfile.TemporaryDirectory(
-                prefix="fishie-overlay-probe-"
-            ) as directory:
-                second_path = os.path.join(directory, "overlay.media")
-                Path(second_path).write_bytes(second_data)
-                try:
-                    second_probe = _probe_path(second_path)
-                except ValueError:
-                    second_probe = None
-        audio_label = ""
-        map_arguments = ["-map", "[v]"]
-        if overlay_audio and second_probe is not None and second_probe.has_audio:
-            if probe.has_audio:
-                audio_label = (
-                    "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[a];"
-                )
-                map_arguments.extend(["-map", "[a]"])
-            else:
-                map_arguments.extend(["-map", "1:a:0"])
-        else:
-            map_arguments.extend(["-map", "0:a?"])
-        overlay_filter = (
-            f"[1:v][0:v]scale2ref={scale_filter}[over][base];"
-            f"[over]format=rgba,colorchannelmixer=aa={opacity:g}[overa];"
-            f"[base][overa]overlay=x='{x_expression}':y='{y_expression}':"
-            "shortest=1[v]"
-        )
-        if audio_label:
-            overlay_filter += f";{audio_label.rstrip(';')}"
-        return _video_command_output(
+        return _render_video_overlay_sync(
             input_data,
-            filename="overlay-video",
-            second_data=second_data,
-            second_loop=True,
-            filter_complex=overlay_filter,
-            map_arguments=map_arguments,
-            shortest=True,
+            second_data,
+            allow_image_base=False,
+            **options,
         )
 
     if effect in {"bassboost", "basslower"}:
@@ -4019,6 +5045,7 @@ def render_video_effect_sync(
             raise ValueError("An audio or video overlay file is required.")
         if effect == "soundeffect":
             options.setdefault("random_time", True)
+            options["_preserve_base_duration"] = True
         return _audio_overlay_output(input_data, second_data, probe, options)
 
     if effect == "audiodestroy":
@@ -4032,9 +5059,11 @@ def render_video_effect_sync(
             probe,
             filename="audio-destroyed",
             audio_filter=(
-                f"acrusher=bits={max(2, 13 - amount)}:mix=1:mode=lin:"
-                f"aa={max(0.05, 0.45 - amount * 0.03):g},"
-                f"aresample={max(3000, 18000 - amount * 1200)},"
+                # Keep a stable sample rate throughout the chain. Very low
+                # intermediate rates made some WebM/AAC inputs fail during
+                # conversion even though the same filter worked for WAV.
+                f"aresample=44100,acrusher=bits={max(2, 13 - amount)}:"
+                "mix=1:mode=lin,"
                 f"acompressor=threshold=-{min(40, 16 + amount * 2)}dB:"
                 f"ratio={min(20, 4 + amount)}:attack=2:release=60:makeup=6,"
                 f"aecho=0.72:0.82:{max(35, amount * 18)}|"

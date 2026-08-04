@@ -29,6 +29,7 @@ from extensions.media_effects.audio_effects import (
 from extensions.media_effects.commands import (
     PIPELINE_EFFECTS,
     RANDOM_EFFECTS,
+    RANDOM_OVERLAY_EFFECTS,
     Images,
     _country_flag_code,
     _extract_sound_effect_selector,
@@ -36,16 +37,26 @@ from extensions.media_effects.commands import (
     _normalize_effect_options,
     _parse_effect_flags,
     _parse_effect_pipeline,
+    _parse_overlay_selector,
+    _parse_overlay_text_argument,
     _playback_factor,
     _prepare_sound_effect_options,
     _random_effect_choices,
-    _restricted_flag_media,
+    _random_overlay_display,
+    _random_overlay_kind,
+    _random_overlay_label,
+    _randomize_effect_timing,
+    _randomize_overlay_options,
     _resolve_pipeline_random_effects,
+    _restricted_flag_media,
     _select_pipeline_sound_effect,
     _sound_effect_autocomplete,
+    _speed_audio_sync,
     _speed_video_sync,
     media_effect_timeout,
 )
+from extensions.media_effects.fonts import EFFECT_FONTS, find_effect_font, font_names
+from extensions.media_effects.image_assets import image_asset_catalog
 from extensions.media_effects.processing import (
     HEAVY_EFFECT_MAX_GIF_FRAMES,
     MAGIK_GIF_WORKING_SIZE,
@@ -59,9 +70,14 @@ from extensions.media_effects.processing import (
     convert_media_sync,
     make_flag_asset,
     probe_media_sync,
+    render_average_colors_sync,
+    render_combine_effect_sync,
     render_image_effect_sync,
+    render_overlay_effect_sync,
+    render_text_effect_sync,
     render_video_effect_sync,
 )
+from extensions.media_effects.video_assets import video_asset_catalog
 from utils.converters import (
     KlipyUrlConverter,
     MediaConverter,
@@ -124,6 +140,40 @@ def _sample_video() -> bytes:
             "lavfi",
             "-i",
             "sine=frequency=220:duration=0.5",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-f",
+            "mp4",
+            "-movflags",
+            "frag_keyframe+empty_moov",
+            "pipe:1",
+        ],
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def _sample_video_for_duration(duration: float) -> bytes:
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=64x48:rate=8:duration={duration:g}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=220:duration={duration:g}",
             "-c:v",
             "libx264",
             "-pix_fmt",
@@ -442,19 +492,165 @@ def test_effect_pipeline_recognizes_overlay_group_commands() -> None:
     assert effects == [
         ("overlayflag", {"flag": "lesbian", "opacity": 35.0}),
         (
-            "overlayimage",
+            "overlay",
             {
                 "overlay": "https://example.com/logo.png",
                 "opacity": 0.5,
                 "scale": 1.0,
+                "size": "",
                 "position": "center",
                 "x": 0,
                 "y": 0,
+                "start": 0.0,
+                "stop": 0.0,
                 "stretch": False,
+                "extend": False,
+                "no_audio": False,
             },
         ),
     ]
     assert skipped == []
+
+
+def test_effect_pipeline_accepts_random_overlay_sources() -> None:
+    source, effects, skipped = _parse_effect_pipeline(
+        "https://example.com/a.png overlay image -overlay random emoji"
+    )
+    assert source == "https://example.com/a.png"
+    assert effects[0][0] == "overlay"
+    assert effects[0][1]["overlay"] == "random emoji"
+    assert skipped == []
+
+
+def test_overlay_text_parser_accepts_positional_and_flagged_media() -> None:
+    source, overlay, options = _parse_overlay_text_argument("base.png overlay.mp4")
+    assert (source, overlay) == ("base.png", "overlay.mp4")
+    assert options["opacity"] == 70.0
+
+    source, overlay, options = _parse_overlay_text_argument(
+        "base.png -overlay overlay.mp4 -size 100x100 -extend"
+    )
+    assert (source, overlay) == ("base.png", "overlay.mp4")
+    assert options["size"] == "100x100"
+    assert options["extend"] is True
+
+    source, overlay, _ = _parse_overlay_text_argument("base.png random emoji")
+    assert (source, overlay) == ("base.png", "random emoji")
+
+    source, overlay, options = _parse_overlay_text_argument("base.png random -fr")
+    assert (source, overlay) == ("base.png", "random")
+    assert options["fullrandom"] is True
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ("user random", ("user", None)),
+        ("user notyyton", ("user", "notyyton")),
+        (
+            "media https://example.com/overlay.mp4",
+            ("media", "https://example.com/overlay.mp4"),
+        ),
+        ("asset image", ("asset", None)),
+        ("image random", ("asset", None)),
+        ("flag United States", ("flag", "United States")),
+        ("random flag de", ("flag", "de")),
+    ),
+)
+def test_overlay_selector_supports_named_sources_and_aliases(
+    value: str,
+    expected: tuple[str, str | None],
+) -> None:
+    assert _parse_overlay_selector(value) == expected
+
+
+def test_overlay_text_parser_accepts_named_source_with_flags() -> None:
+    source, overlay, options = _parse_overlay_text_argument(
+        "base.png flag United States -opacity 35 -fr"
+    )
+    assert (source, overlay) == ("base.png", "flag United States")
+    assert options["opacity"] == 35.0
+    assert options["fullrandom"] is True
+
+
+def test_overlay_text_parser_rejects_more_than_two_media_items() -> None:
+    with pytest.raises(commands.BadArgument, match="background and one overlay"):
+        _parse_overlay_text_argument("base.png overlay.png extra.png")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ("random", "all"),
+        ("random emoji", "emoji"),
+        ("random user", "user"),
+        ("random asset", "asset"),
+    ),
+)
+def test_random_overlay_kind(value: str, expected: str) -> None:
+    assert _random_overlay_kind(value) == expected
+
+
+def test_random_overlay_kind_rejects_unknown_sources() -> None:
+    with pytest.raises(commands.BadArgument, match="must be emoji, user, or asset"):
+        _random_overlay_kind("random sound")
+
+
+def test_random_overlay_labels_are_readable() -> None:
+    assert _random_overlay_label("😄") == "grinning face with smiling eyes"
+    assert _random_overlay_label("<:party:123>") == "party"
+    assert _random_overlay_display("user: notyyton") == "overlay image (user: notyyton)"
+
+
+def test_full_random_overlay_stays_inside_the_background() -> None:
+    options: dict[str, Any] = {
+        "size": "100x100",
+        "scale": 2.0,
+        "position": "center",
+        "x": 200,
+        "y": -200,
+        "stretch": True,
+    }
+    _randomize_overlay_options(options, random.Random(0))
+
+    assert 0.1 <= options["scale"] <= 1.0
+    assert options["position"] in media_effect_commands.RANDOM_OVERLAY_POSITIONS
+    assert options["x"] == options["y"] == 0
+    assert options["stretch"] is False
+    assert "size" not in options
+
+
+def test_random_asset_overlay_returns_bundled_image_bytes() -> None:
+    ctx = SimpleNamespace(
+        guild=None,
+        author=SimpleNamespace(display_avatar=None),
+        bot=SimpleNamespace(custom_emojis={}, user=None),
+        session=None,
+    )
+    images = Images.__new__(Images)
+    data, label = asyncio.run(images._random_overlay_data(ctx, "random asset"))
+
+    assert label.startswith("asset: ")
+    if data.startswith((b"\x89PNG", b"GIF8", b"RIFF")):
+        with Image.open(BytesIO(data)) as image:
+            assert image.width > 0
+            assert image.height > 0
+    else:
+        assert data[4:8] == b"ftyp"
+
+
+def test_named_video_asset_overlay_returns_video_bytes() -> None:
+    ctx = SimpleNamespace(
+        guild=None,
+        author=SimpleNamespace(display_avatar=None),
+        bot=SimpleNamespace(custom_emojis={}, user=None),
+        session=None,
+    )
+    images = Images.__new__(Images)
+    data, label = asyncio.run(images._random_overlay_data(ctx, "asset Bad Apple"))
+
+    assert label == "asset: Bad Apple"
+    assert data[4:8] == b"ftyp"
 
 
 def test_effect_pipeline_recognizes_audio_group_commands() -> None:
@@ -566,8 +762,116 @@ def test_media_effect_timeout_returns_a_clear_error(
     async def slow_effect() -> None:
         await asyncio.sleep(0.05)
 
-    with pytest.raises(commands.BadArgument, match="longer than 30 seconds"):
+    with pytest.raises(commands.BadArgument, match="longer than 60 seconds"):
         asyncio.run(slow_effect())
+
+
+def test_run_progress_cleanup_only_deletes_its_separate_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class ProgressMessage:
+        async def delete(self) -> None:
+            events.append("delete-progress")
+
+    async def scenario() -> None:
+        progress = object.__new__(media_effect_commands._RunProgress)
+
+        class FakeContext:
+            async def send_new(self, _content: str) -> ProgressMessage:
+                events.append("send-progress")
+                progress.done.set()
+                return ProgressMessage()
+
+            async def send(self, _content: str) -> None:
+                raise AssertionError("Progress must not use the cached response")
+
+        progress.ctx = cast(Any, FakeContext())
+        progress.total = 3
+        progress.step = 1
+        progress.label = "invert"
+        progress.changed = asyncio.Event()
+        progress.done = asyncio.Event()
+        progress.owner = None
+
+        async def expire_immediately(awaitable: Any, *, timeout: float) -> None:
+            assert timeout == 60
+            awaitable.close()
+            raise TimeoutError
+
+        monkeypatch.setattr(
+            media_effect_commands.asyncio,
+            "wait_for",
+            expire_immediately,
+        )
+        await progress._report()
+
+    asyncio.run(scenario())
+    assert events == ["send-progress", "delete-progress"]
+
+
+def test_run_progress_edits_the_original_interaction_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[Any] = []
+
+    class InteractionResponse:
+        def __init__(self) -> None:
+            self.done = False
+
+        def is_done(self) -> bool:
+            return self.done
+
+        async def defer(self) -> None:
+            self.done = True
+            events.append("defer")
+
+    class Interaction:
+        def __init__(self) -> None:
+            self.response = InteractionResponse()
+
+        async def edit_original_response(self, *, content: str) -> object:
+            events.append(("edit", content))
+            return object()
+
+    async def scenario() -> None:
+        progress = object.__new__(media_effect_commands._RunProgress)
+        interaction = Interaction()
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.interaction = interaction
+                self._previous_message: object | None = None
+
+            async def send_new(self, _content: str) -> None:
+                raise AssertionError("Application commands must edit their response")
+
+        progress.ctx = cast(Any, FakeContext())
+        progress.total = 2
+        progress.step = 1
+        progress.label = "invert"
+        progress.changed = asyncio.Event()
+        progress.done = asyncio.Event()
+        progress.owner = None
+
+        async def expire_immediately(awaitable: Any, *, timeout: float) -> None:
+            assert timeout == 60
+            awaitable.close()
+            progress.done.set()
+            raise TimeoutError
+
+        monkeypatch.setattr(
+            media_effect_commands.asyncio,
+            "wait_for",
+            expire_immediately,
+        )
+        await progress._report()
+        assert progress.ctx._previous_message is not None
+
+    asyncio.run(scenario())
+    assert events[0] == "defer"
+    assert events[1][0] == "edit"
 
 
 def test_effect_pipeline_has_a_bounded_step_count() -> None:
@@ -579,7 +883,31 @@ def test_effect_pipeline_has_a_bounded_step_count() -> None:
         _parse_effect_pipeline(" ".join(["invert"] * 68))
 
 
-def test_pipeline_random_effects_are_unique_and_report_their_choices() -> None:
+def test_effect_pipeline_expands_repeat_syntax_before_enforcing_the_cap() -> None:
+    source, effects, skipped = _parse_effect_pipeline(
+        "https://example.com/media.gif invert x3 blurx2 -radius 4"
+    )
+    assert source == "https://example.com/media.gif"
+    assert [effect for effect, _ in effects] == [
+        "invert",
+        "invert",
+        "invert",
+        "blur",
+        "blur",
+    ]
+    assert effects[-1][1]["radius"] == 4
+    assert skipped == []
+
+    with pytest.raises(commands.BadArgument, match="expanded effect pipeline"):
+        _parse_effect_pipeline("invert x67 blur")
+    with pytest.raises(commands.BadArgument, match="repetition must be between"):
+        _parse_effect_pipeline("invert x0")
+
+
+def test_pipeline_random_effects_allow_duplicate_choices_and_report_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(media_effect_commands, "RANDOM_EFFECTS", ("invert",))
     resolved = _resolve_pipeline_random_effects(
         [
             ("random", {}),
@@ -590,9 +918,7 @@ def test_pipeline_random_effects_are_unique_and_report_their_choices() -> None:
     )
     random_steps = [step for step in resolved if step[1].startswith("random (")]
     chosen = [effect for effect, _, _ in random_steps]
-    assert len(chosen) == 3
-    assert len(set(chosen)) == 3
-    assert set(chosen) <= set(RANDOM_EFFECTS)
+    assert chosen == ["invert", "invert", "invert"]
     assert all(label == f"random ({effect})" for effect, label, _ in random_steps)
     assert resolved[1] == (
         "invert",
@@ -637,9 +963,40 @@ def test_pipeline_random_timing_is_ordered_and_within_the_media(
         media_duration=4.0,
     )
     options = resolved[0][2]
-    assert 0 <= float(options["start"]) < float(options["stop"]) <= 4.0
-    assert options.get("duration", 0.0) == 0.0
+    assert 0 <= float(options["start"]) <= 4.0
+    if "stop" in options:
+        assert float(options["start"]) < float(options["stop"]) <= 4.0
+    assert "duration" not in options
     assert 0 <= float(options["amount"]) <= 5
+
+
+def test_random_timing_has_optional_end_and_respects_explicit_values() -> None:
+    class TimingRandom:
+        def __init__(self, end_chance: float):
+            self.end_chance = end_chance
+
+        def uniform(self, minimum: float, maximum: float) -> float:
+            return (minimum + maximum) / 2
+
+        def random(self) -> float:
+            return self.end_chance
+
+    no_end = {"start": 0.0, "stop": 0.0, "duration": 0.0}
+    _randomize_effect_timing("sharpen", no_end, 10.0, cast(Any, TimingRandom(0.25)))
+    assert 0 < no_end["start"] < 10
+    assert "stop" not in no_end
+    assert "duration" not in no_end
+
+    with_end = {"start": 0.0, "stop": 0.0}
+    _randomize_effect_timing("sharpen", with_end, 10.0, cast(Any, TimingRandom(0.75)))
+    assert with_end["start"] < with_end["stop"] <= 10
+
+    resolved = _resolve_pipeline_random_effects(
+        [("random", {"start": 1.25, "stop": 2.5})],
+        media_duration=10,
+    )
+    assert resolved[0][2]["start"] == 1.25
+    assert resolved[0][2]["stop"] == 2.5
 
 
 def test_sharpen_is_clamped_to_ffmpegs_supported_range() -> None:
@@ -682,13 +1039,201 @@ def test_pipeline_random_audio_requires_audio_and_keeps_random_flags(
         )
 
 
-def test_pipeline_random_overlay_selects_a_flag() -> None:
+def test_pipeline_random_overlay_selects_a_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        media_effect_commands, "RANDOM_OVERLAY_EFFECTS", ("overlayflag",)
+    )
     resolved = _resolve_pipeline_random_effects(
         [("random", {"category": "overlay", "norandom": True})]
     )
     assert resolved[0][0] == "overlayflag"
     assert resolved[0][1].startswith("random overlay (")
     assert resolved[0][2]["flag"] in media_effect_commands.PRIDE_FLAGS
+
+
+def test_pipeline_random_overlay_can_select_a_random_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(media_effect_commands, "RANDOM_OVERLAY_EFFECTS", ("overlay",))
+    resolved = _resolve_pipeline_random_effects(
+        [("random", {"category": "overlay", "norandom": True})]
+    )
+    assert resolved[0][0] == "overlay"
+    assert resolved[0][2]["overlay"] == "random"
+
+
+def test_pipeline_random_overlay_randomizes_image_layout_and_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(media_effect_commands, "RANDOM_OVERLAY_EFFECTS", ("overlay",))
+    resolved = _resolve_pipeline_random_effects(
+        [
+            (
+                "random",
+                {"category": "overlay"},
+            )
+        ],
+        media_duration=8.0,
+    )
+    options = resolved[0][2]
+    assert options["overlay"] == "random"
+    assert 0.1 <= float(options["scale"]) <= 1.0
+    assert options["position"] in media_effect_commands.RANDOM_OVERLAY_POSITIONS
+    assert options["stretch"] is False
+    assert 0 <= float(options["start"]) <= 8.0
+    if "stop" in options:
+        assert float(options["start"]) < float(options["stop"]) <= 8.0
+
+
+def test_pipeline_random_flag_uses_random_layout_opacity_and_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        media_effect_commands,
+        "RANDOM_OVERLAY_EFFECTS",
+        ("overlayflag",),
+    )
+    resolved = _resolve_pipeline_random_effects(
+        [("random", {"category": "overlay"})],
+        media_duration=8.0,
+    )
+    options = resolved[0][2]
+    assert options["flag"] in media_effect_commands.PRIDE_FLAGS
+    assert 0 <= float(options["opacity"]) <= 100
+    assert 0.1 <= float(options["scale"]) <= 1.0
+    assert options["position"] in media_effect_commands.RANDOM_OVERLAY_POSITIONS
+    assert options["stretch"] is False
+    assert 0 <= float(options["start"]) <= 8.0
+    if "stop" in options:
+        assert float(options["start"]) < float(options["stop"]) <= 8.0
+
+
+def test_pipeline_full_random_overlay_randomizes_bounded_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(media_effect_commands, "RANDOM_OVERLAY_EFFECTS", ("overlay",))
+    resolved = _resolve_pipeline_random_effects(
+        [
+            (
+                "random",
+                {"category": "overlay", "norandom": True, "fullrandom": True},
+            )
+        ]
+    )
+    options = resolved[0][2]
+    assert 0.1 <= options["scale"] <= 1.0
+    assert options["position"] in media_effect_commands.RANDOM_OVERLAY_POSITIONS
+    assert options["x"] == options["y"] == 0
+    assert options["stretch"] is False
+
+
+def test_run_displays_random_overlay_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent_notes: list[str] = []
+
+    async def resolve_media(*_args: Any, **_kwargs: Any) -> str:
+        return "https://example.com/media.png"
+
+    async def fetch_media(*_args: Any, **_kwargs: Any) -> bytes:
+        return b"input"
+
+    async def probe_media(*_args: Any, **_kwargs: Any) -> Any:
+        return SimpleNamespace(has_audio=False, has_video=True, duration=1.0)
+
+    async def random_overlay(*_args: Any, **_kwargs: Any) -> tuple[bytes, str]:
+        return b"overlay", "user: notyyton"
+
+    async def render_overlay(*_args: Any, **_kwargs: Any) -> Any:
+        return SimpleNamespace(data=b"result", filename="overlay.png", displayable=True)
+
+    async def render_image(*_args: Any, **_kwargs: Any) -> Any:
+        return SimpleNamespace(
+            data=b"image-result", filename="removebars.png", displayable=True
+        )
+
+    async def send_result(
+        _ctx: Any,
+        _result: Any,
+        *,
+        started: float,
+        note: str = "",
+    ) -> None:
+        assert started > 0
+        sent_notes.append(note)
+
+    @asynccontextmanager
+    async def typing() -> AsyncIterator[None]:
+        yield
+
+    monkeypatch.setattr(
+        media_effect_commands,
+        "_parse_effect_pipeline",
+        lambda _pipeline: (
+            "",
+            [("removebars", {}), ("overlay", {"overlay": "random"})],
+            [],
+        ),
+    )
+    monkeypatch.setattr(media_effect_commands, "probe_media", probe_media)
+    monkeypatch.setattr(media_effect_commands, "render_image_effect", render_image)
+    monkeypatch.setattr(media_effect_commands, "render_overlay_effect", render_overlay)
+
+    instance = SimpleNamespace(
+        bot=SimpleNamespace(media_semaphore=asyncio.Semaphore(1)),
+        _resolve_effect_media=resolve_media,
+        _fetch_effect_media=fetch_media,
+        _random_overlay_data=random_overlay,
+        _send_effect_result=send_result,
+    )
+    instance._run_pipeline_special_effect = Images._run_pipeline_special_effect.__get__(
+        instance,
+        Images,
+    )
+    ctx = SimpleNamespace(guild=None, typing=typing)
+
+    asyncio.run(
+        Images._run_effect_pipeline(
+            cast(Any, instance),
+            cast(Any, ctx),
+            "removebars overlay image random",
+        )
+    )
+
+    assert "Applied: removebars, overlay image (user: notyyton)" in sent_notes[0]
+
+
+def test_image_asset_catalog_contains_only_normalized_media() -> None:
+    catalog = image_asset_catalog()
+    assert catalog
+    assert all(asset.path.is_file() for asset in catalog)
+    assert all(
+        asset.format == "PNG" or asset.animated or asset.path.name == "pfp.jpg"
+        for asset in catalog
+    )
+    assert {asset.path.name for asset in catalog} >= {
+        "hattori.png",
+        "hattori2.png",
+        "pfp.jpg",
+    }
+
+
+def test_video_asset_catalog_contains_only_bundled_videos() -> None:
+    catalog = video_asset_catalog()
+    assert catalog
+    assert [asset.id for asset in catalog] == list(range(1, len(catalog) + 1))
+    assert all(asset.path.is_file() for asset in catalog)
+    assert all(
+        asset.path.suffix.casefold() in {".mp4", ".m4v", ".mov", ".webm"}
+        for asset in catalog
+    )
+    assert {asset.path.name for asset in catalog} >= {
+        "bad apple.mp4",
+        "crab_rock.mp4",
+        "subwaysurfers.mp4",
+    }
 
 
 def test_pipeline_accepts_reversed_random_categories_and_positional_speed() -> None:
@@ -741,6 +1286,29 @@ def test_random_sound_effect_uses_random_time_without_pitch_or_speed(
     assert full_random["random_time"] is True
     assert -12 <= float(full_random["pitch"]) <= 12
     assert 0.5 <= float(full_random["speed"]) <= 2
+
+
+def test_audio_only_random_uses_only_audio_compatible_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        media_effect_commands,
+        "RANDOM_AUDIO_EFFECTS",
+        ("audioecho",),
+    )
+    resolved = _resolve_pipeline_random_effects(
+        [("random", {})],
+        allow_audio=True,
+        allow_visual=False,
+    )
+    assert resolved[0][0] == "audioecho"
+
+    with pytest.raises(commands.BadArgument, match="Random visual needs"):
+        _resolve_pipeline_random_effects(
+            [("random", {"category": "visual"})],
+            allow_audio=True,
+            allow_visual=False,
+        )
 
 
 def test_repeated_positional_random_sound_effects_stay_sound_effects() -> None:
@@ -836,24 +1404,61 @@ def test_signed_speed_semantics_and_timed_speed_processing() -> None:
     assert result
 
 
+def test_speed_supports_audio_only_media() -> None:
+    result = _speed_audio_sync(
+        _sample_audio("sine=frequency=440:duration=0.8"),
+        2,
+        start=0.1,
+        stop=0.5,
+    )
+    assert result
+    assert probe_media_sync(result).has_audio
+
+
+def test_average_colors_renders_a_labeled_palette() -> None:
+    result = render_image_effect_sync(_png_bytes(), "averagecolors")
+    image = Image.open(BytesIO(result.data))
+    assert result.filename == "averagecolors.png"
+    assert image.width >= 320
+    assert image.height >= 64
+
+
+def test_average_colors_reports_percentages_and_rejects_gifs() -> None:
+    result, colors = render_average_colors_sync(_png_bytes())
+    assert result.filename == "averagecolors.png"
+    assert colors
+    assert all(len(color.rgb) == 3 for color in colors)
+    assert sum(color.percentage for color in colors) == pytest.approx(100, abs=0.1)
+    with pytest.raises(ValueError, match="still images"):
+        render_average_colors_sync(_gif_bytes())
+
+
+def test_average_colors_is_not_a_pipeline_effect() -> None:
+    with pytest.raises(commands.BadArgument, match="supported effect"):
+        _parse_effect_pipeline("average-colors")
+
+
 def test_bundled_audio_effect_catalog_has_stable_ids_and_special_names() -> None:
     catalog = audio_effect_catalog()
     assert [effect.id for effect in catalog] == list(range(1, len(catalog) + 1))
-    assert len(catalog) == 100
+    assert len(catalog) == 138
     assert find_audio_effect("six-one").name == "six-one"
     assert find_audio_effect("six-seven").name == "six-seven"
+    assert find_audio_effect("21").name == "rezero_death"
+    assert find_audio_effect("22").name == "metal_gear_solid_alert"
+    assert find_audio_effect("23").name == "joe_biden_soda"
     assert find_audio_effect(str(catalog[0].id)) == catalog[0]
     assert all(effect.path.is_file() for effect in catalog)
 
 
 def test_numeric_effect_options_clamp_and_report_adjustment() -> None:
     options, adjustments = _normalize_effect_options(
-        "overlayimage",
+        "overlay",
         {"opacity": 250.0, "scale": 0.01, "x": 10_000},
     )
     assert options == {"opacity": 100.0, "scale": 0.05, "x": 4096}
     assert len(adjustments) == 3
-    assert all("Rounded overlayimage" in adjustment for adjustment in adjustments)
+    assert all("Rounded overlay" in adjustment for adjustment in adjustments)
 
 
 def test_overlay_opacity_only_changes_the_second_media() -> None:
@@ -985,7 +1590,7 @@ def test_pipeline_timeout_skips_only_the_slow_effect(
     )
 
     assert "Applied: grayscale" in sent_notes[0]
-    assert "Skipped: invert (took longer than 30 seconds)" in sent_notes[0]
+    assert "Skipped: invert (took longer than 60 seconds)" in sent_notes[0]
 
 
 def test_pipeline_converts_final_klipy_video_result_to_gif(
@@ -1079,10 +1684,18 @@ def test_sideways_hallway_command_and_pipeline_effect_are_removed() -> None:
     assert "hallwaysideways" not in PIPELINE_EFFECTS
 
 
+def test_average_colors_text_aliases_are_available() -> None:
+    assert set(Images.average_colors.aliases) >= {
+        "average-colours",
+        "avgcolours",
+        "averagecolours",
+    }
+
+
 def test_image_and_video_application_groups_are_within_discord_limits() -> None:
-    assert len(Images.image_effect.commands) == 24
+    assert len(Images.image_effect.commands) == 25
     assert len(Images.effect_2.commands) == 25
-    assert len(Images.effect_3.commands) == 17
+    assert len(Images.effect_3.commands) == 19
     assert {command.name for command in Images.image_effect.commands} >= {
         "crop",
         "invert",
@@ -1099,6 +1712,7 @@ def test_image_and_video_application_groups_are_within_discord_limits() -> None:
         "swirl",
         "aswirl",
         "wiggle",
+        "average-colors",
     }
     assert {command.name for command in Images.effect_2.commands} >= {
         "fade-in",
@@ -1145,6 +1759,8 @@ def test_image_and_video_application_groups_are_within_discord_limits() -> None:
         "tremble",
         "watercolor",
         "zoom",
+        "text",
+        "combine",
     }
     assert isinstance(Images.reverse, commands.Command)
     assert not isinstance(Images.reverse, commands.HybridCommand)
@@ -1164,8 +1780,6 @@ def test_image_and_video_application_groups_are_within_discord_limits() -> None:
     }
     assert {command.name for command in Images.overlay_group.commands} == {
         "flag",
-        "image",
-        "video",
     }
     assert {command.name for command in Images.audio_group.commands} == {
         "adhd",
@@ -1213,6 +1827,81 @@ def test_media_application_commands_fit_discords_size_limit() -> None:
         assert command_size(payload) <= 8_000, group.name
 
 
+def test_rebalanced_media_application_groups_use_sequential_names() -> None:
+    cog = MediaEffects(cast(Any, SimpleNamespace()))
+    groups = [
+        child.app_command
+        for child in cog.__cog_commands__
+        if child.parent is None
+        and isinstance(getattr(child, "app_command", None), app_commands.Group)
+    ] + [
+        command
+        for command in cog.__cog_app_commands__
+        if isinstance(command, app_commands.Group)
+    ]
+    assert {group.name for group in groups} == {
+        "effect",
+        "effect-2",
+        "effect-3",
+        "effect-4",
+        "effect-5",
+        "effect-6",
+    }
+
+
+def test_rebalanced_media_groups_do_not_duplicate_leaf_names() -> None:
+    cog = MediaEffects(cast(Any, SimpleNamespace()))
+    groups = [
+        child.app_command
+        for child in cog.__cog_commands__
+        if child.parent is None
+        and isinstance(getattr(child, "app_command", None), app_commands.Group)
+    ] + [
+        command
+        for command in cog.__cog_app_commands__
+        if isinstance(command, app_commands.Group)
+    ]
+    names: dict[str, list[str]] = {}
+    for group in groups:
+        for child in group.commands:
+            names.setdefault(child.name, []).append(group.name)
+
+    assert all(len(group_names) == 1 for group_names in names.values())
+    overlay_commands = [
+        child for group in groups for child in group.commands if child.name == "overlay"
+    ]
+    assert len(overlay_commands) == 1
+    assert "audio_media" in {
+        parameter.name for parameter in overlay_commands[0].parameters
+    }
+    assert not any(
+        child.name == "audio-overlay" for group in groups for child in group.commands
+    )
+
+
+def test_audio_app_commands_stay_under_the_effect_audio_namespace() -> None:
+    cog = MediaEffects(cast(Any, SimpleNamespace()))
+    root = cog.image_effect.app_command
+    assert root is not None
+    audio = next(child for child in root.commands if child.name == "audio")
+    assert isinstance(audio, app_commands.Group)
+    assert {child.name for child in root.commands} == {"audio", "adhd"}
+    assert cog._media_app_command_size(root) <= 7_600
+    assert cog._media_app_command_size(audio) <= 7_600
+    assert {child.name for child in audio.commands} >= {
+        "reverse",
+        "reverb",
+        "pitch",
+        "sound-effect",
+    }
+    assert not any(
+        child.name == "audio-reverse"
+        for command in cog.__cog_app_commands__
+        if isinstance(command, app_commands.Group)
+        for child in command.commands
+    )
+
+
 def test_every_app_media_option_uses_the_shared_name_and_description() -> None:
     cog = MediaEffects(cast(Any, SimpleNamespace()))
     found = 0
@@ -1230,7 +1919,9 @@ def test_every_app_media_option_uses_the_shared_name_and_description() -> None:
             if parameter.name == "media":
                 found += 1
                 assert parameter.description == "User/Emoji/Media URL"
-                assert "User/Emoji/Media URL" in command.description
+                assert "User/Emoji/Media URL" not in command.description
+                assert "Numeric limits" not in command.description
+                assert "\n" not in command.description
             if parameter.name in {
                 "amount",
                 "degrees",
@@ -1290,6 +1981,7 @@ def test_every_requested_effect_is_registered_in_the_slash_groups() -> None:
         "adhd",
         "blur",
         "caption",
+        "average-colors",
         "crop circle",
         "crop triangle",
         "cube",
@@ -1339,6 +2031,7 @@ def test_every_requested_effect_is_registered_in_the_slash_groups() -> None:
         "vignette",
     }
     assert qualified_children(Images.effect_3) == {
+        "combine",
         "enlarge",
         "falsecolor",
         "glitch",
@@ -1350,9 +2043,7 @@ def test_every_requested_effect_is_registered_in_the_slash_groups() -> None:
         "mirror right",
         "mirror top",
         "oilpaint",
-        "overlay flag",
-        "overlay image",
-        "overlay video",
+        "overlay",
         "parallax",
         "quilt",
         "random",
@@ -1362,6 +2053,7 @@ def test_every_requested_effect_is_registered_in_the_slash_groups() -> None:
         "remove outro-tiktok",
         "squishy",
         "tremble",
+        "text",
         "watercolor",
         "zoom",
     }
@@ -1500,6 +2192,73 @@ def test_media_converter_reads_supported_urls_from_a_replied_message() -> None:
     assert result == "https://www.instagram.com/reel/example/"
 
 
+def test_media_converter_reads_components_v2_media_from_a_reply() -> None:
+    replied = SimpleNamespace(
+        id=10,
+        attachments=[],
+        embeds=[],
+        stickers=[],
+        content="",
+        components=[
+            {
+                "type": 17,
+                "components": [
+                    {
+                        "type": 12,
+                        "items": [
+                            {"media": {"url": "https://cdn.example.test/replied.png"}}
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+
+    async def fetch_message(_message_id: int) -> Any:
+        return replied
+
+    ctx = SimpleNamespace(
+        guild=None,
+        message=SimpleNamespace(
+            id=20,
+            attachments=[],
+            reference=SimpleNamespace(message_id=10),
+        ),
+        fetch_message=fetch_message,
+    )
+    result = asyncio.run(MediaConverter().convert(cast(Any, ctx)))
+    assert result == "https://cdn.example.test/replied.png"
+
+
+def test_media_converter_reply_without_asset_uses_display_avatar() -> None:
+    replied = SimpleNamespace(
+        id=10,
+        attachments=[],
+        embeds=[],
+        components=[],
+        stickers=[],
+        content="",
+        author=SimpleNamespace(
+            display_avatar=SimpleNamespace(url="https://cdn.example.test/avatar.png")
+        ),
+    )
+
+    async def fetch_message(_message_id: int) -> Any:
+        return replied
+
+    ctx = SimpleNamespace(
+        guild=None,
+        message=SimpleNamespace(
+            id=20,
+            attachments=[],
+            reference=SimpleNamespace(message_id=10),
+        ),
+        fetch_message=fetch_message,
+    )
+    result = asyncio.run(MediaConverter().convert(cast(Any, ctx)))
+    assert result == "https://cdn.example.test/avatar.png"
+
+
 def test_media_converter_reads_discord_urls_from_recent_message_content() -> None:
     recent = SimpleNamespace(
         id=10,
@@ -1567,6 +2326,183 @@ def test_static_image_effects_produce_images(
     result = render_image_effect_sync(_png_bytes(), effect, **options)
     with Image.open(BytesIO(result.data)) as output:
         output.verify()
+
+
+def test_resize_accepts_exact_width_by_height_for_images_and_pipelines() -> None:
+    result = render_image_effect_sync(_png_bytes(), "resize", size="80x60")
+    with Image.open(BytesIO(result.data)) as output:
+        assert output.size == (80, 60)
+
+    video = render_image_effect_sync(_sample_video(), "resize", size="80x60")
+    video_probe = probe_media_sync(video.data)
+    assert (video_probe.width, video_probe.height) == (80, 60)
+
+    source, effects, skipped = _parse_effect_pipeline(
+        "https://example.com/media.png resize 80x60"
+    )
+    assert source == "https://example.com/media.png"
+    assert effects == [
+        (
+            "resize",
+            {"scale": 1.0, "ratio": "", "size": "80x60"},
+        )
+    ]
+    assert skipped == []
+
+
+def test_text_effect_font_catalog_has_fifteen_distinct_ofl_choices() -> None:
+    assert len(EFFECT_FONTS) == 15
+    assert len(set(font_names())) == 15
+    assert find_effect_font("open-sans").name == "Open Sans"
+    assert find_effect_font("bebas").name == "Bebas Neue"
+
+
+def test_text_effect_renders_unicode_and_inline_emoji_on_an_image() -> None:
+    result = render_text_effect_sync(
+        _png_bytes(),
+        text="Hello 世界 😄",
+        font="Roboto",
+        size=14,
+        position="bottom",
+        style="box",
+        inline_images={"😄": _png_bytes()},
+    )
+    assert result.filename == "text.png"
+    with Image.open(BytesIO(result.data)) as output:
+        assert output.size == (32, 24)
+        assert output.convert("RGBA").getbbox() is not None
+
+
+def test_text_effect_preserves_gif_animation_and_video_audio() -> None:
+    gif_result = render_text_effect_sync(
+        _gif_bytes(),
+        text="GIF",
+        font="Roboto",
+        size=10,
+        position="center",
+    )
+    assert gif_result.filename == "text.gif"
+    with Image.open(BytesIO(gif_result.data)) as output:
+        assert int(getattr(output, "n_frames", 1)) > 1
+
+    video_result = render_text_effect_sync(
+        _sample_video(),
+        text="Video",
+        font="Roboto",
+        size=12,
+        position="top",
+        style="shadow",
+    )
+    video_probe = probe_media_sync(video_result.data)
+    assert video_result.filename == "text.mp4"
+    assert video_probe.has_video is True
+    assert video_probe.has_audio is True
+
+
+def test_text_effect_is_available_in_run_with_positional_text() -> None:
+    source, effects, skipped = _parse_effect_pipeline(
+        "https://example.com/media.gif text hello"
+    )
+    assert source == "https://example.com/media.gif"
+    assert effects[0][0] == "text"
+    assert effects[0][1]["text"] == "hello"
+    assert skipped == []
+
+
+@pytest.mark.parametrize(
+    ("position", "expected_size"),
+    (
+        ("left", (64, 24)),
+        ("right", (64, 24)),
+        ("top", (32, 48)),
+        ("bottom", (32, 48)),
+    ),
+)
+def test_combine_extends_static_canvas_in_each_direction(
+    position: str,
+    expected_size: tuple[int, int],
+) -> None:
+    result = render_combine_effect_sync(
+        _png_bytes(),
+        _png_bytes(),
+        position=position,
+        mode="resize",
+    )
+    assert result.filename == "combine.png"
+    with Image.open(BytesIO(result.data)) as output:
+        assert output.size == expected_size
+
+
+def test_combine_modes_keep_resize_or_stretch_the_second_item() -> None:
+    second = BytesIO()
+    Image.new("RGBA", (10, 20), (0, 255, 0, 180)).save(second, "PNG")
+    expected = {
+        "original": (42, 24),
+        "resize": (44, 24),
+        "stretch": (64, 24),
+    }
+    for mode, size in expected.items():
+        result = render_combine_effect_sync(
+            _png_bytes(),
+            second.getvalue(),
+            position="right",
+            mode=mode,
+        )
+        with Image.open(BytesIO(result.data)) as output:
+            assert output.size == size
+
+
+def test_combine_synchronizes_gifs_and_preserves_video_audio() -> None:
+    gif_result = render_combine_effect_sync(
+        _gif_bytes(),
+        _png_bytes(),
+        position="right",
+        mode="original",
+    )
+    assert gif_result.filename == "combine.gif"
+    with Image.open(BytesIO(gif_result.data)) as output:
+        assert int(getattr(output, "n_frames", 1)) > 1
+
+    video_result = render_combine_effect_sync(
+        _sample_video(),
+        _png_bytes(),
+        position="bottom",
+        mode="stretch",
+        audio="mix",
+    )
+    probe = probe_media_sync(video_result.data)
+    assert video_result.filename == "combine.mp4"
+    assert probe.has_video is True
+    assert probe.has_audio is True
+    assert (probe.width, probe.height) == (64, 96)
+
+    muted = render_combine_effect_sync(
+        _sample_video(),
+        _sample_video(),
+        audio="none",
+    )
+    assert probe_media_sync(muted.data).has_audio is False
+
+
+def test_combine_is_available_in_run_with_defined_options() -> None:
+    source, effects, skipped = _parse_effect_pipeline(
+        "https://example.com/one.gif combine "
+        "-second https://example.com/two.gif "
+        "-position left -mode original -audio none"
+    )
+    assert source == "https://example.com/one.gif"
+    assert effects == [
+        (
+            "combine",
+            {
+                "second": "https://example.com/two.gif",
+                "position": "left",
+                "mode": "original",
+                "audio": "none",
+            },
+        )
+    ]
+    assert skipped == []
 
 
 @pytest.mark.parametrize(
@@ -2144,6 +3080,18 @@ def test_all_single_input_video_effects(effect: str, options: dict[str, Any]) ->
     assert result.data
 
 
+def test_audiodestroy_handles_audio_only_input() -> None:
+    result = render_video_effect_sync(
+        _sample_audio("sine=frequency=330:duration=0.8"),
+        "audiodestroy",
+        amount=8,
+        start=0.1,
+        stop=0.6,
+    )
+    assert result.filename == "audio-destroyed.mp3"
+    assert result.data
+
+
 def test_two_input_video_effects() -> None:
     video = _sample_video()
     overlay = render_video_effect_sync(
@@ -2212,6 +3160,43 @@ def test_sound_effect_converts_a_gif_without_shortening_its_animation() -> None:
     assert probe.duration >= 0.19
 
 
+def test_sound_effect_does_not_extend_a_gif_with_a_frozen_last_frame() -> None:
+    gif = _gif_bytes()
+    original_duration = probe_media_sync(gif).duration
+    result = render_video_effect_sync(
+        gif,
+        "soundeffect",
+        second_data=_sample_audio("sine=frequency=440:duration=1"),
+        random_time=False,
+    )
+    probe = probe_media_sync(result.data)
+    assert probe.duration >= original_duration - 0.03
+    assert probe.duration <= original_duration + 0.12
+
+
+def test_overlapping_sound_effects_preserve_the_base_duration_and_audio() -> None:
+    base = _sample_video()
+    original_duration = probe_media_sync(base).duration
+    first = render_video_effect_sync(
+        base,
+        "soundeffect",
+        second_data=_sample_audio("sine=frequency=440:duration=1"),
+        at=0.1,
+        random_time=False,
+    )
+    second = render_video_effect_sync(
+        first.data,
+        "soundeffect",
+        second_data=_sample_audio("sine=frequency=880:duration=1"),
+        at=0.2,
+        random_time=False,
+    )
+    probe = probe_media_sync(second.data)
+    assert probe.has_audio is True
+    assert probe.duration >= original_duration - 0.05
+    assert probe.duration <= original_duration + 0.12
+
+
 def test_sound_effect_does_not_normalize_the_base_audio_quietly() -> None:
     base = _sample_audio("sine=frequency=440:duration=1")
     silence = _sample_audio("anullsrc=r=44100:cl=stereo:d=0.25")
@@ -2246,9 +3231,22 @@ def test_adhd_segments_scale_short_media_and_include_varied_modes() -> None:
     }
 
 
-def test_random_effect_pool_includes_size_and_volume_effects() -> None:
-    assert {"zoom", "resize", "enlarge"} <= set(RANDOM_EFFECTS)
+def test_random_effect_pool_includes_size_but_not_enlarge() -> None:
+    assert {"zoom", "resize"} <= set(RANDOM_EFFECTS)
+    assert "enlarge" not in RANDOM_EFFECTS
     assert "volume" in media_effect_commands.RANDOM_AUDIO_EFFECTS
+    assert "channelscombine" not in media_effect_commands.RANDOM_AUDIO_EFFECTS
+
+
+def test_enlarge_is_rejected_from_run_and_random(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(commands.BadArgument, match="cannot be used inside"):
+        _parse_effect_pipeline("enlarge")
+
+    monkeypatch.setattr(media_effect_commands, "RANDOM_EFFECTS", ("enlarge",))
+    with pytest.raises(commands.BadArgument, match="No random effects"):
+        _resolve_pipeline_random_effects([("random", {})])
 
 
 @pytest.mark.parametrize(
@@ -2359,6 +3357,61 @@ def test_overlay_video_accepts_audio_toggle() -> None:
         overlay_audio=False,
     )
     assert with_audio.data and without_audio.data
+
+
+def test_unified_overlay_keeps_static_images_on_the_base_canvas() -> None:
+    result = render_overlay_effect_sync(
+        _png_bytes(),
+        _png_bytes(),
+        size="10x8",
+    )
+    assert result.filename == "overlay.png"
+    with Image.open(BytesIO(result.data)) as output:
+        assert output.size == (32, 24)
+
+
+def test_unified_overlay_turns_an_image_into_a_video_without_resizing_the_base() -> (
+    None
+):
+    result = render_overlay_effect_sync(
+        _png_bytes(),
+        _sample_video(),
+        size="20x12",
+    )
+    probe = probe_media_sync(result.data)
+    assert result.filename == "overlay-video.mp4"
+    assert (probe.width, probe.height) == (32, 24)
+    assert probe.has_audio is True
+    assert probe.duration >= 0.4
+
+
+def test_unified_overlay_extend_only_expands_for_a_longer_second_video() -> None:
+    base = _sample_video_for_duration(0.5)
+    longer_overlay = _sample_video_for_duration(1.25)
+    base_duration = probe_media_sync(base).duration
+    overlay_duration = probe_media_sync(longer_overlay).duration
+
+    normal = probe_media_sync(
+        render_overlay_effect_sync(base, longer_overlay).data
+    ).duration
+    extended = probe_media_sync(
+        render_overlay_effect_sync(base, longer_overlay, extend=True).data
+    ).duration
+
+    assert normal <= base_duration + 0.1
+    assert extended >= overlay_duration - 0.1
+
+
+def test_unified_overlay_applies_a_timed_image_overlay_to_video() -> None:
+    result = render_overlay_effect_sync(
+        _sample_video(),
+        _png_bytes(),
+        start=0.1,
+        stop=0.3,
+    )
+    probe = probe_media_sync(result.data)
+    assert result.filename == "overlay-video.mp4"
+    assert probe.has_video is True
 
 
 def test_reverse_preserves_gif_output() -> None:

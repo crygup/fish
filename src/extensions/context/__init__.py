@@ -288,6 +288,12 @@ class Context(commands.Context["Fishie"]):
         self._message_count += 1
         return m
 
+    async def send_new(
+        self, content: str | None = None, **kwargs: Any
+    ) -> discord.Message:
+        """Send a separate response without replacing the cached response."""
+        return await super().send(content, **kwargs)
+
     @property
     def _previous_message(self) -> Optional[discord.Message]:
         if self.message or self.interaction:

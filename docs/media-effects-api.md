@@ -43,8 +43,10 @@ X-API-Key: your-private-key
 }
 ```
 
-`secondary_media_url` is used by `audiooverlay` and `audioreplace`. It can
-point to an audio file or a video that contains audio.
+`secondary_media_url` is used by `overlay`, `audiooverlay`, `audioreplace`, and
+`combine`. For audio effects it can point to an audio file or a video that
+contains audio. For `overlay` and `combine` it is the second image, GIF, or
+video.
 
 The URL must use HTTP or HTTPS, resolve to a public address, and return an
 image, video, or audio content type. Redirects are validated before they are
@@ -105,6 +107,9 @@ booleans.
 | `slidein`, `slideout` | `direction` string: `left`, `right`, `up`, or `down`, `duration` number from 0.1 to 10 |
 | `vignette` | `amount` number from 0 to 1 |
 | `resize` | `scale` number from 0.1 to 4, `ratio` string such as `16:9` or `1:1` |
+| `overlay` | Requires `secondary_media_url`. Accepts `opacity`, `scale`, `size`, `position`, `x`, `y`, `start`, `stop`, `stretch`, `extend`, and `overlay_audio` |
+| `text` | `text`, `font`, `size`, `position`, `x`, `y`, `color`, `style`, `stroke_color`, `stroke_width`, `shadow_color`, `background`, `background_opacity`, `opacity`, `align`, `padding`, and `bold`. Font choices are Roboto, Open Sans, Lato, Montserrat, Oswald, Raleway, Poppins, Bebas Neue, Anton, Bangers, Comic Neue, Lobster, Pacifico, Playfair Display, and Noto Sans |
+| `combine` | Requires `secondary_media_url`. `position` is `top`, `bottom`, `left`, or `right`. `mode` is proportional `resize`, equal-panel `stretch`, or `original`. `audio` is `mix`, `first`, `second`, or `none` |
 | `distort` | `amount` number from -1 to 1 |
 | `grain`, `noise` | `amount` number from 0 to 100 |
 | `rotate` | `degrees` number from -3600 to 3600 |
@@ -137,7 +142,7 @@ booleans.
 | `extract` | No parameters. The response is an MP3 or ZIP file |
 
 The common audio timing fields are `start`, `stop`, and `duration`. Each is
-measured in seconds from 0 to 180. A `stop` or `duration` value of `0` means
+measured in seconds from 0 to 600. A `stop` or `duration` value of `0` means
 the effect continues through the rest of the media. A positive `duration`
 takes priority over `stop`.
 
@@ -150,7 +155,7 @@ value. When this happens, the response includes an `X-Fishie-Adjusted` header
 with the adjustments that were made.
 
 `gifmagik` and `gifswirl` accept static images, GIFs up to 30 seconds, and
-videos up to the general 3 minute media limit. Video processing uses a bounded
+videos up to the general 10 minute media limit. Video processing uses a bounded
 resolution and frame rate so longer clips do not use the much slower
 frame-by-frame GIF renderer. Discord CDN attachment URLs are refreshed through
 Discord before Fishie downloads them.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import math
 import re
 from collections import Counter
 from io import BytesIO
@@ -46,6 +47,19 @@ ANILIST_MEDIA_RE = re.compile(
     re.IGNORECASE,
 )
 ANILIST_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s<>\)]+)\)")
+ANILIST_SPOILER_RE = re.compile(r"~!(.*?)!~", re.DOTALL)
+CHARACTER_HEIGHT_RE = re.compile(
+    r"(?im)^[ \t]*(?:\*\*|__)?height(?:\*\*|__)?[ \t]*:[ \t]*(.+?)[ \t]*(?=\n|$)"
+)
+CHARACTER_METADATA_RE = re.compile(
+    r"(?im)^[ \t]*(?P<marker>\*\*|__)(?P<label>[^*_\n:]+):(?P=marker)"
+    r"[ \t]*(?P<value>.*?)[ \t]*$"
+)
+MEDIA_DESCRIPTION_SOURCE_RE = re.compile(
+    r"(?im)^[ \t]*\(?[ \t]*source[ \t]*:[ \t]*"
+    r"(?P<source>[^)\n]+?)[ \t]*\)?[ \t]*(?=\n|$)"
+)
+DESCRIPTION_PREVIEW_LIMIT = 650
 ANILIST_PROFILE_QUERY = """
 query ($name: String) {
   User(name: $name) {
@@ -69,9 +83,30 @@ query ($name: String) {
       }
     }
     favourites {
-      anime { nodes { siteUrl coverImage { extraLarge } title { romaji } } }
-      manga { nodes { siteUrl coverImage { extraLarge } title { romaji } } }
-      characters { nodes { siteUrl image { large } name { full } } }
+      anime {
+        nodes {
+          siteUrl
+          isAdult
+          coverImage { extraLarge }
+          title { romaji }
+        }
+      }
+      manga {
+        nodes {
+          siteUrl
+          isAdult
+          coverImage { extraLarge }
+          title { romaji }
+        }
+      }
+      characters {
+        nodes {
+          siteUrl
+          image { large }
+          name { full }
+          media(perPage: 6) { nodes { isAdult } }
+        }
+      }
     }
   }
 }
@@ -94,10 +129,72 @@ query ($search: String!, $type: MediaType!) {
       seasonYear
       averageScore
       genres
+      isAdult
       coverImage { extraLarge }
-      mediaListEntry { id status progress }
+      isFavourite
+      mediaListEntry { id status progress score }
     }
   }
+}
+"""
+ANILIST_CURRENT_LIST_QUERY = """
+query ($userName: String!, $type: MediaType!, $statuses: [MediaListStatus!]!) {
+  MediaListCollection(
+    userName: $userName
+    type: $type
+    status_in: $statuses
+  ) {
+    lists {
+      entries {
+        id
+        mediaId
+        status
+        progress
+        score
+        repeat
+        media {
+          id
+          siteUrl
+          title { userPreferred english romaji native }
+          episodes
+          chapters
+        }
+      }
+    }
+  }
+  Viewer { mediaListOptions { scoreFormat } }
+}
+"""
+ANILIST_CURRENT_LIST_PUBLIC_QUERY = """
+query ($userName: String!, $type: MediaType!, $statuses: [MediaListStatus!]!) {
+  MediaListCollection(
+    userName: $userName
+    type: $type
+    status_in: $statuses
+  ) {
+    lists {
+      entries {
+        id
+        mediaId
+        status
+        progress
+        score
+        repeat
+        media {
+          id
+          siteUrl
+          title { userPreferred english romaji native }
+          episodes
+          chapters
+        }
+      }
+    }
+  }
+}
+"""
+ANILIST_VIEWER_OPTIONS_QUERY = """
+query {
+  Viewer { mediaListOptions { scoreFormat } }
 }
 """
 ANILIST_CHARACTER_QUERY = """
@@ -106,7 +203,7 @@ query ($search: String!) {
     characters(search: $search, sort: SEARCH_MATCH) {
       id
       siteUrl
-      name { full native alternative }
+      name { full native alternative alternativeSpoiler }
       image { large }
       description
       gender
@@ -120,6 +217,7 @@ query ($search: String!) {
           type
           siteUrl
           title { userPreferred english romaji native }
+          isAdult
         }
       }
     }
@@ -140,6 +238,25 @@ mutation (
     id
     status
     progress
+    score
+  }
+}
+"""
+ANILIST_SAVE_RATING_MUTATION = """
+mutation ($mediaId: Int!, $score: Float) {
+  SaveMediaListEntry(mediaId: $mediaId, score: $score) {
+    id
+    status
+    progress
+    score
+  }
+}
+"""
+ANILIST_TOGGLE_FAVOURITE_MUTATION = """
+mutation ($animeId: Int, $mangaId: Int) {
+  ToggleFavourite(animeId: $animeId, mangaId: $mangaId) {
+    anime { nodes { id } }
+    manga { nodes { id } }
   }
 }
 """
@@ -150,12 +267,28 @@ ANILIST_LIST_STATUSES = (
     ("PAUSED", "On Hold", "Temporarily paused"),
     ("DROPPED", "Dropped", "Stopped watching this anime"),
 )
+ANILIST_SMILEY_SCORE_FORMATS = {"POINT_3", "SMILEY"}
+ANILIST_SCORE_LIMITS = {
+    "POINT_100": 100,
+    "POINT_10": 10,
+    "POINT_10_DECIMAL": 10,
+    "POINT_5": 5,
+    "THREE_POINT": 3,
+}
+ANILIST_SMILEY_EMOJIS = ("😿", "🐱", "😸")
+ANILIST_RATING_REMOVE_EMOJI = "\U0001f5d1\ufe0f"
 
 
-def _clean_about(value: str | None) -> str:
-    if not value:
-        return "No profile bio provided."
-    text = html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
+def _clean_about(
+    value: str | None,
+    *,
+    max_length: int = 900,
+    fallback: str = "No profile bio provided.",
+) -> str:
+    if not isinstance(value, str) or not value:
+        return fallback
+    text = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text)).strip()
     text = re.sub(r"(?m)^[ \t]*\\+[ \t]*(?=\n|$)", "", text)
     text = re.sub(r"\\+(?=\s*(?:\n|$))", "", text)
 
@@ -170,6 +303,7 @@ def _clean_about(value: str | None) -> str:
         return f"[{label}]({match.group('url')})"
 
     text = ANILIST_MEDIA_RE.sub(_media_link, text)
+    text = ANILIST_SPOILER_RE.sub(r"||\1||", text)
     protected: list[str] = []
 
     def _safe_link_label(label: str) -> str:
@@ -199,13 +333,131 @@ def _clean_about(value: str | None) -> str:
         protected.append(match.group(0))
         return f"\x00{len(protected) - 1}\x00"
 
-    text = re.sub(r"---+|\|", _protect_literal, text)
+    text = re.sub(
+        r"---+|\||^[ \t]*[-*+](?=\s+)",
+        _protect_literal,
+        text,
+        flags=re.MULTILINE,
+    )
     text = discord.utils.escape_mentions(discord.utils.escape_markdown(text))
     for index, item in enumerate(protected):
         text = text.replace(f"\x00{index}\x00", item)
-    if len(text) > 900:
-        text = text[:897].rstrip() + "..."
-    return text or "No profile bio provided."
+    if len(text) > max_length:
+        text = text[: max_length - 3].rstrip() + "..."
+        if text.count("||") % 2:
+            text = text[: max_length - 5].rstrip() + "...||"
+    return text or fallback
+
+
+def _media_description_parts(value: str | None) -> tuple[str, str | None]:
+    """Clean a media description and extract its inline source attribution."""
+
+    fallback = "No description provided."
+    if not isinstance(value, str) or not value.strip():
+        return fallback, None
+    normalized = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    normalized = html.unescape(re.sub(r"<[^>]+>", "", normalized)).strip()
+    source_match = MEDIA_DESCRIPTION_SOURCE_RE.search(normalized)
+    source = None
+    if source_match:
+        source = (
+            _clean_about(
+                source_match.group("source"),
+                max_length=300,
+                fallback="",
+            )
+            or None
+        )
+        normalized = (
+            normalized[: source_match.start()] + normalized[source_match.end() :]
+        )
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
+    return _clean_about(normalized, fallback=fallback), source
+
+
+def _description_preview(
+    value: str,
+    *,
+    max_length: int = DESCRIPTION_PREVIEW_LIMIT,
+) -> tuple[str, bool]:
+    """Return a readable preview without cutting through a word or sentence."""
+
+    if len(value) <= max_length:
+        return value, False
+
+    paragraph_matches = list(
+        re.finditer(
+            r"\n{2,}",
+            value,
+        )
+    )
+    section_header = re.compile(
+        r"(?i)^(?:notes?|source|synopsis|relations?|characters?|staff)\s*:"
+    )
+    header_boundaries = [
+        match.end()
+        for match in paragraph_matches
+        if section_header.match(value[match.end() :].lstrip())
+    ]
+    boundaries = [
+        match.end()
+        for match in re.finditer(
+            r"\n+|(?<=[.!?])(?:[ \t]+)",
+            value,
+        )
+    ]
+
+    def _safe_boundary(position: int) -> bool:
+        preview = value[:position].rstrip()
+        return bool(preview) and preview.count("||") % 2 == 0
+
+    usable_headers = [
+        position
+        for position in header_boundaries
+        if position <= max_length and _safe_boundary(position)
+    ]
+    if usable_headers:
+        position = usable_headers[-1]
+    else:
+        usable_paragraphs = [
+            position
+            for position in (match.end() for match in paragraph_matches)
+            if position <= max_length and _safe_boundary(position)
+        ]
+        if usable_paragraphs:
+            position = usable_paragraphs[-1]
+        else:
+            usable = [
+                position
+                for position in boundaries
+                if position <= max_length and _safe_boundary(position)
+            ]
+            if usable:
+                position = usable[-1]
+            else:
+                later = [
+                    position for position in boundaries if _safe_boundary(position)
+                ]
+                position = later[0] if later else max_length
+                if position == max_length:
+                    whitespace = [
+                        match.start()
+                        for match in re.finditer(r"\s+", value[: max_length + 1])
+                        if match.start() > 0
+                    ]
+                    if whitespace:
+                        position = whitespace[-1]
+
+    preview = value[:position].rstrip()
+    return preview, True
+
+
+def _character_age_value(value: object) -> str | None:
+    if value is None:
+        return None
+    age = str(value).strip()
+    age = re.sub(r"\s*-$", "", age)
+    return age or None
 
 
 def _number(value: Any) -> str:
@@ -226,14 +478,153 @@ def _anime_title(media: dict[str, Any]) -> str:
     return "Unknown anime"
 
 
+def _media_enum_label(value: object) -> str:
+    """Format AniList enum values for the compact media details block."""
+
+    return str(value or "").replace("_", " ").title()
+
+
+def _media_score_format(media: dict[str, Any]) -> str:
+    return str(media.get("_viewerScoreFormat") or "POINT_100")
+
+
+def _media_rating_limit(media: dict[str, Any]) -> int:
+    return ANILIST_SCORE_LIMITS.get(_media_score_format(media), 100)
+
+
+def _media_user_rating(media: dict[str, Any]) -> str | None:
+    """Render the authenticated user's AniList rating in their chosen format."""
+
+    entry = media.get("mediaListEntry")
+    if not isinstance(entry, dict):
+        return None
+    raw_score = entry.get("score")
+    if isinstance(raw_score, bool) or raw_score is None:
+        return None
+    try:
+        score = float(raw_score)
+    except (TypeError, ValueError):
+        return None
+    if score <= 0:
+        return None
+
+    score_format = _media_score_format(media)
+    if score_format in ANILIST_SMILEY_SCORE_FORMATS:
+        # AniList's current smiley setting is POINT_3. Keep SMILEY for
+        # compatibility with older cached responses.
+        index = max(0, min(len(ANILIST_SMILEY_EMOJIS) - 1, round(score) - 1))
+        return ANILIST_SMILEY_EMOJIS[index]
+
+    denominator = ANILIST_SCORE_LIMITS.get(score_format, 100)
+    if score_format == "POINT_10_DECIMAL":
+        score_text = f"{score:.1f}"
+    elif score.is_integer():
+        score_text = str(int(score))
+    else:
+        score_text = f"{score:g}"
+    return f"{score_text}/{denominator}"
+
+
+def _context_allows_adult_art(ctx: Context) -> bool:
+    """Return whether artwork marked for adults may be shown in this context."""
+
+    if getattr(ctx, "guild", None) is None:
+        return True
+    channel = getattr(ctx, "channel", None)
+    is_nsfw = getattr(channel, "is_nsfw", None)
+    if callable(is_nsfw):
+        try:
+            return bool(is_nsfw())
+        except (AttributeError, TypeError):
+            return False
+    return bool(getattr(channel, "nsfw", False))
+
+
+def _is_adult_media(media: object) -> bool:
+    if not isinstance(media, dict):
+        return False
+    if bool(media.get("isAdult")):
+        return True
+    genres = media.get("genres")
+    return isinstance(genres, list) and any(
+        isinstance(genre, str) and genre.casefold() == "hentai" for genre in genres
+    )
+
+
+def _is_adult_character(character: object) -> bool:
+    if not isinstance(character, dict):
+        return False
+    if bool(character.get("isAdult")):
+        return True
+    media = character.get("media")
+    nodes = media.get("nodes") if isinstance(media, dict) else None
+    return isinstance(nodes, list) and any(_is_adult_media(item) for item in nodes)
+
+
+def _character_description_data(
+    value: str | None,
+) -> tuple[str, dict[str, str]]:
+    """Clean a character description and extract AniList metadata lines.
+
+    AniList often prefixes descriptions with emphasized fields such as
+    ``__Affiliation:__`` and ``__Bounty:__``.  Escaping the complete
+    description would otherwise leave those fields looking broken.  Keeping
+    them as separate details also means the profile information remains
+    visible when the description itself is empty or malformed.
+    """
+
+    fallback = "No character description provided."
+    if not isinstance(value, str) or not value.strip():
+        return fallback, {}
+
+    normalized = html.unescape(value)
+    normalized = re.sub(r"<br\s*/?>", "\n", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"<[^>]+>", "", normalized)
+    normalized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", normalized)
+    metadata: dict[str, str] = {}
+
+    def _metadata_line(match: re.Match[str]) -> str:
+        label = re.sub(r"\s+", " ", match.group("label")).strip().casefold()
+        detail = _clean_about(
+            match.group("value"),
+            max_length=600,
+            fallback="",
+        )
+        if detail:
+            metadata[label] = detail
+        return ""
+
+    normalized = CHARACTER_METADATA_RE.sub(_metadata_line, normalized)
+    height_match = CHARACTER_HEIGHT_RE.search(normalized)
+    if height_match:
+        height = _clean_about(
+            height_match.group(1),
+            max_length=300,
+            fallback="",
+        )
+        if height:
+            metadata.setdefault("height", height)
+        normalized = (
+            normalized[: height_match.start()] + normalized[height_match.end() :]
+        )
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
+    return (
+        _clean_about(
+            normalized,
+            max_length=1800,
+            fallback=fallback,
+        ),
+        metadata,
+    )
+
+
+def _character_description_parts(value: str | None) -> tuple[str, str | None]:
+    description, metadata = _character_description_data(value)
+    return description, metadata.get("height")
+
+
 def _clean_character_description(value: str | None) -> str:
-    if not value:
-        return "No character description provided."
-    text = re.sub(r"<br\s*/?>", "\n", html.unescape(value), flags=re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    text = discord.utils.escape_mentions(discord.utils.escape_markdown(text))
-    return text[:1797].rstrip() + "..." if len(text) > 1800 else text
+    return _character_description_parts(value)[0]
 
 
 def _character_media_text(character: dict[str, Any]) -> str | None:
@@ -249,10 +640,27 @@ def _character_media_text(character: dict[str, Any]) -> str | None:
         url = media.get("siteUrl")
         media_type = str(media.get("type") or "MEDIA").title()
         escaped = discord.utils.escape_markdown(title)
-        entries.append(
+        entry = (
             f"[{escaped}]({url}) ({media_type})" if url else f"{escaped} ({media_type})"
         )
+        entries.append(entry)
     return "\n".join(entries) or None
+
+
+def _character_name_values(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        name = item.strip()
+        key = name.casefold()
+        if name and key not in seen:
+            values.append(name)
+            seen.add(key)
+    return values
 
 
 def _media_status_label(status: str | None, media_kind: str) -> str:
@@ -295,7 +703,7 @@ def _media_statistics(profile: dict[str, Any], media_type: str) -> dict[str, Any
 
 def _favourite_media_entries(
     profile: dict[str, Any], media_type: str
-) -> list[tuple[str, str | None, str | None]]:
+) -> list[tuple[str, str | None, str | None, bool]]:
     favourites_data = profile.get("favourites")
     if not isinstance(favourites_data, dict):
         return []
@@ -303,7 +711,7 @@ def _favourite_media_entries(
     if not isinstance(media_favourites, dict):
         return []
     nodes = media_favourites.get("nodes") or []
-    entries: list[tuple[str, str | None, str | None]] = []
+    entries: list[tuple[str, str | None, str | None, bool]] = []
     for item in nodes:
         if not isinstance(item, dict) or not isinstance(item.get("title"), dict):
             continue
@@ -329,6 +737,7 @@ def _favourite_media_entries(
                     and cover_url.startswith(("http://", "https://"))
                     else None
                 ),
+                _is_adult_media(item),
             )
         )
     return entries
@@ -338,20 +747,21 @@ def _favourite_entries(
     profile: dict[str, Any], media_type: str
 ) -> list[tuple[str, str | None]]:
     return [
-        (title, url) for title, url, _ in _favourite_media_entries(profile, media_type)
+        (title, url)
+        for title, url, _, _ in _favourite_media_entries(profile, media_type)
     ]
 
 
 def _favourite_character_entries(
     profile: dict[str, Any],
-) -> list[tuple[str, str | None, str | None]]:
+) -> list[tuple[str, str | None, str | None, bool]]:
     favourites_data = profile.get("favourites")
     if not isinstance(favourites_data, dict):
         return []
     characters = favourites_data.get("characters")
     if not isinstance(characters, dict):
         return []
-    entries: list[tuple[str, str | None, str | None]] = []
+    entries: list[tuple[str, str | None, str | None, bool]] = []
     for item in characters.get("nodes") or []:
         if not isinstance(item, dict) or not isinstance(item.get("name"), dict):
             continue
@@ -375,6 +785,7 @@ def _favourite_character_entries(
                     and image_url.startswith(("http://", "https://"))
                     else None
                 ),
+                _is_adult_character(item),
             )
         )
     return entries
@@ -485,7 +896,7 @@ class AniListProfileView(discord.ui.LayoutView):
         statistics = _media_statistics(profile, self.media_type)
         if self.media_type == "characters":
             character_entries = _favourite_character_entries(profile)
-            favourites = [(name, url) for name, url, _ in character_entries]
+            favourites = [(name, url) for name, url, _, _ in character_entries]
         else:
             favourites = _favourite_entries(profile, self.media_type)
         children: list[discord.ui.Item[Any]] = []
@@ -577,6 +988,15 @@ class CharacterLookupView(discord.ui.LayoutView):
         character: dict[str, Any],
     ) -> None:
         super().__init__(timeout=300)
+        self.ctx = ctx
+        self.character = character
+        self.description_expanded = False
+        self.appearances_shown = False
+        self._render()
+
+    def _render(self) -> None:
+        self.clear_items()
+        character = self.character
         names = character.get("name")
         names = names if isinstance(names, dict) else {}
         name = str(names.get("full") or "Unknown character")
@@ -586,7 +1006,15 @@ class CharacterLookupView(discord.ui.LayoutView):
             or f"https://anilist.co/character/{character.get('id')}"
         )
         image = character.get("image")
-        image_url = image.get("large") if isinstance(image, dict) else None
+        image_url = (
+            image.get("large")
+            if isinstance(image, dict)
+            and (
+                _context_allows_adult_art(self.ctx)
+                or not _is_adult_character(character)
+            )
+            else None
+        )
 
         title = (
             f"## [{discord.utils.escape_markdown(name)}]({site_url})\n"
@@ -596,12 +1024,20 @@ class CharacterLookupView(discord.ui.LayoutView):
             title += f"\n-# {discord.utils.escape_markdown(str(native_name))}"
 
         children: list[discord.ui.Item[Any]] = []
-        description = _clean_character_description(character.get("description"))
+        description, character_metadata = _character_description_data(
+            character.get("description")
+        )
+        height = character_metadata.get("height")
+        description_preview, description_truncated = _description_preview(description)
+        description_text = (
+            description if self.description_expanded else description_preview
+        )
+        description_display = discord.ui.TextDisplay(description_text)
         if image_url:
             children.append(
                 discord.ui.Section(
                     discord.ui.TextDisplay(title),
-                    discord.ui.TextDisplay(description),
+                    description_display,
                     accessory=discord.ui.Thumbnail(str(image_url)),
                 )
             )
@@ -609,15 +1045,32 @@ class CharacterLookupView(discord.ui.LayoutView):
             children.extend(
                 (
                     discord.ui.TextDisplay(title),
-                    discord.ui.TextDisplay(description),
+                    description_display,
                 )
             )
 
+        if description_truncated:
+            more = discord.ui.Button(
+                label="^" if self.description_expanded else "...",
+                style=discord.ButtonStyle.secondary,
+            )
+            more.callback = self._toggle_description
+            children.append(discord.ui.ActionRow(more))
+
         details: list[str] = []
         for label, value in (
-            ("Gender", character.get("gender")),
-            ("Age", character.get("age")),
-            ("Blood type", character.get("bloodType")),
+            ("Gender", character.get("gender") or character_metadata.get("gender")),
+            (
+                "Age",
+                _character_age_value(
+                    character.get("age") or character_metadata.get("age")
+                ),
+            ),
+            ("Height", height),
+            (
+                "Blood type",
+                character.get("bloodType") or character_metadata.get("blood type"),
+            ),
         ):
             if value:
                 details.append(f"**{label}:** {_display_character_value(value)}")
@@ -633,13 +1086,36 @@ class CharacterLookupView(discord.ui.LayoutView):
         favourites = character.get("favourites")
         if favourites is not None:
             details.append(f"**Favourites:** {_number(favourites)}")
-        alternatives = names.get("alternative")
-        if isinstance(alternatives, list) and alternatives:
-            alternative_text = ", ".join(str(value) for value in alternatives[:5])
-            details.append(
-                f"**Other names:** "
-                f"{discord.utils.escape_markdown(alternative_text)}"
-            )
+        standard_labels = {
+            "gender",
+            "age",
+            "height",
+            "blood type",
+            "birthday",
+            "favourites",
+            "other names",
+        }
+        for label, value in character_metadata.items():
+            if label in standard_labels or not value:
+                continue
+            display_label = label[:1].upper() + label[1:]
+            details.append(f"**{display_label}:** {value}")
+        alternative_values = _character_name_values(names.get("alternative"))
+        spoiler_values = _character_name_values(names.get("alternativeSpoiler"))
+        spoiler_keys = {value.casefold() for value in spoiler_values}
+        alternative_values = [
+            value
+            for value in alternative_values
+            if value.casefold() not in spoiler_keys
+        ]
+        name_parts = [
+            _display_character_value(value) for value in alternative_values[:5]
+        ]
+        name_parts.extend(
+            _spoiler_character_value(value) for value in spoiler_values[:5]
+        )
+        if name_parts:
+            details.append(f"**Other names:** {', '.join(name_parts)}")
         if details:
             children.extend(
                 (
@@ -650,18 +1126,50 @@ class CharacterLookupView(discord.ui.LayoutView):
 
         related_media = _character_media_text(character)
         if related_media:
-            children.extend(
-                (
-                    discord.ui.Separator(),
-                    discord.ui.TextDisplay(f"### Appears in\n{related_media}"),
+            if self.appearances_shown:
+                children.extend(
+                    (
+                        discord.ui.Separator(),
+                        discord.ui.TextDisplay(f"### Appears in\n{related_media}"),
+                    )
                 )
-            )
+            else:
+                show_appearances = discord.ui.Button(
+                    label="Show appearances",
+                    style=discord.ButtonStyle.secondary,
+                )
+                show_appearances.callback = self._show_appearances
+                children.append(discord.ui.ActionRow(show_appearances))
 
-        self.add_item(discord.ui.Container(*children, accent_color=ctx.bot.embedcolor))
+        self.add_item(
+            discord.ui.Container(*children, accent_color=self.ctx.bot.embedcolor)
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.ctx.author.id:
+            return True
+        await interaction.response.send_message(
+            "Run the command yourself to use these buttons.", ephemeral=True
+        )
+        return False
+
+    async def _toggle_description(self, interaction: discord.Interaction) -> None:
+        self.description_expanded = not self.description_expanded
+        self._render()
+        await interaction.response.edit_message(view=self)
+
+    async def _show_appearances(self, interaction: discord.Interaction) -> None:
+        self.appearances_shown = True
+        self._render()
+        await interaction.response.edit_message(view=self)
 
 
 def _display_character_value(value: object) -> str:
     return discord.utils.escape_mentions(discord.utils.escape_markdown(str(value)))
+
+
+def _spoiler_character_value(value: object) -> str:
+    return f"||{_display_character_value(value)}||"
 
 
 class MediaProgressModal(discord.ui.Modal, title="Set Progress"):
@@ -702,6 +1210,548 @@ class MediaProgressModal(discord.ui.Modal, title="Set Progress"):
         await self.view._save_entry(interaction, progress=value)
 
 
+class MediaRatingModal(discord.ui.Modal, title="Set Rating"):
+    def __init__(
+        self,
+        view: "MediaLookupView",
+        source_message: discord.Message | None,
+    ) -> None:
+        super().__init__()
+        self.view = view
+        self.source_message = source_message
+        maximum = _media_rating_limit(view.media)
+        self.rating = discord.ui.TextInput(
+            label=f"Rating (0 removes it, max {maximum})",
+            placeholder=f"Enter 0-{maximum}; 0 removes your rating",
+            required=True,
+            max_length=6,
+        )
+        self.add_item(self.rating)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.view.ctx.author.id:
+            await interaction.response.send_message(
+                "This rating dialog is not for you.", ephemeral=True
+            )
+            return
+        raw_value = str(self.rating.value).strip()
+        try:
+            value = float(raw_value)
+        except ValueError:
+            await interaction.response.send_message(
+                "Enter a number for the rating. Use 0 to remove it.", ephemeral=True
+            )
+            return
+        if not math.isfinite(value):
+            await interaction.response.send_message(
+                "Enter a finite number for the rating. Use 0 to remove it.",
+                ephemeral=True,
+            )
+            return
+        score: float
+        if value < 1:
+            score = 0
+        else:
+            score = min(value, _media_rating_limit(self.view.media))
+            if _media_score_format(self.view.media) == "POINT_10_DECIMAL":
+                score = round(score, 1)
+            else:
+                score = round(score)
+        await interaction.response.defer()
+        saved = await self.view._save_entry(
+            interaction,
+            score=score,
+            source_message=self.source_message,
+            update_original=False,
+        )
+        if saved:
+            rating = _media_user_rating(self.view.media)
+            await interaction.followup.send(
+                view=MediaRatingNoticeView(
+                    self.view,
+                    f"Rating updated to {rating}." if rating else "Rating removed.",
+                ),
+                ephemeral=True,
+            )
+
+
+class MediaRatingChoiceView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        view: "MediaLookupView",
+        source_message: discord.Message | None,
+    ) -> None:
+        super().__init__(timeout=120)
+        self.media_view = view
+        self.source_message = source_message
+        self._render()
+
+    def _render(self) -> None:
+        title = _anime_title(self.media_view.media)
+        current = _media_user_rating(self.media_view.media) or "No rating"
+        children: list[discord.ui.Item[Any]] = [
+            discord.ui.TextDisplay(
+                f"### Set rating for {discord.utils.escape_markdown(title)}\n"
+            )
+        ]
+        smiling = [
+            discord.ui.Button(emoji=ANILIST_SMILEY_EMOJIS[0]),
+            discord.ui.Button(emoji=ANILIST_SMILEY_EMOJIS[1]),
+            discord.ui.Button(emoji=ANILIST_SMILEY_EMOJIS[2]),
+            discord.ui.Button(emoji=ANILIST_RATING_REMOVE_EMOJI),
+        ]
+        smiling[0].callback = self._set_frown
+        smiling[1].callback = self._set_neutral
+        smiling[2].callback = self._set_smile
+        smiling[3].callback = self._remove_rating
+        children.append(discord.ui.ActionRow(*smiling))
+        self.add_item(
+            discord.ui.Container(
+                *children,
+                accent_color=self.media_view.ctx.bot.embedcolor,
+            )
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.media_view.ctx.author.id:
+            return True
+        await interaction.response.send_message(
+            "Run the command yourself to manage AniList ratings.", ephemeral=True
+        )
+        return False
+
+    async def _set_score(self, interaction: discord.Interaction, score: float) -> None:
+        await interaction.response.defer()
+        saved = await self.media_view._save_entry(
+            interaction,
+            score=score,
+            source_message=self.source_message,
+            update_original=False,
+        )
+        if saved:
+            rating = _media_user_rating(self.media_view.media)
+            await interaction.edit_original_response(
+                view=MediaRatingNoticeView(
+                    self.media_view,
+                    f"Rating updated to {rating}." if rating else "Rating removed.",
+                )
+            )
+
+    async def _set_smile(self, interaction: discord.Interaction) -> None:
+        await self._set_score(interaction, 3)
+
+    async def _set_neutral(self, interaction: discord.Interaction) -> None:
+        await self._set_score(interaction, 2)
+
+    async def _set_frown(self, interaction: discord.Interaction) -> None:
+        await self._set_score(interaction, 1)
+
+    async def _remove_rating(self, interaction: discord.Interaction) -> None:
+        await self._set_score(interaction, 0)
+
+
+class MediaRatingNoticeView(discord.ui.LayoutView):
+    def __init__(self, view: "MediaLookupView", message: str) -> None:
+        super().__init__(timeout=60)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(message),
+                accent_color=view.ctx.bot.embedcolor,
+            )
+        )
+
+
+class MediaListProgressModal(discord.ui.Modal, title="Set Progress"):
+    def __init__(self, view: "MediaListView") -> None:
+        super().__init__()
+        self.view = view
+        unit = "episode" if view.media_kind == "anime" else "chapter"
+        self.progress = discord.ui.TextInput(
+            label=f"{unit.title()} progress",
+            placeholder=f"Enter the {unit} number",
+            required=True,
+            max_length=6,
+        )
+        self.add_item(self.progress)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.view.ctx.author.id:
+            await interaction.response.send_message(
+                "This progress dialog is not for you.", ephemeral=True
+            )
+            return
+        try:
+            value = int(str(self.progress.value).strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "Enter a whole number for the progress.", ephemeral=True
+            )
+            return
+        total = self.view._progress_total()
+        unit = "episode" if self.view.media_kind == "anime" else "chapter"
+        if value < 0 or (total and value > total):
+            maximum = f" and no more than {total}" if total else ""
+            await interaction.response.send_message(
+                f"{unit.title()} progress must be 0{maximum}.", ephemeral=True
+            )
+            return
+        await interaction.response.defer()
+        await self.view._save_progress(interaction, value)
+
+
+class MediaListView(discord.ui.LayoutView):
+    """Components V2 view for a user's currently active AniList entries."""
+
+    PAGE_SIZE = 5
+
+    def __init__(
+        self,
+        cog: "Anime",
+        ctx: Context,
+        entries: list[dict[str, Any]],
+        media_kind: str,
+        access_token: str | None,
+        score_format: str | None,
+        username: str,
+    ) -> None:
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.ctx = ctx
+        self.entries = entries
+        self.media_kind = media_kind
+        self.access_token = access_token
+        self.score_format = score_format
+        self.username = username
+        self.page = 0
+        self.selected_index = 0 if entries else None
+        self.media_select: discord.ui.Select[Any] | None = None
+        self._render()
+
+    @property
+    def page_count(self) -> int:
+        return max(1, (len(self.entries) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+
+    def _page_entries(self) -> list[tuple[int, dict[str, Any]]]:
+        start = self.page * self.PAGE_SIZE
+        return list(enumerate(self.entries[start : start + self.PAGE_SIZE], start))
+
+    def _selected_entry(self) -> dict[str, Any] | None:
+        if self.selected_index is None:
+            return None
+        if 0 <= self.selected_index < len(self.entries):
+            return self.entries[self.selected_index]
+        return None
+
+    def _entry_media(self, entry: dict[str, Any]) -> dict[str, Any]:
+        media = entry.get("media")
+        media_data = dict(media) if isinstance(media, dict) else {}
+        media_data["mediaListEntry"] = entry
+        media_data["_viewerScoreFormat"] = self.score_format
+        return media_data
+
+    def _entry_title(self, entry: dict[str, Any]) -> str:
+        media = entry.get("media")
+        return _anime_title(media) if isinstance(media, dict) else "Unknown title"
+
+    def _progress_total_for(self, entry: dict[str, Any]) -> int | None:
+        media = entry.get("media")
+        field = "episodes" if self.media_kind == "anime" else "chapters"
+        value = media.get(field) if isinstance(media, dict) else None
+        try:
+            return int(value) if value else None
+        except (TypeError, ValueError):
+            return None
+
+    def _progress_for(self, entry: dict[str, Any]) -> int:
+        try:
+            return max(0, int(entry.get("progress") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _entry_line(self, number: int, entry: dict[str, Any]) -> str:
+        media = entry.get("media")
+        title = discord.utils.escape_mentions(
+            discord.utils.escape_markdown(self._entry_title(entry))
+        )
+        site_url = media.get("siteUrl") if isinstance(media, dict) else None
+        title_text = (
+            f"[{title}]({site_url})"
+            if isinstance(site_url, str)
+            and site_url.startswith(("https://", "http://"))
+            else title
+        )
+        repeat = 0
+        try:
+            repeat = int(entry.get("repeat") or 0)
+        except (TypeError, ValueError):
+            pass
+        repeating = entry.get("status") == "REPEATING" or repeat > 0
+        label = (
+            "Rewatching"
+            if repeating and self.media_kind == "anime"
+            else (
+                "Rereading"
+                if repeating
+                else "Watching" if self.media_kind == "anime" else "Reading"
+            )
+        )
+        rating = _media_user_rating(self._entry_media(entry))
+        score = f" • Score: {rating}" if rating else ""
+        unit = "episodes" if self.media_kind == "anime" else "chapters"
+        progress = self._progress_for(entry)
+        total = self._progress_total_for(entry)
+        progress_value = f"{progress:,}/{total:,}" if total else f"{progress:,}"
+        progress_text = f" · {progress_value} {unit}"
+        return f"**{number}.** {title_text}\n-# {label}{progress_text}{score}"
+
+    def _selected_details(self, entry: dict[str, Any]) -> str:
+        unit = "episode" if self.media_kind == "anime" else "chapter"
+        progress = self._progress_for(entry)
+        total = self._progress_total_for(entry)
+        progress_text = f"{progress:,}/{total:,}" if total else f"{progress:,}"
+        return f"**Progress:** {progress_text} {unit}s"
+
+    def _progress_total(self) -> int | None:
+        entry = self._selected_entry()
+        return self._progress_total_for(entry) if entry else None
+
+    def _render(self) -> None:
+        self.clear_items()
+        label = "Watching" if self.media_kind == "anime" else "Reading"
+        username = discord.utils.escape_mentions(
+            discord.utils.escape_markdown(self.username)
+        )
+        title = f"## Currently {label.lower()} for {username}"
+        if not self.entries:
+            self.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay(title),
+                    discord.ui.TextDisplay(
+                        f"You are not currently {label.lower()} any "
+                        f"{self.media_kind} titles."
+                    ),
+                    accent_color=self.ctx.bot.embedcolor,
+                )
+            )
+            return
+
+        page_entries = self._page_entries()
+        lines = [self._entry_line(index + 1, entry) for index, entry in page_entries]
+        children: list[discord.ui.Item[Any]] = [
+            discord.ui.TextDisplay(title),
+            discord.ui.TextDisplay("\n\n".join(lines)),
+        ]
+
+        media_select: discord.ui.Select[Any] | None = None
+        if self.access_token:
+            options = []
+            for index, entry in page_entries:
+                option_label = self._entry_title(entry)[:100] or "Unknown title"
+                option_description = (
+                    f"{self._progress_for(entry):,} "
+                    f"{'episodes' if self.media_kind == 'anime' else 'chapters'}"
+                )
+                options.append(
+                    discord.SelectOption(
+                        label=option_label,
+                        description=option_description[:100],
+                        value=str(index),
+                        default=index == self.selected_index,
+                    )
+                )
+            media_select = discord.ui.Select(
+                placeholder=f"Select a {self.media_kind} title",
+                min_values=1,
+                max_values=1,
+                options=options,
+            )
+            media_select.callback = self._select_entry
+            self.media_select = media_select
+
+        selected = self._selected_entry()
+        if selected is not None and media_select is not None:
+            children.extend(
+                [
+                    discord.ui.Separator(),
+                    discord.ui.TextDisplay(self._selected_details(selected)),
+                    discord.ui.ActionRow(media_select),
+                ]
+            )
+            if self.access_token:
+                progress = self._progress_for(selected)
+                total = self._progress_total_for(selected)
+                minus = discord.ui.Button(
+                    label="-",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=progress <= 0,
+                )
+                plus = discord.ui.Button(
+                    label="+",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=bool(total and progress >= total),
+                )
+                set_progress = discord.ui.Button(
+                    label="Set Progress", style=discord.ButtonStyle.primary
+                )
+                minus.callback = self._decrease_progress
+                plus.callback = self._increase_progress
+                set_progress.callback = self._open_progress_modal
+                children.append(discord.ui.ActionRow(minus, plus, set_progress))
+
+        children.extend(
+            [
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"-# Page {self.page + 1}/{self.page_count} · "
+                    f"{len(self.entries)} active {self.media_kind} titles"
+                ),
+            ]
+        )
+        if self.page_count > 1:
+            previous = discord.ui.Button(
+                label="<",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page <= 0,
+            )
+            next_page = discord.ui.Button(
+                label=">",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page >= self.page_count - 1,
+            )
+            previous.callback = self._previous_page
+            next_page.callback = self._next_page
+            children.append(discord.ui.ActionRow(previous, next_page))
+
+        self.add_item(
+            discord.ui.Container(*children, accent_color=self.ctx.bot.embedcolor)
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.ctx.author.id:
+            return True
+        await interaction.response.send_message(
+            "Run the command yourself to manage AniList progress.", ephemeral=True
+        )
+        return False
+
+    async def _select_entry(self, interaction: discord.Interaction) -> None:
+        if self.media_select is None or not self.media_select.values:
+            await interaction.response.send_message(
+                "Select a title first.", ephemeral=True
+            )
+            return
+        self.selected_index = int(self.media_select.values[0])
+        self._render()
+        await interaction.response.edit_message(view=self)
+
+    async def _previous_page(self, interaction: discord.Interaction) -> None:
+        if self.page <= 0:
+            await interaction.response.defer()
+            return
+        self.page -= 1
+        start = self.page * self.PAGE_SIZE
+        if self.selected_index is None or not (
+            start <= self.selected_index < start + self.PAGE_SIZE
+        ):
+            self.selected_index = start
+        self._render()
+        await interaction.response.edit_message(view=self)
+
+    async def _next_page(self, interaction: discord.Interaction) -> None:
+        if self.page >= self.page_count - 1:
+            await interaction.response.defer()
+            return
+        self.page += 1
+        start = self.page * self.PAGE_SIZE
+        if self.selected_index is None or not (
+            start <= self.selected_index < start + self.PAGE_SIZE
+        ):
+            self.selected_index = start
+        self._render()
+        await interaction.response.edit_message(view=self)
+
+    async def _decrease_progress(self, interaction: discord.Interaction) -> None:
+        await self._change_progress(interaction, -1)
+
+    async def _increase_progress(self, interaction: discord.Interaction) -> None:
+        await self._change_progress(interaction, 1)
+
+    async def _change_progress(
+        self, interaction: discord.Interaction, amount: int
+    ) -> None:
+        entry = self._selected_entry()
+        if entry is None:
+            await interaction.response.send_message(
+                "Select a title first.", ephemeral=True
+            )
+            return
+        current = self._progress_for(entry)
+        total = self._progress_total_for(entry)
+        new_progress = max(0, current + amount)
+        if total:
+            new_progress = min(new_progress, total)
+        if new_progress == current:
+            await interaction.response.send_message(
+                "Progress is already at that limit.", ephemeral=True
+            )
+            return
+        await interaction.response.defer()
+        await self._save_progress(interaction, new_progress)
+
+    async def _open_progress_modal(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(MediaListProgressModal(self))
+
+    async def _save_progress(
+        self, interaction: discord.Interaction, progress: int
+    ) -> None:
+        entry = self._selected_entry()
+        if entry is None:
+            await interaction.followup.send("Select a title first.", ephemeral=True)
+            return
+        raw_media_id: object = entry.get("mediaId")
+        if raw_media_id is None:
+            media = entry.get("media")
+            raw_media_id = media.get("id") if isinstance(media, dict) else None
+        if isinstance(raw_media_id, bool) or not isinstance(raw_media_id, (int, str)):
+            await interaction.followup.send(
+                "AniList did not return a valid media entry.", ephemeral=True
+            )
+            return
+        try:
+            media_id = int(raw_media_id)
+        except (TypeError, ValueError):
+            await interaction.followup.send(
+                "AniList did not return a valid media entry.", ephemeral=True
+            )
+            return
+        try:
+            response_status, payload = await self.cog._anilist_request(
+                ANILIST_SAVE_MEDIA_MUTATION,
+                {"mediaId": media_id, "progress": progress},
+                self.access_token,
+            )
+        except commands.BadArgument as error:
+            await interaction.followup.send(str(error), ephemeral=True)
+            return
+        error_message = _graphql_error(payload)
+        if response_status != 200 or error_message:
+            detail = f" ({error_message})" if error_message else ""
+            await interaction.followup.send(
+                f"AniList could not update this title{detail}.", ephemeral=True
+            )
+            return
+        data = payload.get("data") if isinstance(payload, dict) else None
+        updated = data.get("SaveMediaListEntry") if isinstance(data, dict) else None
+        if not isinstance(updated, dict):
+            await interaction.followup.send(
+                "AniList did not return an updated list entry.", ephemeral=True
+            )
+            return
+        entry.update(updated)
+        self._render()
+        await interaction.edit_original_response(view=self)
+
+
 class MediaLookupView(discord.ui.LayoutView):
     def __init__(
         self,
@@ -717,6 +1767,7 @@ class MediaLookupView(discord.ui.LayoutView):
         self.media = media
         self.access_token = access_token
         self.media_kind = media_kind
+        self.description_expanded = False
         self._render()
 
     def _progress(self) -> int:
@@ -735,13 +1786,25 @@ class MediaLookupView(discord.ui.LayoutView):
             f"https://anilist.co/anime/{self.media.get('id')}"
         )
         title_text = f"## [{discord.utils.escape_markdown(title)}]({site_url})"
-        cover = (self.media.get("coverImage") or {}).get("extraLarge")
-        description = _clean_about(self.media.get("description"))
+        cover = (
+            (self.media.get("coverImage") or {}).get("extraLarge")
+            if _context_allows_adult_art(self.ctx) or not _is_adult_media(self.media)
+            else None
+        )
+        description, description_source = _media_description_parts(
+            self.media.get("description")
+        )
+        description_preview, description_truncated = _description_preview(description)
+        description_text = (
+            description if self.description_expanded else description_preview
+        )
         details: list[str] = []
         if self.media.get("format"):
-            details.append(f"**Format:** {self.media['format']}")
+            details.append(f"**Format:** {_media_enum_label(self.media['format'])}")
         if self.media.get("status"):
-            details.append(f"**Release status:** {self.media['status']}")
+            details.append(
+                f"**Release status:** {_media_enum_label(self.media['status'])}"
+            )
         progress_field = "episodes" if self.media_kind == "anime" else "chapters"
         progress_label = "Episodes" if self.media_kind == "anime" else "Chapters"
         if self.media.get(progress_field):
@@ -758,13 +1821,15 @@ class MediaLookupView(discord.ui.LayoutView):
                 for genre in self.media["genres"][:8]
             )
             details.append(f"**Genres:** {genres}")
+        if description_source:
+            details.append(f"**Description source:** {description_source}")
         children: list[discord.ui.Item[Any]] = []
         profile_text = title_text
         if cover:
             children.append(
                 discord.ui.Section(
                     discord.ui.TextDisplay(profile_text),
-                    discord.ui.TextDisplay(description),
+                    discord.ui.TextDisplay(description_text),
                     accessory=discord.ui.Thumbnail(str(cover)),
                 )
             )
@@ -772,9 +1837,16 @@ class MediaLookupView(discord.ui.LayoutView):
             children.extend(
                 [
                     discord.ui.TextDisplay(profile_text),
-                    discord.ui.TextDisplay(description),
+                    discord.ui.TextDisplay(description_text),
                 ]
             )
+        if description_truncated:
+            more = discord.ui.Button(
+                label="^" if self.description_expanded else "...",
+                style=discord.ButtonStyle.secondary,
+            )
+            more.callback = self._expand_description
+            children.append(discord.ui.ActionRow(more))
         if details:
             children.extend(
                 [
@@ -788,10 +1860,11 @@ class MediaLookupView(discord.ui.LayoutView):
             status = entry.get("status") if isinstance(entry, dict) else None
             children.extend(
                 [
+                    discord.ui.Separator(),
                     discord.ui.TextDisplay(
                         f"**List status:** {_media_status_label(status, self.media_kind)}\n"
                         f"{_media_progress_text(self.media, self.media_kind)}"
-                    )
+                    ),
                 ]
             )
             options = [
@@ -867,10 +1940,23 @@ class MediaLookupView(discord.ui.LayoutView):
                 label="Set Progress",
                 style=discord.ButtonStyle.primary,
             )
+            favourite = discord.ui.Button(
+                emoji="\u2764\ufe0f" if self.media.get("isFavourite") else "\U0001fa76",
+                style=discord.ButtonStyle.secondary,
+            )
+            rating = _media_user_rating(self.media)
+            rating_button = discord.ui.Button(
+                label=rating or "Rate",
+                style=discord.ButtonStyle.secondary,
+            )
             minus.callback = self._decrease_progress
             plus.callback = self._increase_progress
             jump.callback = self._open_progress_modal
-            children.append(discord.ui.ActionRow(minus, plus, jump))
+            favourite.callback = self._toggle_favourite
+            rating_button.callback = self._open_rating
+            children.append(
+                discord.ui.ActionRow(minus, plus, jump, favourite, rating_button)
+            )
         else:
             children.append(
                 discord.ui.TextDisplay(
@@ -882,6 +1968,11 @@ class MediaLookupView(discord.ui.LayoutView):
             *children, accent_color=self.ctx.bot.embedcolor
         )
         self.add_item(container)
+
+    async def _expand_description(self, interaction: discord.Interaction) -> None:
+        self.description_expanded = not self.description_expanded
+        self._render()
+        await interaction.response.edit_message(view=self)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.ctx.author.id:
@@ -920,21 +2011,33 @@ class MediaLookupView(discord.ui.LayoutView):
     async def _open_progress_modal(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(MediaProgressModal(self))
 
-    async def _save_entry(
-        self,
-        interaction: discord.Interaction,
-        *,
-        status: str | None = None,
-        progress: int | None = None,
-    ) -> None:
-        variables: dict[str, Any] = {"mediaId": int(self.media["id"])}
-        if status is not None:
-            variables["status"] = status
-        if progress is not None:
-            variables["progress"] = progress
+    async def _open_rating(self, interaction: discord.Interaction) -> None:
+        source_message = interaction.message
+        if _media_score_format(self.media) in ANILIST_SMILEY_SCORE_FORMATS:
+            await interaction.response.send_message(
+                view=MediaRatingChoiceView(self, source_message),
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(MediaRatingModal(self, source_message))
+
+    async def _toggle_favourite(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        try:
+            media_id = int(self.media["id"])
+        except (KeyError, TypeError, ValueError):
+            await interaction.followup.send(
+                "AniList did not return a valid media entry.", ephemeral=True
+            )
+            return
+        variables = (
+            {"animeId": media_id}
+            if self.media_kind == "anime"
+            else {"mangaId": media_id}
+        )
         try:
             response_status, payload = await self.cog._anilist_request(
-                ANILIST_SAVE_MEDIA_MUTATION,
+                ANILIST_TOGGLE_FAVOURITE_MUTATION,
                 variables,
                 self.access_token,
             )
@@ -942,22 +2045,78 @@ class MediaLookupView(discord.ui.LayoutView):
             await interaction.followup.send(str(error), ephemeral=True)
             return
         error_message = _graphql_error(payload)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if (
+            response_status != 200
+            or error_message
+            or not isinstance(data, dict)
+            or not isinstance(data.get("ToggleFavourite"), dict)
+        ):
+            detail = f" ({error_message})" if error_message else ""
+            await interaction.followup.send(
+                f"AniList could not update this favourite{detail}.", ephemeral=True
+            )
+            return
+        self.media["isFavourite"] = not bool(self.media.get("isFavourite"))
+        self._render()
+        await interaction.edit_original_response(view=self)
+
+    async def _save_entry(
+        self,
+        interaction: discord.Interaction,
+        *,
+        status: str | None = None,
+        progress: int | None = None,
+        score: float | None = None,
+        source_message: discord.Message | None = None,
+        update_original: bool = True,
+    ) -> bool:
+        variables: dict[str, Any] = {"mediaId": int(self.media["id"])}
+        if status is not None:
+            variables["status"] = status
+        if progress is not None:
+            variables["progress"] = progress
+        if score is not None:
+            variables["score"] = score
+        try:
+            response_status, payload = await self.cog._anilist_request(
+                (
+                    ANILIST_SAVE_RATING_MUTATION
+                    if score is not None
+                    else ANILIST_SAVE_MEDIA_MUTATION
+                ),
+                variables,
+                self.access_token,
+            )
+        except commands.BadArgument as error:
+            await interaction.followup.send(str(error), ephemeral=True)
+            return False
+        error_message = _graphql_error(payload)
         if response_status != 200 or error_message:
             detail = f" ({error_message})" if error_message else ""
             await interaction.followup.send(
                 f"AniList could not update this anime{detail}.", ephemeral=True
             )
-            return
+            return False
         data = payload.get("data") if isinstance(payload, dict) else None
         entry = data.get("SaveMediaListEntry") if isinstance(data, dict) else None
         if not isinstance(entry, dict):
             await interaction.followup.send(
                 "AniList did not return an updated list entry.", ephemeral=True
             )
-            return
+            return False
         self.media["mediaListEntry"] = entry
         self._render()
-        await interaction.edit_original_response(view=self)
+        if source_message is not None:
+            try:
+                await source_message.edit(view=self)
+            except discord.HTTPException:
+                self.cog.bot.logger.debug(
+                    "Could not refresh AniList media message after saving entry"
+                )
+        if update_original:
+            await interaction.edit_original_response(view=self)
+        return True
 
 
 class AniListSettingsView(discord.ui.LayoutView):
@@ -1068,10 +2227,16 @@ class Anime(Cog):
 
     async def _top_media_file(
         self,
-        entries: list[tuple[str, str | None, str | None]],
+        entries: list[tuple[str, str | None, str | None, bool]],
         media_type: str,
+        allow_adult_art: bool,
     ) -> discord.File | None:
-        cover_urls = [cover for _, _, cover in entries[:4] if cover]
+        cover_urls: list[str] = []
+        for _, _, cover, is_adult in entries:
+            if cover and (allow_adult_art or not is_adult):
+                cover_urls.append(cover)
+            if len(cover_urls) >= 4:
+                break
         if not cover_urls:
             return None
 
@@ -1132,12 +2297,11 @@ class Anime(Cog):
         access_token = (
             decrypt_credential(account["anilist_access_token"]) if account else None
         )
-        async with ctx.typing():
-            response_status, payload = await self._anilist_request(
-                ANILIST_MEDIA_QUERY,
-                {"search": search, "type": media_type},
-                access_token,
-            )
+        response_status, payload = await self._anilist_request(
+            ANILIST_MEDIA_QUERY,
+            {"search": search, "type": media_type},
+            access_token,
+        )
         error_message = _graphql_error(payload)
         if response_status == 429:
             raise commands.BadArgument(
@@ -1174,8 +2338,168 @@ class Anime(Cog):
             raise commands.BadArgument(
                 f"No {media_type.lower()} found for **{search}**{detail}."
             )
+        if access_token:
+            # AniList stores the list score as a number, while the denominator
+            # and smiley display are a user preference. Fetch that preference
+            # only for connected users so anonymous searches stay one request.
+            options_status, options_payload = await self._anilist_request(
+                ANILIST_VIEWER_OPTIONS_QUERY,
+                {},
+                access_token,
+            )
+            if options_status == 200:
+                options_data = (
+                    options_payload.get("data")
+                    if isinstance(options_payload, dict)
+                    else None
+                )
+                viewer = (
+                    options_data.get("Viewer")
+                    if isinstance(options_data, dict)
+                    else None
+                )
+                options = (
+                    viewer.get("mediaListOptions") if isinstance(viewer, dict) else None
+                )
+                score_format = (
+                    options.get("scoreFormat") if isinstance(options, dict) else None
+                )
+                if score_format:
+                    media["_viewerScoreFormat"] = score_format
         await ctx.send(
             view=MediaLookupView(self, ctx, media, access_token, media_type.lower()),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def _resolve_anilist_target(
+        self, ctx: Context, user: object
+    ) -> tuple[str, str | None]:
+        """Resolve a Discord user or AniList username for an AniList request."""
+
+        target_user: discord.User | discord.Member | None = None
+        raw_target = user.strip() if isinstance(user, str) else ""
+        if isinstance(user, (discord.User, discord.Member)):
+            target_user = user
+        elif not raw_target:
+            target_user = ctx.author
+        elif re.fullmatch(r"<@!?[0-9]+>|[0-9]{15,22}", raw_target):
+            try:
+                target_user = await commands.UserConverter().convert(ctx, raw_target)
+            except commands.BadArgument as error:
+                raise commands.BadArgument(
+                    "That Discord user could not be found."
+                ) from error
+
+        if target_user is None:
+            username = raw_target.lstrip("@").strip()
+            if not username:
+                raise commands.BadArgument("Provide an AniList username.")
+            return username, None
+
+        account = await self.bot.pool.fetchrow(
+            "SELECT anilist, anilist_access_token FROM accounts WHERE user_id = $1",
+            target_user.id,
+        )
+        username = account["anilist"] if account else None
+        if not username:
+            if target_user.id == ctx.author.id:
+                raise commands.BadArgument(
+                    "Connect AniList first with `fish link anilist`."
+                )
+            raise commands.BadArgument(
+                f"{target_user.display_name} has not connected an AniList account."
+            )
+
+        # Never use another user's OAuth token. Their public AniList profile/list
+        # can still be looked up by username, while progress editing stays local.
+        access_token = None
+        if target_user.id == ctx.author.id and account:
+            encrypted_token = account["anilist_access_token"]
+            if encrypted_token:
+                access_token = decrypt_credential(encrypted_token)
+        return str(username), access_token
+
+    async def _show_active_list(
+        self, ctx: Context, media_type: str, user: object
+    ) -> None:
+        username, access_token = await self._resolve_anilist_target(ctx, user)
+
+        async with ctx.typing():
+            response_status, payload = await self._anilist_request(
+                (
+                    ANILIST_CURRENT_LIST_QUERY
+                    if access_token
+                    else ANILIST_CURRENT_LIST_PUBLIC_QUERY
+                ),
+                {
+                    "userName": str(username),
+                    "type": media_type,
+                    "statuses": ["CURRENT", "REPEATING"],
+                },
+                access_token,
+            )
+        error_message = _graphql_error(payload)
+        if response_status == 429:
+            raise commands.BadArgument(
+                "AniList is currently rate limited. Please try again in a minute."
+            )
+        if response_status == 401 and access_token:
+            raise commands.BadArgument(
+                "The AniList connection has expired. Please reconnect AniList "
+                "with `fish link anilist`."
+            )
+        if response_status >= 500:
+            raise commands.BadArgument(
+                "AniList is temporarily unavailable. Please try again shortly."
+            )
+        if response_status != 200 or error_message:
+            detail = (
+                f" ({discord.utils.escape_markdown(error_message)})"
+                if error_message
+                else ""
+            )
+            raise commands.BadArgument(f"AniList rejected the list request{detail}.")
+
+        data = payload.get("data") if isinstance(payload, dict) else None
+        collection = data.get("MediaListCollection") if isinstance(data, dict) else None
+        lists = collection.get("lists") if isinstance(collection, dict) else None
+        entries: list[dict[str, Any]] = []
+        seen_media: set[str] = set()
+        if isinstance(lists, list):
+            for group in lists:
+                if not isinstance(group, dict):
+                    continue
+                group_entries = group.get("entries")
+                if not isinstance(group_entries, list):
+                    continue
+                for entry in group_entries:
+                    if not isinstance(entry, dict) or not isinstance(
+                        entry.get("media"), dict
+                    ):
+                        continue
+                    media = entry["media"]
+                    media_id = entry.get("mediaId") or media.get("id")
+                    key = (
+                        str(media_id) if media_id is not None else str(entry.get("id"))
+                    )
+                    if key in seen_media:
+                        continue
+                    seen_media.add(key)
+                    entries.append(entry)
+
+        viewer = data.get("Viewer") if isinstance(data, dict) else None
+        options = viewer.get("mediaListOptions") if isinstance(viewer, dict) else None
+        score_format = options.get("scoreFormat") if isinstance(options, dict) else None
+        await ctx.send(
+            view=MediaListView(
+                self,
+                ctx,
+                entries,
+                media_type.lower(),
+                access_token,
+                str(score_format) if score_format else None,
+                str(username),
+            ),
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -1222,10 +2546,11 @@ class Anime(Cog):
         character = results[0] if isinstance(results, list) and results else None
         if not isinstance(character, dict):
             raise commands.BadArgument(f"No AniList character found for **{search}**.")
-        await ctx.send(
-            view=CharacterLookupView(ctx, character),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        async with ctx.typing():
+            await ctx.send(
+                view=CharacterLookupView(ctx, character),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
     @commands.hybrid_command(name="anime")
     @app_commands.describe(search="The anime title to look up")
@@ -1233,7 +2558,8 @@ class Anime(Cog):
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def anime(self, ctx: Context, *, search: str):
         """Look up an anime and manage its AniList progress when connected."""
-        await self._lookup_media(ctx, search, "ANIME")
+        async with ctx.typing():
+            await self._lookup_media(ctx, search, "ANIME")
 
     @commands.hybrid_command(name="manga")
     @app_commands.describe(search="The manga title to look up")
@@ -1241,7 +2567,38 @@ class Anime(Cog):
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def manga(self, ctx: Context, *, search: str):
         """Look up manga and manage its AniList progress when connected."""
-        await self._lookup_media(ctx, search, "MANGA")
+        async with ctx.typing():
+            await self._lookup_media(ctx, search, "MANGA")
+
+    @commands.hybrid_command(name="watching")
+    @app_commands.describe(user="A Discord user mention or AniList username")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def watching(
+        self,
+        ctx: Context,
+        user: str = commands.param(
+            default=commands.Author,
+            description="A Discord user mention or AniList username",
+        ),
+    ):
+        """Show the anime you are currently watching or rewatching."""
+        await self._show_active_list(ctx, "ANIME", user)
+
+    @commands.hybrid_command(name="reading")
+    @app_commands.describe(user="A Discord user mention or AniList username")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def reading(
+        self,
+        ctx: Context,
+        user: str = commands.param(
+            default=commands.Author,
+            description="A Discord user mention or AniList username",
+        ),
+    ):
+        """Show the manga you are currently reading or rereading."""
+        await self._show_active_list(ctx, "MANGA", user)
 
     @commands.hybrid_group(name="anilist", aliases=("ani",), fallback="profile")
     @app_commands.describe(user="A Discord user mention or AniList username")
@@ -1256,40 +2613,7 @@ class Anime(Cog):
         ),
     ):
         """Show an AniList profile by Discord user or AniList username."""
-        target_user: discord.User | discord.Member | None = None
-        raw_target = user.strip() if isinstance(user, str) else ""
-        if isinstance(user, discord.User):
-            target_user = user
-        elif not raw_target:
-            target_user = ctx.author
-        elif raw_target:
-            mention = re.fullmatch(r"<@!?([0-9]+)>", raw_target)
-            if mention:
-                target_user = self.bot.get_user(int(mention.group(1)))
-                if target_user is None:
-                    try:
-                        target_user = await self.bot.fetch_user(int(mention.group(1)))
-                    except discord.HTTPException:
-                        raise commands.BadArgument(
-                            "That Discord user could not be found."
-                        )
-
-        if target_user is not None:
-            account = await self.bot.pool.fetchrow(
-                "SELECT anilist, anilist_access_token FROM accounts WHERE user_id = $1",
-                target_user.id,
-            )
-            username = account["anilist"] if account else None
-            access_token = (
-                decrypt_credential(account["anilist_access_token"]) if account else None
-            )
-            if not username:
-                raise commands.BadArgument(
-                    f"{target_user.display_name} has not connected an AniList account."
-                )
-        else:
-            username = raw_target.lstrip("@") or ctx.author.name
-            access_token = None
+        username, access_token = await self._resolve_anilist_target(ctx, user)
 
         async with ctx.typing():
             headers = (
@@ -1364,33 +2688,35 @@ class Anime(Cog):
                 "anime",
             )
 
-        image_files: dict[str, discord.File] = {}
-        for media_type in available_media:
-            entries = (
-                _favourite_character_entries(profile)
-                if media_type == "characters"
-                else _favourite_media_entries(profile, media_type)
-            )
-            image_file = await self._top_media_file(
-                entries,
-                media_type,
-            )
-            if image_file is not None:
-                image_files[media_type] = image_file
+        async with ctx.typing():
+            image_files: dict[str, discord.File] = {}
+            for media_type in available_media:
+                entries = (
+                    _favourite_character_entries(profile)
+                    if media_type == "characters"
+                    else _favourite_media_entries(profile, media_type)
+                )
+                image_file = await self._top_media_file(
+                    entries,
+                    media_type,
+                    _context_allows_adult_art(ctx),
+                )
+                if image_file is not None:
+                    image_files[media_type] = image_file
 
-        view = _profile_view(
-            ctx,
-            profile,
-            preferred_media,
-            {media: image.filename for media, image in image_files.items()},
-        )
-        send_kwargs: dict[str, Any] = {
-            "view": view,
-            "allowed_mentions": discord.AllowedMentions.none(),
-        }
-        if image_files:
-            send_kwargs["files"] = list(image_files.values())
-        await ctx.send(**send_kwargs)
+            view = _profile_view(
+                ctx,
+                profile,
+                preferred_media,
+                {media: image.filename for media, image in image_files.items()},
+            )
+            send_kwargs: dict[str, Any] = {
+                "view": view,
+                "allowed_mentions": discord.AllowedMentions.none(),
+            }
+            if image_files:
+                send_kwargs["files"] = list(image_files.values())
+            await ctx.send(**send_kwargs)
 
     @anilist.command(name="settings")
     @app_commands.allowed_installs(guilds=True, users=True)

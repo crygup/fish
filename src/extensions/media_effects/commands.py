@@ -7,12 +7,14 @@ import random as random_module
 import re
 import shlex
 import time
+from collections.abc import Mapping
 from functools import lru_cache, wraps
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, cast
 from urllib.parse import urlsplit
 
 import discord
+import emoji as emoji_lib
 import numpy as np
 import pycountry
 from discord import MediaGalleryItem, app_commands, ui
@@ -29,6 +31,7 @@ from PIL import (
 
 from core import Cog
 from utils import MediaConverter, SimplePages, fetch_public_bytes, to_thread
+from utils.converters import TwemojiConverter
 from utils.downloads import Downloader, is_downloadable_media_page
 from utils.errors import DownloadError
 from utils.rich_text import (
@@ -46,13 +49,24 @@ from .audio_effects import (
     audio_effect_choices,
     find_audio_effect,
 )
+from .fonts import font_names
+from .image_assets import ImageAsset, image_asset_catalog
+from .video_assets import VideoAsset, video_asset_catalog
 from .processing import (
+    MAX_MEDIA_DURATION,
     PRIDE_FLAGS,
+    AverageColor,
     EffectResult,
+    NotPillowMedia,
+    compress_media_to_size,
     convert_media,
     make_flag_asset,
     probe_media,
+    render_average_colors,
+    render_combine_effect,
     render_image_effect,
+    render_overlay_effect,
+    render_text_effect,
     render_video_effect,
 )
 
@@ -63,14 +77,15 @@ if TYPE_CHECKING:
 Image.MAX_IMAGE_PIXELS = 25_000_000
 
 MEDIA_INPUT_DESCRIPTION = "User/Emoji/Media URL"
-MEDIA_EFFECT_TIMEOUT = 30
+MEDIA_EFFECT_TIMEOUT = 60
+MEDIA_APP_COMMAND_LIMIT = 7_600
+MEDIA_APP_COMMAND_ROOT_OVERHEAD = 350
 RANDOM_EFFECTS = (
     "blur",
     "brightness",
     "contrast",
     "deepfry",
     "distort",
-    "enlarge",
     "exposure",
     "falsecolor",
     "fisheye",
@@ -110,11 +125,37 @@ RANDOM_AUDIO_EFFECTS = (
     "audiounderwater",
     "bassboost",
     "basslower",
-    "channelscombine",
     "soundeffect",
     "volume",
 )
-RANDOM_OVERLAY_EFFECTS = ("overlayflag",)
+RANDOM_OVERLAY_EFFECTS = ("overlayflag", "overlay")
+RANDOM_OVERLAY_SOURCE_KINDS = ("emoji", "user", "asset", "media", "flag")
+OVERLAY_SOURCE_KIND_ALIASES = {
+    "emoji": "emoji",
+    "emojis": "emoji",
+    "user": "user",
+    "users": "user",
+    "asset": "asset",
+    "assets": "asset",
+    "image": "asset",
+    "images": "asset",
+    "media": "media",
+    "flag": "flag",
+    "flags": "flag",
+}
+OVERLAY_RANDOM_WORDS = frozenset({"random", "rand"})
+RANDOM_OVERLAY_POSITIONS = (
+    "top-left",
+    "top",
+    "top-right",
+    "left",
+    "center",
+    "right",
+    "bottom-left",
+    "bottom",
+    "bottom-right",
+)
+PIPELINE_DISALLOWED_EFFECTS = frozenset({"enlarge"})
 RANDOM_POSITIONAL_NUMBERS = {
     "at",
     "duration",
@@ -149,6 +190,91 @@ SPIN3D_UNSET_VALUE_FLAG_RE = re.compile(
     r"(?<!\S)--?(?:tilt|t|zoom|z|speed|s)(?=\s|$)",
     re.IGNORECASE,
 )
+
+
+def _parse_overlay_selector(value: str) -> tuple[str, str | None] | None:
+    """Parse an overlay source kind and optional name.
+
+    The text overlay command accepts both the legacy ``random emoji`` form and
+    the more descriptive ``emoji random``/``user name`` forms. A ``None``
+    selector means that the kind should be chosen randomly.
+    """
+    try:
+        tokens = shlex.split(value)
+    except ValueError as error:
+        raise commands.BadArgument(
+            "The random overlay arguments contain an unmatched quote."
+        ) from error
+    if not tokens:
+        return None
+    first = tokens[0].casefold()
+    if first in OVERLAY_RANDOM_WORDS:
+        if len(tokens) == 1:
+            return "all", None
+        kind = OVERLAY_SOURCE_KIND_ALIASES.get(tokens[1].casefold())
+        if kind is None:
+            raise commands.BadArgument(
+                "Random overlay must be emoji, user, or asset, media, or flag."
+            )
+        selector = " ".join(tokens[2:]).strip() or None
+    else:
+        kind = OVERLAY_SOURCE_KIND_ALIASES.get(first)
+        if kind is None:
+            return None
+        selector = " ".join(tokens[1:]).strip() or None
+
+    # ``image`` is an alias for the bundled asset pool. It is useful as a
+    # readable spelling of ``asset random`` and should not require an asset
+    # literally named "image".
+    if kind == "asset" and selector is not None:
+        normalized = selector.casefold()
+        if normalized in OVERLAY_RANDOM_WORDS or normalized in {"image", "images"}:
+            selector = None
+    elif selector is not None and selector.casefold() in OVERLAY_RANDOM_WORDS:
+        selector = None
+    return kind, selector
+
+
+def _random_overlay_kind(value: str) -> str | None:
+    """Return an overlay source kind, or ``None`` for normal media."""
+    parsed = _parse_overlay_selector(value)
+    return parsed[0] if parsed is not None else None
+
+
+def _random_overlay_label(value: object) -> str:
+    """Return a readable name for a randomly selected emoji source."""
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+
+    text = str(value).strip()
+    custom = re.fullmatch(r"<a?:(?P<name>[^:>]+):\d+>", text)
+    if custom is not None:
+        return custom.group("name")
+    if text and not text.startswith(("http://", "https://")):
+        demojized = emoji_lib.demojize(text)
+        if demojized != text:
+            return demojized.strip(":").replace("_", " ")
+    return text
+
+
+def _random_overlay_display(label: str) -> str:
+    return f"overlay image ({label})"
+
+
+def _random_overlay_note(label: str) -> str:
+    return f"Applied: {_random_overlay_display(label)}"
+
+
+@lru_cache(maxsize=1)
+def _unicode_overlay_emojis() -> tuple[str, ...]:
+    return tuple(
+        value
+        for value in emoji_lib.EMOJI_DATA
+        if TwemojiConverter.is_unicode_emoji(value)
+    )
+
+
 GLOBE_SPEED_FLAG_RE = re.compile(
     r"(?<!\S)--?(?:speed|s)"
     r"(?:\s*=\s*|\s+)"
@@ -163,10 +289,11 @@ GLOBE_UNSET_SPEED_FLAG_RE = re.compile(
     r"(?<!\S)--?(?:speed|s)(?=\s|$)",
     re.IGNORECASE,
 )
+RESIZE_DIMENSIONS_RE = re.compile(r"^(?P<width>\d{1,4})[xX×](?P<height>\d{1,4})$")
 
 
 def media_effect_timeout(callback: Any) -> Any:
-    """Limit a complete media-effect command, including downloads, to 30 seconds."""
+    """Limit a complete media-effect command, including downloads, to 60 seconds."""
 
     @wraps(callback)
     async def wrapped(*args: Any, **kwargs: Any) -> Any:
@@ -175,19 +302,162 @@ def media_effect_timeout(callback: Any) -> Any:
                 return await callback(*args, **kwargs)
         except TimeoutError as error:
             raise commands.BadArgument(
-                "That effect took longer than 30 seconds. Try a shorter or smaller file."
+                "That effect took longer than 60 seconds. Try a shorter or smaller file."
             ) from error
 
     return wrapped
 
 
+class _MediaAppCommandSizeTree:
+    """Minimal tree interface needed to serialize a top-level app command."""
+
+    class _Defaults:
+        @staticmethod
+        def _merge_to_array(_value: Any) -> list[int]:
+            return []
+
+    allowed_contexts = _Defaults()
+    allowed_installs = _Defaults()
+
+
+_MEDIA_APP_COMMAND_SIZE_TREE = _MediaAppCommandSizeTree()
+
+
+class _RunProgress:
+    """Post one unobtrusive progress message only when a run exceeds a minute."""
+
+    def __init__(self, ctx: Context, total: int):
+        self.ctx = ctx
+        self.total = total
+        self.step = 0
+        self.label = "downloading media"
+        self.changed = asyncio.Event()
+        self.done = asyncio.Event()
+        self.owner = asyncio.current_task()
+        self.task = asyncio.create_task(self._report())
+        self.task.add_done_callback(self._consume_result)
+        if self.owner is not None:
+            self.owner.add_done_callback(lambda _task: self.close())
+
+    @staticmethod
+    def _consume_result(task: asyncio.Task[Any]) -> None:
+        if not task.cancelled():
+            task.exception()
+
+    def update(self, step: int, label: str) -> None:
+        self.step = step
+        self.label = label
+        self.changed.set()
+
+    def close(self) -> None:
+        self.done.set()
+        self.changed.set()
+
+    def _content(self) -> str:
+        if self.step:
+            return (
+                f"Still working... Step **{self.step}/{self.total}**: "
+                f"**{self.label}**"
+            )
+        return f"Still working... Preparing **{self.total}** expanded effect steps."
+
+    async def _report(self) -> None:
+        try:
+            await asyncio.wait_for(self.done.wait(), timeout=60)
+            return
+        except TimeoutError:
+            pass
+        if self.owner is not None and self.owner.done():
+            return
+
+        interaction = getattr(self.ctx, "interaction", None)
+        if interaction is not None:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.defer()
+                message = await interaction.edit_original_response(
+                    content=self._content()
+                )
+                self.ctx._previous_message = message
+            except Exception:
+                return
+
+            last_content = self._content()
+            while not self.done.is_set() and not (
+                self.owner is not None and self.owner.done()
+            ):
+                self.changed.clear()
+                try:
+                    await asyncio.wait_for(self.changed.wait(), timeout=10)
+                except TimeoutError:
+                    pass
+                if self.done.is_set():
+                    break
+                content = self._content()
+                if content == last_content:
+                    continue
+                try:
+                    message = await interaction.edit_original_response(content=content)
+                    self.ctx._previous_message = message
+                except Exception:
+                    break
+                last_content = content
+            return
+
+        try:
+            message = await self.ctx.send_new(self._content())
+        except Exception:
+            return
+        last_content = self._content()
+        try:
+            while not self.done.is_set() and not (
+                self.owner is not None and self.owner.done()
+            ):
+                self.changed.clear()
+                try:
+                    await asyncio.wait_for(self.changed.wait(), timeout=10)
+                except TimeoutError:
+                    pass
+                if self.done.is_set():
+                    break
+                content = self._content()
+                if content != last_content:
+                    try:
+                        await message.edit(content=content)
+                    except Exception:
+                        break
+                    last_content = content
+        finally:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+
+
 def _random_effect_choices(count: int) -> list[str]:
-    if count > len(RANDOM_EFFECTS):
+    available = tuple(
+        effect for effect in RANDOM_EFFECTS if effect not in PIPELINE_DISALLOWED_EFFECTS
+    )
+    if count > len(available):
         raise commands.BadArgument(
-            "A pipeline can contain up to "
-            f"{len(RANDOM_EFFECTS)} unique random effects."
+            "A pipeline can contain up to " f"{len(available)} unique random effects."
         )
-    return random_module.SystemRandom().sample(RANDOM_EFFECTS, count)
+    return random_module.SystemRandom().sample(available, count)
+
+
+def _randomize_overlay_options(
+    options: dict[str, Any],
+    rng: random_module.Random | random_module.SystemRandom,
+) -> None:
+    """Choose a bounded overlay size and an in-canvas anchor position."""
+    options["scale"] = round(rng.uniform(0.1, 1.0), 2)
+    options.pop("size", None)
+    options["position"] = rng.choice(RANDOM_OVERLAY_POSITIONS)
+    # Named positions plus a scale no larger than the base keep every edge
+    # inside the background. Random offsets would defeat that guarantee.
+    options["x"] = 0
+    options["y"] = 0
+    options["stretch"] = False
 
 
 def _randomize_effect_timing(
@@ -206,30 +476,27 @@ def _randomize_effect_timing(
         return
 
     minimum_window = min(upper, max(0.05, upper * 0.1))
-    start = rng.uniform(0, max(0.0, upper - minimum_window))
+    start = round(rng.uniform(0, max(0.0, upper - minimum_window)), 3)
+    options["start"] = start
+    options.pop("duration", None)
+    # Half of randomized effects continue to the end of the media. Omitting
+    # stop is different from explicitly passing zero to timed renderers.
+    if rng.random() < 0.5:
+        options.pop("stop", None)
+        return
     stop_minimum = min(upper, start + minimum_window)
     stop = rng.uniform(stop_minimum, upper) if stop_minimum < upper else upper
-
-    start = round(start, 3)
-    stop = round(stop, 3)
-    if stop <= start:
-        start = 0.0
-        stop = upper
-
-    options["start"] = start
-    options["stop"] = stop
-    if "duration" in bounds:
-        options["duration"] = 0.0
+    options["stop"] = round(max(start + 0.001, stop), 3)
 
 
 def _resolve_pipeline_random_effects(
     effects: list[tuple[str, dict[str, Any]]],
     *,
     allow_audio: bool = False,
+    allow_visual: bool = True,
     media_duration: float = 0.0,
 ) -> list[tuple[str, str, dict[str, Any]]]:
     rng = random_module.SystemRandom()
-    used: set[str] = set()
     resolved: list[tuple[str, str, dict[str, Any]]] = []
     for effect, options in effects:
         if effect == "random":
@@ -245,23 +512,36 @@ def _resolve_pipeline_random_effects(
                     )
                 pool = RANDOM_AUDIO_EFFECTS
             elif category == "overlay":
+                if not allow_visual:
+                    raise commands.BadArgument(
+                        "Random overlay needs media with a video or image track."
+                    )
                 pool = RANDOM_OVERLAY_EFFECTS
             elif category == "visual":
+                if not allow_visual:
+                    raise commands.BadArgument(
+                        "Random visual needs media with a video or image track."
+                    )
                 pool = RANDOM_EFFECTS
             else:
-                pool = (
-                    (*RANDOM_EFFECTS, *RANDOM_AUDIO_EFFECTS)
-                    if allow_audio
-                    else RANDOM_EFFECTS
-                )
-            available = [candidate for candidate in pool if candidate not in used]
-            if not available:
+                if allow_visual and allow_audio:
+                    pool = (*RANDOM_EFFECTS, *RANDOM_AUDIO_EFFECTS)
+                elif allow_visual:
+                    pool = RANDOM_EFFECTS
+                elif allow_audio:
+                    pool = RANDOM_AUDIO_EFFECTS
+                else:
+                    raise commands.BadArgument(
+                        "No random effects are compatible with that media."
+                    )
+            pool = tuple(
+                effect for effect in pool if effect not in PIPELINE_DISALLOWED_EFFECTS
+            )
+            if not pool:
                 raise commands.BadArgument(
-                    f"There are only {len(pool)} unique random {category} effects "
-                    "available for this media."
+                    "No random effects are available for that category."
                 )
-            chosen = rng.choice(available)
-            used.add(chosen)
+            chosen = rng.choice(pool)
             chosen_options = {
                 name: default
                 for name, (_, _, default) in PIPELINE_EFFECTS[chosen][1].items()
@@ -309,21 +589,41 @@ def _resolve_pipeline_random_effects(
                     chosen_options[name] = bool(rng.getrandbits(1))
                 if chosen in {"audiooverlay", "soundeffect"}:
                     chosen_options["source_stop"] = 0.0
-            if not no_random:
+            if chosen in {"overlay", "overlayflag"} and (full_random or not no_random):
+                _randomize_overlay_options(chosen_options, rng)
+            explicit_timing = {
+                name: options[name]
+                for name in ("start", "stop", "duration")
+                if name in options
+            }
+            if explicit_timing:
+                chosen_options.update(explicit_timing)
+            elif not no_random:
                 _randomize_effect_timing(
                     chosen,
                     chosen_options,
                     media_duration,
                     rng,
                 )
+            selected_flag: str | None = None
             if category == "overlay":
-                chosen_options["flag"] = rng.choice(
-                    EFFECT_CATEGORICAL_CHOICES["overlayflag"]["flag"]
-                )
+                if chosen == "overlayflag":
+                    selected_flag = rng.choice(
+                        EFFECT_CATEGORICAL_CHOICES["overlayflag"]["flag"]
+                    )
+                    chosen_options["flag"] = selected_flag
+                elif chosen == "overlay":
+                    chosen_options["overlay"] = "random"
             label_category = "" if category == "all" else f" {category}"
-            resolved.append(
-                (chosen, f"random{label_category} ({chosen})", chosen_options)
-            )
+            if (
+                chosen == "overlayflag"
+                and category == "overlay"
+                and selected_flag is not None
+            ):
+                label = f"random{label_category} (overlayflag: {selected_flag})"
+            else:
+                label = f"random{label_category} ({chosen})"
+            resolved.append((chosen, label, chosen_options))
         else:
             resolved.append((effect, effect, options))
     return resolved
@@ -1161,11 +1461,11 @@ def _caption_panel(
 
     y = padding
     for line in lines:
-        width = measure_inline_tokens(line, font, font_size, inline_images)
+        line_width = measure_inline_tokens(line, font, font_size, inline_images)
         draw_inline_tokens(
             panel,
             line,
-            (round((panel.width - width) / 2), y),
+            (round((panel.width - line_width) / 2), y),
             font=font,
             image_size=font_size,
             assets=inline_images,
@@ -1236,15 +1536,19 @@ def _speed_video_sync(
         has_video = any(stream.get("codec_type") == "video" for stream in streams)
         has_audio = any(stream.get("codec_type") == "audio" for stream in streams)
         if not has_video:
-            raise ValueError("Speed currently requires a video or GIF.")
+            if has_audio:
+                return _speed_audio_sync(data, speed, start=start, stop=stop)
+            raise ValueError("Speed requires video, GIF, or audio media.")
 
         factor = _playback_factor(speed)
         try:
             total_duration = float((metadata.get("format") or {}).get("duration") or 0)
         except (TypeError, ValueError):
             total_duration = 0.0
-        if not 0 <= start <= 180 or not 0 <= stop <= 180:
-            raise ValueError("Start and stop must be between 0 and 180 seconds.")
+        if not 0 <= start <= MAX_MEDIA_DURATION or not 0 <= stop <= MAX_MEDIA_DURATION:
+            raise ValueError(
+                f"Start and stop must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+            )
         end = stop or total_duration or None
         if end is not None and end <= start:
             raise ValueError("Stop must be after start.")
@@ -1347,6 +1651,116 @@ def _speed_video_sync(
 _speed_video = to_thread(_speed_video_sync)
 
 
+def _speed_audio_sync(
+    data: bytes,
+    speed: float,
+    *,
+    start: float = 0.0,
+    stop: float = 0.0,
+) -> bytes:
+    """Change the speed of an audio-only file while preserving untouched ranges."""
+    import os
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="fishie-speed-audio-") as temp_dir:
+        tmp_in = os.path.join(temp_dir, "input.media")
+        tmp_out = os.path.join(temp_dir, "output.mp3")
+        with open(tmp_in, "wb") as tmp:
+            tmp.write(data)
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type:format=duration",
+                "-of",
+                "json",
+                tmp_in,
+            ],
+            capture_output=True,
+            timeout=10,
+            check=False,
+            text=True,
+        )
+        try:
+            metadata = json.loads(probe.stdout or "{}")
+        except json.JSONDecodeError:
+            metadata = {}
+        streams = metadata.get("streams") or []
+        if not any(stream.get("codec_type") == "audio" for stream in streams):
+            raise ValueError("That file does not contain an audio track.")
+        try:
+            total_duration = float((metadata.get("format") or {}).get("duration") or 0)
+        except (TypeError, ValueError):
+            total_duration = 0.0
+        if not 0 <= start <= MAX_MEDIA_DURATION or not 0 <= stop <= MAX_MEDIA_DURATION:
+            raise ValueError(
+                f"Start and stop must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+            )
+        end = stop or total_duration or None
+        if end is not None and end <= start:
+            raise ValueError("Stop must be after start.")
+        if total_duration > 0:
+            if start >= total_duration:
+                raise ValueError("Start must be before the end of the media.")
+            end = min(end or total_duration, total_duration)
+
+        full_media = start <= 0 and (
+            end is None or total_duration <= 0 or end >= total_duration - 0.001
+        )
+        command = ["ffmpeg", "-y", "-i", tmp_in]
+        if full_media:
+            command.extend(["-af", _atempo_filter(_playback_factor(speed)), "-vn"])
+        else:
+            factor = _playback_factor(speed)
+            segments: list[tuple[float, float | None, bool]] = []
+            if start > 0:
+                segments.append((0.0, start, False))
+            segments.append((start, end, True))
+            if end is not None and (
+                total_duration <= 0 or end < total_duration - 0.001
+            ):
+                segments.append((end, None, False))
+            labels = "".join(f"[audio{index}]" for index in range(len(segments)))
+            filters = [f"[0:a]asplit={len(segments)}{labels}"]
+            outputs: list[str] = []
+            for index, (segment_start, segment_end, changed) in enumerate(segments):
+                trim = f"[audio{index}]atrim=start={segment_start:g}"
+                if segment_end is not None:
+                    trim += f":end={segment_end:g}"
+                chain = f"{trim},asetpts=PTS-STARTPTS"
+                if changed:
+                    chain += f",{_atempo_filter(factor)}"
+                chain += ",aresample=44100,aformat=sample_fmts=fltp"
+                label = f"[segment{index}]"
+                filters.append(f"{chain}{label}")
+                outputs.append(label)
+            filters.append(f"{''.join(outputs)}concat=n={len(outputs)}:v=0:a=1[a]")
+            command.extend(["-filter_complex", ";".join(filters), "-map", "[a]"])
+            command.append("-vn")
+        command.extend(["-c:a", "libmp3lame", "-q:a", "2", tmp_out])
+        try:
+            subprocess.run(command, capture_output=True, timeout=30, check=True)
+        except subprocess.TimeoutExpired as error:
+            raise ValueError(
+                "That speed change took longer than 30 seconds. "
+                "Try a shorter or smaller file."
+            ) from error
+        except subprocess.CalledProcessError as error:
+            lines = error.stderr.decode("utf-8", "replace").strip().splitlines()
+            detail = lines[-1] if lines else "ffmpeg could not process that file."
+            raise ValueError(
+                f"Could not change that audio speed: {detail[:300]}"
+            ) from error
+        with open(tmp_out, "rb") as output:
+            return output.read()
+
+
+_speed_audio = to_thread(_speed_audio_sync)
+
+
 @to_thread
 def _compress_video(data: bytes) -> bytes:
     import os
@@ -1389,13 +1803,23 @@ def _compress_video(data: bytes) -> bytes:
 def _parse_effect_flags(
     argument: str,
     *,
-    values: dict[str, tuple[tuple[str, ...], type, Any]] | None = None,
+    values: dict[str, tuple[tuple[str, ...], Callable[[str], Any], Any]] | None = None,
     switches: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Parse lightweight text-command flags while leaving the media argument."""
 
     value_specs = dict(values or {})
-    switch_specs = switches or {}
+    # Randomization controls are valid for every media-effect segment. Most
+    # effects simply carry these through without changing their deterministic
+    # renderer, while random/pipeline effects consume them. Keep the implicit
+    # controls out of parsed options when they were not supplied so existing
+    # command handlers retain their compact defaults.
+    switch_specs = dict(switches or {})
+    implicit_switches = {
+        name for name in ("norandom", "fullrandom") if name not in switch_specs
+    }
+    switch_specs.setdefault("norandom", ("nr",))
+    switch_specs.setdefault("fullrandom", ("fr",))
     existing_names = {
         name.casefold().lstrip("-")
         for canonical, (names, _, _) in value_specs.items()
@@ -1408,7 +1832,7 @@ def _parse_effect_flags(
     if "stop" not in existing_names:
         value_specs["stop"] = (("end",), float, 0.0)
         implicit_timing.add("stop")
-    aliases: dict[str, tuple[str, type]] = {}
+    aliases: dict[str, tuple[str, Callable[[str], Any]]] = {}
     for canonical, (names, converter, _) in value_specs.items():
         for name in (canonical, *names):
             aliases[name.casefold().lstrip("-")] = (canonical, converter)
@@ -1426,6 +1850,7 @@ def _parse_effect_flags(
 
     options = {canonical: default for canonical, (_, _, default) in value_specs.items()}
     options.update({canonical: False for canonical in switch_specs})
+    supplied_switches: set[str] = set()
     media: list[str] = []
     supplied_values: set[str] = set()
     index = 0
@@ -1445,6 +1870,7 @@ def _parse_effect_flags(
         normalized = raw_name.casefold()
         if normalized in switch_aliases:
             options[switch_aliases[normalized]] = True
+            supplied_switches.add(switch_aliases[normalized])
             index += 1
             continue
         spec = aliases.get(normalized)
@@ -1461,6 +1887,18 @@ def _parse_effect_flags(
             if index >= len(tokens):
                 raise commands.BadArgument(f"The `{token}` flag requires a value.")
             raw_value = tokens[index]
+        if canonical == "overlay" and not separator:
+            # Overlay selectors can contain a category and a name, including
+            # country names with spaces. Keep consuming non-flag tokens while
+            # the combined value is still a valid selector.
+            selector_tokens = [raw_value]
+            while index + 1 < len(tokens) and not tokens[index + 1].startswith("-"):
+                candidate = " ".join((*selector_tokens, tokens[index + 1]))
+                if _parse_overlay_selector(candidate) is None:
+                    break
+                selector_tokens.append(tokens[index + 1])
+                index += 1
+            raw_value = " ".join(selector_tokens)
         try:
             options[canonical] = converter(raw_value)
         except (TypeError, ValueError) as error:
@@ -1471,6 +1909,8 @@ def _parse_effect_flags(
         index += 1
 
     for name in implicit_timing - supplied_values:
+        options.pop(name, None)
+    for name in implicit_switches - supplied_switches:
         options.pop(name, None)
     return " ".join(media), options
 
@@ -1484,7 +1924,7 @@ def _parse_bool(value: str) -> bool:
     raise ValueError("Expected true or false.")
 
 
-PipelineFlagValues = dict[str, tuple[tuple[str, ...], type, Any]]
+PipelineFlagValues = dict[str, tuple[tuple[str, ...], Callable[[str], Any], Any]]
 PipelineFlagSwitches = dict[str, tuple[str, ...]]
 PipelineEffectSpec = tuple[str, PipelineFlagValues, PipelineFlagSwitches]
 
@@ -1495,7 +1935,9 @@ AUDIO_TIMING_VALUES: PipelineFlagValues = {
 }
 
 
-def _audio_values(**values: tuple[tuple[str, ...], type, Any]) -> PipelineFlagValues:
+def _audio_values(
+    **values: tuple[tuple[str, ...], Callable[[str], Any], Any],
+) -> PipelineFlagValues:
     return {**values, **AUDIO_TIMING_VALUES}
 
 
@@ -1692,6 +2134,39 @@ PIPELINE_EFFECTS: dict[str, PipelineEffectSpec] = {
         {
             "scale": (("s",), float, 1.0),
             "ratio": (("aspect", "r"), str, ""),
+            "size": (("dimensions", "dim"), str, ""),
+        },
+        {},
+    ),
+    "text": (
+        "special",
+        {
+            "text": (("t", "content"), str, ""),
+            "font": (("f",), str, "Roboto"),
+            "size": (("fontsize", "font-size"), int, 48),
+            "position": (("pos", "p"), str, "center"),
+            "x": (("left",), int, -1),
+            "y": (("top",), int, -1),
+            "color": (("colour", "c"), str, "#ffffff"),
+            "style": (("mode",), str, "outline"),
+            "stroke_color": (("stroke-color", "outline-color"), str, "#000000"),
+            "stroke_width": (("stroke-width", "outline-width"), int, 0),
+            "shadow_color": (("shadow-color",), str, "#000000"),
+            "background": (("background-color", "bg"), str, ""),
+            "background_opacity": (("background-opacity", "bg-opacity"), int, 160),
+            "opacity": (("alpha",), float, 1.0),
+            "align": (("alignment",), str, "center"),
+            "padding": (("pad",), int, 8),
+        },
+        {"bold": ("b",)},
+    ),
+    "combine": (
+        "special",
+        {
+            "second": (("with", "media2", "second-media"), str, ""),
+            "position": (("pos", "p"), str, "right"),
+            "mode": (("size-mode", "sizing"), str, "resize"),
+            "audio": (("audio-mode",), str, "mix"),
         },
         {},
     ),
@@ -1751,29 +2226,24 @@ PIPELINE_EFFECTS: dict[str, PipelineEffectSpec] = {
         },
         {},
     ),
-    "overlayimage": (
+    "overlay": (
         "special",
         {
             "overlay": (("second", "o"), str, ""),
             "opacity": (("alpha",), float, 70.0),
-            "scale": (("size",), float, 1.0),
+            "scale": (("s",), float, 1.0),
+            "size": (("dimensions", "dim"), str, ""),
             "position": (("pos", "p"), str, "center"),
             "x": (("left",), int, 0),
             "y": (("top",), int, 0),
+            "start": (("from",), float, 0.0),
+            "stop": (("end",), float, 0.0),
         },
-        {"stretch": ("fill",)},
-    ),
-    "overlayvideo": (
-        "special",
         {
-            "overlay": (("second", "o"), str, ""),
-            "opacity": (("alpha",), float, 70.0),
-            "scale": (("size",), float, 1.0),
-            "position": (("pos", "p"), str, "center"),
-            "x": (("left",), int, 0),
-            "y": (("top",), int, 0),
+            "stretch": ("fill",),
+            "extend": ("extend",),
+            "no_audio": ("no-audio", "mute-audio"),
         },
-        {"stretch": ("fill",), "no_audio": ("no-audio", "mute-audio")},
     ),
     "speed": (
         "special",
@@ -1901,6 +2371,7 @@ PIPELINE_EFFECT_ALIASES = {
     "greyscale": "grayscale",
     "legofy": "legoify",
     "size": "resize",
+    "addtext": "text",
     "rotation": "rotate",
     "bassreduce": "basslower",
     "audiochannelscombine": "channelscombine",
@@ -1925,6 +2396,8 @@ PIPELINE_EFFECT_ALIASES = {
     "surround": "audiosurround",
     "echo": "audioecho",
     "pitch": "audiopitch",
+    "overlayimage": "overlay",
+    "overlayvideo": "overlay",
 }
 
 NumericBounds = tuple[float, float, bool]
@@ -1972,6 +2445,15 @@ EFFECT_NUMERIC_BOUNDS: dict[str, dict[str, NumericBounds]] = {
     "slideout": {"duration": (0.1, 10, False)},
     "vignette": {"amount": (0, 1, False)},
     "resize": {"scale": (0.1, 4, False)},
+    "text": {
+        "size": (8, 512, True),
+        "x": (-1, 4096, True),
+        "y": (-1, 4096, True),
+        "stroke_width": (0, 32, True),
+        "background_opacity": (0, 255, True),
+        "opacity": (0, 1, False),
+        "padding": (0, 256, True),
+    },
     "distort": {"amount": (-1, 1, False)},
     "grain": {"amount": (0, 100, False)},
     "rotate": {"degrees": (-3600, 3600, False)},
@@ -1990,29 +2472,23 @@ EFFECT_NUMERIC_BOUNDS: dict[str, dict[str, NumericBounds]] = {
     "quilt": {"tiles": (2, 12, True)},
     "enlarge": {"amount": (1, 4, False)},
     "globe": {"speed": (0.25, 3, False)},
+    "overlayflag": {
+        "opacity": (0, 100, False),
+        "start": (0, MAX_MEDIA_DURATION, False),
+        "stop": (0, MAX_MEDIA_DURATION, False),
+    },
     "overlay": {
         "opacity": (0, 100, False),
         "scale": (0.05, 2, False),
         "x": (-4096, 4096, True),
         "y": (-4096, 4096, True),
-    },
-    "overlayflag": {"opacity": (0, 100, False)},
-    "overlayimage": {
-        "opacity": (0, 100, False),
-        "scale": (0.05, 2, False),
-        "x": (-4096, 4096, True),
-        "y": (-4096, 4096, True),
-    },
-    "overlayvideo": {
-        "opacity": (0, 100, False),
-        "scale": (0.05, 2, False),
-        "x": (-4096, 4096, True),
-        "y": (-4096, 4096, True),
+        "start": (0, MAX_MEDIA_DURATION, False),
+        "stop": (0, MAX_MEDIA_DURATION, False),
     },
     "speed": {
         "speed": (-5, 5, False),
-        "start": (0, 180, False),
-        "stop": (0, 180, False),
+        "start": (0, MAX_MEDIA_DURATION, False),
+        "stop": (0, MAX_MEDIA_DURATION, False),
     },
     "spin3d": {
         "tilt": (-360, 360, False),
@@ -2027,18 +2503,18 @@ EFFECT_NUMERIC_BOUNDS: dict[str, dict[str, NumericBounds]] = {
     "audiocompress": {"ratio": (1, 20, False)},
     "audiopitch": {"semitones": (-12, 12, False)},
     "audiooverlay": {
-        "at": (0, 180, False),
-        "source_start": (0, 180, False),
-        "source_stop": (0, 180, False),
-        "duration": (0, 180, False),
+        "at": (0, MAX_MEDIA_DURATION, False),
+        "source_start": (0, MAX_MEDIA_DURATION, False),
+        "source_stop": (0, MAX_MEDIA_DURATION, False),
+        "duration": (0, MAX_MEDIA_DURATION, False),
         "volume": (0, 5, False),
         "pitch": (-12, 12, False),
     },
     "soundeffect": {
-        "at": (0, 180, False),
-        "source_start": (0, 180, False),
-        "source_stop": (0, 180, False),
-        "duration": (0, 180, False),
+        "at": (0, MAX_MEDIA_DURATION, False),
+        "source_start": (0, MAX_MEDIA_DURATION, False),
+        "source_stop": (0, MAX_MEDIA_DURATION, False),
+        "duration": (0, MAX_MEDIA_DURATION, False),
         "volume": (0, 5, False),
         "pitch": (-12, 12, False),
         "speed": (0.25, 4, False),
@@ -2066,9 +2542,9 @@ AUDIO_TIMED_EFFECTS = {
 for _timed_effect in AUDIO_TIMED_EFFECTS:
     EFFECT_NUMERIC_BOUNDS.setdefault(_timed_effect, {}).update(
         {
-            "start": (0, 180, False),
-            "stop": (0, 180, False),
-            "duration": (0, 180, False),
+            "start": (0, MAX_MEDIA_DURATION, False),
+            "stop": (0, MAX_MEDIA_DURATION, False),
+            "duration": (0, MAX_MEDIA_DURATION, False),
         }
     )
 
@@ -2078,8 +2554,8 @@ VIDEO_TIMED_VISUAL_EFFECTS = {
 for _timed_effect in VIDEO_TIMED_VISUAL_EFFECTS:
     EFFECT_NUMERIC_BOUNDS.setdefault(_timed_effect, {}).update(
         {
-            "start": (0, 180, False),
-            "stop": (0, 180, False),
+            "start": (0, MAX_MEDIA_DURATION, False),
+            "stop": (0, MAX_MEDIA_DURATION, False),
         }
     )
 
@@ -2103,6 +2579,11 @@ EFFECT_CATEGORICAL_CHOICES: dict[str, dict[str, tuple[str, ...]]] = {
     "soundeffect": {
         "effect": tuple(str(effect.id) for effect in audio_effect_catalog())
     },
+    "combine": {
+        "position": ("top", "bottom", "left", "right"),
+        "mode": ("resize", "stretch", "original"),
+        "audio": ("mix", "first", "second", "none"),
+    },
 }
 
 
@@ -2121,6 +2602,18 @@ async def _sound_effect_autocomplete(
     if not current or "random".startswith(current.casefold()):
         choices.insert(0, app_commands.Choice(name="Random", value="random"))
     return choices[:25]
+
+
+async def _font_autocomplete(
+    _: discord.Interaction[Any],
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    query = current.casefold().strip()
+    return [
+        app_commands.Choice(name=name, value=name)
+        for name in font_names()
+        if not query or query in name.casefold()
+    ][:25]
 
 
 def _normalize_effect_options(
@@ -2152,12 +2645,12 @@ def _normalize_effect_options(
         if name not in normalized or name in EFFECT_NUMERIC_BOUNDS.get(effect, {}):
             continue
         numeric = float(normalized[name])
-        clamped = min(max(numeric, 0), 180)
+        clamped = min(max(numeric, 0), MAX_MEDIA_DURATION)
         normalized[name] = clamped
         if numeric != clamped:
             adjustments.append(
                 f"Rounded {effect} {name} from {_format_numeric(numeric)} to "
-                f"{_format_numeric(clamped)} (allowed 0–180)"
+                f"{_format_numeric(clamped)} (allowed 0–{_format_numeric(MAX_MEDIA_DURATION)})"
             )
     return normalized, adjustments
 
@@ -2167,7 +2660,7 @@ def _renderer_effect_options(
     options: dict[str, Any],
 ) -> dict[str, Any]:
     rendered = options.copy()
-    if effect in {"overlay", "overlayflag", "overlayimage", "overlayvideo"}:
+    if effect in {"overlay", "overlayflag"}:
         rendered["opacity"] = float(rendered.get("opacity", 100)) / 100
     return rendered
 
@@ -2182,8 +2675,8 @@ PIPELINE_QUALIFIED_EFFECTS: dict[tuple[str, str], tuple[str, dict[str, Any]]] = 
     ("mirror", "right"): ("mirror", {"direction": "right"}),
     ("mirror", "top"): ("mirror", {"direction": "top"}),
     ("overlay", "flag"): ("overlayflag", {}),
-    ("overlay", "image"): ("overlayimage", {}),
-    ("overlay", "video"): ("overlayvideo", {}),
+    ("overlay", "image"): ("overlay", {}),
+    ("overlay", "video"): ("overlay", {}),
     ("bass", "boost"): ("bassboost", {}),
     ("bass", "lower"): ("basslower", {}),
     ("audio", "reverse"): ("audioreverse", {}),
@@ -2219,6 +2712,10 @@ PIPELINE_TRIPLE_EFFECTS: dict[tuple[str, str, str], tuple[str, dict[str, Any]]] 
     ("remove", "outro", "reels"): ("removeoutroreels", {}),
 }
 MAX_PIPELINE_EFFECTS = 67
+PIPELINE_REPEAT_RE = re.compile(r"^x(?P<count>\d+)$", re.IGNORECASE)
+PIPELINE_EFFECT_REPEAT_RE = re.compile(
+    r"^(?P<effect>[a-z][a-z0-9_-]*?)x(?P<count>\d+)$", re.IGNORECASE
+)
 
 
 def _pipeline_segment_name(value: str) -> str | None:
@@ -2299,11 +2796,40 @@ def _parse_effect_pipeline(
     index = 0
     while index < len(tokens):
         token = tokens[index]
+        repeat = PIPELINE_REPEAT_RE.fullmatch(token)
+        if repeat is not None and current is not None:
+            current[2]["__repeat__"] = int(repeat.group("count"))
+            index += 1
+            continue
         if (
             current is not None
             and current[0] == "soundeffect"
             and token.casefold() in {"random", "rand"}
         ):
+            current[1].append(token)
+            index += 1
+            continue
+        if (
+            current is not None
+            and current[0] == "overlay"
+            and token.casefold() in {"random", "rand"}
+        ):
+            current[1].append(token)
+            if (
+                index + 1 < len(tokens)
+                and tokens[index + 1].casefold() in OVERLAY_SOURCE_KIND_ALIASES
+            ):
+                current[1].append(tokens[index + 1])
+                index += 1
+            index += 1
+            continue
+        if (
+            current is not None
+            and current[0] in {"caption", "meme"}
+            and token.casefold() == "text"
+        ):
+            # "text" is a common word in positional captions. Keep the
+            # established `caption text here invert` syntax unambiguous.
             current[1].append(token)
             index += 1
             continue
@@ -2343,9 +2869,22 @@ def _parse_effect_pipeline(
             index += 2
             continue
 
-        effect = _pipeline_segment_name(token) if not token.startswith("-") else None
+        repeat_suffix = (
+            PIPELINE_EFFECT_REPEAT_RE.fullmatch(token)
+            if not token.startswith("-")
+            else None
+        )
+        effect_token = repeat_suffix.group("effect") if repeat_suffix else token
+        effect = (
+            _pipeline_segment_name(effect_token)
+            if not effect_token.startswith("-")
+            else None
+        )
         if effect is not None:
-            current = (effect, [], {})
+            defaults: dict[str, Any] = {}
+            if repeat_suffix is not None:
+                defaults["__repeat__"] = int(repeat_suffix.group("count"))
+            current = (effect, [], defaults)
             segments.append(current)
         elif current is None:
             source_tokens.append(token)
@@ -2357,14 +2896,19 @@ def _parse_effect_pipeline(
         raise commands.BadArgument(
             "Add at least one supported effect after the media input."
         )
-    if len(segments) > MAX_PIPELINE_EFFECTS:
-        raise commands.BadArgument(
-            f"An effect pipeline can contain up to {MAX_PIPELINE_EFFECTS} steps."
-        )
-
     parsed: list[tuple[str, dict[str, Any]]] = []
     skipped: list[str] = []
     for effect, effect_tokens, qualified_defaults in segments:
+        if effect in PIPELINE_DISALLOWED_EFFECTS:
+            raise commands.BadArgument(
+                f"`{effect}` cannot be used inside `run` or `random`. "
+                f"Use `fish {effect}` by itself instead."
+            )
+        repeat_count = int(qualified_defaults.pop("__repeat__", 1))
+        if not 1 <= repeat_count <= MAX_PIPELINE_EFFECTS:
+            raise commands.BadArgument(
+                f"Effect repetition must be between 1 and {MAX_PIPELINE_EFFECTS}."
+            )
         _, values, switches = PIPELINE_EFFECTS[effect]
         remainder, options = _parse_effect_flags(
             " ".join(shlex.quote(token) for token in effect_tokens),
@@ -2376,7 +2920,12 @@ def _parse_effect_pipeline(
             if positional_flag is not None and not positional_media:
                 options["flag"] = positional_flag
                 remainder = ""
-        elif effect in {"caption", "meme"} and remainder and not options["text"]:
+        elif effect == "overlay" and remainder and not options["overlay"]:
+            options["overlay"] = remainder
+            remainder = ""
+        elif (
+            effect in {"caption", "meme", "text"} and remainder and not options["text"]
+        ):
             options["text"] = remainder
             remainder = ""
         elif effect == "zoom" and remainder.casefold() in {"forever", "infinite"}:
@@ -2394,6 +2943,9 @@ def _parse_effect_pipeline(
                 remainder = ""
             except ValueError:
                 pass
+        elif effect == "resize" and RESIZE_DIMENSIONS_RE.fullmatch(remainder):
+            options["size"] = remainder
+            remainder = ""
         elif effect == "soundeffect" and remainder:
             if remainder.casefold() in {"random", "rand"}:
                 options["effect"] = "random"
@@ -2412,7 +2964,12 @@ def _parse_effect_pipeline(
         options.update(qualified_defaults)
         if effect == "soundeffect":
             options = _prepare_sound_effect_options(options)
-        parsed.append((effect, options))
+        parsed.extend((effect, options.copy()) for _ in range(repeat_count))
+        if len(parsed) > MAX_PIPELINE_EFFECTS:
+            raise commands.BadArgument(
+                "The expanded effect pipeline can contain up to "
+                f"{MAX_PIPELINE_EFFECTS} steps."
+            )
     return " ".join(source_tokens), parsed, skipped
 
 
@@ -2466,13 +3023,13 @@ def _effect_name_from_qualified(qualified_name: str) -> str:
     qualified = qualified_name.casefold().split()
     leaf = qualified[-1]
     effect = PIPELINE_EFFECT_ALIASES.get(leaf, leaf)
-    if "overlay" in qualified:
-        effect = {
-            "flag": "overlayflag",
-            "image": "overlayimage",
-            "video": "overlayvideo",
-        }.get(leaf, "overlay")
-    elif "audio" in qualified:
+    # Overflow slash groups use names such as ``effect-audio`` and
+    # ``effect-audio-more``. Treat those as the audio branch when deriving
+    # numeric descriptions, while keeping the text-command hierarchy intact.
+    has_audio = "audio" in qualified or any(
+        part.startswith("effect-audio") for part in qualified
+    )
+    if has_audio:
         effect = {
             "reverse": "audioreverse",
             "reverb": "audioreverb",
@@ -2490,6 +3047,12 @@ def _effect_name_from_qualified(qualified_name: str) -> str:
             "surround": "audiosurround",
             "echo": "audioecho",
         }.get(leaf, effect)
+    elif "overlay" in qualified:
+        effect = {
+            "flag": "overlayflag",
+            "image": "overlay",
+            "video": "overlay",
+        }.get(leaf, "overlay")
     elif "bass" in qualified:
         effect = {"boost": "bassboost", "lower": "basslower"}.get(leaf, effect)
     elif "fade" in qualified:
@@ -2497,11 +3060,23 @@ def _effect_name_from_qualified(qualified_name: str) -> str:
     return effect
 
 
+def _short_media_app_description(description: Any) -> str:
+    """Keep slash descriptions to one concise action line."""
+    short = str(description).splitlines()[0].strip()
+    short = re.sub(r"\bUser/Emoji/Media URLs?\b", "media", short)
+    short = short.replace("an media", "media").replace("a media", "media")
+    short = re.sub(r"\s*\(media\)$", "", short)
+    return short
+
+
 def describe_media_parameters(command: Any) -> None:
     """Fill app-command parameter descriptions and include numeric ranges."""
     if isinstance(command, app_commands.Group):
         for child in command.commands:
             describe_media_parameters(child)
+        short_description = _short_media_app_description(command.description)
+        if str(command.description) != short_description:
+            command.description = short_description
         return
     if not isinstance(command, app_commands.Command):
         return
@@ -2510,7 +3085,11 @@ def describe_media_parameters(command: Any) -> None:
     generic = {
         "effects": "Effects and flags in the order they should run",
         "media": MEDIA_INPUT_DESCRIPTION,
-        "overlay_media": "User/Emoji/Media URL to place on top",
+        "second": "Second User/Emoji/Media URL",
+        "second_media": "Second User/Emoji/Media URL",
+        "overlay_media": (
+            "User/Emoji/Media URL or random [emoji|user|asset] to place on top"
+        ),
         "attachment": "Attach the media to process",
         "overlay_attachment": "Attach the media to place on top",
         "text": "Text used by the effect",
@@ -2519,17 +3098,21 @@ def describe_media_parameters(command: Any) -> None:
         "clockwise": "Rotate clockwise",
         "stretch": "Stretch the overlay to fill the background",
         "overlay_audio": "Mix audio from the overlay",
+        "extend": "Extend output for a longer overlay video",
+        "size": "Overlay dimensions such as 100x100, from 1 to 4096 pixels per side",
         "audio_media": "Audio or video URL to use",
         "audio_attachment": "Attach audio or video to use",
         "effect": "Effect ID, name, or random",
         "start": "Time where the effect begins",
         "stop": "Time where the effect stops, or 0 for the end",
-        "duration": "Effect duration, or 0 for the remaining media",
+        "duration": "Duration 0 to 600 seconds, or 0 for the remaining media",
         "at": "Time where the overlay begins",
         "source_start": "Time to begin reading the overlay source",
         "source_stop": "Time to stop reading the overlay source",
         "random_time": "Choose a random valid start time",
         "preserve_transparency": "Keep transparent areas transparent",
+        "mode": "Resize, stretch, or keep the second item at original size",
+        "audio": "Mix, first, second, or no audio",
     }
     descriptions: dict[str, str] = {}
     numeric = EFFECT_NUMERIC_BOUNDS.get(effect, {})
@@ -2550,10 +3133,19 @@ def describe_media_parameters(command: Any) -> None:
             "No description provided",
         }:
             descriptions[parameter.name] = parameter.name.replace("_", " ").capitalize()
+        if (
+            effect in {"averagecolors", "average-colors"}
+            and parameter.name == "attachment"
+        ):
+            descriptions[parameter.name] = "Attach a still image"
     for name, description in descriptions.items():
         internal_parameter = command._params.get(name)
         if internal_parameter is not None:
             internal_parameter.description = app_commands.locale_str(description)
+
+    short_description = _short_media_app_description(command.description)
+    if str(command.description) != short_description:
+        command.description = short_description
 
 
 def describe_text_numeric_ranges(command: Any) -> None:
@@ -2580,15 +3172,669 @@ def _positional_flag(media: str) -> tuple[str, str | None]:
     if not tokens:
         return media, None
 
-    candidate = tokens[-1]
-    normalized = candidate.casefold().strip().replace(" ", "").replace("-", "")
-    if make_flag_asset(candidate) is None and not re.fullmatch(r"[a-z]{2}", normalized):
-        return media, None
-    return " ".join(tokens[:-1]), candidate
+    for start in range(len(tokens) - 1, -1, -1):
+        candidate = " ".join(tokens[start:])
+        if make_flag_asset(candidate) is not None or _country_flag_code(candidate):
+            return " ".join(tokens[:start]), candidate
+    return media, None
+
+
+def _parse_overlay_text_argument(
+    argument: str,
+) -> tuple[str, str, dict[str, Any]]:
+    media, options = _parse_effect_flags(
+        argument,
+        values={
+            "overlay": (("second", "o"), str, ""),
+            "opacity": (("alpha",), float, 70.0),
+            "scale": (("s",), float, 1.0),
+            "size": (("dimensions", "dim"), str, ""),
+            "position": (("pos", "p"), str, "center"),
+            "x": (("left",), int, 0),
+            "y": (("top",), int, 0),
+            "start": (("from",), float, 0.0),
+            "stop": (("end",), float, 0.0),
+        },
+        switches={
+            "stretch": ("fill",),
+            "extend": ("longer",),
+            "no_audio": ("no-audio", "mute-audio"),
+        },
+    )
+    overlay_source = str(options.pop("overlay", "")).strip()
+    try:
+        positional = shlex.split(media)
+    except ValueError as error:
+        raise commands.BadArgument(
+            "The overlay arguments contain an unmatched quote."
+        ) from error
+
+    if overlay_source:
+        if len(positional) > 1:
+            raise commands.BadArgument(
+                "Provide one background media item before `-overlay`."
+            )
+        source = positional[0] if positional else ""
+        return source, overlay_source, options
+
+    if len(positional) >= 2:
+        candidate = " ".join(positional[1:])
+        # Prefer the explicit source grammar (`user name`, `flag Germany`,
+        # `asset random`) over treating the second token as a bare URL.
+        if _parse_overlay_selector(candidate) is not None:
+            overlay_source = candidate
+            positional = positional[:1]
+        elif len(positional) > 2:
+            raise commands.BadArgument(
+                "Overlay accepts `<media> <user|media|emoji|asset|flag> "
+                "[name|random]`, or a second media URL. Provide one "
+                "background and one overlay media item."
+            )
+    if len(positional) > 2:
+        raise commands.BadArgument(
+            "Overlay accepts a background and one overlay media item."
+        )
+    if not overlay_source and len(positional) >= 2:
+        source, overlay_source = positional[:2]
+        positional = positional[:1]
+    if len(positional) > 1:
+        raise commands.BadArgument(
+            "Overlay accepts a background and one overlay media item."
+        )
+    source = positional[0] if positional else ""
+    return source, overlay_source, options
 
 
 class Images(Cog):
     """Image manipulation commands."""
+
+    def _remove_audio_overlay_app_command(self) -> None:
+        """Keep the legacy text command without registering a duplicate app command."""
+        audio_group = getattr(self.video_effects_audio, "app_command", None)
+        if isinstance(audio_group, app_commands.Group):
+            audio_group.remove_command("overlay")
+
+    @staticmethod
+    def _compact_audio_app_group(audio_group: app_commands.Group) -> None:
+        """Keep the complete audio namespace below Discord's command-size limit."""
+
+        descriptions = {
+            "reverse": "Reverse audio.",
+            "reverb": "Add reverb.",
+            "extract": "Extract audio.",
+            "replace": "Replace audio.",
+            "sound-effect": "Mix a sound effect.",
+            "destroy": "Degrade audio.",
+            "compress": "Compress audio.",
+            "channels-combine": "Combine channels.",
+            "pitch": "Change pitch.",
+            "underwater": "Add an underwater effect.",
+            "nightcore": "Apply nightcore.",
+            "deepvoice": "Lower voices.",
+            "surround": "Widen stereo.",
+            "echo": "Add an echo.",
+        }
+        numeric_parameters = {
+            "amount",
+            "at",
+            "duration",
+            "fade_in",
+            "fade_out",
+            "gain",
+            "pitch",
+            "ratio",
+            "room",
+            "semitones",
+            "source_start",
+            "source_stop",
+            "speed",
+            "start",
+            "stop",
+            "volume",
+        }
+        for child in audio_group.commands:
+            if not isinstance(child, app_commands.Command):
+                continue
+            if child.name in descriptions:
+                child.description = descriptions[child.name]
+            for parameter in child.parameters:
+                if parameter.name in numeric_parameters and " to " in str(
+                    parameter.description
+                ):
+                    # The option name already labels the value. Keeping only
+                    # the range saves space without hiding its valid limits.
+                    compact = str(parameter.description).split(" from ")[-1]
+                    child._params[parameter.name].description = app_commands.locale_str(
+                        compact
+                    )
+                elif parameter.name == "attachment":
+                    child._params[parameter.name].description = app_commands.locale_str(
+                        "File"
+                    )
+                elif parameter.name == "audio_attachment":
+                    child._params[parameter.name].description = app_commands.locale_str(
+                        "Audio"
+                    )
+                elif parameter.name == "effect":
+                    child._params[parameter.name].description = app_commands.locale_str(
+                        "Effect"
+                    )
+                elif parameter.name == "random_time":
+                    child._params[parameter.name].description = app_commands.locale_str(
+                        "Random start"
+                    )
+                elif parameter.name == "loop":
+                    child._params[parameter.name].description = app_commands.locale_str(
+                        "Loop to end"
+                    )
+                elif parameter.name == "full_random":
+                    child._params[parameter.name].description = app_commands.locale_str(
+                        "Randomize settings"
+                    )
+
+    @staticmethod
+    def _media_app_command_size(command: Any) -> int:
+        payload = command.to_dict(_MEDIA_APP_COMMAND_SIZE_TREE)
+        return len(json.dumps(payload, separators=(",", ":")))
+
+    @staticmethod
+    def _custom_emoji_values(bot: Any) -> list[Any]:
+        source = getattr(bot, "custom_emojis", None)
+        if source is None:
+            return []
+        values: list[Any] = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, Mapping):
+                for nested in value.values():
+                    collect(nested)
+            elif isinstance(value, (list, tuple, set, frozenset)):
+                for nested in value:
+                    collect(nested)
+            elif value is not None:
+                values.append(value)
+
+        if isinstance(source, Mapping):
+            collect(source)
+            return values
+        for namespace in (source, type(source)):
+            try:
+                collect(vars(namespace))
+            except TypeError:
+                continue
+        return values
+
+    def _random_overlay_candidates(
+        self,
+        ctx: Context,
+        kind: str,
+    ) -> list[tuple[str, str, object]]:
+        candidates: list[tuple[str, str, object]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add(candidate_kind: str, label: str, value: object) -> None:
+            key = (candidate_kind, str(value))
+            if key not in seen:
+                seen.add(key)
+                candidates.append((candidate_kind, label, value))
+
+        if kind in {"all", "emoji"}:
+            if ctx.guild is not None:
+                for value in ctx.guild.emojis:
+                    url = getattr(value, "url", None)
+                    if url:
+                        add("emoji", _random_overlay_label(value), str(url))
+
+            for value in self._custom_emoji_values(ctx.bot):
+                if isinstance(value, str):
+                    if value.startswith(("http://", "https://")):
+                        add("emoji", _random_overlay_label(value), value)
+                        continue
+                    for item in emoji_lib.emoji_list(value):
+                        token = str(item["emoji"])
+                        if TwemojiConverter.is_unicode_emoji(token):
+                            add(
+                                "emoji",
+                                _random_overlay_label(token),
+                                TwemojiConverter.png_url(token),
+                            )
+                    continue
+                url = getattr(value, "url", None)
+                if url:
+                    add("emoji", _random_overlay_label(value), str(url))
+                    continue
+                name = getattr(value, "name", None)
+                if isinstance(name, str) and TwemojiConverter.is_unicode_emoji(name):
+                    add(
+                        "emoji",
+                        _random_overlay_label(name),
+                        TwemojiConverter.png_url(name),
+                    )
+
+            for token in _unicode_overlay_emojis():
+                add(
+                    "emoji",
+                    _random_overlay_label(token),
+                    TwemojiConverter.png_url(token),
+                )
+
+        if kind in {"all", "user"}:
+            users: list[discord.abc.User]
+            if ctx.guild is not None:
+                users = list(ctx.guild.members)
+            else:
+                users = [ctx.author]
+                if ctx.bot.user is not None:
+                    users.append(ctx.bot.user)
+            if not users:
+                users = [ctx.author]
+            for user in users:
+                avatar = getattr(getattr(user, "display_avatar", None), "url", None)
+                if avatar:
+                    add(
+                        "user",
+                        str(getattr(user, "name", None) or user),
+                        str(avatar),
+                    )
+
+        if kind in {"all", "asset", "media"}:
+            for asset in image_asset_catalog():
+                add("asset", asset.display_name, asset)
+            for asset in video_asset_catalog():
+                add("asset", asset.display_name, asset)
+
+        if kind in {"all", "flag"}:
+            # Keep aliases out of the random pool so equivalent pride flags
+            # do not crowd out country flags or the canonical names.
+            pride_aliases = {"rainbow", "gay", "bi", "nb", "ace", "aro"}
+            for name in PRIDE_FLAGS:
+                if name not in pride_aliases:
+                    add("flag", name, name)
+            for country in pycountry.countries:
+                name = str(getattr(country, "name", "")).strip()
+                code = str(getattr(country, "alpha_2", "")).casefold()
+                if name and re.fullmatch(r"[a-z]{2}", code):
+                    add("flag", name, code)
+
+        return candidates
+
+    async def _random_overlay_data(
+        self,
+        ctx: Context,
+        source: str,
+    ) -> tuple[bytes, str]:
+        parsed = _parse_overlay_selector(source)
+        if parsed is None:
+            raise commands.BadArgument("That is not a valid overlay source.")
+        kind, selector = parsed
+
+        # `media <url>` is an explicit media source, while `media random`
+        # shares the bundled image/video asset pool below.
+        if kind == "media" and selector:
+            try:
+                media_url = await self._resolve_effect_media(
+                    ctx,
+                    selector,
+                    scan_messages=False,
+                )
+                return await self._fetch_effect_media(ctx, media_url), (
+                    f"media: {selector}"
+                )
+            except commands.BadArgument as error:
+                raise commands.BadArgument(
+                    "That media overlay could not be loaded."
+                ) from error
+
+        rng = random_module.SystemRandom()
+        if kind == "all":
+            candidate_pools = {
+                candidate_kind: self._random_overlay_candidates(ctx, candidate_kind)
+                for candidate_kind in ("emoji", "user", "asset", "flag")
+            }
+            available_kinds = [
+                candidate_kind
+                for candidate_kind, pool in candidate_pools.items()
+                if pool
+            ]
+            if not available_kinds:
+                raise commands.BadArgument("No random overlay sources are available.")
+            kind = rng.choice(available_kinds)
+            candidates = candidate_pools[kind]
+        else:
+            candidates = self._random_overlay_candidates(ctx, kind)
+
+        if selector and kind == "flag":
+            # Resolve named countries and two-letter codes directly so aliases
+            # such as `uk` and multi-word names do not depend on candidate
+            # labels being present in the random pool.
+            data = await self._flag_data(ctx, selector)
+            return data, f"flag: {selector}"
+
+        if selector and kind == "user":
+            # User selectors can be a username, display name, mention, or ID.
+            query = selector.strip().casefold()
+            if query.startswith("@") and not query.startswith("<@"):
+                query = query[1:]
+            query_id = re.fullmatch(r"<@!?(\d+)>|(\d+)", query)
+            wanted_id = (
+                next((group for group in query_id.groups() if group), None)
+                if query_id
+                else None
+            )
+            users: list[discord.abc.User]
+            if ctx.guild is not None:
+                users = list(ctx.guild.members)
+            else:
+                users = [ctx.author]
+                if ctx.bot.user is not None:
+                    users.append(ctx.bot.user)
+            selected_user = next(
+                (
+                    user
+                    for user in users
+                    if (
+                        (wanted_id is not None and str(user.id) == wanted_id)
+                        or str(getattr(user, "name", "")).casefold() == query
+                        or str(getattr(user, "display_name", "")).casefold() == query
+                        or str(getattr(user, "global_name", "")).casefold() == query
+                    )
+                ),
+                None,
+            )
+            if selected_user is None:
+                raise commands.BadArgument(
+                    f"No user named `{selector}` is available for an overlay."
+                )
+            avatar = getattr(
+                getattr(selected_user, "display_avatar", None),
+                "url",
+                None,
+            )
+            if not avatar:
+                raise commands.BadArgument("That user does not have an avatar.")
+            candidates = [
+                (
+                    "user",
+                    str(getattr(selected_user, "name", None) or selected_user),
+                    str(avatar),
+                )
+            ]
+        elif selector:
+            normalized_query = selector.casefold().strip()
+            query_labels = {
+                normalized_query,
+                _random_overlay_label(selector).casefold(),
+            }
+            compact_queries = {
+                re.sub(r"[^a-z0-9]+", "", wanted) for wanted in query_labels
+            }
+
+            def matches(candidate: tuple[str, str, object]) -> bool:
+                candidate_kind, label, value = candidate
+                values = [label, str(value)]
+                if candidate_kind == "asset":
+                    for attribute in ("name", "display_name", "category"):
+                        attribute_value = getattr(value, attribute, None)
+                        if attribute_value:
+                            values.append(str(attribute_value))
+                for candidate_value in values:
+                    folded = candidate_value.casefold().strip()
+                    if folded in query_labels:
+                        return True
+                    if re.sub(r"[^a-z0-9]+", "", folded) in compact_queries:
+                        return True
+                return False
+
+            candidates = [candidate for candidate in candidates if matches(candidate)]
+            if not candidates:
+                raise commands.BadArgument(
+                    f"No {kind} overlay named `{selector}` is available."
+                )
+        if not candidates:
+            raise commands.BadArgument(f"No random {kind} overlays are available.")
+
+        last_error: Exception | None = None
+        for _ in range(min(12, max(1, len(candidates)))):
+            candidate_kind, label, value = rng.choice(candidates)
+            try:
+                if candidate_kind == "asset":
+                    assert isinstance(value, (ImageAsset, VideoAsset))
+                    # Bundled assets are small and local, so read them directly
+                    # instead of spending time creating a worker-thread task.
+                    if value.path.stat().st_size > 10 * 1024 * 1024:
+                        raise commands.BadArgument("The bundled asset was too large.")
+                    data = value.path.read_bytes()
+                elif candidate_kind == "flag":
+                    data = await self._flag_data(ctx, str(value))
+                else:
+                    response = await fetch_public_bytes(
+                        ctx.session,
+                        str(value),
+                        max_bytes=10 * 1024 * 1024,
+                        allowed_content_prefixes=("image/",),
+                        allowed_hosts=(
+                            "cdn.discord.com",
+                            "cdn.discordapp.com",
+                            "cdn.discordapp.net",
+                            "media.discordapp.net",
+                            "raw.githubusercontent.com",
+                        ),
+                    )
+                    data = response.data
+                return data, f"{candidate_kind}: {label}"
+            except Exception as error:
+                last_error = error
+        raise commands.BadArgument(
+            "A random overlay source could not be fetched."
+        ) from last_error
+
+    @staticmethod
+    def _copy_media_app_group(
+        source: app_commands.Group, name: str
+    ) -> app_commands.Group:
+        return app_commands.Group(
+            name=name,
+            description=source.description,
+            allowed_contexts=source.allowed_contexts,
+            allowed_installs=source.allowed_installs,
+            guild_only=source.guild_only,
+            nsfw=source.nsfw,
+            default_permissions=source.default_permissions,
+            extras=dict(source.extras),
+        )
+
+    def _rebalance_media_app_group(
+        self,
+        source: app_commands.Group,
+        children: list[Any],
+        names: set[str],
+        base_name: str,
+    ) -> None:
+        """Split a hybrid app-command group into payload-safe top-level groups."""
+        for child in list(source.commands):
+            source.remove_command(child.name)
+
+        chunks: list[list[Any]] = []
+        current: list[Any] = []
+        current_size = MEDIA_APP_COMMAND_ROOT_OVERHEAD
+        for child in children:
+            child_size = self._media_app_command_size(child) + 1
+            if current and current_size + child_size > MEDIA_APP_COMMAND_LIMIT:
+                chunks.append(current)
+                current = []
+                current_size = MEDIA_APP_COMMAND_ROOT_OVERHEAD
+            current.append(child)
+            current_size += child_size
+        if current:
+            chunks.append(current)
+
+        for index, chunk in enumerate(chunks):
+            if index == 0:
+                target = source
+            else:
+                name = self._next_media_app_group_name(
+                    names,
+                    f"{base_name}-more",
+                )
+                target = self._copy_media_app_group(source, name)
+                self.__cog_app_commands__.append(target)
+            for child in chunk:
+                child.parent = None
+                target.add_command(child)
+
+    @staticmethod
+    def _next_media_app_group_name(names: set[str], base: str) -> str:
+        if base not in names:
+            names.add(base)
+            return base
+        index = 2
+        while f"{base}-{index}" in names:
+            index += 1
+        name = f"{base}-{index}"
+        names.add(name)
+        return name
+
+    def _merge_media_app_groups(self, groups: list[app_commands.Group]) -> None:
+        """Pack compatible overflow groups into the fewest numbered groups."""
+        while len(groups) > 1:
+            best: tuple[int, int, int] | None = None
+            for left_index, left in enumerate(groups[:-1]):
+                left_names = {child.name for child in left.commands}
+                for right_index in range(left_index + 1, len(groups)):
+                    right = groups[right_index]
+                    if left_names & {child.name for child in right.commands}:
+                        continue
+                    if len(left.commands) + len(right.commands) > 25:
+                        continue
+
+                    moved: list[Any] = []
+                    combined_size = MEDIA_APP_COMMAND_LIMIT + 1
+                    try:
+                        for child in list(right.commands):
+                            right.remove_command(child.name)
+                            child.parent = None
+                            moved.append(child)
+                            left.add_command(child)
+                        combined_size = self._media_app_command_size(left)
+                    finally:
+                        for child in moved:
+                            left.remove_command(child.name)
+                            child.parent = None
+                            right.add_command(child)
+
+                    if combined_size <= MEDIA_APP_COMMAND_LIMIT and (
+                        best is None or combined_size > best[0]
+                    ):
+                        best = (combined_size, left_index, right_index)
+
+            if best is None:
+                return
+
+            _, left_index, right_index = best
+            left = groups[left_index]
+            right = groups.pop(right_index)
+            for child in list(right.commands):
+                right.remove_command(child.name)
+                child.parent = None
+                left.add_command(child)
+            if right in self.__cog_app_commands__:
+                self.__cog_app_commands__.remove(right)
+
+    def _rebalance_effect_app_commands(self) -> None:
+        """Keep media-effect slash payloads below Discord's 8,000-byte limit.
+
+        Hybrid commands remain in their existing text-command groups. Only the
+        application-command objects are moved into numbered overflow groups,
+        so prefix command names and behavior do not change.
+        """
+        if getattr(self, "_media_app_commands_rebalanced", False):
+            return
+        self._media_app_commands_rebalanced = True
+
+        hybrid_roots: list[app_commands.Group] = []
+        for command in self.__cog_commands__:
+            if command.parent is not None:
+                continue
+            app_command = getattr(command, "app_command", None)
+            if isinstance(app_command, app_commands.Group):
+                hybrid_roots.append(app_command)
+        hybrid_roots.sort(key=lambda group: (group.name != "effect", group.name))
+        initial_app_command_ids = {id(command) for command in self.__cog_app_commands__}
+        names = {command.name for command in hybrid_roots} | {
+            command.name for command in self.__cog_app_commands__
+        }
+
+        for source in hybrid_roots:
+            audio_group = next(
+                (
+                    child
+                    for child in source.commands
+                    if isinstance(child, app_commands.Group) and child.name == "audio"
+                ),
+                None,
+            )
+            if audio_group is not None:
+                self._compact_audio_app_group(audio_group)
+
+            for child in list(source.commands):
+                if not isinstance(child, app_commands.Group):
+                    continue
+                if self._media_app_command_size(child) <= MEDIA_APP_COMMAND_LIMIT:
+                    continue
+
+                # A nested group that is larger than Discord's limit cannot be
+                # registered as-is. Keep the audio namespace intact whenever
+                # its compact form fits, and only flatten other oversized
+                # groups as a last resort.
+                source.remove_command(child.name)
+                nested_children = list(child.commands)
+                overflow_name = self._next_media_app_group_name(
+                    names,
+                    f"{source.name}-{child.name}",
+                )
+                overflow = self._copy_media_app_group(source, overflow_name)
+                self._rebalance_media_app_group(
+                    overflow,
+                    nested_children,
+                    names,
+                    overflow_name,
+                )
+                if overflow not in self.__cog_app_commands__:
+                    self.__cog_app_commands__.append(overflow)
+
+            children = list(source.commands)
+            if source.name == "effect" and audio_group is not None:
+                # Put the audio namespace in the primary effect group. It is
+                # intentionally kept ahead of visual commands so the splitter
+                # can move those commands to effect-2, effect-3, and so on.
+                direct_priority = [
+                    child
+                    for child in children
+                    if child is not audio_group and child.name == "adhd"
+                ]
+                children = [audio_group, *direct_priority] + [
+                    child
+                    for child in children
+                    if child is not audio_group and child not in direct_priority
+                ]
+            if self._media_app_command_size(source) > MEDIA_APP_COMMAND_LIMIT:
+                self._rebalance_media_app_group(
+                    source,
+                    children,
+                    names,
+                    source.name,
+                )
+
+        generated_groups = [
+            command
+            for command in self.__cog_app_commands__
+            if id(command) not in initial_app_command_ids
+            and isinstance(command, app_commands.Group)
+        ]
+        self._merge_media_app_groups(generated_groups)
+        all_media_groups = [*hybrid_roots, *generated_groups]
+        for index, group in enumerate(all_media_groups):
+            group.name = "effect" if index == 0 else f"effect-{index + 1}"
 
     async def _convert_effect_source(
         self,
@@ -2681,9 +3927,22 @@ class Images(Cog):
             if ctx.guild is not None
             else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
         )
+        compressed = False
+        if len(result.data) > max_size:
+            original_result = result
+            try:
+                result = await compress_media_to_size(
+                    result.data,
+                    result.filename,
+                    max_size,
+                )
+            except ValueError:
+                result = original_result
+            compressed = result.data != original_result.data
         if len(result.data) > max_size:
             raise commands.BadArgument(
-                "The result is too large for this server's upload limit."
+                "The result is too large for this server's upload limit. "
+                "Try fewer effects, a shorter video, or a smaller source."
             )
 
         info_lines = [
@@ -2692,13 +3951,19 @@ class Images(Cog):
         ]
         if note:
             info_lines.append(f"-# {note}")
+        if compressed:
+            info_lines.append("-# Compressed to fit the server upload limit")
         info_text = "\n".join(info_lines)
         filename = result.filename.replace("/", "_").replace("\\", "_")
+        if not result.displayable:
+            await ctx.send(
+                content=info_text,
+                file=discord.File(BytesIO(result.data), filename),
+                reference=ctx.message.to_reference(fail_if_not_exists=False),
+            )
+            return
         media_item: ui.Item[Any]
-        if result.displayable:
-            media_item = ui.MediaGallery(MediaGalleryItem(f"attachment://{filename}"))
-        else:
-            media_item = ui.File(f"attachment://{filename}")
+        media_item = ui.MediaGallery(MediaGalleryItem(f"attachment://{filename}"))
         container = ui.Container(
             media_item,
             ui.TextDisplay(info_text),
@@ -2712,6 +3977,65 @@ class Images(Cog):
             view=view,
             reference=ctx.message.to_reference(fail_if_not_exists=False),
         )
+
+    async def _send_average_colors_result(
+        self,
+        ctx: Context,
+        colors: list[AverageColor],
+        *,
+        started: float,
+    ) -> None:
+        rows = ["## Average colors"]
+        for i, color in enumerate(colors, start=1):
+            red, green, blue = color.rgb
+            hex_value = f"#{red:02X}{green:02X}{blue:02X}"
+            rows.append(
+                f"**{hex_value}** `rgb({red}, {green}, {blue})` "
+                f"**{color.percentage:.1f}%**"
+            )
+        rows.extend(
+            (
+                "",
+                f"-# Invoked by {ctx.author.mention}",
+                f"-# Took {time.monotonic() - started:.1f}s",
+            )
+        )
+        container = ui.Container(
+            ui.TextDisplay("\n".join(rows)), accent_color=self.bot.embedcolor
+        )
+        view_type = type("AverageColorsView", (ui.LayoutView,), {})
+        view = view_type(timeout=None)
+        view.add_item(container)
+        await ctx.send(
+            view=view,
+            reference=ctx.message.to_reference(fail_if_not_exists=False),
+        )
+
+    @media_effect_timeout
+    async def _average_colors_effect(
+        self,
+        ctx: Context,
+        *,
+        source: str = "",
+        attachment: discord.Attachment | None = None,
+    ) -> None:
+        media_url = await self._resolve_effect_media(ctx, source, attachment)
+        started = time.monotonic()
+        async with self.bot.media_semaphore, ctx.typing():
+            media_data = await self._fetch_effect_media(ctx, media_url)
+            try:
+                _, colors = await render_average_colors(media_data)
+            except NotPillowMedia as error:
+                raise commands.BadArgument(
+                    "Average colors only supports still images, not GIFs or videos."
+                ) from error
+            except ValueError as error:
+                raise commands.BadArgument(str(error)) from error
+            await self._send_average_colors_result(
+                ctx,
+                colors,
+                started=started,
+            )
 
     async def _send_effect_results(
         self,
@@ -2727,9 +4051,23 @@ class Images(Cog):
             if ctx.guild is not None
             else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
         )
+        fitted_results: list[EffectResult] = []
+        for result in results:
+            if len(result.data) > max_size:
+                try:
+                    result = await compress_media_to_size(
+                        result.data,
+                        result.filename,
+                        max_size,
+                    )
+                except ValueError:
+                    pass
+            fitted_results.append(result)
+        results = fitted_results
         if any(len(result.data) > max_size for result in results):
             raise commands.BadArgument(
-                "At least one converted file is too large for this server."
+                "At least one converted file is too large for this server. "
+                "Try fewer effects, a shorter video, or a smaller source."
             )
         filenames = [
             result.filename.replace("/", "_").replace("\\", "_") for result in results
@@ -2779,14 +4117,25 @@ class Images(Cog):
         if flag_name:
             self._validate_flag_media(flag_name, source, media_url)
         second_url = ""
+        second_data: bytes | None = None
+        random_overlay_label: str | None = None
         if second_source or second_attachment is not None:
-            second_url = await self._resolve_effect_media(
-                ctx,
-                second_source,
-                second_attachment,
-                attachment_index=1,
-                scan_messages=False,
-            )
+            if (
+                second_attachment is None
+                and _random_overlay_kind(second_source) is not None
+            ):
+                second_data, random_overlay_label = await self._random_overlay_data(
+                    ctx,
+                    second_source,
+                )
+            else:
+                second_url = await self._resolve_effect_media(
+                    ctx,
+                    second_source,
+                    second_attachment,
+                    attachment_index=1,
+                    scan_messages=False,
+                )
         elif (
             effect == "overlay"
             and "overlay_data" not in options
@@ -2801,22 +4150,39 @@ class Images(Cog):
         started = time.monotonic()
         async with self.bot.media_semaphore, ctx.typing():
             media_data = await self._fetch_effect_media(ctx, media_url)
-            if second_url:
-                options["overlay_data"] = await self._fetch_effect_media(
-                    ctx, second_url
-                )
+            supplied_overlay_data = options.pop("overlay_data", None)
+            if second_data is not None:
+                supplied_overlay_data = second_data
+            elif second_url:
+                supplied_overlay_data = await self._fetch_effect_media(ctx, second_url)
+            if effect == "overlay" and bool(options.pop("fullrandom", False)):
+                _randomize_overlay_options(options, random_module.SystemRandom())
             options, adjustments = _normalize_effect_options(effect, options)
             renderer_options = _renderer_effect_options(effect, options)
             try:
-                result = await render_image_effect(
-                    media_data,
-                    effect,
-                    **renderer_options,
-                )
+                if effect == "overlay":
+                    if not isinstance(supplied_overlay_data, bytes):
+                        raise ValueError("A second image or video is required.")
+                    result = await render_overlay_effect(
+                        media_data,
+                        supplied_overlay_data,
+                        **renderer_options,
+                    )
+                else:
+                    result = await render_image_effect(
+                        media_data,
+                        effect,
+                        **renderer_options,
+                    )
             except ValueError as error:
                 raise commands.BadArgument(str(error)) from error
+            random_note = (
+                _random_overlay_note(random_overlay_label)
+                if random_overlay_label is not None
+                else ""
+            )
             combined_note = " | ".join(
-                part for part in (note, "; ".join(adjustments)) if part
+                part for part in (note, random_note, "; ".join(adjustments)) if part
             )
             await self._send_effect_result(
                 ctx,
@@ -2841,14 +4207,24 @@ class Images(Cog):
     ) -> None:
         media_url = await self._resolve_effect_media(ctx, source, attachment)
         second_url = ""
+        random_overlay_label: str | None = None
         if second_source or second_attachment is not None:
-            second_url = await self._resolve_effect_media(
-                ctx,
-                second_source,
-                second_attachment,
-                attachment_index=1,
-                scan_messages=False,
-            )
+            if (
+                second_attachment is None
+                and _random_overlay_kind(second_source) is not None
+            ):
+                second_data, random_overlay_label = await self._random_overlay_data(
+                    ctx,
+                    second_source,
+                )
+            else:
+                second_url = await self._resolve_effect_media(
+                    ctx,
+                    second_source,
+                    second_attachment,
+                    attachment_index=1,
+                    scan_messages=False,
+                )
         elif (
             effect in {"overlay", "audioreplace", "audiooverlay"}
             and len(ctx.message.attachments) > 1
@@ -2867,22 +4243,114 @@ class Images(Cog):
             options, adjustments = _normalize_effect_options(effect, options)
             renderer_options = _renderer_effect_options(effect, options)
             try:
-                result = await render_video_effect(
-                    media_data,
-                    effect,
-                    second_data=second_data,
-                    **renderer_options,
-                )
+                if effect == "overlay":
+                    if not isinstance(second_data, bytes):
+                        raise ValueError("A second image or video is required.")
+                    result = await render_overlay_effect(
+                        media_data,
+                        second_data,
+                        **renderer_options,
+                    )
+                else:
+                    result = await render_video_effect(
+                        media_data,
+                        effect,
+                        second_data=second_data,
+                        **renderer_options,
+                    )
             except ValueError as error:
                 raise commands.BadArgument(str(error)) from error
+            random_note = (
+                _random_overlay_note(random_overlay_label)
+                if random_overlay_label is not None
+                else ""
+            )
             combined_note = " | ".join(
-                part for part in (note, "; ".join(adjustments)) if part
+                part for part in (note, random_note, "; ".join(adjustments)) if part
             )
             await self._send_effect_result(
                 ctx,
                 result,
                 started=started,
                 note=combined_note,
+            )
+
+    @media_effect_timeout
+    async def _apply_text_effect(
+        self,
+        ctx: Context,
+        *,
+        source: str = "",
+        attachment: discord.Attachment | None = None,
+        **options: Any,
+    ) -> None:
+        text = str(options.get("text", "")).strip()
+        if not text:
+            raise commands.BadArgument('Add text with `-text "your text"`.')
+        media_url = await self._resolve_effect_media(ctx, source, attachment)
+        started = time.monotonic()
+        async with self.bot.media_semaphore, ctx.typing():
+            media_data = await self._fetch_effect_media(ctx, media_url)
+            options["inline_images"] = await resolve_inline_images(ctx.session, [text])
+            options, adjustments = _normalize_effect_options("text", options)
+            try:
+                result = await render_text_effect(media_data, **options)
+            except ValueError as error:
+                raise commands.BadArgument(str(error)) from error
+            await self._send_effect_result(
+                ctx,
+                result,
+                started=started,
+                note="; ".join(adjustments),
+            )
+
+    @media_effect_timeout
+    async def _apply_combine_effect(
+        self,
+        ctx: Context,
+        *,
+        source: str = "",
+        second_source: str = "",
+        attachment: discord.Attachment | None = None,
+        second_attachment: discord.Attachment | None = None,
+        **options: Any,
+    ) -> None:
+        first_url = await self._resolve_effect_media(ctx, source, attachment)
+        if not second_source and second_attachment is None:
+            if len(ctx.message.attachments) > 1:
+                second_attachment = ctx.message.attachments[1]
+            else:
+                raise commands.BadArgument(
+                    "Add a second User/Emoji/Media URL with `-second`, or attach "
+                    "two files."
+                )
+        second_url = await self._resolve_effect_media(
+            ctx,
+            second_source,
+            second_attachment,
+            attachment_index=1,
+            scan_messages=False,
+        )
+        started = time.monotonic()
+        async with self.bot.media_semaphore, ctx.typing():
+            first_data, second_data = await asyncio.gather(
+                self._fetch_effect_media(ctx, first_url),
+                self._fetch_effect_media(ctx, second_url),
+            )
+            options, adjustments = _normalize_effect_options("combine", options)
+            try:
+                result = await render_combine_effect(
+                    first_data,
+                    second_data,
+                    **options,
+                )
+            except ValueError as error:
+                raise commands.BadArgument(str(error)) from error
+            await self._send_effect_result(
+                ctx,
+                result,
+                started=started,
+                note="; ".join(adjustments),
             )
 
     @media_effect_timeout
@@ -3248,50 +4716,48 @@ class Images(Cog):
             try:
                 image_str = await self._convert_effect_source(ctx, "")
             except commands.BadArgument:
-                raise commands.BadArgument("No image or video found.")
+                raise commands.BadArgument("No image, video, or audio found.")
 
         if not image_str or not isinstance(image_str, str):
-            raise commands.BadArgument("Could not resolve an image or video source.")
+            raise commands.BadArgument(
+                "Could not resolve an image, video, or audio source."
+            )
         async with self.bot.media_semaphore, ctx.typing():
-            import time as _time
-
-            started = _time.time()
+            started = time.monotonic()
             img_data = await self._fetch_effect_media(ctx, image_str)
             try:
-                result = await _speed_video(
-                    img_data,
-                    speed_val,
-                    start=start,
-                    stop=stop,
-                )
+                probe = await probe_media(img_data)
+                if probe.has_video:
+                    result = EffectResult(
+                        await _speed_video(
+                            img_data,
+                            speed_val,
+                            start=start,
+                            stop=stop,
+                        ),
+                        "speed.mp4",
+                    )
+                elif probe.has_audio:
+                    result = EffectResult(
+                        await _speed_audio(
+                            img_data,
+                            speed_val,
+                            start=start,
+                            stop=stop,
+                        ),
+                        "speed.mp3",
+                        displayable=False,
+                    )
+                else:
+                    raise ValueError("Speed requires video, GIF, or audio media.")
             except ValueError as error:
                 raise commands.BadArgument(str(error)) from error
 
-            elapsed = _time.time() - started
-            info_text = f"-# Invoked by {ctx.author.mention}\n-# Took {elapsed:.1f}s"
-            if adjustments:
-                info_text += f"\n-# {'; '.join(adjustments)}"
-
-            max_size = ctx.guild.filesize_limit if ctx.guild else 25 * 1024 * 1024
-            if len(result) > max_size:
-                raise commands.BadArgument(
-                    "The sped-up video is too large for this server."
-                )
-
-            buf = BytesIO(result)
-            gallery = ui.MediaGallery(MediaGalleryItem("attachment://speed.mp4"))
-            container = ui.Container(
-                gallery,
-                ui.TextDisplay(info_text),
-                accent_color=self.bot.embedcolor,
-            )
-            view_type = type("SpeedView", (ui.LayoutView,), {})
-            v = view_type(timeout=None)
-            v.add_item(container)
-            await ctx.send(
-                file=discord.File(buf, "speed.mp4"),
-                view=v,
-                reference=ctx.message.to_reference(fail_if_not_exists=False),
+            await self._send_effect_result(
+                ctx,
+                result,
+                started=started,
+                note="; ".join(adjustments),
             )
 
     @commands.command(
@@ -3879,6 +5345,27 @@ class Images(Cog):
         await self._apply_image_effect(ctx, "shuffle", source=media)
 
     @commands.command(
+        name="average-colors",
+        aliases=(
+            "averagecolors",
+            "avgcolors",
+            "avgcs",
+            "average-colours",
+            "averagecolours",
+            "avgcolours",
+            "averagecolor",
+            "avgcolor",
+            "averagecolour",
+            "avgcolour",
+            "avgc",
+        ),
+        extras={"usage": "<media>"},
+    )
+    async def average_colors(self, ctx: Context, *, media: str = "") -> None:
+        """Create a labeled palette from a still User/Emoji/Media URL image."""
+        await self._average_colors_effect(ctx, source=media)
+
+    @commands.command(
         name="tint",
         extras={"usage": "<media> [-color #5865f2 -amount 0.35]"},
     )
@@ -4034,15 +5521,89 @@ class Images(Cog):
         extras={"usage": "<media> [-scale 1 -ratio 16:9]"},
     )
     async def resize(self, ctx: Context, *, argument: str = "") -> None:
-        """Resize a User/Emoji/Media URL."""
-        await self._parsed_effect(
-            ctx,
-            "resize",
+        """Resize a User/Emoji/Media URL.
+
+        -# -scale  Scale both dimensions by a multiplier.
+        -# -ratio  Crop to an aspect ratio such as 16:9.
+        -# -size   Set an exact size such as 1280x720.
+        """
+        media, options = _parse_effect_flags(
             argument,
             values={
                 "scale": (("s",), float, 1.0),
                 "ratio": (("aspect", "r"), str, ""),
+                "size": (("dimensions", "dim"), str, ""),
             },
+        )
+        if not options["size"]:
+            tokens = shlex.split(media)
+            if tokens and RESIZE_DIMENSIONS_RE.fullmatch(tokens[-1]):
+                options["size"] = tokens.pop()
+                media = " ".join(tokens)
+        await self._apply_image_effect(
+            ctx,
+            "resize",
+            source=media,
+            **options,
+        )
+
+    @commands.command(
+        name="text",
+        aliases=("addtext",),
+        extras={
+            "usage": (
+                '<media> -text "hello" [-font Roboto -size 48 -position center '
+                "-color #ffffff -style outline -bold]"
+            )
+        },
+    )
+    async def text_effect(self, ctx: Context, *, argument: str = "") -> None:
+        """Add styled Unicode and emoji text to a User/Emoji/Media URL.
+
+        -# -text      Text to draw, including Unicode or Discord emoji.
+        -# -font      One of the bundled font family names.
+        -# -size      Font size from 8 to 512.
+        -# -position  A named position such as center or bottom-right.
+        -# -style     Use normal, outline, shadow, or box.
+        -# -bold      Enable the bold font variation or bold rendering.
+        """
+        media, options = _parse_effect_flags(
+            argument,
+            values=PIPELINE_EFFECTS["text"][1],
+            switches=PIPELINE_EFFECTS["text"][2],
+        )
+        if not options["text"] and "|" in media:
+            media, text = media.split("|", 1)
+            options["text"] = text.strip()
+        await self._apply_text_effect(ctx, source=media.strip(), **options)
+
+    @commands.command(
+        name="combine",
+        aliases=("joinmedia", "stackmedia"),
+        extras={
+            "usage": (
+                "<media> -second <media> " "[-position right -mode resize -audio mix]"
+            )
+        },
+    )
+    async def combine_effect(self, ctx: Context, *, argument: str = "") -> None:
+        """Combine two User/Emoji/Media URLs on one extended canvas.
+
+        -# -second    The second item to place beside the first.
+        -# -position  Place it at top, bottom, left, or right.
+        -# -mode      Resize proportionally, stretch, or keep original size.
+        -# -audio     Mix both sources, use first/second, or use none.
+        """
+        media, options = _parse_effect_flags(
+            argument,
+            values=PIPELINE_EFFECTS["combine"][1],
+        )
+        second_source = str(options.pop("second", "")).strip()
+        await self._apply_combine_effect(
+            ctx,
+            source=media.strip(),
+            second_source=second_source,
+            **options,
         )
 
     @commands.command(name="distort", extras={"usage": "<media> [-amount 0.25]"})
@@ -4244,10 +5805,34 @@ class Images(Cog):
         """Mirror the top half of a User/Emoji/Media URL."""
         await self._apply_image_effect(ctx, "mirror", source=media, direction="top")
 
-    @commands.group(name="overlay", invoke_without_command=True)
-    async def overlay_group(self, ctx: Context) -> None:
-        """Overlay a flag or second User/Emoji/Media URL."""
-        await ctx.send_help(ctx.command)
+    @commands.group(
+        name="overlay",
+        invoke_without_command=True,
+        extras={
+            "usage": (
+                "<media> <user|media|emoji|asset|flag> [name|random] "
+                "[-opacity 70 -scale 1 -size 100x100 -start 0 -stop 0 "
+                "-position center -x 0 -y 0 -stretch -extend -no-audio -fr]"
+            )
+        },
+    )
+    async def overlay_group(self, ctx: Context, *, argument: str = "") -> None:
+        """Overlay one User/Emoji/Media URL on another.
+
+        -# -fr           Randomize the overlay size and position within the background.
+        """
+        if not argument.strip():
+            await ctx.send_help(ctx.command)
+            return
+        source, second_source, options = _parse_overlay_text_argument(argument)
+        options["overlay_audio"] = not bool(options.pop("no_audio", False))
+        await self._apply_image_effect(
+            ctx,
+            "overlay",
+            source=source,
+            second_source=second_source,
+            **options,
+        )
 
     @overlay_group.command(
         name="flag",
@@ -4277,82 +5862,6 @@ class Images(Cog):
         options["_flag_name"] = flag
         options["stretch"] = True
         await self._apply_image_effect(ctx, "overlay", source=media, **options)
-
-    @overlay_group.command(
-        name="image",
-        extras={
-            "usage": (
-                "<media> -overlay <media> [-opacity 70 -scale 1 "
-                "-position center -x 0 -y 0 -stretch]"
-            )
-        },
-    )
-    async def overlay_group_image(self, ctx: Context, *, argument: str = "") -> None:
-        """Overlay a User/Emoji/Media URL on another.
-
-        -# -overlay    The User/Emoji/Media URL placed over the main input.
-        -# -opacity    Change the overlay opacity from 0 to 100%. Defaults to 70.
-        -# -scale      Change the overlay size. Defaults to 1.
-        """
-        media, options = _parse_effect_flags(
-            argument,
-            values={
-                "overlay": (("second", "o"), str, ""),
-                "opacity": (("alpha",), float, 70.0),
-                "scale": (("size",), float, 1.0),
-                "position": (("pos", "p"), str, "center"),
-                "x": (("left",), int, 0),
-                "y": (("top",), int, 0),
-            },
-            switches={"stretch": ("fill",)},
-        )
-        second_source = str(options.pop("overlay"))
-        await self._apply_image_effect(
-            ctx,
-            "overlay",
-            source=media,
-            second_source=second_source,
-            **options,
-        )
-
-    @overlay_group.command(
-        name="video",
-        extras={
-            "usage": (
-                "<media> -overlay <media> [-opacity 70 -scale 1 "
-                "-position center -x 0 -y 0 -stretch -no-audio]"
-            )
-        },
-    )
-    async def overlay_group_video(self, ctx: Context, *, argument: str = "") -> None:
-        """Overlay a User/Emoji/Media URL on another.
-
-        -# -overlay    The User/Emoji/Media URL placed over the main input.
-        -# -opacity    Change the overlay opacity from 0 to 100%. Defaults to 70.
-        -# -scale      Change the overlay size. Defaults to 1.
-        -# -no-audio   Do not mix audio from the overlay video.
-        """
-        media, options = _parse_effect_flags(
-            argument,
-            values={
-                "overlay": (("second", "o"), str, ""),
-                "opacity": (("alpha",), float, 70.0),
-                "scale": (("size",), float, 1.0),
-                "position": (("pos", "p"), str, "center"),
-                "x": (("left",), int, 0),
-                "y": (("top",), int, 0),
-            },
-            switches={"stretch": ("fill",), "no_audio": ("no-audio", "mute-audio")},
-        )
-        second_source = str(options.pop("overlay"))
-        options["overlay_audio"] = not bool(options.pop("no_audio", False))
-        await self._apply_video_effect(
-            ctx,
-            "overlay",
-            source=media,
-            second_source=second_source,
-            **options,
-        )
 
     @commands.group(name="bass", invoke_without_command=True)
     async def bass_group(self, ctx: Context) -> None:
@@ -4402,15 +5911,12 @@ class Images(Cog):
     async def sound_effects_catalog(self, ctx: Context) -> None:
         """Show every bundled sound effect and its ID."""
         entries = [
-            (
-                f"`{effect.id}` • **{effect.display_name}** "
-                f"• {effect.category.title()}"
-            )
-            for effect in audio_effect_catalog()
+            (f"**{effect.display_name}**")
+            for effect in audio_effect_catalog()  # sorted already here by id, no need for resorting.
         ]
         pager = SimplePages(entries, ctx=ctx, per_page=15)
-        pager.embed.title = "Sound effects"
-        pager.embed.colour = ctx.color
+        pager.embed.title = "Sound effects list"
+        pager.embed.colour = ctx.bot.embedcolor
         await pager.start(ctx)
 
     @commands.group(name="audio", invoke_without_command=True)
@@ -4763,15 +6269,31 @@ class Images(Cog):
         if effect == "speed":
             speed = float(options["speed"])
             _playback_factor(speed)
-            return EffectResult(
-                await _speed_video(
-                    current_data,
-                    speed,
-                    start=float(options.get("start", 0)),
-                    stop=float(options.get("stop", 0)),
-                ),
-                "speed.mp4",
-            )
+            media_probe = await probe_media(current_data)
+            start = float(options.get("start", 0))
+            stop = float(options.get("stop", 0))
+            if media_probe.has_video:
+                return EffectResult(
+                    await _speed_video(
+                        current_data,
+                        speed,
+                        start=start,
+                        stop=stop,
+                    ),
+                    "speed.mp4",
+                )
+            if media_probe.has_audio:
+                return EffectResult(
+                    await _speed_audio(
+                        current_data,
+                        speed,
+                        start=start,
+                        stop=stop,
+                    ),
+                    "speed.mp3",
+                    displayable=False,
+                )
+            raise ValueError("Speed requires video, GIF, or audio media.")
 
         if effect == "meme":
             text = str(options.get("text", "")).strip()
@@ -4789,42 +6311,43 @@ class Images(Cog):
         if effect == "overlayflag":
             overlay_data = await self._flag_data(ctx, str(options.pop("flag")))
             renderer_options = _renderer_effect_options(effect, options)
-            return await render_image_effect(
+            # Explicit flag overlays fill the media by default. Randomized
+            # overlays set this to false so their chosen scale and position
+            # are respected instead of being overwritten here.
+            renderer_options.setdefault("stretch", True)
+            return await render_overlay_effect(
                 current_data,
-                "overlay",
-                overlay_data=overlay_data,
-                opacity=float(renderer_options["opacity"]),
-                stretch=True,
+                overlay_data,
+                **renderer_options,
             )
 
-        if effect in {"overlayimage", "overlayvideo"}:
+        if effect == "overlay":
             overlay_source = str(options.pop("overlay")).strip()
             if not overlay_source:
                 raise ValueError(
                     "Overlay requires `-overlay` followed by a second "
                     "User/Emoji/Media URL."
                 )
-            overlay_url = await self._resolve_effect_media(
-                ctx,
-                overlay_source,
-                scan_messages=False,
+            overlay_data = options.pop("_overlay_data", None)
+            if (
+                not isinstance(overlay_data, bytes)
+                and _random_overlay_kind(overlay_source) is not None
+            ):
+                overlay_data, _ = await self._random_overlay_data(ctx, overlay_source)
+            elif not isinstance(overlay_data, bytes):
+                overlay_url = await self._resolve_effect_media(
+                    ctx,
+                    overlay_source,
+                    scan_messages=False,
+                )
+                overlay_data = await self._fetch_effect_media(ctx, overlay_url)
+            renderer_options = _renderer_effect_options("overlay", options)
+            renderer_options["overlay_audio"] = not bool(
+                renderer_options.pop("no_audio", False)
             )
-            overlay_data = await self._fetch_effect_media(ctx, overlay_url)
-            renderer_options = _renderer_effect_options(effect, options)
-            if effect == "overlayvideo":
-                renderer_options["overlay_audio"] = not bool(
-                    renderer_options.pop("no_audio", False)
-                )
-                return await render_video_effect(
-                    current_data,
-                    "overlay",
-                    second_data=overlay_data,
-                    **renderer_options,
-                )
-            return await render_image_effect(
+            return await render_overlay_effect(
                 current_data,
-                "overlay",
-                overlay_data=overlay_data,
+                overlay_data,
                 **renderer_options,
             )
 
@@ -4880,6 +6403,32 @@ class Images(Cog):
                 **options,
             )
 
+        if effect == "text":
+            text = str(options.get("text", "")).strip()
+            if not text:
+                raise ValueError("Text cannot be empty.")
+            options["inline_images"] = await resolve_inline_images(ctx.session, [text])
+            return await render_text_effect(current_data, **options)
+
+        if effect == "combine":
+            second_source = str(options.pop("second", "")).strip()
+            if not second_source:
+                raise ValueError(
+                    "Combine requires `-second` followed by another "
+                    "User/Emoji/Media URL."
+                )
+            second_url = await self._resolve_effect_media(
+                ctx,
+                second_source,
+                scan_messages=False,
+            )
+            second_data = await self._fetch_effect_media(ctx, second_url)
+            return await render_combine_effect(
+                current_data,
+                second_data,
+                **options,
+            )
+
         raise ValueError(f"{effect} is not supported in pipelines.")
 
     async def _run_effect_pipeline(
@@ -4891,6 +6440,7 @@ class Images(Cog):
         attachment: discord.Attachment | None = None,
     ) -> None:
         parsed_source, effects, skipped = _parse_effect_pipeline(pipeline)
+        progress = _RunProgress(ctx, len(effects))
         media_url = await self._resolve_effect_media(
             ctx,
             source or parsed_source,
@@ -4907,16 +6457,29 @@ class Images(Cog):
             completed: list[str] = []
             adjustments: list[str] = []
             used_sound_effect_ids: set[int] = set()
-            for effect, label, options in _resolve_pipeline_random_effects(
-                effects,
-                allow_audio=bool(media_probe and media_probe.has_audio),
-                media_duration=float(getattr(media_probe, "duration", 0.0)),
+            for step, (effect, label, options) in enumerate(
+                _resolve_pipeline_random_effects(
+                    effects,
+                    allow_audio=bool(media_probe and media_probe.has_audio),
+                    allow_visual=media_probe is None
+                    or bool(getattr(media_probe, "has_video", True)),
+                    media_duration=float(getattr(media_probe, "duration", 0.0)),
+                ),
+                start=1,
             ):
+                progress.update(step, label)
                 engine = PIPELINE_EFFECTS[effect][0]
                 normalized_options, normalized_notes = _normalize_effect_options(
                     effect,
                     options,
                 )
+                if effect == "overlay" and bool(
+                    normalized_options.pop("fullrandom", False)
+                ):
+                    _randomize_overlay_options(
+                        normalized_options,
+                        random_module.SystemRandom(),
+                    )
                 if effect == "overlayflag":
                     self._validate_flag_media(
                         str(normalized_options.get("flag", "")),
@@ -4935,7 +6498,20 @@ class Images(Cog):
                     used_sound_effect_ids.add(selected.id)
                     normalized_options["effect"] = str(selected.id)
                     label = f"{label}: {selected.display_name}"
+                random_overlay_label: str | None = None
                 try:
+                    if effect == "overlay":
+                        overlay_source = str(
+                            normalized_options.get("overlay", "")
+                        ).strip()
+                        if _random_overlay_kind(overlay_source) is not None:
+                            (
+                                normalized_options["_overlay_data"],
+                                random_overlay_label,
+                            ) = await self._random_overlay_data(
+                                ctx,
+                                overlay_source,
+                            )
                     async with asyncio.timeout(MEDIA_EFFECT_TIMEOUT):
                         if engine == "special":
                             result = await self._run_pipeline_special_effect(
@@ -4963,12 +6539,14 @@ class Images(Cog):
                                 ),
                             )
                 except TimeoutError:
-                    skipped.append(f"{label} (took longer than 30 seconds)")
+                    skipped.append(f"{label} (took longer than 60 seconds)")
                     continue
                 except ValueError as error:
                     skipped.append(f"{label} ({error})")
                     continue
                 current_data = result.data
+                if random_overlay_label is not None:
+                    label = _random_overlay_display(random_overlay_label)
                 completed.append(label)
                 adjustments.extend(normalized_notes)
 
@@ -4984,12 +6562,14 @@ class Images(Cog):
                 note_parts.append(f"Skipped: {'; '.join(skipped)}")
             if adjustments:
                 note_parts.append("; ".join(adjustments))
+            progress.close()
             await self._send_effect_result(
                 ctx,
                 result,
                 started=started,
                 note=" | ".join(note_parts),
             )
+        progress.close()
 
     @commands.command(
         name="run",
@@ -5293,6 +6873,7 @@ class Images(Cog):
         ctx: Context,
         scale: float = 1.0,
         ratio: str = "",
+        size: str = "",
         media: str | None = None,
         attachment: discord.Attachment | None = None,
     ) -> None:
@@ -5304,6 +6885,7 @@ class Images(Cog):
             attachment,
             scale=scale,
             ratio=ratio,
+            size=size,
         )
 
     @effect_2.command(name="distort")
@@ -5412,6 +6994,59 @@ class Images(Cog):
     async def effect_3(self, ctx: Context) -> None:
         """Apply more effects to a User/Emoji/Media URL."""
         await ctx.send_help(ctx.command)
+
+    @effect_3.command(name="text")
+    @app_commands.autocomplete(font=_font_autocomplete)
+    async def effect_3_text(
+        self,
+        ctx: Context,
+        text: str,
+        font: str = "Roboto",
+        size: app_commands.Range[int, 8, 512] = 48,
+        position: str = "center",
+        color: str = "#ffffff",
+        style: str = "outline",
+        bold: bool = False,
+        media: str | None = None,
+        attachment: discord.Attachment | None = None,
+    ) -> None:
+        """Add styled Unicode and emoji text to a User/Emoji/Media URL."""
+        await self._apply_text_effect(
+            ctx,
+            source=media or "",
+            attachment=attachment,
+            text=text,
+            font=font,
+            size=size,
+            position=position,
+            color=color,
+            style=style,
+            bold=bold,
+        )
+
+    @effect_3.command(name="combine")
+    async def effect_3_combine(
+        self,
+        ctx: Context,
+        position: Literal["top", "bottom", "left", "right"] = "right",
+        mode: Literal["resize", "stretch", "original"] = "resize",
+        audio: Literal["mix", "first", "second", "none"] = "mix",
+        media: str | None = None,
+        second_media: str | None = None,
+        attachment: discord.Attachment | None = None,
+        second_attachment: discord.Attachment | None = None,
+    ) -> None:
+        """Combine two User/Emoji/Media URLs on one extended canvas."""
+        await self._apply_combine_effect(
+            ctx,
+            source=media or "",
+            second_source=second_media or "",
+            attachment=attachment,
+            second_attachment=second_attachment,
+            position=position,
+            mode=mode,
+            audio=audio,
+        )
 
     @effect_3.command(name="hallway")
     async def effect_3_hallway(
@@ -5773,7 +7408,7 @@ class Images(Cog):
     @app_commands.describe(
         speed="Playback speed from -5 to -1 (slower) or 1 to 5 (faster)",
         media=MEDIA_INPUT_DESCRIPTION,
-        attachment="Attach an image, GIF, or video",
+        attachment="Attach an image, GIF, video, or audio",
         start="Time where the speed change begins",
         stop="Time where the speed change ends, or 0 for the end",
     )
@@ -5814,6 +7449,22 @@ class Images(Cog):
             source=media or "",
             attachment=attachment,
             preserve_transparency=preserve_transparency,
+        )
+
+    @image_effect.command(name="average-colors")
+    @app_commands.describe(
+        media=MEDIA_INPUT_DESCRIPTION,
+        attachment="Attach a still image",
+    )
+    async def image_effect_average_colors(
+        self,
+        ctx: Context,
+        media: str | None = None,
+        attachment: discord.Attachment | None = None,
+    ) -> None:
+        """Create a labeled palette from a still image."""
+        await self._average_colors_effect(
+            ctx, source=media or "", attachment=attachment
         )
 
     @image_effect.command(name="spin")
@@ -6234,76 +7885,110 @@ class Images(Cog):
             direction="top",
         )
 
-    @effect_3.group(name="overlay", invoke_without_command=True)
-    async def image_effect_overlay(self, ctx: Context) -> None:
-        """Overlay a flag or second User/Emoji/Media URL."""
-        await ctx.send_help(ctx.command)
-
-    @image_effect_overlay.command(name="flag")
-    @app_commands.describe(
-        flag="Pride flag, pirate, country name, or two-letter country code",
-        opacity="Overlay opacity from 0 to 100%",
-    )
-    async def image_effect_overlay_flag(
-        self,
-        ctx: Context,
-        flag: str,
-        media: str | None = None,
-        attachment: discord.Attachment | None = None,
-        opacity: float = 35.0,
-    ) -> None:
-        """Overlay a pride, country, or pirate flag on a User/Emoji/Media URL."""
-        flag_data = await self._flag_data(ctx, flag)
-        await self._apply_image_effect(
-            ctx,
-            "overlay",
-            source=media or "",
-            attachment=attachment,
-            overlay_data=flag_data,
-            _flag_name=flag,
-            opacity=opacity,
-            scale=1.0,
-            stretch=True,
-        )
-
-    @image_effect_overlay.command(name="image")
+    @effect_3.command(name="overlay")
     @app_commands.describe(
         media=MEDIA_INPUT_DESCRIPTION,
-        overlay_media="User/Emoji/Media URL to place on top",
-        attachment="Attach the background image or GIF",
-        overlay_attachment="Attach the image to place on top",
+        overlay_media=(
+            "User/Emoji/Media URL or [user|media|emoji|asset|flag] [name|random]"
+            " to place on top"
+        ),
+        audio_media="Audio or video URL to mix into the main media",
+        flag="Pride flag, pirate, country name, or two-letter country code",
+        attachment="Attach the background image, GIF, or video",
+        overlay_attachment="Attach the image, GIF, or video to place on top",
+        audio_attachment="Attach audio or video to mix in",
         opacity="Overlay opacity from 0 to 100%",
         scale="Overlay size from 0.05 to 2 times the background",
+        size="Overlay dimensions such as 100x100, from 1 to 4096 pixels per side",
         position="Where to place the overlay",
         x="Horizontal offset from -4096 to 4096 pixels",
         y="Vertical offset from -4096 to 4096 pixels",
-        stretch="Stretch instead of preserving aspect ratio",
+        start="Time when the overlay starts",
+        stop="Time when the overlay stops",
+        stretch="Stretch the overlay to fill the background",
+        extend="Extend the output when the overlay video is longer",
+        overlay_audio="Mix audio from the overlay video",
+        at="Main-media time where audio starts",
+        source_start="Time to begin reading the audio file",
+        source_stop="Time to stop reading the audio file, or 0 for its end",
+        duration="Maximum audio length, or 0 for the remaining source",
+        volume="Audio volume from 0 to 5",
+        pitch="Audio pitch from -12 to 12 semitones",
+        random_time="Place the audio at a random valid time",
     )
-    async def image_effect_overlay_image(
+    async def effect_3_overlay(
         self,
         ctx: Context,
         media: str | None = None,
         overlay_media: str | None = None,
+        audio_media: str | None = None,
+        flag: str | None = None,
         attachment: discord.Attachment | None = None,
         overlay_attachment: discord.Attachment | None = None,
+        audio_attachment: discord.Attachment | None = None,
         opacity: float = 70.0,
         scale: float = 1.0,
-        position: Literal[
-            "center",
-            "top-left",
-            "top",
-            "top-right",
-            "left",
-            "right",
-            "bottom-left",
-            "bottom",
-            "bottom-right",
-        ] = "center",
+        size: str | None = None,
+        position: str = "center",
         x: int = 0,
         y: int = 0,
+        start: float = 0.0,
+        stop: float = 0.0,
         stretch: bool = False,
+        extend: bool = False,
+        overlay_audio: bool = True,
+        at: float = 0.0,
+        source_start: float = 0.0,
+        source_stop: float = 0.0,
+        duration: float = 0.0,
+        volume: float = 1.0,
+        pitch: float = 0.0,
+        random_time: bool = False,
     ) -> None:
-        """Overlay a User/Emoji/Media URL on another."""
+        """Overlay visual media or mix audio into another media item."""
+        if audio_media or audio_attachment is not None:
+            if flag or overlay_media or overlay_attachment is not None:
+                raise commands.BadArgument(
+                    "Choose visual overlay options or audio media, not both."
+                )
+            await self._apply_video_effect(
+                ctx,
+                "audiooverlay",
+                source=media or "",
+                attachment=attachment,
+                second_source=audio_media or "",
+                second_attachment=audio_attachment,
+                at=at,
+                source_start=source_start,
+                source_stop=source_stop,
+                duration=duration,
+                volume=volume,
+                pitch=pitch,
+                random_time=random_time,
+            )
+            return
+        if flag and (overlay_media or overlay_attachment is not None):
+            raise commands.BadArgument(
+                "Choose a flag or an overlay media item, not both."
+            )
+        options: dict[str, Any] = {
+            "opacity": opacity,
+            "scale": scale,
+            "position": position,
+            "x": x,
+            "y": y,
+            "start": start,
+            "stop": stop,
+            "stretch": stretch,
+            "extend": extend,
+            "overlay_audio": overlay_audio,
+        }
+        if size:
+            options["size"] = size
+        if flag:
+            options["overlay_data"] = await self._flag_data(ctx, flag)
+            options["_flag_name"] = flag
+            options["stretch"] = True
         await self._apply_image_effect(
             ctx,
             "overlay",
@@ -6311,12 +7996,7 @@ class Images(Cog):
             attachment=attachment,
             second_source=overlay_media or "",
             second_attachment=overlay_attachment,
-            opacity=opacity,
-            scale=scale,
-            position=position,
-            x=x,
-            y=y,
-            stretch=stretch,
+            **options,
         )
 
     @image_effect.command(name="reverse")
@@ -6403,62 +8083,6 @@ class Images(Cog):
             start=start,
             stop=stop,
             duration=duration,
-        )
-
-    @image_effect_overlay.command(name="video")
-    @app_commands.describe(
-        media=MEDIA_INPUT_DESCRIPTION,
-        overlay_media="User/Emoji/Media URL to place on top",
-        attachment="Attach the background video",
-        overlay_attachment="Attach the video or image to place on top",
-        opacity="Overlay opacity from 0 to 100%",
-        scale="Overlay size from 0.05 to 2 times the background",
-        position="Where to place the overlay",
-        x="Horizontal offset from -4096 to 4096 pixels",
-        y="Vertical offset from -4096 to 4096 pixels",
-        stretch="Stretch instead of preserving aspect ratio",
-        overlay_audio="Mix audio from the overlay video",
-    )
-    async def video_effects_overlay_video(
-        self,
-        ctx: Context,
-        media: str | None = None,
-        overlay_media: str | None = None,
-        attachment: discord.Attachment | None = None,
-        overlay_attachment: discord.Attachment | None = None,
-        opacity: float = 70.0,
-        scale: float = 1.0,
-        position: Literal[
-            "center",
-            "top-left",
-            "top",
-            "top-right",
-            "left",
-            "right",
-            "bottom-left",
-            "bottom",
-            "bottom-right",
-        ] = "center",
-        x: int = 0,
-        y: int = 0,
-        stretch: bool = False,
-        overlay_audio: bool = True,
-    ) -> None:
-        """Overlay a User/Emoji/Media URL on another."""
-        await self._apply_video_effect(
-            ctx,
-            "overlay",
-            source=media or "",
-            attachment=attachment,
-            second_source=overlay_media or "",
-            second_attachment=overlay_attachment,
-            opacity=opacity,
-            scale=scale,
-            position=position,
-            x=x,
-            y=y,
-            stretch=stretch,
-            overlay_audio=overlay_audio,
         )
 
     @image_effect.group(name="bass", invoke_without_command=True)

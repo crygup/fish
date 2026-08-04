@@ -27,6 +27,7 @@ from .regexes import (
     KLIPY_RE,
     LIVE_STREAM_RE,
     SOUNDCLOUD_RE,
+    TIKTOK_RE,
     TWITTER_RE,
     YOUTUBE_RE,
     YT_CLIP_RE,
@@ -36,7 +37,8 @@ from .regexes import (
 if TYPE_CHECKING:
     from core import Context
 
-DOWNLOAD_TIMEOUT: float = 180.0  # three minutes
+DOWNLOAD_TIMEOUT: float = 10 * 60.0  # ten minutes
+DOWNLOAD_TIMEOUT_MINUTES = int(DOWNLOAD_TIMEOUT // 60)
 DOWNLOAD_HOSTS = frozenset(
     {
         "youtube.com",
@@ -73,6 +75,22 @@ DOWNLOAD_HOSTS = frozenset(
     }
 )
 DISCORD_MEDIA_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})
+_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+_VIDEO_SUFFIXES = frozenset({".mp4", ".webm", ".mov", ".mkv", ".avi"})
+
+# TikTok occasionally changes which mobile app profile its API accepts.  Keep
+# a small, known-good fallback list so a transient extractor response does not
+# turn into a generic download failure for users.
+_TIKTOK_EXTRACTOR_PROFILES: tuple[str, ...] = (
+    (
+        "tiktok:app_name=musical_ly;app_version=35.1.3;"
+        "manifest_app_version=2023501030;aid=1233"
+    ),
+    (
+        "tiktok:app_name=trill;app_version=35.1.3;"
+        "manifest_app_version=2023501030;aid=1180"
+    ),
+)
 
 _COOKIE_MAP: list[tuple[Any, str]] = [
     (YOUTUBE_RE, str(FILES_ROOT / "cookies" / "youtube-cookies.txt")),
@@ -133,12 +151,27 @@ def download_format_selector(
     selector = (
         f"bestvideo[height<={res_target}]+bestaudio/" f"best[height<={res_target}]"
     )
-    if TWITTER_RE.search(url):
-        # X sometimes exposes GIF posts as a single progressive MP4 whose
-        # height is unknown to yt-dlp. Without this final fallback, the height
-        # filter removes the post's only downloadable format.
+    if TWITTER_RE.search(url) or TIKTOK_RE.search(url):
+        # X and TikTok sometimes expose a single progressive format whose
+        # height is unknown to yt-dlp, or only expose a height above our
+        # preferred target. Without this fallback the height filter removes
+        # the post's only downloadable format.
         selector += "/best"
     return selector
+
+
+def _summarize_yt_dlp_error(stderr: str) -> str:
+    """Return a short, URL-redacted diagnostic suitable for the bot log."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    if not lines:
+        return "no stderr output"
+    detail = " | ".join(lines[-3:])
+    detail = re.sub(r"https?://\S+", "<url>", detail)
+    return detail[:1000]
+
+
+def _is_video_file(path: str) -> bool:
+    return os.path.splitext(path)[1].casefold() in _VIDEO_SUFFIXES
 
 
 # ffmpeg filter for optimized GIF conversion:
@@ -196,7 +229,8 @@ class Downloader:
         remaining = self._deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise DownloadError(
-                "This download took longer than 3 minutes and was stopped. "
+                f"This download took longer than {DOWNLOAD_TIMEOUT_MINUTES} minutes "
+                "and was stopped. "
                 "Try a shorter video."
             )
         return remaining
@@ -227,7 +261,8 @@ class Downloader:
                 pass
             await communicate_task
             raise DownloadError(
-                "This download took longer than 3 minutes and was stopped. "
+                f"This download took longer than {DOWNLOAD_TIMEOUT_MINUTES} minutes "
+                "and was stopped. "
                 "Try a shorter video."
             ) from exc
         except asyncio.CancelledError:
@@ -282,6 +317,7 @@ class Downloader:
         is_audio = SOUNDCLOUD_RE.search(video) or self.format == "mp3"
         is_klipy = bool(KLIPY_RE.search(video))
         is_instagram = bool(INSTAGRAM_RE.search(video))
+        is_tiktok = bool(TIKTOK_RE.search(video))
 
         format_selector = download_format_selector(
             video,
@@ -300,9 +336,15 @@ class Downloader:
             "--no-playlist",
             "--js-runtimes",
             "deno",
+            "--retries",
+            "2",
+            "--fragment-retries",
+            "2",
             "--print",
             "after_move:filepath",
         ]
+
+        tiktok_extractor_arg_index: int | None = None
 
         if cookies := _get_cookies(video):
             args += ["--cookies", self._prepare_cookie_file(cookies)]
@@ -314,6 +356,17 @@ class Downloader:
             args.append("--force-ipv4")
             if not is_audio:
                 args += ["--format-sort", f"res:{res_target}"]
+
+        if is_tiktok:
+            # TikTok's web endpoint intermittently serves an empty challenge
+            # page. The mobile extractor is more reliable when it receives a
+            # current, explicit app profile instead of choosing one at random.
+            tiktok_extractor_arg_index = len(args) + 1
+            args += [
+                "--extractor-args",
+                _TIKTOK_EXTRACTOR_PROFILES[0],
+                "--force-ipv4",
+            ]
 
         if not is_youtube:
             args += [
@@ -341,6 +394,128 @@ class Downloader:
 
         args.append(video)
 
+        attempts = len(_TIKTOK_EXTRACTOR_PROFILES) if is_tiktok else 1
+        last_returncode: int | None = None
+        last_stderr = ""
+        last_failure = ""
+
+        for attempt in range(attempts):
+            if attempt:
+                self._cleanup_output()
+                if tiktok_extractor_arg_index is not None:
+                    args[tiktok_extractor_arg_index] = _TIKTOK_EXTRACTOR_PROFILES[
+                        attempt
+                    ]
+                # Give TikTok's edge endpoint a short opportunity to recover,
+                # without extending the downloader's single global deadline.
+                await asyncio.sleep(min(0.75, self._remaining_timeout()))
+
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+            try:
+                stdout, stderr_raw = await self._communicate_with_timeout(proc)
+            except DownloadError:
+                self._cleanup_output()
+                raise
+
+            last_returncode = proc.returncode
+            last_stderr = stderr_raw.decode(errors="replace").strip()
+
+            if proc.returncode != 0:
+                if "is_live" in last_stderr and "filter" in last_stderr:
+                    self._cleanup_output()
+                    raise DownloadError(
+                        "Live streams cannot be downloaded. Please provide a recorded video."
+                    )
+                last_failure = "yt-dlp exited before producing a media file."
+                if attempt + 1 < attempts:
+                    self.ctx.bot.logger.warning(
+                        "yt-dlp attempt failed host=%s attempt=%s/%s; retrying",
+                        urlsplit(video).hostname,
+                        attempt + 1,
+                        attempts,
+                    )
+                    continue
+            else:
+                output_path = stdout.decode(errors="replace").strip()
+                if output_path and os.path.isfile(output_path):
+                    return output_path
+                last_failure = "yt-dlp completed without producing a media file."
+                if attempt + 1 < attempts:
+                    self.ctx.bot.logger.warning(
+                        "yt-dlp produced no output host=%s attempt=%s/%s; retrying",
+                        urlsplit(video).hostname,
+                        attempt + 1,
+                        attempts,
+                    )
+                    continue
+
+            break
+
+        # Instagram photo posts (and carousels whose first item is a photo)
+        # have no video formats. yt-dlp can still retrieve the public post
+        # image as a thumbnail, so use that before returning the generic video
+        # error. This keeps the same path usable by the normal downloader,
+        # auto-download, and media effects.
+        if is_instagram and re.search(
+            r"no video|no video formats|requested format is not available",
+            last_stderr,
+            re.IGNORECASE,
+        ):
+            thumbnail_path = await self._instagram_thumbnail_download(video)
+            if thumbnail_path is not None:
+                return thumbnail_path
+
+        self.ctx.bot.logger.error(
+            "yt-dlp failed exit=%s host=%s attempts=%s detail=%s",
+            last_returncode,
+            urlsplit(video).hostname,
+            attempts,
+            _summarize_yt_dlp_error(last_stderr),
+        )
+        if last_failure:
+            self.ctx.bot.logger.error(last_failure)
+        raise DownloadError(
+            "yt-dlp could not download this video. The site may be blocking "
+            "the request, or the video may be unavailable."
+        )
+
+    async def _instagram_thumbnail_download(self, video: str) -> str | None:
+        """Download a public Instagram image post through yt-dlp's thumbnail."""
+        args = [
+            sys.executable,
+            "-m",
+            "yt_dlp",
+            "--no-playlist",
+            "--force-ipv4",
+            "--ignore-no-formats-error",
+            "--skip-download",
+            "--write-thumbnail",
+            "--convert-thumbnails",
+            "jpg",
+            "-o",
+            os.path.join(self._job_dir or "", f"{self.filename}.%(ext)s"),
+        ]
+
+        if cookies := _get_cookies(video):
+            args += ["--cookies", self._prepare_cookie_file(cookies)]
+
+        args += [
+            "--add-header",
+            "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 "
+            "Safari/537.36",
+            "--add-header",
+            "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "--add-header",
+            "Accept-Language:en-US,en;q=0.9",
+            video,
+        ]
+
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
@@ -348,34 +523,25 @@ class Downloader:
             start_new_session=True,
         )
         try:
-            stdout, stderr_raw = await self._communicate_with_timeout(proc)
+            _, stderr_raw = await self._communicate_with_timeout(proc)
         except DownloadError:
             self._cleanup_output()
             raise
-        stderr_text = stderr_raw.decode().strip() if stderr_raw else ""
 
         if proc.returncode != 0:
-            self.ctx.bot.logger.error(
-                "yt-dlp failed exit=%s host=%s",
-                proc.returncode,
+            self.ctx.bot.logger.warning(
+                "Instagram thumbnail fallback failed host=%s detail=%s",
                 urlsplit(video).hostname,
+                _summarize_yt_dlp_error(stderr_raw.decode(errors="replace")),
             )
-            if "is_live" in stderr_text and "filter" in stderr_text:
-                raise DownloadError(
-                    "Live streams cannot be downloaded. Please provide a recorded video."
-                )
-            raise DownloadError(
-                "yt-dlp could not download this video. The site may be blocking "
-                "the request, or the video may be unavailable."
-            )
-        output_path = stdout.decode().strip()
-        if not output_path or not os.path.isfile(output_path):
-            raise DownloadError(
-                "yt-dlp was unable to download this video. "
-                "The site may be blocking the request, or the video is unavailable."
-            )
+            self._cleanup_output()
+            return None
 
-        return output_path
+        for path in glob.glob(self._output_glob()):
+            if os.path.splitext(path)[1].casefold() in _IMAGE_SUFFIXES:
+                return path
+        self._cleanup_output()
+        return None
 
     async def _download_direct_media(self, url: str) -> str:
         """Download a trusted direct media URL without invoking yt-dlp."""
@@ -638,7 +804,7 @@ class Downloader:
         # Instagram may return VP9 video in an MP4 container. Desktop players
         # can decode it, but Discord mobile can display only the first frame.
         # Normalize Instagram downloads to H.264/AAC with fast-start metadata.
-        if INSTAGRAM_RE.search(self.url) and not output_path.lower().endswith(".gif"):
+        if INSTAGRAM_RE.search(self.url) and _is_video_file(output_path):
             output_path = await self._convert_to_mobile_mp4(output_path)
             if os.path.getsize(output_path) > self.max_filesize:
                 self._cleanup_output()
@@ -778,7 +944,8 @@ class Downloader:
         except asyncio.TimeoutError:
             self._cleanup_output()
             await self.ctx.send(
-                "This download took longer than 3 minutes and was stopped. "
+                f"This download took longer than {DOWNLOAD_TIMEOUT_MINUTES} minutes "
+                "and was stopped. "
                 "Try a shorter video.",
                 ephemeral=self.hidden,
             )

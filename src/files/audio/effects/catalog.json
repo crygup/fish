@@ -163,26 +163,26 @@
     },
     {
       "id": 21,
-      "name": "clip_1",
-      "display_name": "Clip 1",
+      "name": "rezero_death",
+      "display_name": "Re:Zero Death",
       "category": "misc",
-      "path": "misc/clip_1.mp3",
+      "path": "misc/rezero_death.mp3",
       "duration": 8.281
     },
     {
       "id": 22,
-      "name": "clip_2",
-      "display_name": "Clip 2",
+      "name": "metal_gear_solid_alert",
+      "display_name": "Metal Gear Solid Alert",
       "category": "misc",
-      "path": "misc/clip_2.mp3",
+      "path": "misc/metal_gear_solid_alert.mp3",
       "duration": 1.593
     },
     {
       "id": 23,
-      "name": "clip_3",
-      "display_name": "Clip 3",
+      "name": "joe_biden_soda",
+      "display_name": "Joe Biden Soda",
       "category": "misc",
-      "path": "misc/clip_3.mp3",
+      "path": "misc/joe_biden_soda.mp3",
       "duration": 2.952
     },
     {
@@ -800,6 +800,310 @@
       "category": "roblox",
       "path": "roblox/yum.mp3",
       "duration": 0.72
+    },
+    {
+      "id": 101,
+      "name": "among_us_role_reveal_sound",
+      "display_name": "Among Us Role Reveal Sound",
+      "category": "misc",
+      "path": "misc/among_us_role_reveal_sound.mp3",
+      "duration": 4.624
+    },
+    {
+      "id": 102,
+      "name": "another_one_dj_khaled",
+      "display_name": "Another One DJ Khaled",
+      "category": "misc",
+      "path": "misc/another_one_dj_khaled.mp3",
+      "duration": 0.862
+    },
+    {
+      "id": 103,
+      "name": "aubrey_hi",
+      "display_name": "Aubrey Hi",
+      "category": "misc",
+      "path": "misc/aubrey_hi.mp3",
+      "duration": 1.404
+    },
+    {
+      "id": 104,
+      "name": "awkward_cricket",
+      "display_name": "Awkward Cricket",
+      "category": "misc",
+      "path": "misc/awkward_cricket.mp3",
+      "duration": 4.467
+    },
+    {
+      "id": 105,
+      "name": "aww",
+      "display_name": "Aww",
+      "category": "misc",
+      "path": "misc/aww.mp3",
+      "duration": 3.004
+    },
+    {
+      "id": 106,
+      "name": "bro_sound_like",
+      "display_name": "Bro Sound Like",
+      "category": "misc",
+      "path": "misc/bro_sound_like.mp3",
+      "duration": 12.565
+    },
+    {
+      "id": 107,
+      "name": "censor_beep",
+      "display_name": "Censor Beep",
+      "category": "misc",
+      "path": "misc/censor_beep.mp3",
+      "duration": 0.287
+    },
+    {
+      "id": 108,
+      "name": "city_boy",
+      "display_name": "City Boy",
+      "category": "misc",
+      "path": "misc/city_boy.mp3",
+      "duration": 2.926
+    },
+    {
+      "id": 109,
+      "name": "core_sound_effect",
+      "display_name": "Core Sound Effect",
+      "category": "misc",
+      "path": "misc/core_sound_effect.mp3",
+      "duration": 0.731
+    },
+    {
+      "id": 110,
+      "name": "correct_answer_gameshow",
+      "display_name": "Correct Answer Gameshow",
+      "category": "misc",
+      "path": "misc/correct_answer_gameshow.mp3",
+      "duration": 1.296
+    },
+    {
+      "id": 111,
+      "name": "discord_join_sound_effect",
+      "display_name": "Discord Join Sound Effect",
+      "category": "misc",
+      "path": "misc/discord_join_sound_effect.mp3",
+      "duration": 1.752
+    },
+    {
+      "id": 112,
+      "name": "flashback",
+      "display_name": "Flashback",
+      "category": "misc",
+      "path": "misc/flashback.mp3",
+      "duration": 4.416
+    },
+    {
+      "id": 113,
+      "name": "fnaf_1_music_box",
+      "display_name": "FNAF 1 Music Box",
+      "category": "misc",
+      "path": "misc/fnaf_1_music_box.mp3",
+      "duration": 9.665
+    },
+    {
+      "id": 114,
+      "name": "fortnite_drinking",
+      "display_name": "Fortnite Drinking",
+      "category": "misc",
+      "path": "misc/fortnite_drinking.mp3",
+      "duration": 7.920
+    },
+    {
+      "id": 115,
+      "name": "gta_v_wasted",
+      "display_name": "GTA V Wasted",
+      "category": "misc",
+      "path": "misc/gta_v_wasted.mp3",
+      "duration": 7.784
+    },
+    {
+      "id": 116,
+      "name": "he_was_a_serial_killer",
+      "display_name": "He Was a Serial Killer",
+      "category": "misc",
+      "path": "misc/he_was_a_serial_killer.mp3",
+      "duration": 45.845
+    },
+    {
+      "id": 117,
+      "name": "heavenly_music",
+      "display_name": "Heavenly Music",
+      "category": "misc",
+      "path": "misc/heavenly_music.mp3",
+      "duration": 11.781
+    },
+    {
+      "id": 118,
+      "name": "help",
+      "display_name": "Help",
+      "category": "misc",
+      "path": "misc/help.mp3",
+      "duration": 17.998
+    },
+    {
+      "id": 119,
+      "name": "i_am_the_angry_pumpkin",
+      "display_name": "I Am the Angry Pumpkin",
+      "category": "misc",
+      "path": "misc/i_am_the_angry_pumpkin.mp3",
+      "duration": 25.896
+    },
+    {
+      "id": 120,
+      "name": "i_love_butt",
+      "display_name": "I Love Butt",
+      "category": "misc",
+      "path": "misc/i_love_butt.mp3",
+      "duration": 10.475
+    },
+    {
+      "id": 121,
+      "name": "iphone_notification",
+      "display_name": "iPhone Notification",
+      "category": "misc",
+      "path": "misc/iphone_notification.mp3",
+      "duration": 4.676
+    },
+    {
+      "id": 122,
+      "name": "jeopardy_theme_song",
+      "display_name": "Jeopardy Theme Song",
+      "category": "misc",
+      "path": "misc/jeopardy_theme_song.mp3",
+      "duration": 30.720
+    },
+    {
+      "id": 123,
+      "name": "lagging_loading",
+      "display_name": "Lagging Loading",
+      "category": "misc",
+      "path": "misc/lagging_loading.mp3",
+      "duration": 2.743
+    },
+    {
+      "id": 124,
+      "name": "mac_quack",
+      "display_name": "Mac Quack",
+      "category": "misc",
+      "path": "misc/mac_quack.mp3",
+      "duration": 1.176
+    },
+    {
+      "id": 125,
+      "name": "oh_my_god_meme",
+      "display_name": "Oh My God Meme",
+      "category": "misc",
+      "path": "misc/oh_my_god_meme.mp3",
+      "duration": 1.672
+    },
+    {
+      "id": 126,
+      "name": "please_speed_i_need_this",
+      "display_name": "Please Speed I Need This",
+      "category": "misc",
+      "path": "misc/please_speed_i_need_this.mp3",
+      "duration": 12.121
+    },
+    {
+      "id": 127,
+      "name": "punch_sound",
+      "display_name": "Punch Sound",
+      "category": "misc",
+      "path": "misc/punch_sound.mp3",
+      "duration": 1.567
+    },
+    {
+      "id": 128,
+      "name": "quote_is",
+      "display_name": "Quote Is",
+      "category": "misc",
+      "path": "misc/quote_is.mp3",
+      "duration": 11.755
+    },
+    {
+      "id": 129,
+      "name": "romance",
+      "display_name": "Romance",
+      "category": "misc",
+      "path": "misc/romance.mp3",
+      "duration": 5.856
+    },
+    {
+      "id": 130,
+      "name": "say_that_again_2",
+      "display_name": "Say That Again 2",
+      "category": "misc",
+      "path": "misc/say_that_again_2.mp3",
+      "duration": 4.702
+    },
+    {
+      "id": 131,
+      "name": "smoke_detector_beep",
+      "display_name": "Smoke Detector Beep",
+      "category": "misc",
+      "path": "misc/smoke_detector_beep.mp3",
+      "duration": 1.097
+    },
+    {
+      "id": 132,
+      "name": "snore_mimimimimimi",
+      "display_name": "Snore Mimimimimimi",
+      "category": "misc",
+      "path": "misc/snore_mimimimimimi.mp3",
+      "duration": 5.695
+    },
+    {
+      "id": 133,
+      "name": "taco_bell_bong",
+      "display_name": "Taco Bell Bong",
+      "category": "misc",
+      "path": "misc/taco_bell_bong.mp3",
+      "duration": 1.959
+    },
+    {
+      "id": 134,
+      "name": "this_is_not_fortnite",
+      "display_name": "This Is Not Fortnite",
+      "category": "misc",
+      "path": "misc/this_is_not_fortnite.mp3",
+      "duration": 604.003
+    },
+    {
+      "id": 135,
+      "name": "tuco_get_out",
+      "display_name": "Tuco Get Out",
+      "category": "misc",
+      "path": "misc/tuco_get_out.mp3",
+      "duration": 1.032
+    },
+    {
+      "id": 136,
+      "name": "were_going_back_in_time",
+      "display_name": "We Are Going Back in Time",
+      "category": "misc",
+      "path": "misc/were_going_back_in_time.mp3",
+      "duration": 16.536
+    },
+    {
+      "id": 137,
+      "name": "womp_womp_womp",
+      "display_name": "Womp Womp Womp",
+      "category": "misc",
+      "path": "misc/womp_womp_womp.mp3",
+      "duration": 3.709
+    },
+    {
+      "id": 138,
+      "name": "yaaaaaaaay",
+      "display_name": "Yaaaaaaay",
+      "category": "misc",
+      "path": "misc/yaaaaaaaay.mp3",
+      "duration": 8.176
     }
   ]
 }

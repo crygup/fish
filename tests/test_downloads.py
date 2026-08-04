@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from utils.downloads import download_format_selector, is_downloadable_media_page
+from utils.regexes import VIDEOS_RE
 
 
 def test_supported_media_pages_use_the_guarded_downloader() -> None:
@@ -25,14 +26,22 @@ def test_twitter_selector_falls_back_when_gif_dimensions_are_unknown() -> None:
     assert selector == ("bestvideo[height<=1080]+bestaudio/" "best[height<=1080]/best")
 
 
-def test_regular_video_selector_keeps_the_resolution_limit() -> None:
+def test_tiktok_selector_falls_back_when_dimensions_are_unavailable() -> None:
     selector = download_format_selector(
         "https://www.tiktok.com/@example/video/1234567890123456789",
         "mp4",
         res_target=720,
     )
 
-    assert selector == "bestvideo[height<=720]+bestaudio/best[height<=720]"
+    assert selector == "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+
+
+def test_auto_download_keeps_the_tiktok_video_id() -> None:
+    url = "https://www.tiktok.com/@example/video/1234567890123456789"
+    match = VIDEOS_RE.search(url)
+
+    assert match is not None
+    assert match.group(0) == url
 
 
 def test_audio_selector_is_unchanged() -> None:

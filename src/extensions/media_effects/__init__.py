@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import discord
-from discord.ext import commands as discord_commands
 
 from .commands import (
     Images,
@@ -23,15 +22,15 @@ class MediaEffects(Images, name="Media Effects"):
 
     def __init__(self, bot: Fishie) -> None:
         self.bot = bot
+        self._remove_audio_overlay_app_command()
         for command in self.get_app_commands():
             describe_media_parameters(command)
         for command in self.walk_commands():
-            if (
-                isinstance(command, discord_commands.HybridCommand)
-                and command.app_command is not None
-            ):
-                describe_media_parameters(command.app_command)
+            app_command = getattr(command, "app_command", None)
+            if app_command is not None:
+                describe_media_parameters(app_command)
             describe_text_numeric_ranges(command)
+        self._rebalance_effect_app_commands()
 
 
 async def setup(bot: Fishie) -> None:

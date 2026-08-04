@@ -270,11 +270,26 @@ def _text_width(
     text: str,
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
 ) -> float:
-    size = _font_size(font)
-    mono = _font_is_mono(font)
-    return sum(
-        text_font(run, size, mono=mono).getlength(run) for run in _text_runs(text)
+    return sum(_font_for_run(run, font).getlength(run) for run in _text_runs(text))
+
+
+def _font_for_run(
+    run: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Keep the selected font for supported text and fall back per script."""
+    meaningful = next(
+        (
+            character
+            for character in run
+            if character.isalpha() and not unicodedata.combining(character)
+        ),
+        "",
     )
+    group = _font_group(meaningful) if meaningful else "default"
+    if not meaningful or (group == "default" and ord(meaningful) <= 0x024F):
+        return font
+    return text_font(run, _font_size(font), mono=_font_is_mono(font))
 
 
 @lru_cache(maxsize=512)
@@ -358,6 +373,8 @@ def draw_inline_tokens(
     assets: dict[str, bytes],
     timestamp_ms: int = 0,
     fill: str | tuple[int, ...] = "black",
+    stroke_width: int = 0,
+    stroke_fill: str | tuple[int, ...] | None = None,
 ) -> None:
     draw = ImageDraw.Draw(image)
     x, y = position
@@ -371,12 +388,15 @@ def draw_inline_tokens(
             x += image_size
             continue
         for run in _text_runs(token.value):
-            run_font = text_font(
+            run_font = _font_for_run(run, font)
+            draw.text(
+                (round(x), y),
                 run,
-                _font_size(font),
-                mono=_font_is_mono(font),
+                font=run_font,
+                fill=fill,
+                stroke_width=stroke_width,
+                stroke_fill=stroke_fill,
             )
-            draw.text((round(x), y), run, font=run_font, fill=fill)
             x += run_font.getlength(run)
 
 

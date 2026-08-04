@@ -435,17 +435,26 @@ class MediaConverter(commands.Converter[str]):
     def _component_media_url(cls, component: object) -> str | None:
         if isinstance(component, dict):
             media = component.get("media")
-            url = media.get("url") if isinstance(media, dict) else None
-            nested = component.get("components", ())
-            if not nested:
-                nested = component.get("items", ())
+            url = (
+                media.get("url")
+                if isinstance(media, dict)
+                else media if isinstance(media, str) else component.get("url")
+            )
+            nested = component.get("components") or component.get("items") or ()
             accessory = component.get("accessory")
         else:
             media = getattr(component, "media", None)
-            url = getattr(media, "url", None)
-            nested = getattr(component, "children", None)
-            if nested is None:
-                nested = getattr(component, "items", ())
+            if isinstance(media, str):
+                url = media
+            else:
+                url = getattr(media, "url", None) or getattr(media, "media", None)
+            if not isinstance(url, str):
+                url = getattr(component, "url", None)
+            nested = (
+                getattr(component, "children", None)
+                or getattr(component, "components", None)
+                or getattr(component, "items", ())
+            )
             accessory = getattr(component, "accessory", None)
 
         if cls._is_media_url(url):
@@ -475,6 +484,14 @@ class MediaConverter(commands.Converter[str]):
             url = cls._component_media_url(component)
             if url:
                 return url
+            to_dict = getattr(component, "to_dict", None)
+            if callable(to_dict):
+                try:
+                    url = cls._component_media_url(to_dict())
+                except (TypeError, ValueError):
+                    url = None
+                if url:
+                    return url
         for sticker in getattr(message, "stickers", ()):
             url = getattr(sticker, "url", None)
             if cls._is_media_url(url):
@@ -575,6 +592,15 @@ class MediaConverter(commands.Converter[str]):
                 url = await self._message_content_media_url(ctx, replied)
                 if url:
                     return url
+                # A replied message without an asset still has a useful
+                # author source. Use Discord's resolved display avatar, never
+                # the raw default-avatar URL that can be present in payloads.
+                display_avatar = getattr(
+                    getattr(replied, "author", None), "display_avatar", None
+                )
+                avatar_url = getattr(display_avatar, "url", None)
+                if self._is_media_url(avatar_url):
+                    return avatar_url
         # 2.5. scan recent messages for media
         if include_message_media and not argument:
             try:

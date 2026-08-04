@@ -4,7 +4,9 @@ from re import compile as comp
 # fmt: off
 VIDEOS_RE: Pattern[str] = comp(
     r"""
-    (https://(vt|www|vm|m|vk)?.?tiktok.com/(@?[a-zA-z0-9_.]{1,})?/?(@?[a-zA-z0-9_.]{1,})?/?(@?[a-zA-z0-9_.]{1,})?/)?
+    # Keep the complete TikTok path, including video IDs.  The final slash is
+    # optional because Discord links commonly omit it.
+    (https://(?:vt|www|vm|m|vk)?\.?tiktok\.com/[^\s<>()]+)?
     (https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,})?
     (https?://clips.twitch.tv/[a-zA-Z0-9_-])?
     (https?://(?:www\.)?(twitter|x|fxtwitter|vxtwitter|fixupx|girlcockx)\.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19,})?
