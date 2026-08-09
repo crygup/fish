@@ -24,6 +24,7 @@ format_table = {
     "member_join_logs": "member_id",
     "tags": "author_id",
     "emoji_stats": "author_id",
+    "download_stats": "user_id",
 }
 
 
@@ -302,6 +303,8 @@ class Logging(Cog):
             "pokemon": ["Pokémon solve tracking", "\U0001f7e2"],
             "corn": ["Corn reaction tracking", "\U0001f7e2"],
             "emoji": ["Emoji statistics tracking", "\U0001f7e2"],
+            "downloads": ["Download site statistics", "\U0001f7e2"],
+            "snipe": ["Deleted and edited message sniping", "\U0001f7e2"],
         }
 
         if bool(records):
@@ -380,6 +383,7 @@ class Logging(Cog):
             "member_join_logs": "Server joins",
             "tags": "Tags",
             "emoji_stats": "Emoji statistics",
+            "download_stats": "Download statistics",
         }
 
         return [

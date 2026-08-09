@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Sequence, cast
 
@@ -11,8 +12,8 @@ from discord.ext import commands
 
 from core import Cog
 from utils.activities import (
-    activity_image_url,
     activity_identity,
+    activity_image_url,
     activity_summary,
     loggable_activities,
 )
@@ -175,6 +176,20 @@ def _channel_permission_changes(
     elif deleted and not created:
         action = discord.AuditLogAction.overwrite_delete
     return changes, action
+
+
+@dataclass(frozen=True, slots=True)
+class _ChannelPositionChange:
+    """Snapshot of one channel/category move for the short batching window."""
+
+    guild: discord.Guild
+    channel_id: int
+    channel_label: str
+    before_position: object | None
+    after_position: object | None
+
+
+CHANNEL_MOVE_BATCH_DELAY = 0.75
 
 
 class _LoggerView(discord.ui.LayoutView):
@@ -429,6 +444,133 @@ class Logger(Cog):
     _pending_purges: dict[tuple[int, int], float]
     _webhook_locks: dict[tuple[int, str], asyncio.Lock]
     _logged_webhook_creations: dict[tuple[int, int, str], float]
+    _channel_move_batches: dict[int, list[_ChannelPositionChange]]
+    _channel_move_tasks: dict[int, asyncio.Task[None]]
+
+    def _queue_channel_position_update(
+        self,
+        before: discord.abc.GuildChannel,
+        after: discord.abc.GuildChannel,
+    ) -> None:
+        batches: dict[int, list[_ChannelPositionChange]] = getattr(
+            self, "_channel_move_batches", {}
+        )
+        tasks: dict[int, asyncio.Task[None]] = getattr(self, "_channel_move_tasks", {})
+        self._channel_move_batches = batches
+        self._channel_move_tasks = tasks
+
+        name = str(getattr(after, "name", after.id))
+        label = getattr(after, "mention", None) or f"`{_display(name)}`"
+        guild_id = after.guild.id
+        batches.setdefault(guild_id, []).append(
+            _ChannelPositionChange(
+                guild=after.guild,
+                channel_id=after.id,
+                channel_label=label,
+                before_position=getattr(before, "position", None),
+                after_position=getattr(after, "position", None),
+            )
+        )
+        if guild_id not in tasks:
+            tasks[guild_id] = asyncio.create_task(
+                self._flush_channel_position_updates(guild_id)
+            )
+
+    async def _flush_channel_position_updates(self, guild_id: int) -> None:
+        try:
+            await asyncio.sleep(CHANNEL_MOVE_BATCH_DELAY)
+            batches: dict[int, list[_ChannelPositionChange]] = getattr(
+                self, "_channel_move_batches", {}
+            )
+            changes = batches.pop(guild_id, [])
+            if not changes:
+                return
+
+            # Discord can emit more than one update for a channel during a
+            # reorder. Keep its original position and the final position only.
+            merged: dict[int, _ChannelPositionChange] = {}
+            for change in changes:
+                previous = merged.get(change.channel_id)
+                if previous is None:
+                    merged[change.channel_id] = change
+                else:
+                    merged[change.channel_id] = _ChannelPositionChange(
+                        guild=change.guild,
+                        channel_id=change.channel_id,
+                        channel_label=change.channel_label,
+                        before_position=previous.before_position,
+                        after_position=change.after_position,
+                    )
+            changes = list(merged.values())
+            embed = self._channel_position_embed(changes)
+            await self._emit_logger(
+                changes[0].guild,
+                "channel",
+                embed,
+                audit_action=discord.AuditLogAction.channel_update,
+                audit_target_id=changes[0].channel_id if len(changes) == 1 else None,
+            )
+        finally:
+            tasks: dict[int, asyncio.Task[None]] = getattr(
+                self, "_channel_move_tasks", {}
+            )
+            if tasks.get(guild_id) is asyncio.current_task():
+                tasks.pop(guild_id, None)
+                batches = getattr(self, "_channel_move_batches", {})
+                if batches.get(guild_id):
+                    tasks[guild_id] = asyncio.create_task(
+                        self._flush_channel_position_updates(guild_id)
+                    )
+
+    @staticmethod
+    def _channel_position_embed(
+        changes: Sequence[_ChannelPositionChange],
+    ) -> discord.Embed:
+        if len(changes) == 1:
+            change = changes[0]
+            embed = Logger._embed(
+                "Channel updated",
+                f"{change.channel_label} was updated.",
+                color=discord.Colour.orange(),
+            )
+            embed.add_field(
+                name="Position",
+                value=(
+                    f"Before: {_display(change.before_position)}\n"
+                    f"After: {_display(change.after_position)}"
+                ),
+                inline=False,
+            )
+            Logger._add_item_id(embed, discord.Object(change.channel_id))
+            return embed
+
+        entries = [
+            f"{change.channel_label} (ID: {change.channel_id}): "
+            f"{_display(change.before_position)} -> "
+            f"{_display(change.after_position)}"
+            for change in changes
+        ]
+        summary = "Multiple channels or categories were moved together."
+        visible: list[str] = []
+        for entry in entries:
+            candidate = summary + "\n\n" + "\n\n".join((*visible, entry))
+            if len(candidate) > 4096:
+                break
+            visible.append(entry)
+        remaining = len(entries) - len(visible)
+        details = "\n\n".join(visible)
+        if remaining:
+            suffix = f"\n\n… and {remaining} more."
+            while visible and len(summary) + 2 + len(details) + len(suffix) > 4096:
+                visible.pop()
+                details = "\n\n".join(visible)
+            details += suffix
+        embed = Logger._embed(
+            "Channels moved",
+            summary + "\n\n" + details,
+            color=discord.Colour.orange(),
+        )
+        return embed
 
     def _webhook_lock(self, guild_id: int, event: str) -> asyncio.Lock:
         locks: dict[tuple[int, str], asyncio.Lock] = getattr(self, "_webhook_locks", {})
@@ -1225,6 +1367,49 @@ class Logger(Cog):
                 audit_target_id=after.id,
             )
 
+        before_role_ids = {role.id for role in before.roles}
+        after_role_ids = {role.id for role in after.roles}
+        added_roles = [
+            role
+            for role in after.roles
+            if role.id not in before_role_ids and not role.is_default()
+        ]
+        removed_roles = [
+            role
+            for role in before.roles
+            if role.id not in after_role_ids and not role.is_default()
+        ]
+        if added_roles or removed_roles:
+            embed = self._embed(
+                "Member roles changed",
+                f"{after.mention}'s roles were updated.",
+                color=discord.Colour.orange(),
+            )
+            if added_roles:
+                embed.add_field(
+                    name="Roles added",
+                    value="\n".join(
+                        f"{role.mention} (`{role.id}`)" for role in added_roles
+                    )[:1024],
+                    inline=False,
+                )
+            if removed_roles:
+                embed.add_field(
+                    name="Roles removed",
+                    value="\n".join(
+                        f"{role.mention} (`{role.id}`)" for role in removed_roles
+                    )[:1024],
+                    inline=False,
+                )
+            self._add_item_id(embed, after)
+            await self._emit_logger(
+                after.guild,
+                "member",
+                embed,
+                audit_action=discord.AuditLogAction.member_role_update,
+                audit_target_id=after.id,
+            )
+
         if before.timed_out_until != after.timed_out_until:
             timed_out = after.timed_out_until is not None
             embed = self._embed(
@@ -1398,6 +1583,29 @@ class Logger(Cog):
 
     @commands.Cog.listener("on_member_join")
     async def logger_member_join(self, member: discord.Member) -> None:
+        if member.bot:
+            embed = self._embed(
+                "Bot added",
+                f"{member.mention} was added to the server.",
+                color=discord.Colour.green(),
+            )
+            embed.set_author(name=str(member), icon_url=member.display_avatar.url)
+            embed.add_field(
+                name="Bot",
+                value=f"{_display(member.name)}\n{member.mention}",
+                inline=True,
+            )
+            self._add_item_id(embed, member)
+            await self._emit_logger(
+                member.guild,
+                "server",
+                embed,
+                audit_action=discord.AuditLogAction.bot_add,
+                audit_target_id=member.id,
+                audit_actor_label="Added by",
+            )
+            return
+
         embed = self._embed(
             "Member joined",
             f"{member.mention} joined the server.",
@@ -1482,11 +1690,17 @@ class Logger(Cog):
         metadata_changed = (
             before.name != after.name or before_category != after_category
         )
+        before_position = getattr(before, "position", None)
+        after_position = getattr(after, "position", None)
+        position_changed = before_position != after_position
         permission_changes, overwrite_action = _channel_permission_changes(
             before,
             after,
         )
-        if not metadata_changed and not permission_changes:
+        if not metadata_changed and not position_changed and not permission_changes:
+            return
+        if position_changed and not metadata_changed and not permission_changes:
+            self._queue_channel_position_update(before, after)
             return
         embed = self._embed(
             "Channel updated",
@@ -1501,6 +1715,15 @@ class Logger(Cog):
             embed.add_field(
                 name="After",
                 value=f"{_display(after.name)} / {_display(after.category)}",
+            )
+        if position_changed:
+            embed.add_field(
+                name="Position",
+                value=(
+                    f"Before: {_display(before_position)}\n"
+                    f"After: {_display(after_position)}"
+                ),
+                inline=False,
             )
         if permission_changes:
             permission_text = "\n\n".join(permission_changes)
@@ -1597,7 +1820,14 @@ class Logger(Cog):
             before.permissions,
             after.permissions,
         )
-        if before.name == after.name and not permission_changes:
+        color_changed = before.colour != after.colour
+        position_changed = before.position != after.position
+        if (
+            before.name == after.name
+            and not permission_changes
+            and not color_changed
+            and not position_changed
+        ):
             return
         embed = self._embed(
             "Role updated",
@@ -1614,6 +1844,24 @@ class Logger(Cog):
             embed.add_field(
                 name="Permission changes",
                 value=permission_text,
+                inline=False,
+            )
+        if color_changed:
+            embed.add_field(
+                name="Color",
+                value=(
+                    f"Before: {_display(before.colour)}\n"
+                    f"After: {_display(after.colour)}"
+                ),
+                inline=False,
+            )
+        if position_changed:
+            embed.add_field(
+                name="Position",
+                value=(
+                    f"Before: {_display(before.position)}\n"
+                    f"After: {_display(after.position)}"
+                ),
                 inline=False,
             )
         self._add_item_id(embed, after)
@@ -1961,3 +2209,10 @@ class Logger(Cog):
             audit_target=user,
             audit_actor_label="Moderator",
         )
+
+    def cog_unload(self) -> None:
+        """Cancel pending channel-move batches when the moderation cog reloads."""
+        for task in getattr(self, "_channel_move_tasks", {}).values():
+            task.cancel()
+        getattr(self, "_channel_move_tasks", {}).clear()
+        getattr(self, "_channel_move_batches", {}).clear()

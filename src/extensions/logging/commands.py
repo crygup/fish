@@ -135,7 +135,7 @@ class Commands(Cog):
             None,
         )
 
-    @commands.hybrid_command(name="activity", aliases=("game", "playing"))
+    @commands.hybrid_command(name="activity", aliases=("playing",))
     @commands.guild_only()
     @app_commands.describe(query="Activity name or server member to look up")
     async def activity(
@@ -303,11 +303,7 @@ class Commands(Cog):
             embed.description = f"-# View all avatars [here](https://crygup.com/discord?tab=user&subtab=avatars&q={user.id})"
             await ctx.send(file=file, embed=embed)
 
-    @commands.hybrid_group(
-        name="avatars", aliases=("pfps", "avis", "avs"), fallback="profile"
-    )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.group(name="avatars", aliases=("pfps", "avis", "avs"))
     async def avatars(self, ctx: Context, *, user: discord.User = commands.Author):
         """Shows a user's previous avatars"""
 
@@ -322,13 +318,10 @@ class Commands(Cog):
 
         await self.avatars_func(ctx, user, ctx.guild.id)
 
-    @commands.hybrid_group(
+    @commands.group(
         name="avatarhistory",
         aliases=("avyh", "avatar-history", "avatar_history", "pfph", "avh"),
-        fallback="profile",
     )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def avatar_history(
         self, ctx: Context, *, user: discord.User = commands.Author
     ):
@@ -346,10 +339,7 @@ class Commands(Cog):
 
         await self.avatars_grid(ctx, user, ctx.guild.id)
 
-    @commands.command(name="usernames")
-    async def usernames(self, ctx: Context, *, user: discord.User = commands.Author):
-        """Shows a user's previous usernames"""
-
+    async def _usernames(self, ctx: Context, user: discord.User) -> None:
         self.ensure_history_visible(ctx, user)
         results = await self.bot.pool.fetch(
             "SELECT * FROM username_logs WHERE user_id = $1 ORDER BY created_at DESC",
@@ -374,6 +364,11 @@ class Commands(Cog):
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
+    @commands.command(name="usernames")
+    async def usernames(self, ctx: Context, *, user: discord.User = commands.Author):
+        """Shows a user's previous usernames"""
+        await self._usernames(ctx, user)
+
     @commands.hybrid_command(name="servertags", aliases=("stags",))
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -381,7 +376,9 @@ class Commands(Cog):
         self, ctx: Context, *, user: discord.User = commands.Author
     ) -> None:
         """Shows a user's previous primary server tags."""
+        await self._server_tags(ctx, user)
 
+    async def _server_tags(self, ctx: Context, user: discord.User) -> None:
         self.ensure_history_visible(ctx, user)
         results = await self.bot.pool.fetch(
             "SELECT * FROM stag_logs WHERE user_id = $1 ORDER BY created_at DESC",
@@ -407,14 +404,7 @@ class Commands(Cog):
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
-    @commands.hybrid_command(name="names", aliases=("display_names", "displaynames"))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def display_names(
-        self, ctx: Context, *, user: discord.User = commands.Author
-    ):
-        """Shows a user's previous display names"""
-
+    async def _display_names(self, ctx: Context, user: discord.User) -> None:
         self.ensure_history_visible(ctx, user)
         results = await self.bot.pool.fetch(
             "SELECT * FROM display_name_logs WHERE user_id = $1 ORDER BY created_at DESC",
@@ -440,15 +430,22 @@ class Commands(Cog):
 
         await pager.start(ctx)
 
-    @commands.hybrid_command(name="nicknames", aliases=("nicks",))
-    @app_commands.allowed_installs(guilds=True)
-    @app_commands.allowed_contexts(guilds=True)
+    @commands.command(name="names", aliases=("display_names", "displaynames"))
+    async def display_names(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ):
+        """Shows a user's previous display names"""
+        await self._display_names(ctx, user)
+
+    @commands.command(name="nicknames", aliases=("nicks",))
     @commands.guild_only()
     async def nicknames(
         self, ctx: Context, *, member: discord.Member = commands.Author
     ):
         """Shows a user's previous nicknames"""
+        await self._nicknames(ctx, member)
 
+    async def _nicknames(self, ctx: Context, member: discord.Member) -> None:
         self.ensure_history_visible(ctx, member)
         results = await self.bot.pool.fetch(
             "SELECT * FROM nickname_logs WHERE user_id = $1 AND guild_id = $2 ORDER BY created_at DESC",
@@ -616,6 +613,14 @@ class Commands(Cog):
         user: Optional[discord.Member] = None,
     ):
         """Shows a member's daily status activity over the last 31 days."""
+        async with ctx.typing():
+            await self._status_calendar(ctx, user)
+
+    async def _status_calendar(
+        self,
+        ctx: GuildContext,
+        user: Optional[discord.Member] = None,
+    ) -> None:
         started = time.monotonic()
         target = user or ctx.author
         self.ensure_history_visible(ctx, target)

@@ -13,8 +13,11 @@ from core import Cog
 from extensions.context import ConfirmationView
 from utils import time as time_utils
 
+from .custom_roles import CustomRoles
 from .honeypot import Honeypot
 from .logger import Logger
+from .mass import Mass
+from .snipe import Snipe
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -66,7 +69,7 @@ def _parse_duration(until: datetime.datetime) -> int:
     return int(minutes)
 
 
-class Moderation(Logger, Honeypot):
+class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles):
     """Server moderation commands."""
 
     emoji = discord.PartialEmoji(name="\U0001f528")
@@ -74,12 +77,19 @@ class Moderation(Logger, Honeypot):
     def __init__(self, bot: Fishie):
         self.bot = bot
         self._dehoist_guilds: set[int] = set()
+        self._snipe_enabled_guilds: set[int] = set()
+        self._editsnipe_enabled_guilds: set[int] = set()
+        self._snipe_messages = {}
+        self._last_snipes = {}
+        self._last_editsnipes = {}
+        self._snipe_last_prune = 0.0
 
     async def cog_load(self) -> None:
         rows = await self.bot.pool.fetch(
             "SELECT guild_id FROM guild_settings WHERE dehoist = TRUE"
         )
         self._dehoist_guilds = {int(row["guild_id"]) for row in rows}
+        await self._load_snipe_settings()
 
     @staticmethod
     def _can_dehoist(member: discord.Member, me: discord.Member) -> bool:
@@ -313,6 +323,169 @@ class Moderation(Logger, Honeypot):
         )
         scope = f"in {channel.mention}" if channel is not None else "in this server"
         await ctx.send(f"Enabled `{command.qualified_name}` {scope}.")
+
+    @staticmethod
+    def _lockable_channel(channel: discord.abc.GuildChannel) -> bool:
+        return isinstance(channel, (discord.TextChannel, discord.ForumChannel))
+
+    async def _resolve_lock_channels(
+        self, ctx: GuildContext, target: str | None
+    ) -> list[discord.abc.GuildChannel]:
+        guild = ctx.guild
+        if target is None or not target.strip():
+            channel = ctx.channel
+            if not isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
+                raise commands.BadArgument(
+                    "Lock and unlock can only be used in text or forum channels."
+                )
+            return [channel]
+
+        value = target.strip()
+        if value.casefold() == "all":
+            return [
+                channel for channel in guild.channels if self._lockable_channel(channel)
+            ]
+
+        try:
+            channel = await commands.TextChannelConverter().convert(ctx, value)
+        except commands.BadArgument:
+            try:
+                channel = await commands.ForumChannelConverter().convert(ctx, value)
+            except commands.BadArgument as error:
+                raise commands.BadArgument(
+                    "Choose a text/forum channel, `all`, or leave it blank for this channel."
+                ) from error
+        if channel.guild.id != guild.id:
+            raise commands.BadArgument("The channel must belong to this server.")
+        return [channel]
+
+    async def _lock_channel(
+        self, ctx: GuildContext, channel: discord.abc.GuildChannel
+    ) -> bool:
+        existing = await self.bot.pool.fetchrow(
+            "SELECT 1 FROM channel_locks WHERE guild_id = $1 AND channel_id = $2",
+            channel.guild.id,
+            channel.id,
+        )
+        if existing:
+            return False
+
+        role = channel.guild.default_role
+        previous = channel.overwrites_for(role)
+        allow, deny = previous.pair()
+        had_overwrite = role in channel.overwrites
+        await self.bot.pool.execute(
+            """
+            INSERT INTO channel_locks
+                (guild_id, channel_id, had_overwrite, allow_bits, deny_bits, locked_by)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            channel.guild.id,
+            channel.id,
+            had_overwrite,
+            allow.value,
+            deny.value,
+            ctx.author.id,
+        )
+        try:
+            previous.send_messages = False
+            await channel.set_permissions(
+                role,
+                overwrite=previous,
+                reason=f"Channel locked by {ctx.author} (ID: {ctx.author.id})",
+            )
+        except Exception:
+            await self.bot.pool.execute(
+                "DELETE FROM channel_locks WHERE guild_id = $1 AND channel_id = $2",
+                channel.guild.id,
+                channel.id,
+            )
+            raise
+        return True
+
+    async def _unlock_channel(self, channel: discord.abc.GuildChannel) -> bool:
+        row = await self.bot.pool.fetchrow(
+            """
+            SELECT had_overwrite, allow_bits, deny_bits
+            FROM channel_locks
+            WHERE guild_id = $1 AND channel_id = $2
+            """,
+            channel.guild.id,
+            channel.id,
+        )
+        if row is None:
+            return False
+
+        role = channel.guild.default_role
+        overwrite = None
+        if row["had_overwrite"]:
+            overwrite = discord.PermissionOverwrite.from_pair(
+                discord.Permissions(int(row["allow_bits"])),
+                discord.Permissions(int(row["deny_bits"])),
+            )
+        await channel.set_permissions(
+            role,
+            overwrite=overwrite,
+            reason="Channel unlocked and previous permissions restored",
+        )
+        await self.bot.pool.execute(
+            "DELETE FROM channel_locks WHERE guild_id = $1 AND channel_id = $2",
+            channel.guild.id,
+            channel.id,
+        )
+        return True
+
+    @commands.hybrid_command(name="lock")
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_channels=True)
+    @commands.bot_has_guild_permissions(manage_channels=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    @app_commands.describe(
+        target="A channel mention/name/ID, or `all`. Leave blank for this channel."
+    )
+    async def lock(self, ctx: GuildContext, *, target: str | None = None) -> None:
+        """Lock a text or forum channel and remember its previous permissions."""
+        channels = await self._resolve_lock_channels(ctx, target)
+        changed = 0
+        for channel in channels:
+            if await self._lock_channel(ctx, channel):
+                changed += 1
+        if target and target.strip().casefold() == "all":
+            await ctx.send(
+                f"Locked **{changed}** channel{'s' if changed != 1 else ''}."
+            )
+        elif changed:
+            await ctx.send(f"Locked {channels[0].mention}.")
+        else:
+            await ctx.send(f"{channels[0].mention} is already locked.")
+
+    @commands.hybrid_command(name="unlock")
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_channels=True)
+    @commands.bot_has_guild_permissions(manage_channels=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    @app_commands.describe(
+        target="A channel mention/name/ID, or `all`. Leave blank for this channel."
+    )
+    async def unlock(self, ctx: GuildContext, *, target: str | None = None) -> None:
+        """Restore the permissions saved by lock for a text or forum channel."""
+        channels = await self._resolve_lock_channels(ctx, target)
+        changed = 0
+        for channel in channels:
+            if await self._unlock_channel(channel):
+                changed += 1
+        if target and target.strip().casefold() == "all":
+            await ctx.send(
+                f"Unlocked **{changed}** channel{'s' if changed != 1 else ''} and restored their permissions."
+            )
+        elif changed:
+            await ctx.send(
+                f"Unlocked {channels[0].mention} and restored its permissions."
+            )
+        else:
+            await ctx.send(f"{channels[0].mention} does not have a saved lock.")
 
     @commands.command(name="ban")
     @mod_target("ban_members")
