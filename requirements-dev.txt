@@ -121,6 +121,8 @@ nodeenv==1.10.0
     # via pyright
 numpy==2.5.1
     # via pandas
+opencv-python-headless==4.11.0.86
+    # via -r requirements.in
 packageurl-python==0.17.6
     # via cyclonedx-python-lib
 packaging==26.2
@@ -182,6 +184,8 @@ python-dateutil==2.9.0.post0
     # via
     #   -r requirements.in
     #   pandas
+qrcode==8.2
+    # via -r requirements.in
 requests==2.34.2
     # via
     #   cachecontrol

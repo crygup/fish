@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import mimetypes
 import random as random_module
 import re
 import shlex
@@ -30,7 +31,15 @@ from PIL import (
 )
 
 from core import Cog
-from utils import MediaConverter, SimplePages, fetch_public_bytes, to_thread
+from utils import (
+    TEMP_MEDIA_MAX_BYTES,
+    MediaConverter,
+    SimplePages,
+    TemporaryMediaError,
+    fetch_public_bytes,
+    to_thread,
+    upload_temporary_media,
+)
 from utils.converters import TwemojiConverter
 from utils.downloads import Downloader, is_downloadable_media_page
 from utils.errors import DownloadError
@@ -42,6 +51,11 @@ from utils.rich_text import (
     text_font,
     wrap_inline_text,
 )
+from utils.unit_conversion import (
+    ConversionError,
+    convert_request,
+    parse_conversion_expression,
+)
 
 from .audio_effects import (
     AudioEffect,
@@ -51,7 +65,6 @@ from .audio_effects import (
 )
 from .fonts import font_names
 from .image_assets import ImageAsset, image_asset_catalog
-from .video_assets import VideoAsset, video_asset_catalog
 from .processing import (
     MAX_MEDIA_DURATION,
     PRIDE_FLAGS,
@@ -69,6 +82,7 @@ from .processing import (
     render_text_effect,
     render_video_effect,
 )
+from .video_assets import VideoAsset, video_asset_catalog
 
 if TYPE_CHECKING:
     from core.bot import Fishie
@@ -3934,17 +3948,11 @@ class Images(Cog):
                 result = await compress_media_to_size(
                     result.data,
                     result.filename,
-                    max_size,
+                    TEMP_MEDIA_MAX_BYTES,
                 )
             except ValueError:
                 result = original_result
             compressed = result.data != original_result.data
-        if len(result.data) > max_size:
-            raise commands.BadArgument(
-                "The result is too large for this server's upload limit. "
-                "Try fewer effects, a shorter video, or a smaller source."
-            )
-
         info_lines = [
             f"-# Invoked by {ctx.author.mention}",
             f"-# Took {time.monotonic() - started:.1f}s",
@@ -3955,6 +3963,46 @@ class Images(Cog):
             info_lines.append("-# Compressed to fit the server upload limit")
         info_text = "\n".join(info_lines)
         filename = result.filename.replace("/", "_").replace("\\", "_")
+        hosted_url: str | None = None
+        if len(result.data) > max_size:
+            try:
+                hosted_url = await upload_temporary_media(
+                    self.bot,
+                    result.data,
+                    filename,
+                    content_type=mimetypes.guess_type(filename)[0],
+                )
+            except TemporaryMediaError as error:
+                raise commands.BadArgument(
+                    "The result is too large for Discord and could not be hosted "
+                    "temporarily. Try fewer effects, a shorter video, or a smaller source."
+                ) from error
+            info_text = (
+                f"{info_text}\n"
+                "-# Discord's upload limit was exceeded. This link expires in 30 minutes."
+            )
+        if hosted_url is not None:
+            container_items: list[ui.Item[Any]]
+            if result.displayable:
+                container_items = [
+                    ui.MediaGallery(MediaGalleryItem(hosted_url)),
+                    ui.TextDisplay(info_text),
+                ]
+            else:
+                container_items = [
+                    ui.TextDisplay(
+                        f"[Open the generated file]({hosted_url})\n{info_text}"
+                    )
+                ]
+            container = ui.Container(*container_items, accent_color=self.bot.embedcolor)
+            view_type = type("HostedMediaEffectView", (ui.LayoutView,), {})
+            view = view_type(timeout=None)
+            view.add_item(container)
+            await ctx.send(
+                view=view,
+                reference=ctx.message.to_reference(fail_if_not_exists=False),
+            )
+            return
         if not result.displayable:
             await ctx.send(
                 content=info_text,
@@ -4064,26 +4112,49 @@ class Images(Cog):
                     pass
             fitted_results.append(result)
         results = fitted_results
-        if any(len(result.data) > max_size for result in results):
-            raise commands.BadArgument(
-                "At least one converted file is too large for this server. "
-                "Try fewer effects, a shorter video, or a smaller source."
-            )
+        hosted_urls: dict[int, str] = {}
+        for index, result in enumerate(results):
+            if len(result.data) <= max_size:
+                continue
+            filename = result.filename.replace("/", "_").replace("\\", "_")
+            try:
+                hosted_urls[index] = await upload_temporary_media(
+                    self.bot,
+                    result.data,
+                    filename,
+                    content_type=mimetypes.guess_type(filename)[0],
+                )
+            except TemporaryMediaError as error:
+                raise commands.BadArgument(
+                    "At least one converted file is too large for Discord and "
+                    "could not be hosted temporarily."
+                ) from error
         filenames = [
             result.filename.replace("/", "_").replace("\\", "_") for result in results
         ]
         items: list[ui.Item[Any]] = []
-        for result, filename in zip(results, filenames):
-            if result.displayable:
+        files: list[discord.File] = []
+        for index, (result, filename) in enumerate(zip(results, filenames)):
+            hosted_url = hosted_urls.get(index)
+            if hosted_url is not None and result.displayable:
+                items.append(ui.MediaGallery(MediaGalleryItem(hosted_url)))
+            elif result.displayable:
                 items.append(
                     ui.MediaGallery(MediaGalleryItem(f"attachment://{filename}"))
                 )
+                files.append(discord.File(BytesIO(result.data), filename))
+            elif hosted_url is not None:
+                items.append(ui.TextDisplay(f"[Open the generated file]({hosted_url})"))
             else:
                 items.append(ui.File(f"attachment://{filename}"))
+                files.append(discord.File(BytesIO(result.data), filename))
         items.append(
             ui.TextDisplay(
                 f"-# Invoked by {ctx.author.mention}\n"
-                f"-# Took {time.monotonic() - started:.1f}s"
+                f"-# Took {time.monotonic() - started:.1f}s\n"
+                "-# Oversized files are hosted for 30 minutes"
+                if hosted_urls
+                else f"-# Took {time.monotonic() - started:.1f}s"
             )
         )
         container = ui.Container(*items, accent_color=self.bot.embedcolor)
@@ -4091,10 +4162,7 @@ class Images(Cog):
         view = view_type(timeout=None)
         view.add_item(container)
         await ctx.send(
-            files=[
-                discord.File(BytesIO(result.data), filename)
-                for result, filename in zip(results, filenames)
-            ],
+            files=files,
             view=view,
             reference=ctx.message.to_reference(fail_if_not_exists=False),
         )
@@ -4443,11 +4511,6 @@ class Images(Cog):
                 "No image found. Attach one, reply to an image, or provide a URL."
             ) from error
 
-        max_size = (
-            ctx.guild.filesize_limit
-            if ctx.guild is not None
-            else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
-        )
         async with self.bot.media_semaphore, ctx.typing():
             import time
 
@@ -4458,28 +4521,16 @@ class Images(Cog):
                     image_data,
                     speed,
                     clockwise,
-                    max_size,
+                    TEMP_MEDIA_MAX_BYTES,
                 )
             except ValueError as error:
                 raise commands.BadArgument(str(error)) from error
 
-            elapsed = time.time() - started
-            info_text = f"-# Invoked by {ctx.author.mention}\n-# Took {elapsed:.1f}s"
-            if adjustments:
-                info_text += f"\n-# {'; '.join(adjustments)}"
-            gallery = ui.MediaGallery(MediaGalleryItem("attachment://globe.gif"))
-            container = ui.Container(
-                gallery,
-                ui.TextDisplay(info_text),
-                accent_color=self.bot.embedcolor,
-            )
-            view_type = type("GlobeView", (ui.LayoutView,), {})
-            view = view_type(timeout=None)
-            view.add_item(container)
-            await ctx.send(
-                file=discord.File(output, "globe.gif"),
-                view=view,
-                reference=ctx.message.to_reference(fail_if_not_exists=False),
+            await self._send_effect_result(
+                ctx,
+                EffectResult(output.getvalue(), "globe.gif"),
+                started=started,
+                note="; ".join(adjustments),
             )
 
     @media_effect_timeout
@@ -4503,11 +4554,6 @@ class Images(Cog):
                 "No image found. Attach one, reply to an image, or provide a URL."
             ) from error
 
-        max_size = (
-            ctx.guild.filesize_limit
-            if ctx.guild is not None
-            else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
-        )
         async with self.bot.media_semaphore, ctx.typing():
             import time
 
@@ -4520,28 +4566,16 @@ class Images(Cog):
                     zoom,
                     speed,
                     clockwise,
-                    max_size,
+                    TEMP_MEDIA_MAX_BYTES,
                 )
             except ValueError as error:
                 raise commands.BadArgument(str(error)) from error
 
-            elapsed = time.time() - started
-            info_text = f"-# Invoked by {ctx.author.mention}\n-# Took {elapsed:.1f}s"
-            if adjustments:
-                info_text += f"\n-# {'; '.join(adjustments)}"
-            gallery = ui.MediaGallery(MediaGalleryItem("attachment://spin3d.gif"))
-            container = ui.Container(
-                gallery,
-                ui.TextDisplay(info_text),
-                accent_color=self.bot.embedcolor,
-            )
-            view_type = type("Spin3DView", (ui.LayoutView,), {})
-            view = view_type(timeout=None)
-            view.add_item(container)
-            await ctx.send(
-                file=discord.File(output, "spin3d.gif"),
-                view=view,
-                reference=ctx.message.to_reference(fail_if_not_exists=False),
+            await self._send_effect_result(
+                ctx,
+                EffectResult(output.getvalue(), "spin3d.gif"),
+                started=started,
+                note="; ".join(adjustments),
             )
 
     @media_effect_timeout
@@ -4624,38 +4658,19 @@ class Images(Cog):
                 force_gif=_is_klipy_media_url(image_url),
             )
 
-            elapsed = time.time() - started
-            info_text = f"-# Invoked by {ctx.author.mention}\n-# Took {elapsed:.1f}s"
-
             if filename.endswith(".mp4"):
-                max_size = ctx.guild.filesize_limit if ctx.guild else 25 * 1024 * 1024
                 buf.seek(0, 2)
                 size = buf.tell()
                 if size > 20 * 1024 * 1024:
                     buf.seek(0)
                     data = await _compress_video(buf.read())
                     buf = BytesIO(data)
-                buf.seek(0, 2)
-                if buf.tell() > max_size:
-                    buf.seek(0)
-                    raise commands.BadArgument(
-                        "The captioned video is too large for this server. Try a smaller video or use a server with a higher upload limit."
-                    )
                 buf.seek(0)
 
-            gallery = ui.MediaGallery(MediaGalleryItem(f"attachment://{filename}"))
-            container = ui.Container(
-                gallery,
-                ui.TextDisplay(info_text),
-                accent_color=self.bot.embedcolor,
-            )
-            view_type = type("CaptionView", (ui.LayoutView,), {})
-            view = view_type(timeout=None)
-            view.add_item(container)
-            await ctx.send(
-                file=discord.File(buf, filename),
-                view=view,
-                reference=ctx.message.to_reference(fail_if_not_exists=False),
+            await self._send_effect_result(
+                ctx,
+                EffectResult(buf.read(), filename),
+                started=started,
             )
 
     @media_effect_timeout
@@ -5548,7 +5563,7 @@ class Images(Cog):
         )
 
     @commands.command(
-        name="text",
+        name="text-effect",
         aliases=("addtext",),
         extras={
             "usage": (
@@ -5703,13 +5718,28 @@ class Images(Cog):
     @commands.command(
         name="convert",
         aliases=("covert",),
-        extras={"usage": "<media> [-format mp4]"},
+        extras={"usage": "<media> [-format mp4] | <amount> <unit> [to|into] <unit>"},
     )
     async def convert_command(self, ctx: Context, *, argument: str = "") -> None:
-        """Convert up to five User/Emoji/Media URLs to another format.
+        """Convert media files, currencies, or measurements.
 
-        -# -format    Choose the output format. Defaults to MP4.
+        Media conversion accepts a User/Emoji/Media URL and can use
+        ``-format`` to choose another file format. Values can be converted
+        between supported currencies, Robux, temperatures, distances, and
+        time units, for example ``10 usd to pounds`` or ``5m into sec``.
+
+        -# -format    Choose the output format for media. Defaults to MP4.
         """
+        conversion = parse_conversion_expression(argument)
+        if conversion is not None:
+            try:
+                async with ctx.typing():
+                    result = await convert_request(ctx, conversion)
+            except ConversionError as error:
+                raise commands.BadArgument(str(error)) from error
+            await ctx.send(result, allowed_mentions=discord.AllowedMentions.none())
+            return
+
         media, options = _parse_effect_flags(
             argument,
             values={"format": (("f",), str, "mp4")},
@@ -6214,12 +6244,6 @@ class Images(Cog):
         effect: str,
         options: dict[str, Any],
     ) -> EffectResult:
-        max_size = (
-            ctx.guild.filesize_limit
-            if ctx.guild is not None
-            else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
-        )
-
         if effect == "globe":
             speed = float(options["speed"])
             if not 0.25 <= speed <= 3:
@@ -6228,7 +6252,7 @@ class Images(Cog):
                 current_data,
                 speed,
                 bool(options["clockwise"]),
-                max_size,
+                TEMP_MEDIA_MAX_BYTES,
             )
             return EffectResult(output.getvalue(), "globe.gif")
 
@@ -6248,7 +6272,7 @@ class Images(Cog):
                 zoom,
                 speed,
                 bool(options["clockwise"]),
-                max_size,
+                TEMP_MEDIA_MAX_BYTES,
             )
             return EffectResult(output.getvalue(), "spin3d.gif")
 

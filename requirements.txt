@@ -91,6 +91,8 @@ numpy==2.5.1
     # via
     #   -r requirements.in
     #   pandas
+opencv-python-headless==4.11.0.86
+    # via -r requirements.in
 pandas==3.0.3
     # via -r requirements.in
 parsedatetime==2.6
@@ -123,6 +125,8 @@ python-dateutil==2.9.0.post0
     # via
     #   -r requirements.in
     #   pandas
+qrcode==8.2
+    # via -r requirements.in
 rich==15.0.0
     # via curl-cffi
 six==1.17.0

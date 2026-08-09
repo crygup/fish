@@ -7,6 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any, Callable
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
@@ -274,6 +275,7 @@ class Calculator(Cog):
     emoji = discord.PartialEmoji(name="➗")
 
     @commands.hybrid_command(name="math", aliases=("calc", "calculate"))
+    @app_commands.describe(expression="Arithmetic expression to calculate safely.")
     async def math(self, ctx: Context, *, expression: str):
         """Calculate a complex arithmetic expression safely."""
         try:

@@ -14,6 +14,7 @@ jishaku==2.7.5
 lru-dict==1.4.1
 lxml==6.1.1
 numpy==2.5.1
+opencv-python-headless==4.11.0.86
 pandas==3.0.3
 parsedatetime==2.6
 pillow==12.3.0
@@ -22,6 +23,7 @@ psutil==7.2.2
 pydantic==2.13.4
 pycountry==24.6.1
 python-dateutil==2.9.0.post0
+qrcode==8.2
 typing-extensions==4.16.0
 uvicorn==0.51.0
 yt-dlp==2026.7.4
