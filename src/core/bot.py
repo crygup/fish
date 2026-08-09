@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import json
 import pkgutil
+import random
 import re
 import sys
 import traceback
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     List,
     Mapping,
@@ -39,6 +41,85 @@ from .migrations import check_migrations
 SILENT_COMMAND_USERS: dict[str, frozenset[int]] = {
     "crab": frozenset({662378595192274974}),
 }
+
+ERROR_COMPONENT_CHUNK = 3_700
+_ERROR_URL_QUERY_RE = re.compile(r"(?i)(https?://[^\s<>\"']+)\?[^\s<>\"']*")
+_ERROR_AUTH_RE = re.compile(
+    r"(?i)(\b(?:authorization|x-api-key|api[_-]?key|token|secret|password)\s*[:=]\s*(?:bearer\s+)?)\S+"
+)
+
+
+def _error_chunks(value: str, limit: int = ERROR_COMPONENT_CHUNK) -> list[str]:
+    """Split error text into safe Components V2-sized chunks."""
+    value = value or "No error text was provided."
+    value = value.replace("```", "`\u200b``")
+    return [value[index : index + limit] for index in range(0, len(value), limit)]
+
+
+def _error_code_block(value: str) -> str:
+    return f"```text\n{value.replace('```', '`\u200b``')}\n```"
+
+
+def _redact_error_text(value: object, redact: Callable[[str], str]) -> str:
+    """Remove configured secrets and common bearer data from diagnostics."""
+    text = redact(str(value))
+    text = _ERROR_URL_QUERY_RE.sub(r"\1?[REDACTED]", text)
+    return _ERROR_AUTH_RE.sub(r"\1[REDACTED]", text)
+
+
+def _error_inline(value: object, redact: Callable[[str], str]) -> str:
+    text = _redact_error_text(value, redact)
+    text = discord.utils.escape_markdown(text)
+    text = discord.utils.escape_mentions(text)
+    return text
+
+
+def _error_user_name(user: object | None) -> str | None:
+    if user is None:
+        return None
+    return str(
+        getattr(user, "display_name", None)
+        or getattr(user, "global_name", None)
+        or getattr(user, "name", None)
+        or user
+    )
+
+
+def _interaction_invocation(
+    interaction: discord.Interaction | None,
+    command_name: str | None = None,
+) -> str | None:
+    if interaction is None:
+        return None
+    data = interaction.data
+    if not isinstance(data, dict):
+        return f"/{command_name}" if command_name else None
+
+    def render_options(options: object) -> str:
+        if not isinstance(options, list):
+            return ""
+        parts: list[str] = []
+        for option in options:
+            if not isinstance(option, dict) or not option.get("name"):
+                continue
+            name = str(option["name"])
+            nested = render_options(option.get("options"))
+            if nested:
+                parts.append(f"{name} {nested}")
+            elif "value" in option:
+                parts.append(f"{name}={option['value']}")
+            else:
+                parts.append(name)
+        return " ".join(parts)
+
+    name = command_name or str(data.get("name") or "unknown")
+    options = render_options(data.get("options"))
+    invocation = f"/{name}" + (f" {options}" if options else "")
+    custom_id = data.get("custom_id")
+    if custom_id:
+        invocation += f" [component: {custom_id}]"
+    return invocation
+
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -77,6 +158,31 @@ APP_PARAMETER_DESCRIPTIONS = {
     "user": "Discord user to view",
     "username": "Account username or profile URL",
 }
+
+ROTATING_STATUSES: tuple[str, ...] = (
+    "fish help",
+    "fish anime mob psycho",
+    "fish manga mob psycho",
+    "fish image dr pepper",
+    "fish character emilia",
+    "fish remind 67 minutes",
+    "fish download",
+    "fish prefix",
+    "fish fm",
+    "fish anilist",
+    "fish caption i love dr pepper",
+    "fish click",
+    "fish movie",
+    "fish letterboxd",
+    "fish twitch follow @pge4",
+    "fish highlight",
+    "fish cube",
+    "fish globe",
+    "fish chart",
+    "fish phone",
+    "fish badapple",
+)
+STATUS_ROTATION_INTERVAL = 60 * 30
 
 
 def describe_missing_app_parameters(command: Any) -> None:
@@ -221,6 +327,8 @@ class Fishie(commands.Bot):
         self._resources_closed = False
         self._oauth_refresh_tasks: set[asyncio.Task[Any]] = set()
         self._eventsub_tasks: set[asyncio.Task[Any]] = set()
+        self._status_rotation_task: asyncio.Task[None] | None = None
+        self._status_rotation_index = 0
         self._restart_message_checked = False
         self.testing: bool = testing
         self.error_logs = None
@@ -384,29 +492,145 @@ class Fishie(commands.Bot):
         file = discord.File(s, "large.txt")  # type: ignore
         return file
 
-    async def log_error(self, error: Exception | commands.CommandError | BaseException):
+    def _error_invocation_details(
+        self,
+        *,
+        context: Any | None = None,
+        interaction: discord.Interaction | None = None,
+        event: str | None = None,
+        event_args: tuple[Any, ...] = (),
+    ) -> tuple[str, str | None, str | None, str | None, str | None]:
+        """Return source, author, subject, ID, and invocation text for an error."""
+        interaction = interaction or getattr(context, "interaction", None)
+        command = getattr(getattr(context, "command", None), "qualified_name", None)
+        message = getattr(context, "message", None)
+        author = getattr(context, "author", None)
+        subject: object | None = None
+        invocation: str | None = None
+
+        if message is not None and getattr(message, "content", None):
+            invocation = str(message.content)
+
+        if interaction is not None:
+            author = author or getattr(interaction, "user", None)
+            app_invocation = _interaction_invocation(interaction, command)
+            if invocation is None:
+                invocation = app_invocation
+            source = "Component interaction" if context is not None else "Interaction"
+            if command:
+                source += f" ({command})"
+        elif context is not None:
+            source = "Text command"
+            if command:
+                source += f" ({command})"
+        elif event:
+            source = f"Event: {event}"
+        else:
+            source = "Background task"
+
+        for argument in event_args:
+            if isinstance(argument, discord.Message):
+                author = author or argument.author
+                if invocation is None:
+                    invocation = argument.content or None
+                continue
+            if isinstance(argument, discord.Interaction):
+                author = author or argument.user
+                if invocation is None:
+                    invocation = _interaction_invocation(argument)
+                continue
+            if isinstance(argument, (discord.Member, discord.User)):
+                subject = subject or argument
+
+        if event and not source.startswith("Event:"):
+            source = f"Event: {event}"
+
+        author_name = _error_user_name(author)
+        subject_name = _error_user_name(subject)
+        author_id = str(getattr(author, "id", "")) if author is not None else None
+        return source, author_name, subject_name, author_id, invocation
+
+    async def log_error(
+        self,
+        error: Exception | commands.CommandError | BaseException,
+        *,
+        context: Any | None = None,
+        interaction: discord.Interaction | None = None,
+        event: str | None = None,
+        event_args: tuple[Any, ...] = (),
+    ) -> None:
         excinfo = "".join(
             traceback.format_exception(
-                type(error), error, error.__traceback__, chain=False
+                type(error), error, error.__traceback__, chain=True
             )
         )
 
-        excinfo = self.redact(excinfo)
+        excinfo = _redact_error_text(excinfo, self.redact)
+        source, author_name, subject_name, author_id, invocation = (
+            self._error_invocation_details(
+                context=context,
+                interaction=interaction,
+                event=event,
+                event_args=event_args,
+            )
+        )
+        source = _error_inline(source, self.redact)
+        author_text = (
+            f"{_error_inline(author_name, self.redact)} (`{author_id}`)"
+            if author_name and author_id
+            else "Unavailable"
+        )
+        subject_text = (
+            _error_inline(subject_name, self.redact) if subject_name else None
+        )
+        invocation = discord.utils.escape_mentions(
+            _redact_error_text(invocation or "Unavailable", self.redact)
+        )
 
-        formatted = f"```py\n{excinfo}\n```"
-        if len(formatted) > 2000:
-            files = [self.too_big(excinfo)]
-            content = "File too large"
-        else:
-            files = []
-            content = formatted
+        chunks = _error_chunks(excinfo)
+        visible_chunk_count = 5 if len(chunks) <= 5 else 4
+        children: list[discord.ui.Item] = [
+            discord.ui.TextDisplay("## Fishie error report"),
+            discord.ui.TextDisplay(
+                "\n".join(
+                    [
+                        f"**Source:** {source}",
+                        f"**Author:** {author_text}",
+                        *([f"**Subject:** {subject_text}"] if subject_text else []),
+                    ]
+                )
+            ),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(f"### Invocation\n{_error_code_block(invocation)}"),
+            discord.ui.Separator(),
+        ]
+        for index, chunk in enumerate(chunks[:visible_chunk_count]):
+            heading = "### Full error\n" if index == 0 else ""
+            children.append(discord.ui.TextDisplay(heading + _error_code_block(chunk)))
+        files: list[discord.File] = []
+        if len(chunks) > visible_chunk_count:
+            children.append(
+                discord.ui.TextDisplay(
+                    "-# The complete traceback is attached as `large.txt`."
+                )
+            )
+            files.append(self.too_big(excinfo))
+
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(
+            discord.ui.Container(*children, accent_color=discord.Color.red().value)
+        )
 
         if self.error_logs is None:
             self.logger.error("Error webhook is not initialized; cannot send report")
             return
 
         try:
-            await self.error_logs.send(content=content, files=files)
+            await self.error_logs.send(
+                view=view,
+                files=files,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         except Exception:
             self.logger.exception("Failed to send error report")
 
@@ -421,7 +645,11 @@ class Fishie(commands.Bot):
             type(error), error, error.__traceback__, file=sys.stderr
         )
 
-        await self.log_error(error)
+        await self.log_error(
+            error,
+            event=event,
+            event_args=(*args, *kwargs.values()),
+        )
 
         return await super().on_error(event, *args, **kwargs)
 
@@ -471,7 +699,10 @@ class Fishie(commands.Bot):
         async with self.pool.acquire() as connection:
             await check_migrations(connection)
 
-        self.activity = discord.CustomActivity(name="fish help")
+        self._status_rotation_index = random.randrange(len(ROTATING_STATUSES))
+        self.activity = discord.CustomActivity(
+            name=ROTATING_STATUSES[self._status_rotation_index]
+        )
 
         self.error_logs = discord.Webhook.from_url(
             self.config["webhooks"]["error_logs"], session=self.session
@@ -484,6 +715,31 @@ class Fishie(commands.Bot):
         await self.populate_cache()
         await update_pokemon(self)
         self.logger.info(f"Added {len(self.pokemon):,} pokemon")
+        self._status_rotation_task = asyncio.create_task(
+            self._rotate_statuses(), name="fishie-status-rotation"
+        )
+
+    async def _rotate_statuses(self) -> None:
+        """Rotate the public custom status without changing the mobile identify."""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            await asyncio.sleep(STATUS_ROTATION_INTERVAL)
+            if self.is_closed():
+                return
+
+            self._status_rotation_index = (self._status_rotation_index + 1) % len(
+                ROTATING_STATUSES
+            )
+            activity = discord.CustomActivity(
+                name=ROTATING_STATUSES[self._status_rotation_index]
+            )
+            self.activity = activity
+            try:
+                await self.change_presence(activity=activity)
+            except discord.DiscordException:
+                self.logger.warning(
+                    "Could not update the rotating custom status", exc_info=True
+                )
 
     async def on_ready(self):
         if not hasattr(self, "start_time"):
@@ -573,6 +829,14 @@ class Fishie(commands.Bot):
         return await super().get_context(message, cls=new_cls)
 
     async def close(self) -> None:
+        status_task = self._status_rotation_task
+        self._status_rotation_task = None
+        if status_task is not None and not status_task.done():
+            status_task.cancel()
+            try:
+                await status_task
+            except asyncio.CancelledError:
+                pass
         if self._resources_closed:
             await super().close()
             return

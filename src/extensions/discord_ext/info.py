@@ -34,7 +34,6 @@ from utils import (
     fish_edit,
     fish_go_back,
     human_join,
-    reply,
 )
 
 if TYPE_CHECKING:
@@ -299,30 +298,60 @@ class _RoleMemberModal(discord.ui.Modal, title="Member ID"):
             )
 
 
+async def _fetch_review_entries(
+    ctx: Context, user: Union[discord.User, discord.Member]
+) -> List[Review]:
+    url = f"https://manti.vendicated.dev/api/reviewdb/users/{user.id}/reviews"
+    async with ctx.session.get(url) as resp:
+        if resp.status != 200:
+            return []
+        payload = await resp.json()
+
+    reviews = payload.get("reviews", []) if isinstance(payload, dict) else []
+    if not isinstance(reviews, list) or not reviews:
+        return []
+
+    # ReviewDB normally prefixes the list with a summary record. Some users
+    # receive only review records, so only discard that prefix when it is not
+    # shaped like a review.
+    first = reviews[0]
+    rows = (
+        reviews[1:] if not isinstance(first, dict) or "sender" not in first else reviews
+    )
+
+    entries: List[Review] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sender = row.get("sender")
+        if not isinstance(sender, dict):
+            continue
+        try:
+            review_id = int(row["id"])
+            if review_id == 0:
+                continue
+            entries.append(
+                Review(
+                    id=review_id,
+                    sender=ReviewSender(
+                        user_id=int(sender["discordID"]),
+                        profilePhoto=str(sender.get("profilePhoto") or ""),
+                        username=str(sender.get("username") or "Unknown user"),
+                    ),
+                    comment=str(row.get("comment") or ""),
+                    timestamp=int(row["timestamp"]),
+                    target_id=user.id,
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return entries
+
+
 class UserDropdown(discord.ui.Select):
-    def __init__(
-        self,
-        ctx: Context,
-        user: Union[discord.User, discord.Member],
-        index_embed: discord.Embed,
-        fetched_user: Optional[discord.User] = None,
-    ):
-        self.ctx = ctx
-        self.user = user
-        self.fetched_user = fetched_user
-        self.index_embed = index_embed
-
-        self.index_cache: Optional[discord.Embed] = None
-        self.avatar_cache: Optional[discord.Embed] = None
-        self.banner_cache: Optional[discord.Embed] = None
-        self.bot_cache: Optional[discord.Embed] = None
-
-        if isinstance(user, discord.Member):
-            self._guild_id: Optional[int] = user.guild.id
-        elif ctx.guild:
-            self._guild_id = ctx.guild.id
-        else:
-            self._guild_id = None
+    def __init__(self, user_view: "UserView"):
+        self.user_view = user_view
+        user = user_view.user
 
         options = [
             discord.SelectOption(
@@ -351,7 +380,7 @@ class UserDropdown(discord.ui.Select):
             ),
         ]
 
-        if fetched_user and fetched_user.banner:
+        if user_view.fetched_user.banner:
             options.append(
                 discord.SelectOption(
                     label="Banner",
@@ -373,193 +402,328 @@ class UserDropdown(discord.ui.Select):
 
         super().__init__(placeholder="Make a selection", options=options)
 
-    async def index_response(self):
-        return self.index_embed
+    async def callback(self, interaction: Interaction) -> None:
+        await self.user_view.select_page(interaction, self.values[0])
 
-    async def avatar_response(self) -> discord.Embed:
-        if self.avatar_cache:
-            return self.avatar_cache
 
-        ctx = self.ctx
-        user = self.user
-        fuser = self.fetched_user or await ctx.bot.fetch_user(user.id)
-        color = fuser.accent_color or ctx.bot.embedcolor
-
-        avatars = [f"[Default]({user.default_avatar.url})"]
-
-        if user.avatar:
-            avatars.append(f"[Avatar]({user.avatar.url})")
-
-        if isinstance(user, discord.Member) and user.guild_avatar:
-            avatars.append(f"[Guild]({user.guild_avatar.url})")
-
-        embed = discord.Embed(
-            color=color, description=human_join([a for a in avatars], final="and")
+class UserView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.User, discord.Member],
+        fetched_user: discord.User,
+        index_body: str,
+        footer_text: str,
+        server_tag: str | None = None,
+        avatar_media_url: str = "",
+        accent_color: discord.Colour | None = None,
+    ) -> None:
+        super().__init__(timeout=120)
+        self.ctx = ctx
+        self.user = user
+        self.fetched_user = fetched_user
+        self.index_body = index_body
+        self.footer_text = footer_text
+        self.server_tag = server_tag
+        self.avatar_media_url = avatar_media_url or user.display_avatar.url
+        self.accent_color = accent_color or ctx.bot.embedcolor
+        self._guild_id = (
+            user.guild.id
+            if isinstance(user, discord.Member)
+            else ctx.guild.id if ctx.guild else None
         )
-        embed.set_author(name=f"{user}'s avatars", icon_url=user.display_avatar.url)
+        self._page = "index"
+        self._reviews: List[Review] = []
+        self._review_index = 0
+        self._bot_data: Dict[Any, Any] | None = None
+        self.message: Optional[discord.Message] = None
+        self._render()
 
-        embed.set_footer(text=f"Run {ctx.get_prefix}avatar for more details.")
+    def _footer(self, extra: str | None = None) -> list[discord.ui.TextDisplay]:
+        lines = self.footer_text.splitlines()
+        if extra:
+            lines.extend(extra.splitlines())
 
-        embed.set_image(url=user.display_avatar.url)
+        regular_lines = [line for line in lines if not line.startswith("-# ")]
+        subtext_lines = [line for line in lines if line.startswith("-# ")]
+        displays: list[discord.ui.TextDisplay] = []
+        if regular_lines:
+            displays.append(discord.ui.TextDisplay("\n".join(regular_lines)))
+        if subtext_lines:
+            displays.append(discord.ui.TextDisplay("\n".join(subtext_lines)))
+        return displays
 
-        self.avatar_cache = embed
-        return embed
+    def _profile_section(self, title: str, body: str) -> discord.ui.Section:
+        return discord.ui.Section(
+            discord.ui.TextDisplay(f"## {title}"),
+            discord.ui.TextDisplay(body or "No additional information."),
+            accessory=discord.ui.Thumbnail(self.avatar_media_url),
+        )
 
-    async def review_response(self, interaction: discord.Interaction) -> None:
-        cog = self.ctx.bot.discord
-        if cog:
-            await cog.review_func(self.ctx, self.user, hidden=True)
-        else:
-            await interaction.response.send_message(
-                content="Could not find any reviews.", ephemeral=True
+    def _render(self) -> None:
+        self.clear_items()
+        children: list[discord.ui.Item[Any]]
+
+        if self._page == "index":
+            title = str(self.user)
+            if self.server_tag:
+                title += f" ({self.server_tag})"
+            children = [
+                self._profile_section(title, f"{self.user.mention}\n{self.index_body}")
+            ]
+            children.extend([discord.ui.Separator(), *self._footer()])
+        elif self._page == "avatar":
+            avatars = [f"[Default]({self.user.default_avatar.url})"]
+            if self.user.avatar:
+                avatars.append(f"[Avatar]({self.user.avatar.url})")
+            if isinstance(self.user, discord.Member) and self.user.guild_avatar:
+                avatars.append(f"[Guild]({self.user.guild_avatar.url})")
+            children = [
+                self._profile_section(
+                    f"{self.user}'s avatars",
+                    human_join(avatars, final="and")
+                    + f"\n\nRun {self.ctx.get_prefix}avatar for more details.",
+                ),
+                discord.ui.Separator(),
+                discord.ui.MediaGallery(
+                    discord.MediaGalleryItem(self.avatar_media_url)
+                ),
+            ]
+        elif self._page == "banner":
+            banner = self.fetched_user.banner
+            children = (
+                [
+                    discord.ui.TextDisplay(f"## {self.user}'s banner"),
+                    discord.ui.MediaGallery(discord.MediaGalleryItem(banner.url)),
+                ]
+                if banner
+                else [discord.ui.TextDisplay("This user has no banner.")]
             )
+        elif self._page == "statuses":
+            children = [
+                discord.ui.TextDisplay(f"## {self.user}'s statuses"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(self._status_text),
+            ]
+        elif self._page == "bot":
+            children = self._bot_children()
+        elif self._page == "reviews":
+            children = self._review_children()
+        else:
+            children = [discord.ui.TextDisplay("No information available.")]
 
-    async def banner_response(self) -> discord.Embed:
-        if self.banner_cache:
-            return self.banner_cache
+        container = discord.ui.Container(*children, accent_color=self.accent_color)
+        self.add_item(container)
+        self.dropdown = UserDropdown(self)
+        self.add_item(discord.ui.ActionRow(self.dropdown))
 
-        ctx = self.ctx
-        user = self.user
-        fuser = self.fetched_user or await ctx.bot.fetch_user(user.id)
-        color = fuser.accent_color or ctx.bot.embedcolor
+        if self._page == "reviews" and self._reviews:
+            previous = discord.ui.Button(
+                label="<",
+                style=discord.ButtonStyle.primary,
+                disabled=self._review_index == 0,
+            )
+            next_button = discord.ui.Button(
+                label=">",
+                style=discord.ButtonStyle.primary,
+                disabled=self._review_index >= len(self._reviews) - 1,
+            )
+            previous.callback = self._previous_review
+            next_button.callback = self._next_review
+            self.add_item(discord.ui.ActionRow(previous, next_button))
 
-        embed = discord.Embed(color=color)
-        embed.set_author(name=f"{user}'s banner", icon_url=user.display_avatar.url)
-        assert fuser.banner
-
-        embed.set_image(url=fuser.banner.url)
-
-        self.banner_cache = embed
-        return embed
-
-    async def bot_response(self) -> discord.Embed:
-        if self.bot_cache:
-            return self.bot_cache
-
-        ctx = self.ctx
-        user = self.user
-        fuser = self.fetched_user or await ctx.bot.fetch_user(user.id)
-        color = fuser.accent_color or ctx.bot.embedcolor
-
-        url = f"https://discord.com/api/v10/oauth2/applications/{user.id}/rpc"
-
-        async with ctx.session.get(url) as r:
-            if r.status != 200:
-                raise commands.BadArgument(f"Unable to fetch info on {user}")
-
-            data: Dict[Any, Any] = await r.json()
-
-        embed = discord.Embed(color=color)
-        embed.set_author(name=f"{user}'s bot info", icon_url=user.display_avatar.url)
-
-        embed.description = data.get("description")
-
-        public = data.get("bot_public") or False
-        requires_code = data.get("bot_require_code_grant") or False
-        guild_id: Optional[str] = data.get("guild_id")
-
-        info_text = (
-            f"Public: {['no', 'yes'][public]}\n"
-            f"Requires code: {['no', 'yes'][requires_code]}\n"
+    def _review_children(self) -> list[discord.ui.Item[Any]]:
+        if not self._reviews:
+            return [
+                discord.ui.TextDisplay(f"## Reviews for {self.user}"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay("This user has no reviews."),
+            ]
+        review = self._reviews[self._review_index]
+        author = review.sender
+        text = (
+            f"## Review by {author.username}\n"
+            f"{review.comment or 'No review text.'}\n\n"
+            f"-# Page {self._review_index + 1}/{len(self._reviews)} · Review ID: {review.id}"
         )
+        items: list[discord.ui.Item[Any]] = [discord.ui.TextDisplay(text)]
+        if author.profilePhoto:
+            items.insert(
+                0,
+                discord.ui.Section(
+                    discord.ui.TextDisplay(text),
+                    accessory=discord.ui.Thumbnail(author.profilePhoto),
+                ),
+            )
+            items.pop(1)
+        return items
 
-        info_text += f"Guild ID: `{guild_id}`" if guild_id else ""
-
-        embed.add_field(name="Bot info", value=info_text)
-
-        tags: Optional[List[str]] = data.get("tags")
-
+    def _bot_children(self) -> list[discord.ui.Item[Any]]:
+        data = self._bot_data or {}
+        public = "yes" if data.get("bot_public") else "no"
+        requires_code = "yes" if data.get("bot_require_code_grant") else "no"
+        info = [
+            f"**Public:** {public}",
+            f"**Requires code:** {requires_code}",
+        ]
+        if data.get("guild_id"):
+            info.append(f"**Guild ID:** `{data['guild_id']}`")
+        tags = data.get("tags")
         if tags:
-            embed.add_field(name="Tags", value="\n".join([f"`{t}`" for t in tags]))
-
-        admin_perms = discord.Permissions.none()
-        admin_perms.administrator = True
+            info.append(f"**Tags:** {' '.join(f'`{tag}`' for tag in tags)}")
         invite_perms = [
-            ("Administrator", admin_perms),
+            ("Administrator", discord.Permissions(administrator=True)),
             ("Advanced", discord.Permissions.advanced()),
             ("General", discord.Permissions.general()),
             ("None", discord.Permissions.none()),
             ("All", discord.Permissions.all()),
         ]
+        invites = "\n".join(
+            f"[`{name}`]({discord.utils.oauth_url(self.user.id, permissions=perms)})"
+            for name, perms in invite_perms
+        )
+        return [
+            self._profile_section(
+                f"{self.user}'s bot info",
+                str(data.get("description") or "No description.")
+                + "\n\n"
+                + "\n".join(info)
+                + f"\n\n**Invites:**\n{invites}",
+            )
+        ]
 
-        embed.add_field(
-            name="Invites",
-            value="\n".join(
-                f"[`{name}`]({discord.utils.oauth_url(user.id, permissions=perms)})"
-                for name, perms in invite_perms
-            ),
+    @property
+    def _status_text(self) -> str:
+        return getattr(self, "_statuses", "No status data recorded yet.")
+
+    async def select_page(self, interaction: Interaction, value: str) -> None:
+        await interaction.response.defer()
+        try:
+            if value == "reviews":
+                self._reviews = await _fetch_review_entries(self.ctx, self.user)
+                self._review_index = 0
+            elif value == "statuses":
+                rows: list[asyncpg.Record] = []
+                if self._guild_id:
+                    rows = await self.ctx.pool.fetch(
+                        "SELECT status, last_seen FROM user_statuses WHERE user_id = $1 AND guild_id = $2 ORDER BY last_seen DESC",
+                        self.user.id,
+                        self._guild_id,
+                    )
+                if not rows:
+                    rows = await self.ctx.pool.fetch(
+                        "SELECT status, last_seen FROM user_statuses WHERE user_id = $1 ORDER BY last_seen DESC",
+                        self.user.id,
+                    )
+                self._statuses = (
+                    "\n".join(
+                        f"**{row['status'].title()}** • {discord.utils.format_dt(row['last_seen'], 'R')}"
+                        for row in rows
+                    )
+                    if rows
+                    else "No status data recorded yet."
+                )
+            elif value == "bot":
+                url = f"https://discord.com/api/v10/oauth2/applications/{self.user.id}/rpc"
+                async with self.ctx.session.get(url) as response:
+                    if response.status != 200:
+                        raise commands.BadArgument(
+                            f"Unable to fetch info on {self.user}"
+                        )
+                    self._bot_data = await response.json()
+            self._page = value
+            self._render()
+            await interaction.edit_original_response(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except Exception as error:
+            self.ctx.bot.logger.error(
+                "Could not render userinfo dropdown",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+            await interaction.followup.send(
+                "Could not load that section right now.", ephemeral=True
+            )
+
+    async def _previous_review(self, interaction: Interaction) -> None:
+        if not self._reviews:
+            await interaction.response.edit_message(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        self._review_index = max(0, self._review_index - 1)
+        self._render()
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
-        self.bot_cache = embed
-        return embed
+    async def _next_review(self, interaction: Interaction) -> None:
+        if not self._reviews:
+            await interaction.response.edit_message(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        self._review_index = min(len(self._reviews) - 1, self._review_index + 1)
+        self._render()
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
-    async def statuses_response(self) -> discord.Embed:
-        ctx = self.ctx
-        user = self.user
+    async def interaction_check(self, interaction: Interaction) -> bool:
+        if interaction.user.id == self.ctx.author.id:
+            return True
+        await interaction.response.send_message(
+            "Only the person who ran this command can use these controls.",
+            ephemeral=True,
+        )
+        return False
 
-        rows: list[asyncpg.Record] = []
-
-        if self._guild_id:
-            rows = await ctx.pool.fetch(
-                "SELECT status, last_seen FROM user_statuses WHERE user_id = $1 AND guild_id = $2 ORDER BY last_seen DESC",
-                user.id,
-                self._guild_id,
+    async def on_timeout(self) -> None:
+        self.dropdown.disabled = True
+        for item in self.children:
+            if isinstance(item, discord.ui.ActionRow):
+                for child in item.children:
+                    if isinstance(child, discord.ui.Button):
+                        child.disabled = True
+        if self.message:
+            await self.message.edit(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
 
-        if not rows:
-            rows = await ctx.pool.fetch(
-                "SELECT status, last_seen FROM user_statuses WHERE user_id = $1 ORDER BY last_seen DESC",
-                user.id,
-            )
-
-        embed = discord.Embed(color=ctx.bot.embedcolor)
-        embed.set_author(name=f"{user}'s statuses", icon_url=user.display_avatar.url)
-
-        if not rows:
-            embed.description = "No status data recorded yet."
-        else:
-            value = "\n".join(
-                f"**{r['status'].title()}** • {discord.utils.format_dt(r['last_seen'], 'R')}"
-                for r in rows
-            )
-            embed.add_field(name="Last Seen", value=value)
-
-        return embed
-
-    async def callback(self, interaction: Interaction):
-        value = self.values[0]
-
-        options = {
-            "index": self.index_response,
-            "avatar": self.avatar_response,
-            "banner": self.banner_response,
-            "bot": self.bot_response,
-            "statuses": self.statuses_response,
-        }
-
-        if value in options.keys():
-            embed = await options[value]()
-
-            if not interaction.message:
-                raise commands.BadArgument("Interaction message is gone somehow.")
-
-            await interaction.message.edit(embed=embed)
-            await interaction.response.defer()
-        else:
-            await interaction.response.defer()
-            await self.review_response(interaction)
-
-
-class UserView(AuthorView):
-    def __init__(
+    async def on_error(
         self,
-        ctx: Context,
-        user: Union[discord.User, discord.Member],
-        index_embed: discord.Embed,
-        fetched_user: Optional[discord.User] = None,
-    ):
-        super().__init__(ctx)
-        self.add_item(UserDropdown(ctx, user, index_embed, fetched_user))
+        interaction: Interaction,
+        error: Exception,
+        item: discord.ui.Item[Any],
+    ) -> None:
+        self.ctx.bot.logger.error(
+            "Userinfo view failed for %s on %s",
+            self.ctx.author,
+            type(item).__name__,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        try:
+            await self.ctx.bot.log_error(
+                error,
+                context=self.ctx,
+                interaction=interaction,
+            )
+        except Exception:
+            self.ctx.bot.logger.exception("Could not send userinfo view error report")
+        try:
+            message = f"Could not update the review page: {error}"
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.DiscordException:
+            self.ctx.bot.logger.exception("Could not send userinfo view error")
 
 
 class QualityDropdown(discord.ui.Select):
@@ -763,10 +927,10 @@ class AvatarView(AuthorView):
         await interaction.message.edit(embed=self.embed, attachments=[file], view=None)
         await interaction.response.send_message(
             "Avatar saved! Here's how saving avatars works: the avatar is saved as a "
-            "file in this message instead of a Discord user avatar. This "
-            "means that unless the message with the file gets deleted, the avatar "
-            "will remain forever, unlike user avatars, which will be deleted if the "
-            "user decides to change theirs to something else later on.",
+            "file in this message instead of using the avatar URL. This means that "
+            "unless the message with the file gets deleted, the url to the file "
+            "will remain forever, unlike avatars URLs, which will be deleted if "
+            "the user decides to change their avatar later on.",
             ephemeral=True,
         )
 
@@ -798,7 +962,6 @@ class Info(Cog):
         public_flags: Dict[Any, Any] = dict(member.public_flags)
         new_values = {
             member.id: True,
-            "owner": await ctx.bot.is_owner(member),
             "server_owner": isinstance(member, discord.Member)
             and member.guild.owner == member,
             "booster": isinstance(member, discord.Member) and member.premium_since,
@@ -831,27 +994,22 @@ class Info(Cog):
         fuser = await self.bot.fetch_user(user.id)
 
         badges = await self.get_badges(user, ctx, fuser)
+        body_parts: list[str] = []
+        if badges:
+            body_parts.append("**Badges:**\n" + "\n".join(badges))
 
-        embed = discord.Embed(
-            color=fuser.accent_colour or self.bot.embedcolor,
-            description=user.mention,
-            timestamp=user.created_at,
-        )
-        embed.set_author(name=str(user), icon_url=user.display_avatar.url)
-        bar = "\u2800" * 47
-        embed.set_footer(text=f"{bar} \nID: {user.id} \nCreated at")
+        primary_guild = getattr(fuser, "primary_guild", None)
+        server_tag = getattr(primary_guild, "tag", None)
 
-        if bool(badges):
-            embed.add_field(name="Badges", value="\n".join(badges))
-
+        footer_lines = [
+            f"Created at: <t:{int(user.created_at.timestamp())}:D>",
+        ]
         if isinstance(user, discord.Member):
-            joined = user.joined_at or discord.utils.utcnow()
-            pos_text = (
-                f"Position #{self.join_pos(user)}\n"
-                f"{discord.utils.format_dt(joined, 'D')}\n"
-                f"{reply} {discord.utils.format_dt(joined, 'R')}"
-            )
-            embed.add_field(name="Joined", value=pos_text)
+            if user.joined_at:
+                footer_lines.append(
+                    f"Joined: <t:{int(user.joined_at.timestamp())}:D> "
+                    f"(position #{self.join_pos(user)})"
+                )
 
         guild_id = (
             user.guild.id
@@ -874,41 +1032,65 @@ class Info(Cog):
             )
 
         if row:
-            embed.add_field(
-                name="Last Seen",
-                value=f"**{row['status'].title()}** {discord.utils.format_dt(row['last_seen'], 'R')}",
+            footer_lines.append(
+                f"Last seen: {row['status'].title()} "
+                f"{discord.utils.format_dt(row['last_seen'], 'R')}"
             )
 
-        await ctx.send(embed=embed, view=UserView(ctx, user, embed, fuser))
+        footer_lines.append(
+            f"-# ID: {user.id}",
+        )
+
+        avatar_asset = user.display_avatar
+        avatar_filename = (
+            "userinfo-avatar.gif"
+            if avatar_asset.is_animated()
+            else "userinfo-avatar.png"
+        )
+        avatar_file = await avatar_asset.to_file(filename=avatar_filename)
+        view = UserView(
+            ctx,
+            user,
+            fuser,
+            "\n\n".join(body_parts) or "No additional information.",
+            "\n".join(footer_lines),
+            server_tag,
+            f"attachment://{avatar_file.filename}",
+            fuser.accent_color or discord.Colour(self.bot.embedcolor),
+        )
+        view.message = await ctx.send(
+            view=view,
+            file=avatar_file,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def review_func(
         self, ctx: Context, user: discord.User | discord.Member, hidden: bool = False
     ):
-        url = f"https://manti.vendicated.dev/api/reviewdb/users/{user.id}/reviews"
-        async with ctx.session.get(url) as resp:
-            json = await resp.json()
-
-        data: List[Review] = [
-            Review(
-                id=r["id"],
-                sender=ReviewSender(
-                    user_id=r["sender"]["discordID"],
-                    profilePhoto=r["sender"]["profilePhoto"],
-                    username=r["sender"]["username"],
-                ),
-                comment=r["comment"],
-                timestamp=r["timestamp"],
-                target_id=user.id,
+        data = await _fetch_review_entries(ctx, user)
+        if not data:
+            view = discord.ui.LayoutView(timeout=120)
+            view.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay(
+                        f"## Reviews for {user}\n\nThis user has no reviews."
+                    ),
+                    accent_color=self.bot.embedcolor,
+                )
             )
-            for r in json["reviews"][1:]
-        ]
-
+            await ctx.send(
+                view=view,
+                ephemeral=hidden,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
         source = ReviewsPageSource(entries=data)
         source.embed.title = f"Review for {user.display_name} (via ReviewDB)"
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx, e=hidden)
 
-    @commands.hybrid_command(name="userinfo", aliases=("ui", "user"))
+    @commands.hybrid_group(name="user", aliases=("userinfo", "ui"), fallback="info")
+    @app_commands.describe(user="User to inspect. Defaults to yourself.")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def userinfo(
@@ -922,6 +1104,26 @@ class Info(Cog):
         """
         async with ctx.typing():
             await self.user_info(ctx, user)
+
+    async def _send_user_avatar(
+        self,
+        ctx: Context,
+        user: Union[discord.Member, discord.User] = commands.Author,
+    ) -> None:
+        fuser = await self.bot.fetch_user(user.id)
+        embed = discord.Embed(color=fuser.accent_color or self.bot.embedcolor)
+        embed.set_author(name=f"{user}'s avatar", icon_url=user.display_avatar.url)
+        embed.set_image(url=user.display_avatar.url)
+
+        sql = """SELECT created_at FROM avatars WHERE user_id = $1 ORDER BY created_at DESC"""
+        last_av: Optional[datetime.datetime] = await self.bot.pool.fetchval(
+            sql, user.id
+        )
+        if last_av:
+            embed.timestamp = last_av
+            embed.set_footer(text="Last avatar saved")
+
+        await ctx.send(embed=embed, view=AvatarView(ctx, user, embed, fuser))
 
     def channel_embed(self, channel: AllChannels) -> discord.Embed:
         embed = discord.Embed(
@@ -1050,6 +1252,7 @@ class Info(Cog):
     @commands.hybrid_group(
         name="avatar", aliases=("pfp", "av", "avy", "avi"), fallback="get"
     )
+    @app_commands.describe(user="User whose avatar should be shown.")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def avatar(
@@ -1059,25 +1262,10 @@ class Info(Cog):
         user: Union[discord.Member, discord.User] = commands.Author,
     ):
         """Get or edit a user's avatar"""
-        fuser = await self.bot.fetch_user(user.id)
-        embed = discord.Embed(color=fuser.accent_color or self.bot.embedcolor)
-        embed.set_author(name=f"{user}'s avatar", icon_url=user.display_avatar.url)
-
-        embed.set_image(url=user.display_avatar.url)
-
-        sql = """SELECT created_at FROM avatars WHERE user_id = $1 ORDER BY created_at DESC"""
-
-        last_av: Optional[datetime.datetime] = await self.bot.pool.fetchval(
-            sql, user.id
-        )
-
-        if last_av:
-            embed.timestamp = last_av
-            embed.set_footer(text="Last avatar saved")
-
-        await ctx.send(embed=embed, view=AvatarView(ctx, user, embed, fuser))
+        await self._send_user_avatar(ctx, user)
 
     @avatar.command(name="history", aliases=("h",))
+    @app_commands.describe(user="User whose saved avatar history should be shown.")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def avatar_history(
@@ -1094,9 +1282,7 @@ class Info(Cog):
 
         await logging.avatars_func(ctx, user)
 
-    @commands.hybrid_command(name="banner")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="banner")
     async def user_banner(
         self,
         ctx: Context,
@@ -1104,6 +1290,13 @@ class Info(Cog):
         user: Union[discord.Member, discord.User] = commands.Author,
     ):
         """Get or edit a user's banner"""
+        await self._send_user_banner(ctx, user)
+
+    async def _send_user_banner(
+        self,
+        ctx: Context,
+        user: Union[discord.Member, discord.User] = commands.Author,
+    ) -> None:
         user = await self.bot.fetch_user(user.id)
         if not user.banner:
             raise commands.BadArgument("User has no banner.")
@@ -1116,6 +1309,159 @@ class Info(Cog):
         embed.set_image(url=f"attachment://{file.filename}")
 
         await ctx.send(embed=embed, file=file)
+
+    @userinfo.group(name="avatar", fallback="get")
+    @app_commands.describe(user="User whose avatar should be shown.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_avatar_group(
+        self,
+        ctx: Context,
+        *,
+        user: Union[discord.Member, discord.User] = commands.Author,
+    ) -> None:
+        """Get a user's current avatar."""
+        await self._send_user_avatar(ctx, user)
+
+    @user_avatar_group.command(name="history")
+    @app_commands.describe(user="User whose avatar history should be shown.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_avatar_history(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ) -> None:
+        """Show a user's saved avatar history in a grid."""
+        logging = self.bot.logging
+        if logging is None:
+            raise commands.BadArgument("Could not find logging cog.")
+        await logging.avatars_grid(ctx, user)
+
+    @user_avatar_group.command(name="list")
+    @app_commands.describe(user="User whose saved avatars should be listed.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_avatar_list(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ) -> None:
+        """List a user's saved avatars."""
+        logging = self.bot.logging
+        if logging is None:
+            raise commands.BadArgument("Could not find logging cog.")
+        await logging.avatars_func(ctx, user)
+
+    @userinfo.command(name="banner")
+    @app_commands.describe(user="User whose banner should be shown.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_banner_subcommand(
+        self,
+        ctx: Context,
+        *,
+        user: Union[discord.Member, discord.User] = commands.Author,
+    ) -> None:
+        """Get a user's banner."""
+        await self._send_user_banner(ctx, user)
+
+    @userinfo.command(name="nicknames", aliases=("nicks",))
+    @commands.guild_only()
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    @app_commands.describe(
+        member="Server member whose nickname history should be shown."
+    )
+    async def user_nicknames(
+        self, ctx: GuildContext, *, member: discord.Member = commands.Author
+    ) -> None:
+        """Show a member's nickname history in this server."""
+        logging = self.bot.logging
+        if logging is None:
+            raise commands.BadArgument("Could not find logging cog.")
+        await logging._nicknames(ctx, member)
+
+    @userinfo.command(name="usernames")
+    @app_commands.describe(user="User whose username history should be shown.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_usernames(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ) -> None:
+        """Show a user's previous usernames."""
+        logging = self.bot.logging
+        if logging is None:
+            raise commands.BadArgument("Could not find logging cog.")
+        await logging._usernames(ctx, user)
+
+    @userinfo.command(name="names", aliases=("display_names", "displaynames"))
+    @app_commands.describe(user="User whose display-name history should be shown.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_display_names(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ) -> None:
+        """Show a user's previous display names."""
+        logging = self.bot.logging
+        if logging is None:
+            raise commands.BadArgument("Could not find logging cog.")
+        await logging._display_names(ctx, user)
+
+    @userinfo.command(name="servertags", aliases=("stags",))
+    @app_commands.describe(user="User whose server tag history should be shown.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_servertags(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ) -> None:
+        """Show a user's previous primary server tags."""
+        logging = self.bot.logging
+        if logging is None:
+            raise commands.BadArgument("Could not find logging cog.")
+        await logging._server_tags(ctx, user)
+
+    @userinfo.command(name="joins")
+    @app_commands.describe(user="User whose server join history should be shown.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_joins(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ) -> None:
+        """Show a user's server join statistics."""
+        logging = self.bot.logging
+        if logging is None:
+            raise commands.BadArgument("Could not find logging cog.")
+        await logging._joins_user_stats(ctx, user)
+
+    @userinfo.command(name="stats")
+    @app_commands.describe(user="User whose command statistics should be shown.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_stats(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ) -> None:
+        """Show a user's most-used commands."""
+        tools = self.bot.tools
+        if tools is None:
+            raise commands.BadArgument("Could not find tools cog.")
+        await tools._user_top(ctx, user)
+
+    @userinfo.command(
+        name="status-calendar",
+        aliases=("statuscalendar", "statuscal", "statushistory", "statuses", "status"),
+    )
+    @commands.guild_only()
+    @app_commands.describe(
+        member="Server member whose status calendar should be shown."
+    )
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def user_status_calendar(
+        self, ctx: GuildContext, *, member: discord.Member = commands.Author
+    ) -> None:
+        """Show a member's daily status activity over the last 31 days."""
+        logging = self.bot.logging
+        if logging is None:
+            raise commands.BadArgument("Could not find logging cog.")
+        async with ctx.typing():
+            await logging._status_calendar(ctx, member)
 
     async def server_info(self, ctx: GuildContext, guild: discord.Guild):
         embed = discord.Embed(timestamp=guild.created_at)
@@ -1272,6 +1618,10 @@ class Info(Cog):
         await self.server_splash(ctx, guild)
 
     @commands.hybrid_command(name="reviews")
+    @app_commands.describe(
+        user="User whose reviews should be shown.",
+        hidden="Include reviews marked hidden by the user.",
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def reviews(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import discord
 from discord import app_commands
@@ -107,6 +107,101 @@ class CommandStats(Cog):
     ):
         """See how many times a command has been used (global by default, or per user)."""
         await self._command_count(ctx, user, command_name.strip().lower())
+
+    @stats.command(name="download", aliases=("downloads", "dl"))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_download(
+        self,
+        ctx: Context,
+        *,
+        user: discord.User = commands.param(
+            default=commands.Author,
+            description="User to check download stats for (defaults to you).",
+        ),
+    ) -> None:
+        """See total downloads and the sites a user downloads from most."""
+        if user.id != ctx.author.id and not ctx.bot.db_cache.user_history_is_public(
+            user.id
+        ):
+            await ctx.send("That user's download statistics are private.")
+            return
+
+        rows = await ctx.bot.pool.fetch(
+            "SELECT site, SUM(downloads) AS downloads FROM download_stats "
+            "WHERE user_id = $1 GROUP BY site ORDER BY downloads DESC, site ASC",
+            user.id,
+        )
+        if not rows:
+            subject = "You" if user.id == ctx.author.id else user.display_name
+            await ctx.send(f"{subject} have not downloaded any media yet.")
+            return
+
+        total = sum(int(row["downloads"]) for row in rows)
+        site_labels = {
+            "instagram": "Instagram",
+            "tiktok": "TikTok",
+            "twitter": "Twitter",
+            "youtube": "YouTube",
+            "twitch": "Twitch",
+            "reddit": "Reddit",
+            "threads": "Threads",
+            "facebook": "Facebook",
+            "pixiv": "Pixiv",
+            "tumblr": "Tumblr",
+            "pinterest": "Pinterest",
+            "soundcloud": "SoundCloud",
+            "klipy": "Klipy",
+            "tenor": "Tenor",
+        }
+        sites = "\n".join(
+            f"**{site_labels.get(str(row['site']), str(row['site']).title())}** "
+            f"({int(row['downloads']):,})"
+            for row in rows
+        )
+        embed = discord.Embed(
+            title=f"Download stats for {user.display_name}",
+            description=f"**Total downloads:** {total:,}\n\n{sites}",
+            color=ctx.bot.embedcolor,
+        )
+        embed.set_thumbnail(url=user.display_avatar.url)
+        await ctx.send(embed=embed)
+
+    @cast(Any, stats.group)(name="emoji", invoke_without_command=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_emoji(self, ctx: Context, target: Optional[str] = None) -> None:
+        """Show the existing server or user emoji statistics."""
+        emoji_cog: Any = ctx.bot.get_cog("Emojis")
+        if emoji_cog is None:
+            await ctx.send("Emoji statistics are not available right now.")
+            return
+        await emoji_cog.send_emoji_stats(ctx, target)
+
+    @stats_emoji.command(name="global")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_emoji_global(
+        self, ctx: Context, target: Optional[str] = None
+    ) -> None:
+        """Show a user's existing emoji statistics across all servers."""
+        emoji_cog: Any = ctx.bot.get_cog("Emojis")
+        if emoji_cog is None:
+            await ctx.send("Emoji statistics are not available right now.")
+            return
+        await emoji_cog.send_global_emoji_stats(ctx, target)
+
+    @stats.command(name="tictactoe", aliases=("ttt",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_tictactoe(self, ctx: Context) -> None:
+        """Show the global Tic-Tac-Toe leaderboards."""
+        fun_cog: Any = ctx.bot.get_cog("Fun")
+        controller: Any = getattr(fun_cog, "_tictactoe_controller", None)
+        if controller is None:
+            await ctx.send("Tic-Tac-Toe statistics are not available right now.")
+            return
+        await controller.send_stats(ctx)
 
     async def _command_count(
         self,

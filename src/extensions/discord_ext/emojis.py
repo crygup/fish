@@ -4,8 +4,9 @@ import zipfile
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
-import emoji as emoji_lib
 import discord
+import emoji as emoji_lib
+from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
@@ -247,17 +248,18 @@ class Emojis(Cog):
                     str(custom) if custom is not None else f"Custom emoji `{emoji_id}`"
                 )
             lines.append(f"{display} ({int(row['uses']):,} uses)")
-        embed = discord.Embed(
-            title=title,
-            description="\n".join(lines),
-            color=self.bot.embedcolor,
+        pages = SimplePages(entries=lines, per_page=10, ctx=ctx)
+        pages.embed.title = title
+        pages.embed.colour = self.bot.embedcolor
+        pages.embed.set_footer(
+            text="Only valid Twemoji emoji and custom emoji are counted."
         )
-        embed.set_footer(text="Only valid Twemoji emoji and custom emoji are counted.")
-        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        await pages.start(ctx)
 
-    @emoji_group.group(name="stats", invoke_without_command=True)
-    async def emoji_stats(self, ctx: Context, target: Optional[str] = None) -> None:
-        """Show emoji usage for a server or a member."""
+    async def send_emoji_stats(
+        self, ctx: Context, target: Optional[str] = None
+    ) -> None:
+        """Send emoji usage for a server or a member."""
         if target is not None:
             try:
                 guild = await commands.GuildConverter().convert(ctx, target)
@@ -284,15 +286,26 @@ class Emojis(Cog):
             guild_id=ctx.guild.id if ctx.guild is not None else None,
         )
 
+    async def send_global_emoji_stats(
+        self, ctx: Context, target: Optional[str] = None
+    ) -> None:
+        """Send a user's emoji usage across all servers."""
+        user = await self._resolve_stats_user(ctx, target)
+        await self._send_emoji_stats(
+            ctx, title=f"Global emoji stats for {user}", author_id=user.id
+        )
+
+    @emoji_group.group(name="stats", invoke_without_command=True)
+    async def emoji_stats(self, ctx: Context, target: Optional[str] = None) -> None:
+        """Show emoji usage for a server or a member."""
+        await self.send_emoji_stats(ctx, target)
+
     @emoji_stats.command(name="global")
     async def emoji_stats_global(
         self, ctx: Context, target: Optional[str] = None
     ) -> None:
         """Show a user's emoji usage across all servers."""
-        user = await self._resolve_stats_user(ctx, target)
-        await self._send_emoji_stats(
-            ctx, title=f"Global emoji stats for {user}", author_id=user.id
-        )
+        await self.send_global_emoji_stats(ctx, target)
 
     @emoji_group.command(name="create")
     @commands.has_permissions(manage_emojis=True)
@@ -371,6 +384,11 @@ class Emojis(Cog):
         await self.steal_emojis(ctx, emoji_results)
 
     @commands.hybrid_group(name="emojis", fallback="get")
+    @app_commands.describe(
+        guild="Server whose emojis should be listed.",
+        name="Show emoji names instead of the emoji itself.",
+        ids="Include each emoji ID in the results.",
+    )
     async def emojis(
         self,
         ctx: Context,
@@ -397,6 +415,7 @@ class Emojis(Cog):
         await pages.start(ctx)
 
     @emojis.command(name="download")
+    @app_commands.describe(disabled="Include emojis that are currently disabled.")
     @commands.has_permissions(manage_emojis=True)
     @commands.bot_has_permissions(manage_emojis=True)
     async def emoji_download(

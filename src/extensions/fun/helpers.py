@@ -236,10 +236,16 @@ class WTPModal(discord.ui.Modal, title="Who's that Pokémon?"):
         )
 
     async def on_error(self, interaction: Interaction, error: Exception):
+        message = getattr(self.ctx, "message", None)
+        content = getattr(message, "content", "")
         self.ctx.bot.logger.info(
-            f'View {self} errored by {self.ctx.author}. Full content: "{self.ctx.message.content}"'
+            f'View {self} errored by {self.ctx.author}. Full content: "{content}"'
         )
-        await self.ctx.bot.log_error(error)
+        await self.ctx.bot.log_error(
+            error,
+            context=self.ctx,
+            interaction=interaction,
+        )
 
         try:
             await interaction.response.send_message(str(error), ephemeral=True)

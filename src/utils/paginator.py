@@ -61,7 +61,10 @@ class Pager(discord.ui.View):
     async def on_timeout(self) -> None:
         self.disable_all()
         if self.message:
-            await self.message.edit(view=self)
+            await self.message.edit(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
     async def show_checked_page(
         self, interaction: discord.Interaction, page_number: int
@@ -94,6 +97,7 @@ class Pager(discord.ui.View):
         page = await self.source.get_page(0)
         kwargs = await self._get_kwargs_from_page(page)
         self._update_labels(0)
+        kwargs["allowed_mentions"] = discord.AllowedMentions.none()
         self.message = await self.ctx.send(**kwargs, view=self, ephemeral=e)
 
     async def _get_kwargs_from_page(self, page: int) -> Dict[str, Any]:
@@ -115,6 +119,7 @@ class Pager(discord.ui.View):
         kwargs = await self._get_kwargs_from_page(page)
         self._update_labels(page_number)
         if kwargs:
+            kwargs["allowed_mentions"] = discord.AllowedMentions.none()
             if interaction.response.is_done():
                 if self.message:
                     await self.message.edit(**kwargs, view=self)
@@ -127,6 +132,7 @@ class Pager(discord.ui.View):
         await interaction.response.send_message(
             f'You can\'t use this, sorry. \nIf you\'d like to use this then run the command `{self.ctx.command}{self.ctx.invoked_subcommand or ""}`',
             ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
         return False
 
@@ -158,13 +164,17 @@ class Pager(discord.ui.View):
                     page = int(self.stuff.value)
                 else:
                     await interaction.response.send_message(
-                        "Please enter a valid number", ephemeral=True
+                        "Please enter a valid number",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
                     )
                     return
 
                 if max_pages and page > max_pages or page < 1:
                     await interaction.response.send_message(
-                        f"Page **{page}** does not exist", ephemeral=True
+                        f"Page **{page}** does not exist",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
                     )
                     return
 

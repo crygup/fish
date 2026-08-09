@@ -577,6 +577,7 @@ class Reminder(Cog):
             await interaction.response.send_message(str(error), ephemeral=True)
 
     @reminder.command(name="delete", aliases=["remove", "cancel"], ignore_extra=False)
+    @app_commands.describe(id="ID of the reminder to delete.")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def reminder_delete(self, ctx: Context, *, id: int):

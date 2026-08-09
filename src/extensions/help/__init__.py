@@ -133,13 +133,14 @@ class HelpCommand(commands.HelpCommand):
     async def send_command_help(self, command: commands.Command[Cog, ..., Any]):
         ctx = self.context
         embed = make_command_embed(ctx, command)
+        if command.cog is None:
+            await ctx.send(embed=embed)
+            return
+
         cmds = await self.filter_commands(command.cog.get_commands(), sort=True)
-        if command.cog:
-            all_cogs = [c for _, c in ctx.bot.cogs.items() if c]
-            view = CogHelpView(ctx, all_cogs, selected_cog=command.cog)
-            _add_command_help_dropdowns(view, ctx, cmds)
-        else:
-            view = CommandHelpView(ctx, cmds)
+        all_cogs = [c for _, c in ctx.bot.cogs.items() if c]
+        view = CogHelpView(ctx, all_cogs, selected_cog=command.cog)
+        _add_command_help_dropdowns(view, ctx, cmds)
         await ctx.send(embed=embed, view=view)
 
     async def send_group_help(self, group: commands.Group[Cog, ..., commands.Command]):

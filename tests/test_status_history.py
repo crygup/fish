@@ -1,5 +1,6 @@
 import datetime
 from types import SimpleNamespace
+from typing import Any, cast
 
 from PIL import Image, ImageChops
 
@@ -95,10 +96,11 @@ def test_status_calendar_renders_all_31_days() -> None:
 
 
 def test_mixed_day_hour_colours_fill_the_entire_cell() -> None:
+    statuses = cast(list[list[str | None]], [["online"] * 12 + ["dnd"] * 12])
     output = render_status_calendar(
         "Fishie",
         datetime.date(2026, 7, 6),
-        [["online"] * 12 + ["dnd"] * 12],
+        statuses,
     )
 
     with Image.open(output) as image:
@@ -162,8 +164,8 @@ class RecordingConnectionPool:
 async def test_status_transition_closes_before_opening_under_a_lock() -> None:
     connection = RecordingConnection()
     cog = StatusCog()
-    cog.bot = SimpleNamespace(pool=RecordingConnectionPool(connection))
-    member = SimpleNamespace(id=42, guild=SimpleNamespace(id=99))
+    cog.bot = cast(Any, SimpleNamespace(pool=RecordingConnectionPool(connection)))
+    member = cast(Any, SimpleNamespace(id=42, guild=SimpleNamespace(id=99)))
 
     await cog.store_status(member, "online")
 
@@ -181,7 +183,7 @@ async def test_status_transition_closes_before_opening_under_a_lock() -> None:
 async def test_status_cleanup_keeps_latest_status_occurrence() -> None:
     pool = RecordingPool()
     cog = Tasks()
-    cog.bot = SimpleNamespace(pool=pool)
+    cog.bot = cast(Any, SimpleNamespace(pool=pool))
 
     deleted = await cog.cleanup_status_history()
 

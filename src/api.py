@@ -1190,6 +1190,7 @@ VALID_OPTOUTS = {
     "pokemon",
     "corn",
     "emoji",
+    "downloads",
 }
 
 
@@ -1664,8 +1665,17 @@ async def list_commands():
         raise HTTPException(503, "Bot not ready")
     cmds = []
 
+    def is_effect_app_subcommand(command: Any) -> bool:
+        """Keep the split effect groups, but hide their child commands on the site."""
+        qualified_name = str(getattr(command, "qualified_name", "")).casefold()
+        return bool(re.match(r"^effect(?:-\d+)?\s+", qualified_name))
+
     def add_cmd(c):
-        if c.hidden or c.cog_name in ("Owner", "Jishaku"):
+        if (
+            c.hidden
+            or c.cog_name in ("Owner", "Jishaku")
+            or is_effect_app_subcommand(c)
+        ):
             return
         aliases = ", ".join(c.aliases) if c.aliases else ""
         params = []

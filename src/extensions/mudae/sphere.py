@@ -547,11 +547,33 @@ class SphereCog(Cog):
                 position += 1
         return revealed if found_any else None
 
-    @commands.hybrid_command(name="oc", aliases=("sphere",))
+    @commands.command(name="oc", aliases=("sphere",))
+    @commands.guild_only()
+    async def sphere(self, ctx: Context):
+        """Show the best next move for a Mudae sphere chest game."""
+        await self._run_sphere(ctx)
+
+    @commands.hybrid_group(name="mudae")
     @commands.guild_only()
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
-    async def sphere(self, ctx: Context):
+    async def mudae(self, ctx: Context):
+        """Use the Mudae sphere solvers."""
+        await ctx.send("Choose the `oc` or `oq` solver.")
+
+    @mudae.command(
+        name="oc",
+        aliases=("sphere",),
+        description="Show the best next move for a Mudae sphere chest game.",
+    )
+    @commands.guild_only()
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def mudae_oc(self, ctx: Context):
+        """Show the best next move for a Mudae sphere chest game."""
+        await self._run_sphere(ctx)
+
+    async def _run_sphere(self, ctx: Context):
         """Show the best next move for a Mudae sphere chest game."""
         if not self.bot.user:
             raise commands.BadArgument("Bot not fully loaded, please wait.")
@@ -621,11 +643,25 @@ class SphereCog(Cog):
             except discord.HTTPException:
                 break
 
-    @commands.hybrid_command(name="oq", aliases=("sphereq",))
+    @commands.command(name="oq", aliases=("sphereq",))
+    @commands.guild_only()
+    async def sphereq(self, ctx: Context):
+        """Show the best next moves for a Mudae OQ sphere game."""
+        await self._run_sphereq(ctx)
+
+    @mudae.command(
+        name="oq",
+        aliases=("sphereq",),
+        description="Show the best next moves for a Mudae OQ sphere game.",
+    )
     @commands.guild_only()
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
-    async def sphereq(self, ctx: Context):
+    async def mudae_oq(self, ctx: Context):
+        """Show the best next moves for a Mudae OQ sphere game."""
+        await self._run_sphereq(ctx)
+
+    async def _run_sphereq(self, ctx: Context):
         """Show the best next moves for a Mudae OQ sphere game."""
         if not self.bot.user:
             raise commands.BadArgument("Bot not fully loaded, please wait.")

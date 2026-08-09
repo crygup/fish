@@ -44,7 +44,11 @@ class AuthorView(discord.ui.View):
             self.ctx.author.id,
             getattr(self.ctx.command, "qualified_name", None),
         )
-        await self.ctx.bot.log_error(error)
+        await self.ctx.bot.log_error(
+            error,
+            context=self.ctx,
+            interaction=interaction,
+        )
 
         try:
             await interaction.response.send_message(str(error), ephemeral=True)

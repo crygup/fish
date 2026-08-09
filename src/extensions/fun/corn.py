@@ -223,6 +223,7 @@ class Corn(Cog):
             "If I don't get beginner before I sleep I will commit unalive",
             "3 things I need to do with my ggf\n\n-HEAD SHOULDERS KNEE\n\n-HUG HER\n\n-KILL HER",
             "The diary of a wimpy kid is the coolest thing I've ever read",
+            "Can you guys not roast my English? Uwu",
         ]
 
         choice = random.choice(things)

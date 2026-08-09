@@ -66,4 +66,8 @@ class CommandErrors(Cog):
                 await ctx.send("An unexpected error occurred.")
             except Exception:
                 pass
-        await self.bot.log_error(error)
+        await self.bot.log_error(
+            error,
+            context=ctx,
+            interaction=getattr(ctx, "interaction", None),
+        )

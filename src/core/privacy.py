@@ -29,6 +29,12 @@ USER_ID_TABLES = (
     "pokemon_solves",
     "mudae_dm_consent",
     "phone_consent",
+    "download_stats",
+    "download_events",
+    "minigame_stats",
+    "click_user_totals",
+    "click_user_guild_totals",
+    "custom_role_assignments",
 )
 
 GUILD_ID_TABLES = (
@@ -57,6 +63,7 @@ GUILD_ID_TABLES = (
     "youtube_announcement_deliveries",
     "pinboard_pins",
     "pokemon_solves",
+    "download_events",
     "mudae_timers",
     "mudae_subs",
     "mudae_channels",
@@ -64,6 +71,10 @@ GUILD_ID_TABLES = (
     "corn_reacts",
     "tags",
     "emoji_stats",
+    "custom_roles",
+    "custom_role_assignments",
+    "channel_locks",
+    "tictactoe_games",
 )
 
 
@@ -89,12 +100,27 @@ async def erase_user(connection: Any, user_id: int) -> int:
         ("pokemon_guesses", "author_id"),
         ("tags", "author_id"),
         ("emoji_stats", "author_id"),
+        ("custom_roles", "created_by"),
+        ("custom_role_assignments", "assigned_by"),
+        ("channel_locks", "locked_by"),
     ):
         deleted += _count(
             await connection.execute(
                 f"DELETE FROM {table} WHERE {column} = $1", user_id
             )
         )
+
+    deleted += _count(
+        await connection.execute(
+            """DELETE FROM tictactoe_games
+               WHERE player_x_id = $1
+                  OR player_o_id = $1
+                  OR winner_id = $1
+                  OR loser_id = $1
+                  OR started_by_id = $1""",
+            user_id,
+        )
+    )
 
     deleted += _count(
         await connection.execute(

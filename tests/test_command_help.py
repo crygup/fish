@@ -14,6 +14,7 @@ from extensions.fun import Fun
 from extensions.help import command_usage, make_command_embed
 from extensions.media_effects.commands import Images
 from extensions.tools import Tools
+from extensions.tools.purge import ReactionPurgeFlags
 
 
 def registered_commands() -> list[commands.Command]:
@@ -116,6 +117,17 @@ def test_flag_commands_document_their_flags() -> None:
     assert "-onlyme" in (Fun.phone.help or "")
     assert "-clockwise" in (Images.cube.help or "")
     assert "-audio" in (Images.audio_group_replace.help or "")
+
+
+def test_reaction_purge_documents_and_parses_reaction_filters() -> None:
+    assert "-reaction" in (Tools.purge_reactions.help or "")
+    assert "-reaction_id" in (Tools.purge_reactions.help or "")
+    parsed = ReactionPurgeFlags.parse_flags(
+        "-reaction_name sparkle -emoji_id 123 -skip"
+    )
+    assert parsed["reaction"] == ["sparkle"]
+    assert parsed["reaction_id"] == ["123"]
+    assert parsed["skip"] == ["true"]
 
 
 def test_flag_converter_commands_have_help_and_custom_usage() -> None:
