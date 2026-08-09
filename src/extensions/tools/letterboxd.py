@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import html
 import os
+import random
 import re
 from io import BytesIO
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import aiohttp
 import discord
+from discord import app_commands
 from discord.ext import commands
 from PIL import Image
 from playwright.async_api import async_playwright
@@ -30,6 +35,59 @@ LBD_LOGO = "https://a.ltrbxd.com/logos/letterboxd-decal-dots-pos-rgb-500px.png"
 COOKIE_FILE = FILES_ROOT / "cookies" / "letterboxd-cookies.txt"
 
 
+def _movie_text(value: object, limit: int = 1_500) -> str:
+    """Escape OMDb text before putting it into a Components V2 view."""
+    text = html.unescape(str(value or "")).strip()
+    text = discord.utils.escape_mentions(discord.utils.escape_markdown(text))
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    if len(text) > limit:
+        text = text[: limit - 1].rsplit(" ", 1)[0].rstrip() + "…"
+    return text
+
+
+def _movie_safe_url(value: object) -> str | None:
+    """Only use ordinary HTTP(S) URLs supplied by OMDb."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return value
+
+
+def _movie_available(value: object) -> str | None:
+    text = html.unescape(str(value or "")).strip()
+    return text if text and text.casefold() != "n/a" else None
+
+
+def _movie_runtime(value: object) -> str | None:
+    """Add an hours/minutes representation to OMDb's minute runtime."""
+    runtime = _movie_available(value)
+    if runtime is None:
+        return None
+    match = re.fullmatch(r"(\d+)\s*(?:minutes?|mins?|m)", runtime, re.IGNORECASE)
+    if match is None:
+        return runtime
+    total_minutes = int(match.group(1))
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{total_minutes} min ({hours}h{minutes}m)"
+
+
+def _movie_release_timestamp(value: object) -> int | None:
+    """Convert OMDb's release date into a Discord timestamp."""
+    release_date = _movie_available(value)
+    if not release_date:
+        return None
+    for date_format in ("%d %b %Y", "%d %B %Y", "%Y-%m-%d"):
+        try:
+            parsed = datetime.datetime.strptime(release_date, date_format)
+        except ValueError:
+            continue
+        return int(parsed.replace(tzinfo=datetime.timezone.utc).timestamp())
+    return None
+
+
 async def _read_remote_image(response: aiohttp.ClientResponse) -> bytes | None:
     if response.content_length and response.content_length > MAX_REMOTE_IMAGE_BYTES:
         return None
@@ -48,6 +106,9 @@ class Letterboxd(Cog):
     BASE = "https://letterboxd.com"
 
     @commands.hybrid_command(name="letterboxd", aliases=("lbxd",))
+    @app_commands.describe(
+        username="Letterboxd username, profile URL, or Discord user."
+    )
     async def letterboxd(
         self,
         ctx: Context,
@@ -85,6 +146,186 @@ class Letterboxd(Cog):
                 self, ctx, username, url, dn, av, stats, bio, fav_file, recent_urls
             )
             view.message = await ctx.send(embed=embed, view=view, file=fav_file)
+
+    @commands.hybrid_command(name="movie")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.describe(query="Movie title, year, IMDb ID, or IMDb URL.")
+    async def movie(self, ctx: Context, *, query: str):
+        """Look up a movie through OMDb."""
+        await self._omdb_lookup(ctx, query, "movie")
+
+    @commands.hybrid_command(name="show", aliases=("tv", "series"))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.describe(query="TV show title, year, IMDb ID, or IMDb URL.")
+    async def show(self, ctx: Context, *, query: str):
+        """Look up a TV show through OMDb."""
+        await self._omdb_lookup(ctx, query, "series")
+
+    async def _omdb_lookup(self, ctx: Context, query: str, media_type: str) -> None:
+        query = query.strip()
+        if not query:
+            label = "TV show" if media_type == "series" else "movie"
+            raise commands.BadArgument(f"Provide a {label} title to look up.")
+
+        keys = self.bot.config["keys"].get("opendb", [])
+        if isinstance(keys, str):
+            keys = [keys]
+        keys = [str(key).strip() for key in keys if str(key).strip()]
+        if not keys:
+            raise commands.CommandError("OMDb is not configured.")
+
+        params = {
+            "apikey": random.choice(keys),
+            "plot": "full",
+            "r": "json",
+            "type": media_type,
+        }
+        imdb_match = re.search(r"imdb\.com/title/(tt\d+)", query, re.IGNORECASE)
+        if imdb_match:
+            params["i"] = imdb_match.group(1)
+        elif re.fullmatch(r"tt\d+", query, re.IGNORECASE):
+            params["i"] = query
+        else:
+            params["t"] = query[:255]
+
+        try:
+            async with ctx.typing():
+                async with self.bot.session.get(
+                    "https://www.omdbapi.com/",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    if response.status != 200:
+                        raise commands.BadArgument(
+                            "OMDb could not process that lookup."
+                        )
+                    movie_data = await response.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+            raise commands.BadArgument("OMDb could not process that lookup.") from exc
+
+        if not isinstance(movie_data, dict) or movie_data.get("Response") != "True":
+            error = _movie_available(
+                movie_data.get("Error") if isinstance(movie_data, dict) else None
+            )
+            raise commands.BadArgument(
+                _movie_text(error, 300)
+                if error
+                else "No result was found for that query."
+            )
+
+        view = self._movie_view(movie_data)
+        await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
+
+    def _movie_view(self, movie_data: dict[str, Any]) -> discord.ui.LayoutView:
+        title = _movie_text(
+            _movie_available(movie_data.get("Title")) or "Unknown movie", 180
+        )
+        title_display = f"## {title}"
+
+        plot = _movie_text(
+            _movie_available(movie_data.get("Plot"))
+            or "No plot description available.",
+            1_800,
+        )
+        poster = _movie_safe_url(movie_data.get("Poster"))
+        children: list[discord.ui.Item[Any]] = []
+        if poster:
+            children.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(title_display),
+                    discord.ui.TextDisplay(plot),
+                    accessory=discord.ui.Thumbnail(poster),
+                )
+            )
+        else:
+            children.extend(
+                (
+                    discord.ui.TextDisplay(title_display),
+                    discord.ui.TextDisplay(plot),
+                )
+            )
+        children.append(discord.ui.Separator())
+
+        details: list[str] = []
+        for label, key in (
+            ("Rated", "Rated"),
+            ("Runtime", "Runtime"),
+            ("Genre", "Genre"),
+            ("Director", "Director"),
+            ("Writer", "Writer"),
+            ("Actors", "Actors"),
+            ("Language", "Language"),
+            ("Production", "Production"),
+            ("Box office", "BoxOffice"),
+        ):
+            value = _movie_available(movie_data.get(key))
+            if value:
+                if key == "Runtime":
+                    value = _movie_runtime(value)
+                details.append(f"**{label}:** {_movie_text(value, 800)}")
+        if str(movie_data.get("Type", "")).casefold() == "series":
+            seasons = _movie_available(movie_data.get("totalSeasons"))
+            if seasons:
+                details.append(f"**Seasons:** {_movie_text(seasons, 80)}")
+
+        rating_values: list[str] = []
+        ratings = movie_data.get("Ratings")
+        if isinstance(ratings, list):
+            for rating in ratings:
+                if not isinstance(rating, dict):
+                    continue
+                source = _movie_text(_movie_available(rating.get("Source")), 120)
+                value = _movie_text(_movie_available(rating.get("Value")), 120)
+                if source and value:
+                    if source.casefold() == "internet movie database":
+                        source = "IMDb"
+                    rating_values.append(f"{source}: {value}")
+        if rating_values:
+            details.append(f"**Ratings:** {' · '.join(rating_values)}")
+
+        children.append(
+            discord.ui.TextDisplay(
+                "\n".join(details)[:3_500] or "No additional details were provided."
+            )
+        )
+        imdb_id = movie_data.get("imdbID")
+        release_timestamp = _movie_release_timestamp(movie_data.get("Released"))
+        buttons: list[discord.ui.Button] = []
+        if isinstance(imdb_id, str) and re.fullmatch(r"tt\d+", imdb_id):
+            buttons.append(
+                discord.ui.Button(
+                    label="IMDb",
+                    style=discord.ButtonStyle.link,
+                    url=f"https://www.imdb.com/title/{imdb_id}/",
+                )
+            )
+            buttons.append(
+                discord.ui.Button(
+                    label="Letterboxd",
+                    style=discord.ButtonStyle.link,
+                    url=f"https://letterboxd.com/imdb/{imdb_id}",
+                )
+            )
+        footer_parts = [
+            (
+                f"IMDb ID: {_movie_text(imdb_id, 40)}"
+                if imdb_id
+                else "IMDb ID: Unavailable"
+            )
+        ]
+        if release_timestamp is not None:
+            footer_parts.append(f"Released: <t:{release_timestamp}:D>")
+        footer_parts.append("Data from OMDb")
+        children.append(discord.ui.TextDisplay(f"-# {' · '.join(footer_parts)}"))
+
+        container = discord.ui.Container(*children, accent_color=self.bot.embedcolor)
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(container)
+        if buttons:
+            view.add_item(discord.ui.ActionRow(*buttons))
+        return view
 
     async def _scrape_profile(self, username, url):
         async with async_playwright() as pw:
