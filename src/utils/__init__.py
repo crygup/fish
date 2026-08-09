@@ -10,6 +10,7 @@ from .fuzzy import *
 from .network import *
 from .paginator import *
 from .regexes import *
+from .temp_media import *
 from .time import *
 from .types import *
 from .vars import *

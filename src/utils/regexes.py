@@ -10,7 +10,14 @@ VIDEOS_RE: Pattern[str] = comp(
     (https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,})?
     (https?://clips.twitch.tv/[a-zA-Z0-9_-])?
     (https?://(?:www\.)?(twitter|x|fxtwitter|vxtwitter|fixupx|girlcockx)\.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19,})?
-    (https?://(www.)reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6})?
+    (https?://(?:(?:www|old|new|np|sh|nm)\.)?reddit.com/(?:r|user|comments)/[^\s<>()]+)?
+    (https?://redd.it/[a-zA-Z0-9]+)?
+    (https?://(?:www\.)?threads\.(?:net|com)/[^\s<>()]+)?
+    (https?://(?:www\.|m\.|web\.)?facebook.com/[^\s<>()]+)?
+    (https?://fb.watch/[^\s<>()]+)?
+    (https?://(?:www\.)?pixiv.net/(?:en/)?(?:artworks/\d+|member_illust\.php\?[^\s<>()]+|novel/show\.php\?[^\s<>()]+))?
+    (https?://(?:www\.)?tumblr.com/[^\s<>()]+)?
+    (https?://[a-zA-Z0-9-]+\.tumblr.com/(?:post|video)/\d+[^\s<>()]*)?
     (https://(www.)?youtube.com/clip/[A-Za-z0-9_-]{1,})?
     (https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11})?
     (https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11}))?
@@ -45,7 +52,21 @@ LIVE_STREAM_RE: tuple[Pattern[str], ...] = (
     TWITCH_LIVE_RE,
     KICK_LIVE_RE,
 )
-REDDIT_RE: Pattern[str] = comp(r"https?://(www.)reddit.com/r/[a-zA-Z0-9_-]{1,20}/comments/[a-z0-9]{6}")
+REDDIT_RE: Pattern[str] = comp(
+    r"https?://(?:(?:www|old|new|np|sh|nm)\.)?reddit\.com/(?:r|user|comments)/[^\s<>()]+|https?://redd\.it/[a-zA-Z0-9]+"
+)
+THREADS_RE: Pattern[str] = comp(
+    r"https?://(?:www\.)?threads\.(?:net|com)/[^\s<>()]+"
+)
+FACEBOOK_RE: Pattern[str] = comp(
+    r"https?://(?:fb\.watch/[^\s<>()]+|(?:www\.|m\.|web\.)?facebook\.com/[^\s<>()]+)"
+)
+PIXIV_RE: Pattern[str] = comp(
+    r"https?://(?:www\.)?pixiv\.net/(?:en/)?(?:artworks/\d+|member_illust\.php\?[^\s<>()]+|novel/show\.php\?[^\s<>()]+)"
+)
+TUMBLR_RE: Pattern[str] = comp(
+    r"https?://(?:www\.)?tumblr\.com/[^\s<>()]+|https?://[a-zA-Z0-9-]+\.tumblr\.com/(?:post|video)/\d+[^\s<>()]*"
+)
 YT_CLIP_RE: Pattern[str] = comp(r"https://(www.)?youtube.com/clip/[A-Za-z0-9_-]{1,}")
 YT_SHORT_RE: Pattern[str] = comp(r"https://(www.)?youtube.com/shorts/[a-zA-Z0-9_-]{11}")
 YOUTUBE_RE: Pattern[str] = comp(r"https://(www.)?youtu(.be|be.com)/(watch\?v=[a-zA-Z0-9_-]{11}|[a-zA-Z0-9_-]{11})")

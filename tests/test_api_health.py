@@ -109,6 +109,7 @@ def test_user_history_routes_accept_optional_session_for_private_self_access() -
 def test_activity_is_available_as_an_individual_tracking_opt_out() -> None:
     assert "activity" in api.VALID_OPTOUTS
     assert "emoji" in api.VALID_OPTOUTS
+    assert "downloads" in api.VALID_OPTOUTS
 
 
 @pytest.mark.asyncio

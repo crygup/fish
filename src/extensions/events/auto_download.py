@@ -4,6 +4,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING, cast
 
 import discord
+from discord import MediaGalleryItem, ui
 from discord.ext import commands
 
 from core import Cog
@@ -13,8 +14,11 @@ from utils import (
     VIDEOS_RE,
     Downloader,
     KlipyUrlConverter,
+    TemporaryMediaError,
     TenorUrlConverter,
+    record_download,
     to_image,
+    upload_temporary_media,
 )
 
 if TYPE_CHECKING:
@@ -56,16 +60,45 @@ class AutoDownload(Cog):
             try:
                 url = await TenorUrlConverter().convert(ctx, message.content)
                 img = cast(BytesIO, await to_image(ctx.session, url))
-                downloader = Downloader(ctx, url)
+                downloader = Downloader(
+                    ctx,
+                    url,
+                    auto_download=True,
+                    allow_temporary_hosting=True,
+                )
                 if img.getbuffer().nbytes > downloader.max_filesize:
-                    await ctx.send(
-                        f"This GIF exceeds {downloader.upload_limit_description}.",
-                        ephemeral=True,
+                    try:
+                        hosted_url = await upload_temporary_media(
+                            self.bot,
+                            img.getvalue(),
+                            "tenor.gif",
+                            content_type="image/gif",
+                        )
+                    except TemporaryMediaError:
+                        await ctx.send(
+                            f"This GIF exceeds {downloader.upload_limit_description} "
+                            "and temporary hosting is unavailable.",
+                            ephemeral=True,
+                        )
+                        return
+                    container = ui.Container(
+                        ui.MediaGallery(MediaGalleryItem(hosted_url)),
+                        ui.TextDisplay(
+                            "-# Discord's upload limit was exceeded. "
+                            "This link expires in 30 minutes."
+                        ),
+                        accent_color=self.bot.embedcolor,
                     )
+                    view_type = type("HostedAutoDownloadView", (ui.LayoutView,), {})
+                    view = view_type(timeout=None)
+                    view.add_item(container)
+                    await ctx.send(view=view, ephemeral=True)
+                    await record_download(ctx, tenor_match.group(0), auto_download=True)
                     return
                 await ctx.send(
                     file=discord.File(img, filename="tenor.gif"), ephemeral=True
                 )
+                await record_download(ctx, tenor_match.group(0), auto_download=True)
 
                 return
 
@@ -76,7 +109,13 @@ class AutoDownload(Cog):
             try:
                 url = await KlipyUrlConverter().convert(ctx, klipy_match.group(0))
                 async with ctx.typing(ephemeral=True):
-                    await Downloader(ctx, url, format="gif").download()
+                    await Downloader(
+                        ctx,
+                        url,
+                        format="gif",
+                        auto_download=True,
+                        allow_temporary_hosting=True,
+                    ).download()
                 return
             except commands.BadArgument:
                 pass
@@ -84,6 +123,11 @@ class AutoDownload(Cog):
         async with ctx.typing(ephemeral=True):
             if not video_match or not video_match.group(0):
                 return
-            dl = Downloader(ctx, video_match.group(0))
+            dl = Downloader(
+                ctx,
+                video_match.group(0),
+                auto_download=True,
+                allow_temporary_hosting=True,
+            )
 
             await dl.download()

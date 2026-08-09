@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import html as html_lib
+import json
+import mimetypes
 import os
 import re
 import secrets
@@ -11,28 +14,41 @@ import sys
 import tempfile
 import time
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, List, Optional
-from urllib.parse import urlsplit
+from typing import TYPE_CHECKING, Any, Optional
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 import discord
+from bs4 import BeautifulSoup
 from discord import MediaGalleryItem, ui
+from discord.ext import commands
 
 from .errors import DownloadError
-from .functions import litterbox, to_thread
-from .network import validate_public_url
+from .functions import to_thread
+from .network import (
+    read_bounded_response,
+    validate_connected_peer,
+    validate_public_url,
+)
 from .paths import DOWNLOADS_ROOT, FILES_ROOT
 from .regexes import (
+    FACEBOOK_RE,
     INSTAGRAM_RE,
     KLIPY_RE,
     LIVE_STREAM_RE,
+    PIXIV_RE,
+    REDDIT_RE,
     SOUNDCLOUD_RE,
+    THREADS_RE,
     TIKTOK_RE,
+    TUMBLR_RE,
     TWITTER_RE,
     YOUTUBE_RE,
     YT_CLIP_RE,
     YT_SHORT_RE,
 )
+from .temp_media import TemporaryMediaError, upload_temporary_media
+from .vars import base_header
 
 if TYPE_CHECKING:
     from core import Context
@@ -68,15 +84,127 @@ DOWNLOAD_HOSTS = frozenset(
         "www.twitch.tv",
         "reddit.com",
         "www.reddit.com",
+        "old.reddit.com",
+        "new.reddit.com",
+        "np.reddit.com",
+        "sh.reddit.com",
+        "nm.reddit.com",
+        "redditmedia.com",
+        "www.redditmedia.com",
+        "redd.it",
+        "i.redd.it",
+        "v.redd.it",
+        "preview.redd.it",
+        "external-preview.redd.it",
+        "threads.net",
+        "www.threads.net",
+        "threads.com",
+        "www.threads.com",
+        "facebook.com",
+        "www.facebook.com",
+        "m.facebook.com",
+        "web.facebook.com",
+        "fb.watch",
+        "pixiv.net",
+        "www.pixiv.net",
+        "tumblr.com",
+        "www.tumblr.com",
         "pin.it",
         "pinterest.com",
         "www.pinterest.com",
         "static.klipy.com",
     }
 )
+_DOWNLOAD_SITE_HOSTS: dict[str, frozenset[str]] = {
+    "instagram": frozenset({"instagram.com", "www.instagram.com"}),
+    "tiktok": frozenset(
+        {
+            "tiktok.com",
+            "www.tiktok.com",
+            "m.tiktok.com",
+            "vm.tiktok.com",
+            "vt.tiktok.com",
+            "vk.tiktok.com",
+        }
+    ),
+    "twitter": frozenset(
+        {
+            "twitter.com",
+            "www.twitter.com",
+            "x.com",
+            "www.x.com",
+            "fxtwitter.com",
+            "www.fxtwitter.com",
+            "vxtwitter.com",
+            "www.vxtwitter.com",
+            "fixupx.com",
+            "www.fixupx.com",
+            "girlcockx.com",
+            "www.girlcockx.com",
+        }
+    ),
+    "youtube": frozenset(
+        {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+    ),
+    "twitch": frozenset({"twitch.tv", "www.twitch.tv", "clips.twitch.tv"}),
+    "reddit": frozenset(
+        {
+            "reddit.com",
+            "www.reddit.com",
+            "old.reddit.com",
+            "new.reddit.com",
+            "np.reddit.com",
+            "sh.reddit.com",
+            "nm.reddit.com",
+            "redditmedia.com",
+            "www.redditmedia.com",
+            "redd.it",
+            "i.redd.it",
+            "v.redd.it",
+            "preview.redd.it",
+            "external-preview.redd.it",
+        }
+    ),
+    "threads": frozenset(
+        {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}
+    ),
+    "facebook": frozenset(
+        {
+            "facebook.com",
+            "www.facebook.com",
+            "m.facebook.com",
+            "web.facebook.com",
+            "fb.watch",
+        }
+    ),
+    "pixiv": frozenset({"pixiv.net", "www.pixiv.net"}),
+    "tumblr": frozenset({"tumblr.com", "www.tumblr.com"}),
+    "pinterest": frozenset({"pin.it", "pinterest.com", "www.pinterest.com"}),
+    "soundcloud": frozenset({"soundcloud.com", "on.soundcloud.com"}),
+    "klipy": frozenset({"klipy.com", "www.klipy.com", "static.klipy.com"}),
+    "tenor": frozenset({"tenor.com", "www.tenor.com", "tenor.co", "media.tenor.com"}),
+}
 DISCORD_MEDIA_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 _VIDEO_SUFFIXES = frozenset({".mp4", ".webm", ".mov", ".mkv", ".avi"})
+_MEDIA_SUFFIXES = _IMAGE_SUFFIXES | _VIDEO_SUFFIXES | frozenset({".gif"})
+_MEDIA_CONTENT_SUFFIXES = {
+    "image/gif": ".gif",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+    "video/x-matroska": ".mkv",
+}
+_DIRECT_MEDIA_HEADERS = {
+    **base_header,
+    "Accept": "image/avif,image/webp,image/apng,image/*,video/*;q=0.8,*/*;q=0.5",
+}
+_MAX_PAGE_BYTES = 2 * 1024 * 1024
+_MAX_EXTRACTED_MEDIA = 20
 
 # TikTok occasionally changes which mobile app profile its API accepts.  Keep
 # a small, known-good fallback list so a transient extractor response does not
@@ -114,11 +242,91 @@ def is_discord_media_url(url: str) -> bool:
     return hostname in DISCORD_MEDIA_HOSTS
 
 
+def _is_allowed_download_host(hostname: str) -> bool:
+    """Return whether a page host is supported by the downloader.
+
+    Tumblr blogs use arbitrary subdomains (``blog-name.tumblr.com``), so an
+    exact host set cannot cover them without allowing unrelated domains.
+    Restrict that exception to one label directly below tumblr.com.
+    """
+    hostname = hostname.lower().rstrip(".")
+    return hostname in DOWNLOAD_HOSTS or (
+        hostname.endswith(".tumblr.com") and hostname.count(".") == 2
+    )
+
+
+def _page_allowed_hosts(hostname: str) -> frozenset[str]:
+    """Build the redirect allowlist for a supported source page."""
+    hostname = hostname.lower().rstrip(".")
+    if hostname.endswith(".tumblr.com") and hostname.count(".") == 2:
+        return frozenset({hostname, "tumblr.com", "www.tumblr.com"})
+    site = normalize_download_site(f"https://{hostname}/")
+    if site is not None:
+        return frozenset(_DOWNLOAD_SITE_HOSTS[site] | {hostname})
+    return frozenset({hostname})
+
+
+def normalize_download_site(url: str) -> str | None:
+    """Return a stable site label without retaining the source URL."""
+    hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
+    if hostname.endswith(".tumblr.com") and hostname.count(".") == 2:
+        return "tumblr"
+    for site, hosts in _DOWNLOAD_SITE_HOSTS.items():
+        if hostname in hosts:
+            return site
+    return None
+
+
+async def record_download(
+    ctx: "Context", url: str, *, auto_download: bool = False
+) -> None:
+    """Record one successful download while respecting the user's opt-out."""
+    site = normalize_download_site(url)
+    if site is None or ctx.bot.db_cache.user_tracking_opted_out(
+        ctx.author.id, "downloads"
+    ):
+        return
+
+    try:
+        await ctx.bot.pool.execute(
+            """
+            INSERT INTO download_stats (user_id, site, auto_download, downloads)
+            VALUES ($1, $2, $3, 1)
+            ON CONFLICT (user_id, site, auto_download) DO UPDATE
+            SET downloads = download_stats.downloads + 1,
+                last_downloaded_at = now()
+            """,
+            ctx.author.id,
+            site,
+            auto_download,
+        )
+        guild = getattr(ctx, "guild", None)
+        if guild is not None:
+            channel = getattr(ctx, "channel", None)
+            await ctx.bot.pool.execute(
+                """
+                INSERT INTO download_events (
+                    user_id, guild_id, channel_id, site, auto_download
+                )
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                ctx.author.id,
+                guild.id,
+                getattr(channel, "id", None),
+                site,
+                auto_download,
+            )
+    except Exception:
+        ctx.bot.logger.exception("Failed to record download site statistics")
+
+
 def is_downloadable_media_page(url: str) -> bool:
     """Return whether a URL should use the guarded yt-dlp workflow."""
     parsed = urlsplit(url)
     hostname = (parsed.hostname or "").lower().rstrip(".")
-    if parsed.scheme.lower() not in {"http", "https"} or hostname not in DOWNLOAD_HOSTS:
+    if parsed.scheme.lower() not in {"http", "https"} or not _is_allowed_download_host(
+        hostname
+    ):
         return False
     suffix = os.path.splitext(parsed.path)[1].casefold()
     return suffix not in {
@@ -151,7 +359,13 @@ def download_format_selector(
     selector = (
         f"bestvideo[height<={res_target}]+bestaudio/" f"best[height<={res_target}]"
     )
-    if TWITTER_RE.search(url) or TIKTOK_RE.search(url):
+    if (
+        TWITTER_RE.search(url)
+        or TIKTOK_RE.search(url)
+        or REDDIT_RE.search(url)
+        or FACEBOOK_RE.search(url)
+        or TUMBLR_RE.search(url)
+    ):
         # X and TikTok sometimes expose a single progressive format whose
         # height is unknown to yt-dlp, or only expose a height above our
         # preferred target. Without this fallback the height filter removes
@@ -174,6 +388,171 @@ def _is_video_file(path: str) -> bool:
     return os.path.splitext(path)[1].casefold() in _VIDEO_SUFFIXES
 
 
+def _is_gallery_file(path: str) -> bool:
+    return os.path.splitext(path)[1].casefold() in _MEDIA_SUFFIXES
+
+
+def _normalise_extracted_url(value: object, base_url: str) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = html_lib.unescape(value).replace("\\/", "/").strip()
+    if not value or value.startswith(("data:", "blob:")):
+        return None
+    candidate = urljoin(base_url, value)
+    parsed = urlsplit(candidate)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return None
+    return candidate
+
+
+def _extract_html_media_urls(
+    text: str,
+    base_url: str,
+    *,
+    include_images_with_video: bool = False,
+) -> list[str]:
+    """Extract post media from OpenGraph, video tags, and JSON fragments."""
+    soup = BeautifulSoup(text, "html.parser")
+    videos: list[str] = []
+    images: list[str] = []
+
+    def add(target: list[str], value: object) -> None:
+        candidate = _normalise_extracted_url(value, base_url)
+        if candidate and candidate not in target:
+            target.append(candidate)
+
+    for tag in soup.find_all(("video", "source")):
+        add(videos, tag.get("src"))
+        add(videos, tag.get("data-src"))
+
+    video_meta = {
+        "og:video",
+        "og:video:url",
+        "og:video:secure_url",
+        "twitter:player:stream",
+    }
+    image_meta = {"og:image", "og:image:url", "twitter:image", "twitter:image:src"}
+    for meta in soup.find_all("meta"):
+        key = str(meta.get("property") or meta.get("name") or "").lower()
+        content = meta.get("content")
+        if key in video_meta:
+            add(videos, content)
+        elif key in image_meta:
+            add(images, content)
+
+    if not videos and not images:
+        for link in soup.find_all("link"):
+            rel = {str(item).lower() for item in (link.get("rel") or [])}
+            if "image_src" in rel:
+                add(images, link.get("href"))
+        for tag in soup.find_all("img"):
+            add(images, tag.get("src"))
+            add(images, tag.get("data-src"))
+
+    # Some server-rendered pages only expose the CDN URL inside escaped JSON.
+    # Decode the JSON-style escaped slashes before scanning.  Otherwise a URL
+    # such as ``https:\/\/cdn.example/video.mp4`` is invisible to the regex.
+    # Only use this fallback when the page has no media tags.  A page with an
+    # OpenGraph thumbnail can also contain dozens of unrelated loading images.
+    if not videos and not images:
+        searchable_text = html_lib.unescape(text).replace("\\/", "/")
+        escaped_urls = re.findall(
+            r"https?://[^\"'<>\\\s]+?\.(?:mp4|webm|mov|gif|jpe?g|png|webp)(?:\?[^\"'<>\\\s]*)?",
+            searchable_text,
+            re.IGNORECASE,
+        )
+        for value in escaped_urls:
+            add(
+                videos if re.search(r"\.(?:mp4|webm|mov)$", value, re.I) else images,
+                value,
+            )
+
+    extracted = videos + images if include_images_with_video else (videos or images)
+    return extracted[:_MAX_EXTRACTED_MEDIA]
+
+
+def _is_threads_media_url(value: str) -> bool:
+    """Only accept media hosted on Meta's public CDN domains."""
+    hostname = (urlsplit(value).hostname or "").lower().rstrip(".")
+    return hostname.endswith(".cdninstagram.com") or hostname.endswith(".fbcdn.net")
+
+
+def _extract_threads_json_media_urls(text: str, base_url: str) -> list[str]:
+    """Extract each attachment from Threads' embedded post payload.
+
+    Threads' server-rendered page stores carousel attachments in JSON script
+    tags.  The normal OpenGraph tags only expose a thumbnail, while scanning
+    every URL in the page also picks up profile pictures and related posts.
+    Walking the first carousel payload lets us select one best URL per
+    attachment without downloading unrelated assets.
+    """
+    soup = BeautifulSoup(text, "html.parser")
+
+    def first_candidate(item: object) -> str | None:
+        if not isinstance(item, dict):
+            return None
+        versions = item.get("video_versions")
+        if isinstance(versions, list):
+            for version in versions:
+                if not isinstance(version, dict):
+                    continue
+                candidate = _normalise_extracted_url(version.get("url"), base_url)
+                if candidate and _is_threads_media_url(candidate):
+                    return candidate
+        image_data = item.get("image_versions2")
+        candidates = (
+            image_data.get("candidates") if isinstance(image_data, dict) else None
+        )
+        if isinstance(candidates, list):
+            for version in candidates:
+                if not isinstance(version, dict):
+                    continue
+                candidate = _normalise_extracted_url(version.get("url"), base_url)
+                if candidate and _is_threads_media_url(candidate):
+                    return candidate
+        return None
+
+    def walk(value: object, depth: int = 0) -> list[str]:
+        if depth > 16:
+            return []
+        if isinstance(value, dict):
+            carousel = value.get("carousel_media")
+            if isinstance(carousel, list):
+                media = [
+                    candidate
+                    for item in carousel
+                    if (candidate := first_candidate(item))
+                ]
+                if media:
+                    return list(dict.fromkeys(media))[:_MAX_EXTRACTED_MEDIA]
+            candidate = first_candidate(value)
+            if candidate:
+                return [candidate]
+            for child in value.values():
+                media = walk(child, depth + 1)
+                if media:
+                    return media
+        elif isinstance(value, list):
+            for child in value:
+                media = walk(child, depth + 1)
+                if media:
+                    return media
+        return []
+
+    for script in soup.find_all("script", type="application/json"):
+        payload = script.string or script.get_text()
+        if not payload:
+            continue
+        try:
+            value = json.loads(payload)
+        except (TypeError, ValueError):
+            continue
+        media = walk(value)
+        if media:
+            return media
+    return []
+
+
 # ffmpeg filter for optimized GIF conversion:
 #   10 fps, 480px wide (AR preserved), lanczos scaling,
 #   palettegen with diff mode + 128 colors,
@@ -194,10 +573,16 @@ class Downloader:
         format: str = "mp4",
         filename: Optional[str] = None,
         hidden: Optional[bool] = False,
+        auto_download: bool = False,
+        allow_temporary_hosting: bool = False,
+        ignore_checks: bool = False,
     ) -> None:
         self.ctx = ctx
         self.url = url
         self.format = format
+        self.auto_download = auto_download
+        self.allow_temporary_hosting = allow_temporary_hosting
+        self.ignore_checks = ignore_checks
         raw_filename = filename or secrets.token_urlsafe(8).strip("-")
         # Titles are user-controlled (``download --title``).  Restrict the
         # name to a plain filename so it cannot escape the download directory
@@ -278,11 +663,34 @@ class Downloader:
             raise DownloadError("The download job was not initialized.")
         return os.path.join(self._job_dir, f"{self.filename}.*")
 
-    def _find_output(self) -> str:
-        matches = glob.glob(self._output_glob())
+    @staticmethod
+    def _sort_output_paths(matches: list[str]) -> list[str]:
+        def sort_key(path: str) -> tuple[int, str]:
+            # Playlist entries use ``.001.``, ``.002.``, and so on. A single
+            # item may use yt-dlp's ``NA`` placeholder.
+            match = re.search(r"\.(\d+)\.[^.]+$", path)
+            return (int(match.group(1)), path) if match else (10**9, path)
+
+        return sorted(matches, key=sort_key)
+
+    @staticmethod
+    def _output_entry_key(path: str) -> str:
+        match = re.search(r"\.(\d+|NA)\.[^.]+$", path)
+        return match.group(1) if match else path
+
+    def _find_outputs(self, pattern: str | None = None) -> list[str]:
+        matches = [
+            path
+            for path in glob.glob(pattern or self._output_glob())
+            if os.path.isfile(path)
+        ]
         if not matches:
             raise DownloadError("Download completed but no output file was found.")
-        return matches[0]
+        return self._sort_output_paths(matches)
+
+    def _find_output(self) -> str:
+        """Return the first output for callers that only need one item."""
+        return self._find_outputs()[0]
 
     def _cleanup_output(self) -> None:
         for path in glob.glob(self._output_glob()):
@@ -310,14 +718,20 @@ class Downloader:
         self._cookie_file = cookie_file
         return cookie_file
 
-    async def _yt_dlp_download(self, video: str, *, res_target: int) -> str:
-        """Download via yt-dlp CLI subprocess; return the output path on disk."""
+    async def _yt_dlp_download(self, video: str, *, res_target: int) -> list[str]:
+        """Download every media entry returned by yt-dlp for a post."""
 
         is_youtube = bool(YOUTUBE_RE.search(video) or YT_SHORT_RE.search(video))
         is_audio = SOUNDCLOUD_RE.search(video) or self.format == "mp3"
         is_klipy = bool(KLIPY_RE.search(video))
         is_instagram = bool(INSTAGRAM_RE.search(video))
         is_tiktok = bool(TIKTOK_RE.search(video))
+        is_reddit = bool(REDDIT_RE.search(video))
+        is_tumblr = bool(TUMBLR_RE.search(video))
+        is_multi_post = (
+            is_instagram or bool(TWITTER_RE.search(video)) or is_reddit or is_tumblr
+        )
+        is_instagram_post = is_instagram and "/p/" in urlsplit(video).path
 
         format_selector = download_format_selector(
             video,
@@ -332,8 +746,11 @@ class Downloader:
             "-f",
             format_selector,
             "-o",
-            os.path.join(self._job_dir or "", f"{self.filename}.%(ext)s"),
-            "--no-playlist",
+            os.path.join(
+                self._job_dir or "",
+                f"{self.filename}.%(playlist_index)03d.%(ext)s",
+            ),
+            "--yes-playlist" if is_multi_post else "--no-playlist",
             "--js-runtimes",
             "deno",
             "--retries",
@@ -398,6 +815,7 @@ class Downloader:
         last_returncode: int | None = None
         last_stderr = ""
         last_failure = ""
+        downloaded_paths: list[str] = []
 
         for attempt in range(attempts):
             if attempt:
@@ -425,6 +843,13 @@ class Downloader:
             last_returncode = proc.returncode
             last_stderr = stderr_raw.decode(errors="replace").strip()
 
+            try:
+                output_paths = self._find_outputs()
+            except DownloadError:
+                output_paths = []
+            if output_paths:
+                downloaded_paths = output_paths
+
             if proc.returncode != 0:
                 if "is_live" in last_stderr and "filter" in last_stderr:
                     self._cleanup_output()
@@ -441,9 +866,10 @@ class Downloader:
                     )
                     continue
             else:
-                output_path = stdout.decode(errors="replace").strip()
-                if output_path and os.path.isfile(output_path):
-                    return output_path
+                if output_paths:
+                    if not is_instagram_post:
+                        return output_paths
+                    break
                 last_failure = "yt-dlp completed without producing a media file."
                 if attempt + 1 < attempts:
                     self.ctx.bot.logger.warning(
@@ -456,6 +882,23 @@ class Downloader:
 
             break
 
+        # Instagram carousels can mix videos and images. The normal format
+        # download produces the video entries, while this thumbnail pass fills
+        # in any image entries whose extractor reports no video formats.
+        if is_instagram_post:
+            thumbnail_paths = await self._instagram_thumbnail_download(video)
+            if thumbnail_paths:
+                outputs_by_entry = {
+                    self._output_entry_key(path): path for path in downloaded_paths
+                }
+                for path in thumbnail_paths:
+                    outputs_by_entry.setdefault(self._output_entry_key(path), path)
+                downloaded_paths = self._sort_output_paths(
+                    list(outputs_by_entry.values())
+                )
+            if downloaded_paths:
+                return downloaded_paths
+
         # Instagram photo posts (and carousels whose first item is a photo)
         # have no video formats. yt-dlp can still retrieve the public post
         # image as a thumbnail, so use that before returning the generic video
@@ -466,9 +909,9 @@ class Downloader:
             last_stderr,
             re.IGNORECASE,
         ):
-            thumbnail_path = await self._instagram_thumbnail_download(video)
-            if thumbnail_path is not None:
-                return thumbnail_path
+            thumbnail_paths = await self._instagram_thumbnail_download(video)
+            if thumbnail_paths is not None:
+                return thumbnail_paths
 
         self.ctx.bot.logger.error(
             "yt-dlp failed exit=%s host=%s attempts=%s detail=%s",
@@ -480,17 +923,20 @@ class Downloader:
         if last_failure:
             self.ctx.bot.logger.error(last_failure)
         raise DownloadError(
-            "yt-dlp could not download this video. The site may be blocking "
+            "Failed to download. The site may be blocking "
             "the request, or the video may be unavailable."
         )
 
-    async def _instagram_thumbnail_download(self, video: str) -> str | None:
-        """Download a public Instagram image post through yt-dlp's thumbnail."""
+    async def _instagram_thumbnail_download(self, video: str) -> list[str] | None:
+        """Download every public Instagram image entry as a thumbnail."""
+        thumbnail_glob = os.path.join(
+            self._job_dir or "", f"{self.filename}.thumbnail.*"
+        )
         args = [
             sys.executable,
             "-m",
             "yt_dlp",
-            "--no-playlist",
+            "--yes-playlist",
             "--force-ipv4",
             "--ignore-no-formats-error",
             "--skip-download",
@@ -498,7 +944,10 @@ class Downloader:
             "--convert-thumbnails",
             "jpg",
             "-o",
-            os.path.join(self._job_dir or "", f"{self.filename}.%(ext)s"),
+            os.path.join(
+                self._job_dir or "",
+                f"{self.filename}.thumbnail.%(playlist_index)03d.%(ext)s",
+            ),
         ]
 
         if cookies := _get_cookies(video):
@@ -525,7 +974,11 @@ class Downloader:
         try:
             _, stderr_raw = await self._communicate_with_timeout(proc)
         except DownloadError:
-            self._cleanup_output()
+            for path in glob.glob(thumbnail_glob):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
             raise
 
         if proc.returncode != 0:
@@ -534,76 +987,440 @@ class Downloader:
                 urlsplit(video).hostname,
                 _summarize_yt_dlp_error(stderr_raw.decode(errors="replace")),
             )
-            self._cleanup_output()
+            for path in glob.glob(thumbnail_glob):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
             return None
 
-        for path in glob.glob(self._output_glob()):
-            if os.path.splitext(path)[1].casefold() in _IMAGE_SUFFIXES:
-                return path
-        self._cleanup_output()
+        try:
+            paths = [
+                path
+                for path in self._find_outputs(thumbnail_glob)
+                if os.path.splitext(path)[1].casefold() in _IMAGE_SUFFIXES
+            ]
+        except DownloadError:
+            paths = []
+        if paths:
+            return paths
+        for path in glob.glob(thumbnail_glob):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
         return None
 
-    async def _download_direct_media(self, url: str) -> str:
-        """Download a trusted direct media URL without invoking yt-dlp."""
-        if self._job_dir is None:
-            raise DownloadError("The download job was not initialized.")
-
-        suffix = os.path.splitext(urlsplit(url).path)[1].lower()
-        if suffix not in {".gif", ".mp4", ".webm", ".mov"}:
-            suffix = ".mp4"
-        output_path = os.path.join(self._job_dir, f"{self.filename}{suffix}")
+    async def _fetch_page_html(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> str:
+        """Fetch a supported public page while validating every redirect."""
+        parsed = urlsplit(url)
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        allowed_hosts = _page_allowed_hosts(hostname)
+        current = url
+        request_headers = {
+            **base_header,
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            **(headers or {}),
+        }
 
         try:
             async with asyncio.timeout(self._remaining_timeout()):
-                async with self.ctx.session.get(
-                    url,
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/131.0.0.0 Safari/537.36"
-                        )
-                    },
-                ) as response:
-                    if response.status != 200:
-                        raise DownloadError(
-                            "Klipy did not return the requested media file."
-                        )
-
-                    content_length = response.content_length
-                    if (
-                        content_length is not None
-                        and content_length > self.max_filesize
-                    ):
-                        raise DownloadError(
-                            f"This media exceeds {self.upload_limit_description}."
-                        )
-
-                    size = 0
-                    with open(output_path, "wb") as output:
-                        async for chunk in response.content.iter_chunked(64 * 1024):
-                            size += len(chunk)
-                            if size > self.max_filesize:
+                for _ in range(6):
+                    await validate_public_url(
+                        current,
+                        allowed_hosts=allowed_hosts,
+                        allow_http=False,
+                    )
+                    async with self.ctx.session.get(
+                        current,
+                        headers=request_headers,
+                        allow_redirects=False,
+                    ) as response:
+                        validate_connected_peer(response)
+                        if response.status in {301, 302, 303, 307, 308}:
+                            location = response.headers.get("Location")
+                            if not location:
                                 raise DownloadError(
-                                    f"This media exceeds {self.upload_limit_description}."
+                                    "The source page returned an invalid redirect."
                                 )
-                            output.write(chunk)
+                            current = urljoin(current, location)
+                            continue
+                        if response.status != 200:
+                            raise DownloadError(
+                                f"The source page returned HTTP {response.status}."
+                            )
+                        content_type = response.headers.get("Content-Type", "").lower()
+                        if content_type and not content_type.startswith(
+                            ("text/html", "application/xhtml+xml")
+                        ):
+                            raise DownloadError("The source page did not return HTML.")
+                        data = await read_bounded_response(response, _MAX_PAGE_BYTES)
+                        return data.decode("utf-8", errors="replace")
         except DownloadError:
-            try:
-                os.remove(output_path)
-            except OSError:
-                pass
             raise
+        except commands.CommandError as exc:
+            raise DownloadError("The source page could not be fetched.") from exc
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            try:
-                os.remove(output_path)
-            except OSError:
-                pass
-            raise DownloadError(
-                "Klipy did not return the requested media file."
-            ) from exc
+            raise DownloadError("The source page could not be fetched.") from exc
 
-        return output_path
+        raise DownloadError("The source page redirected too many times.")
+
+    @staticmethod
+    def _pixiv_artwork_id(url: str) -> str | None:
+        match = re.search(
+            r"(?:/artworks/|illust_id=)(?P<id>\d+)",
+            url,
+            re.IGNORECASE,
+        )
+        return match.group("id") if match else None
+
+    async def _pixiv_media_urls(self, url: str) -> list[str]:
+        """Resolve every page of a public Pixiv illustration."""
+        artwork_id = self._pixiv_artwork_id(url)
+        if artwork_id is None:
+            return []
+
+        api_url = f"https://www.pixiv.net/ajax/illust/{artwork_id}/pages?lang=en"
+        headers = {
+            **base_header,
+            "Accept": "application/json,text/plain,*/*",
+            "Referer": f"https://www.pixiv.net/artworks/{artwork_id}",
+        }
+        try:
+            await validate_public_url(
+                api_url,
+                allowed_hosts={"www.pixiv.net", "pixiv.net"},
+                allow_http=False,
+            )
+            async with asyncio.timeout(self._remaining_timeout()):
+                async with self.ctx.session.get(
+                    api_url,
+                    headers=headers,
+                    allow_redirects=False,
+                ) as response:
+                    validate_connected_peer(response)
+                    if response.status == 200:
+                        payload = await response.json(content_type=None)
+                    else:
+                        payload = None
+        except (
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            ValueError,
+            commands.CommandError,
+        ):
+            payload = None
+
+        results: list[str] = []
+        body = payload.get("body") if isinstance(payload, dict) else None
+        if isinstance(body, list):
+            for item in body:
+                original = (
+                    item.get("urls", {}).get("original")
+                    if isinstance(item, dict)
+                    else None
+                )
+                parsed = urlsplit(original) if isinstance(original, str) else None
+                if (
+                    isinstance(original, str)
+                    and parsed
+                    and parsed.scheme == "https"
+                    and parsed.hostname in {"i.pximg.net", "s.pximg.net"}
+                    and original not in results
+                ):
+                    results.append(original)
+
+        if results:
+            return results[:_MAX_EXTRACTED_MEDIA]
+
+        # Pixiv occasionally denies the AJAX request to an unauthenticated
+        # client. The public page still includes an OpenGraph image in that
+        # case, which at least preserves single-image downloads.
+        try:
+            page = await self._fetch_page_html(url)
+        except DownloadError:
+            return []
+        return [
+            candidate
+            for candidate in _extract_html_media_urls(page, url)
+            if (urlsplit(candidate).hostname or "").lower()
+            in {"i.pximg.net", "s.pximg.net"}
+        ][:_MAX_EXTRACTED_MEDIA]
+
+    async def _threads_share_redirect_url(self, url: str) -> str:
+        """Resolve a Threads ``/share/<token>`` URL to its post URL.
+
+        Share links return the normal Threads application shell unless the
+        private ``__a=1`` response is requested.  That response is still
+        public and contains a short-lived, same-host redirect to the post.
+        """
+        parsed = urlsplit(url)
+        if "/share/" not in parsed.path.lower():
+            return url
+
+        query = [(key, value) for key, value in parse_qsl(parsed.query) if key != "__a"]
+        query.append(("__a", "1"))
+        resolver_url = urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                urlencode(query),
+                parsed.fragment,
+            )
+        )
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        try:
+            await validate_public_url(
+                resolver_url,
+                allowed_hosts=_page_allowed_hosts(hostname),
+                allow_http=False,
+            )
+            async with asyncio.timeout(self._remaining_timeout()):
+                async with self.ctx.session.get(
+                    resolver_url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0",
+                        "Accept": "application/x-javascript,application/json;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    },
+                    allow_redirects=False,
+                ) as response:
+                    validate_connected_peer(response)
+                    if response.status != 200:
+                        return url
+                    body = await read_bounded_response(response, 128 * 1024)
+            raw = body.decode("utf-8", errors="replace").removeprefix("for (;;);")
+            payload = json.loads(raw)
+            redirect = payload.get("redirect") if isinstance(payload, dict) else None
+            candidate = _normalise_extracted_url(redirect, url)
+            if not candidate:
+                return url
+            await validate_public_url(
+                candidate,
+                allowed_hosts=_page_allowed_hosts(hostname),
+                allow_http=False,
+            )
+            return candidate
+        except (
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            UnicodeError,
+            ValueError,
+            commands.CommandError,
+        ):
+            return url
+
+    async def _threads_oembed_media_urls(self, url: str | None = None) -> list[str]:
+        """Use Threads' public oEmbed response when the post HTML is sparse."""
+        endpoint = "https://graph.threads.net/oembed"
+        target_url = url or self.url
+        try:
+            await validate_public_url(
+                endpoint,
+                allowed_hosts={"graph.threads.net"},
+                allow_http=False,
+            )
+            async with asyncio.timeout(self._remaining_timeout()):
+                async with self.ctx.session.get(
+                    endpoint,
+                    params={"url": target_url},
+                    headers={**base_header, "Accept": "application/json"},
+                    allow_redirects=False,
+                ) as response:
+                    validate_connected_peer(response)
+                    if response.status != 200:
+                        return []
+                    payload = await response.json(content_type=None)
+        except (
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            ValueError,
+            commands.CommandError,
+        ):
+            return []
+
+        if not isinstance(payload, dict):
+            return []
+        media: list[str] = []
+        embedded_html = payload.get("html")
+        if isinstance(embedded_html, str):
+            media.extend(
+                _extract_html_media_urls(
+                    embedded_html,
+                    target_url,
+                    include_images_with_video=True,
+                )
+            )
+        for key in (
+            "media_url",
+            "video_url",
+            "image_url",
+            "thumbnail_url",
+        ):
+            candidate = _normalise_extracted_url(payload.get(key), target_url)
+            if candidate and candidate not in media:
+                media.append(candidate)
+        return media[:_MAX_EXTRACTED_MEDIA]
+
+    async def _download_site_media(self) -> list[str] | None:
+        """Resolve sites without a maintained yt-dlp extractor."""
+        if PIXIV_RE.search(self.url):
+            media_urls = await self._pixiv_media_urls(self.url)
+            referer = "https://www.pixiv.net/"
+        elif THREADS_RE.search(self.url):
+            resolved_url = await self._threads_share_redirect_url(self.url)
+            try:
+                page = await self._fetch_page_html(
+                    resolved_url,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+            except DownloadError:
+                page = ""
+            media_urls = _extract_threads_json_media_urls(page, resolved_url)
+            if not media_urls:
+                media_urls = _extract_html_media_urls(page, resolved_url)
+            if not media_urls:
+                media_urls = await self._threads_oembed_media_urls(resolved_url)
+            referer = resolved_url
+        else:
+            return None
+
+        if not media_urls:
+            raise DownloadError("No public media was found on that page.")
+
+        paths: list[str] = []
+        for index, media_url in enumerate(media_urls, start=1):
+            try:
+                path = await self._download_direct_media(
+                    media_url,
+                    headers={"Referer": referer},
+                    output_stem=f"{self.filename}.{index:03d}",
+                )
+            except DownloadError as exc:
+                self.ctx.bot.logger.warning(
+                    "Source media item failed host=%s detail=%s",
+                    urlsplit(media_url).hostname,
+                    str(exc),
+                )
+                continue
+            paths.append(path)
+        if not paths:
+            raise DownloadError("The source media could not be downloaded.")
+        return paths
+
+    async def _download_direct_media(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        output_stem: str | None = None,
+    ) -> str:
+        """Download a public direct image or video without invoking yt-dlp."""
+        if self._job_dir is None:
+            raise DownloadError("The download job was not initialized.")
+
+        current = url
+        request_headers = {**_DIRECT_MEDIA_HEADERS, **(headers or {})}
+        output_path: str | None = None
+        try:
+            async with asyncio.timeout(self._remaining_timeout()):
+                for _ in range(6):
+                    await validate_public_url(current, allow_http=False)
+                    async with self.ctx.session.get(
+                        current,
+                        headers=request_headers,
+                        allow_redirects=False,
+                    ) as response:
+                        validate_connected_peer(response)
+                        if response.status in {301, 302, 303, 307, 308}:
+                            location = response.headers.get("Location")
+                            if not location:
+                                raise DownloadError(
+                                    "The media server returned an invalid redirect."
+                                )
+                            current = urljoin(current, location)
+                            continue
+                        if response.status != 200:
+                            raise DownloadError(
+                                f"The media server returned HTTP {response.status}."
+                            )
+
+                        content_type = (
+                            response.headers.get("Content-Type", "")
+                            .split(";", 1)[0]
+                            .lower()
+                        )
+                        suffix = os.path.splitext(urlsplit(current).path)[1].lower()
+                        if suffix not in _MEDIA_SUFFIXES:
+                            suffix = _MEDIA_CONTENT_SUFFIXES.get(content_type, "")
+                        if suffix not in _MEDIA_SUFFIXES:
+                            raise DownloadError(
+                                "The source did not return a supported image or video."
+                            )
+                        if content_type and not (
+                            content_type.startswith(("image/", "video/"))
+                            or content_type == "application/octet-stream"
+                        ):
+                            raise DownloadError(
+                                "The source did not return a supported image or video."
+                            )
+
+                        stem = output_stem or self.filename
+                        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")
+                        output_path = os.path.join(
+                            self._job_dir,
+                            f"{stem or self.filename}{suffix}",
+                        )
+                        content_length = response.content_length
+                        if (
+                            not self.ignore_checks
+                            and content_length is not None
+                            and content_length > self.max_filesize
+                        ):
+                            raise DownloadError(
+                                f"This media exceeds {self.upload_limit_description}."
+                            )
+
+                        size = 0
+                        with open(output_path, "wb") as output:
+                            async for chunk in response.content.iter_chunked(64 * 1024):
+                                size += len(chunk)
+                                if not self.ignore_checks and size > self.max_filesize:
+                                    raise DownloadError(
+                                        f"This media exceeds {self.upload_limit_description}."
+                                    )
+                                output.write(chunk)
+                        return output_path
+        except DownloadError:
+            if output_path:
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+            raise
+        except commands.CommandError as exc:
+            if output_path:
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+            raise DownloadError("The requested media could not be downloaded.") from exc
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            if output_path:
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+            raise DownloadError("The requested media could not be downloaded.") from exc
+
+        raise DownloadError("The media server redirected too many times.")
 
     async def _convert_to_gif(
         self, input_path: str, *, full_frames: bool = False
@@ -756,8 +1573,24 @@ class Downloader:
                 pass
         return 0.0
 
-    async def _download(self) -> discord.File:
-        await validate_public_url(self.url, allowed_hosts=DOWNLOAD_HOSTS)
+    def _attachment_filename(self, path: str, index: int, total: int) -> str:
+        extension = os.path.splitext(path)[1].casefold() or ".mp4"
+        if total == 1:
+            return f"{self.filename}{extension}"
+        return f"{self.filename}-{index}{extension}"
+
+    async def _download_all(self) -> list[discord.File]:
+        parsed_url = urlsplit(self.url)
+        hostname = (parsed_url.hostname or "").lower().rstrip(".")
+        if not _is_allowed_download_host(hostname):
+            raise DownloadError("That website is not supported.")
+        allowed_hosts = (
+            DOWNLOAD_HOSTS if hostname in DOWNLOAD_HOSTS else frozenset({hostname})
+        )
+        try:
+            await validate_public_url(self.url, allowed_hosts=allowed_hosts)
+        except commands.CommandError as exc:
+            raise DownloadError(str(exc)) from exc
 
         if any(pattern.search(self.url) for pattern in LIVE_STREAM_RE):
             raise DownloadError(
@@ -772,29 +1605,55 @@ class Downloader:
             urlsplit(self.url).scheme == "https"
             and urlsplit(self.url).hostname == "static.klipy.com"
         )
+        is_site_media = bool(PIXIV_RE.search(self.url) or THREADS_RE.search(self.url))
 
-        if is_klipy_media:
-            output_path = await self._download_direct_media(self.url)
+        if is_site_media:
+            output_paths = await self._download_site_media() or []
+        elif is_klipy_media:
+            output_paths = [await self._download_direct_media(self.url)]
         else:
-            output_path = await self._yt_dlp_download(self.url, res_target=1080)
+            output_paths = await self._yt_dlp_download(self.url, res_target=1080)
 
         if is_audio:
-            if os.path.getsize(output_path) > self.max_filesize:
+            if (
+                not self.ignore_checks
+                and not self.allow_temporary_hosting
+                and any(
+                    os.path.getsize(path) > self.max_filesize for path in output_paths
+                )
+            ):
                 self._cleanup_output()
                 raise DownloadError(
                     f"This audio file exceeds {self.upload_limit_description}."
                 )
-            return discord.File(output_path, filename=os.path.basename(output_path))
-
-        if os.path.getsize(output_path) > self.max_filesize:
-            self._cleanup_output()
-            if is_klipy_media:
-                raise DownloadError(
-                    f"This media exceeds {self.upload_limit_description}."
+            return [
+                discord.File(
+                    path,
+                    filename=self._attachment_filename(path, index, len(output_paths)),
                 )
-            output_path = await self._yt_dlp_download(self.url, res_target=720)
+                for index, path in enumerate(output_paths, start=1)
+            ]
 
-            if os.path.getsize(output_path) > self.max_filesize:
+        if not self.ignore_checks and any(
+            os.path.getsize(path) > self.max_filesize for path in output_paths
+        ):
+            if is_klipy_media or is_site_media:
+                if not self.allow_temporary_hosting:
+                    self._cleanup_output()
+                    raise DownloadError(
+                        f"This media exceeds {self.upload_limit_description}."
+                    )
+            else:
+                self._cleanup_output()
+                output_paths = await self._yt_dlp_download(self.url, res_target=720)
+
+            if (
+                not self.ignore_checks
+                and not self.allow_temporary_hosting
+                and any(
+                    os.path.getsize(path) > self.max_filesize for path in output_paths
+                )
+            ):
                 self._cleanup_output()
                 raise DownloadError(
                     f"This video exceeds {self.upload_limit_description} even at "
@@ -804,121 +1663,223 @@ class Downloader:
         # Instagram may return VP9 video in an MP4 container. Desktop players
         # can decode it, but Discord mobile can display only the first frame.
         # Normalize Instagram downloads to H.264/AAC with fast-start metadata.
-        if INSTAGRAM_RE.search(self.url) and _is_video_file(output_path):
-            output_path = await self._convert_to_mobile_mp4(output_path)
-            if os.path.getsize(output_path) > self.max_filesize:
-                self._cleanup_output()
-                raise DownloadError(
-                    f"This video exceeds {self.upload_limit_description} after "
-                    "mobile compatibility conversion. Try a shorter clip."
-                )
+        if INSTAGRAM_RE.search(self.url):
+            for index, output_path in enumerate(output_paths):
+                if _is_video_file(output_path):
+                    output_paths[index] = await self._convert_to_mobile_mp4(output_path)
 
         # Twitter GIF conversion:
         #   --format gif          → always convert (rejected if > 30s)
         #   --format mp4 (default) → auto-convert if file has no audio track
         if TWITTER_RE.search(self.url):
-            want_gif = self.format == "gif" or (
-                self.format == "mp4" and not await self._has_audio(output_path)
-            )
-            if want_gif:
-                if self.format == "gif" and self._duration > 30:
+            requested_format = self.format
+            for index, output_path in enumerate(output_paths):
+                if not _is_video_file(output_path):
+                    continue
+                self._duration = await self._get_duration(output_path)
+                has_audio = await self._has_audio(output_path)
+                want_gif = requested_format == "gif" or (
+                    requested_format == "mp4" and not has_audio
+                )
+                if not want_gif:
+                    continue
+                if self._duration > 30:
                     raise DownloadError(
                         "GIF conversion is limited to videos 30 seconds or shorter. "
                         "This video is {:.0f} seconds.".format(self._duration)
                     )
-                dur = self._duration or await self._get_duration(output_path)
-                if dur > 30:
-                    raise DownloadError(
-                        "GIF conversion is limited to videos 30 seconds or shorter. "
-                        "This video is {:.0f} seconds.".format(dur)
-                    )
-                output_path = await self._convert_to_gif(output_path)
-                self.format = "gif"
-
-                if os.path.getsize(output_path) > self.max_filesize:
-                    self._cleanup_output()
-                    raise DownloadError(
-                        f"GIF conversion exceeded {self.upload_limit_description}. "
-                        "Try a shorter clip or omit `--gif`."
-                    )
+                output_paths[index] = await self._convert_to_gif(output_path)
 
         # Klipy pages represent GIFs as video files.  Normalize those files to
         # an actual GIF before sending so Discord renders them as animated GIFs
         # instead of a video attachment.
-        if is_klipy_media and not is_audio and not output_path.lower().endswith(".gif"):
-            dur = self._duration or await self._get_duration(output_path)
+        if (
+            is_klipy_media
+            and not is_audio
+            and not output_paths[0].lower().endswith(".gif")
+        ):
+            output_path = output_paths[0]
+            dur = await self._get_duration(output_path)
             if dur > 30:
                 self._cleanup_output()
                 raise DownloadError(
                     "GIF conversion is limited to videos 30 seconds or shorter. "
                     "This video is {:.0f} seconds.".format(dur)
                 )
-            output_path = await self._convert_to_gif(output_path, full_frames=True)
-            self.format = "gif"
+            output_paths[0] = await self._convert_to_gif(output_path, full_frames=True)
 
-            if os.path.getsize(output_path) > self.max_filesize:
-                self._cleanup_output()
-                raise DownloadError(
-                    f"GIF conversion exceeded {self.upload_limit_description}. "
-                    "Try a shorter clip."
-                )
+        if (
+            not self.ignore_checks
+            and not self.allow_temporary_hosting
+            and any(os.path.getsize(path) > self.max_filesize for path in output_paths)
+        ):
+            self._cleanup_output()
+            raise DownloadError(
+                f"The downloaded media exceeds {self.upload_limit_description}."
+            )
 
-        return discord.File(output_path, filename=os.path.basename(output_path))
+        total = len(output_paths)
+        return [
+            discord.File(
+                path,
+                filename=self._attachment_filename(path, index, total),
+            )
+            for index, path in enumerate(output_paths, start=1)
+        ]
 
-    async def _download_and_send(self):
-        files: List[discord.File] = []
+    async def _download(self) -> discord.File:
+        """Return the first item for commands that process one media file."""
+        files = await self._download_all()
+        for extra in files[1:]:
+            extra.close()
+        return files[0]
 
+    async def _download_and_send(self) -> bool:
         started = time.time()
 
         try:
-            files.append(await self._download())
+            files = await self._download_all()
         except DownloadError as e:
             self._cleanup_output()
             await self.ctx.send(str(e), ephemeral=self.hidden)
-            return
+            return False
 
         elapsed = time.time() - started
         info_text = f"-# Invoked by {self.ctx.author.mention}\n-# Took {elapsed:.1f}s"
 
-        file = files[0]
-        filename = file.filename.lower()
+        # Discord accepts at most ten attachments per message. Keep every
+        # carousel item by sending it in ordered batches when necessary.
+        batches = [files[index : index + 10] for index in range(0, len(files), 10)]
+        reference = self.ctx.message.to_reference(fail_if_not_exists=False)
+        for batch_index, batch in enumerate(batches):
+            hosted: dict[int, str] = {}
+            local_files: list[discord.File] = []
+            try:
+                for index, file in enumerate(batch):
+                    if self._file_size(file) <= self.max_filesize:
+                        local_files.append(file)
+                        continue
+                    hosted[index] = await upload_temporary_media(
+                        self.ctx.bot,
+                        file.fp,  # type: ignore[arg-type]
+                        file.filename,
+                        content_type=mimetypes.guess_type(file.filename)[0],
+                        ignore_size_limit=self.ignore_checks,
+                    )
 
-        try:
-            if filename.endswith((".mp4", ".webm", ".mov")):
-                gallery = ui.MediaGallery(
-                    MediaGalleryItem(f"attachment://{file.filename}")
+                has_video = any(_is_gallery_file(file.filename) for file in batch)
+                has_hosted = bool(hosted)
+                if has_video or has_hosted:
+                    container_items: list[ui.Item[Any]] = []
+                    gallery_items: list[MediaGalleryItem] = []
+                    other_items: list[ui.Item[Any]] = []
+                    for index, file in enumerate(batch):
+                        if index not in hosted and file not in local_files:
+                            continue
+                        if _is_gallery_file(file.filename):
+                            gallery_items.append(
+                                MediaGalleryItem(
+                                    hosted[index]
+                                    if index in hosted
+                                    else f"attachment://{file.filename}"
+                                )
+                            )
+                        elif index in hosted:
+                            other_items.append(
+                                ui.TextDisplay(
+                                    f"[Open {file.filename}]({hosted[index]})"
+                                )
+                            )
+                        else:
+                            other_items.append(ui.File(f"attachment://{file.filename}"))
+                    if gallery_items:
+                        container_items.append(ui.MediaGallery(*gallery_items))
+                    container_items.extend(other_items)
+                    if has_hosted:
+                        container_items.append(
+                            ui.TextDisplay(
+                                f"{info_text}\n"
+                                "-# Oversized files are hosted for 30 minutes"
+                            )
+                        )
+                    else:
+                        container_items.append(ui.TextDisplay(info_text))
+                    container = ui.Container(
+                        *container_items,
+                        accent_color=self.ctx.bot.embedcolor,
+                    )
+                    view_type = type("DownloadView", (ui.LayoutView,), {})
+                    view = view_type(timeout=None)
+                    view.add_item(container)
+                    await self.ctx.send(
+                        files=local_files,
+                        view=view,
+                        reference=reference if batch_index == 0 else None,
+                        ephemeral=self.hidden,
+                    )
+                else:
+                    await self.ctx.send(
+                        files=local_files,
+                        mention_author=True,
+                        reference=reference if batch_index == 0 else None,
+                        ephemeral=self.hidden,
+                    )
+            except TemporaryMediaError as error:
+                await self.ctx.send(
+                    "A file exceeded Discord's upload limit and could not be "
+                    "hosted temporarily. Try a shorter or smaller media file.",
+                    ephemeral=self.hidden,
                 )
+                self.ctx.bot.logger.warning("temporary media upload failed: %s", error)
+                return False
+            except discord.HTTPException:
+                # A file can still be rejected for reasons other than its
+                # advertised size. Retry the batch as hosted media instead of
+                # falling back to an unrelated third-party file host.
+                links: list[str] = [hosted[index] for index in sorted(hosted)]
+                for index, file in enumerate(batch):
+                    if index in hosted:
+                        continue
+                    try:
+                        links.append(
+                            await upload_temporary_media(
+                                self.ctx.bot,
+                                file.fp,  # type: ignore[arg-type]
+                                file.filename,
+                                content_type=mimetypes.guess_type(file.filename)[0],
+                                ignore_size_limit=self.ignore_checks,
+                            )
+                        )
+                    except TemporaryMediaError as error:
+                        self.ctx.bot.logger.warning(
+                            "temporary media retry failed: %s", error
+                        )
+                if not links:
+                    await self.ctx.send(
+                        "Discord rejected the media and temporary hosting was "
+                        "unavailable. Try a shorter or smaller file.",
+                        ephemeral=self.hidden,
+                    )
+                    return False
                 container = ui.Container(
-                    gallery,
-                    ui.TextDisplay(info_text),
+                    ui.TextDisplay(
+                        f"{info_text}\n"
+                        "-# Discord rejected the upload. These links expire in 30 minutes.\n"
+                        + "\n".join(f"[Open media]({link})" for link in links)
+                    ),
                     accent_color=self.ctx.bot.embedcolor,
                 )
-                view_type = type("DownloadView", (ui.LayoutView,), {})
-                v = view_type(timeout=None)
-                v.add_item(container)
+                view_type = type("HostedDownloadView", (ui.LayoutView,), {})
+                view = view_type(timeout=None)
+                view.add_item(container)
                 await self.ctx.send(
-                    file=file,
-                    view=v,
-                    reference=self.ctx.message.to_reference(fail_if_not_exists=False),
+                    view=view,
+                    reference=reference if batch_index == 0 else None,
                     ephemeral=self.hidden,
                 )
-            else:
-                await self.ctx.send(
-                    files=files,
-                    mention_author=True,
-                    reference=self.ctx.message.to_reference(fail_if_not_exists=False),
-                    ephemeral=self.hidden,
-                )
-        except discord.HTTPException:
-            text = (
-                "Files were too big for Discord. "
-                "**These will delete after 72 hours**\n\n"
-            )
-            for f in files:
-                file_bytes = await self._file_to_bytes(f)
-                url = await litterbox(self.ctx.session, file_bytes, f.filename)
-                text += f"{url}\n"
-            await self.ctx.send(text, ephemeral=self.hidden)
+
+        for file in files:
+            file.close()
 
         for f in files:
             filename = os.path.basename(f.filename)
@@ -930,6 +1891,7 @@ class Downloader:
                 pass
 
         self._cleanup_output()
+        return True
 
     async def download(self):
         """Run the complete download/conversion/send workflow with one deadline."""
@@ -938,8 +1900,12 @@ class Downloader:
         self._deadline = asyncio.get_running_loop().time() + DOWNLOAD_TIMEOUT
         try:
             async with self.ctx.bot.media_semaphore:
-                await asyncio.wait_for(
+                completed = await asyncio.wait_for(
                     self._download_and_send(), timeout=DOWNLOAD_TIMEOUT
+                )
+            if completed:
+                await record_download(
+                    self.ctx, self.url, auto_download=self.auto_download
                 )
         except asyncio.TimeoutError:
             self._cleanup_output()
@@ -996,6 +1962,18 @@ class Downloader:
                 self._job_dir = None
                 self._cookie_file = None
 
+    @staticmethod
+    def _file_size(file: discord.File) -> int:
+        fp: Any = file.fp
+        try:
+            return int(os.fstat(fp.fileno()).st_size)
+        except (AttributeError, OSError, ValueError):
+            current = fp.tell()
+            fp.seek(0, os.SEEK_END)
+            size = fp.tell()
+            fp.seek(current)
+            return int(size)
+
     @to_thread
     def _file_to_bytes(self, file: discord.File) -> bytes:
         fp: BufferedReader | BytesIO = file.fp  # type: ignore
@@ -1004,4 +1982,5 @@ class Downloader:
             with open(str(fp), "rb") as f:
                 return f.read()
         else:
+            fp.seek(0)
             return fp.read()
