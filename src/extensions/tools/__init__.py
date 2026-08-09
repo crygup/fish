@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import json
 import re
+from importlib import import_module
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
-from urllib.parse import urljoin
 
-import aiohttp
 import discord
-from defusedxml import ElementTree as ET
 from discord import app_commands
 from discord.ext import commands
 from discord.utils import escape_markdown
@@ -18,7 +15,6 @@ from playwright.async_api import async_playwright
 
 from extensions.context import Context
 from utils import (
-    ROBLOX_ASSET_RE,
     AuthorView,
     FieldPageSource,
     Pager,
@@ -26,11 +22,11 @@ from utils import (
     TenorUrlConverter,
     UrbanPageSource,
     URLConverter,
+    fetch_public_bytes,
     get_or_fetch_user,
     plural,
-    read_bounded_response,
     to_image,
-    validate_connected_peer,
+    update_pokemon,
     validate_public_url,
 )
 
@@ -41,15 +37,58 @@ from .google import Google
 from .letterboxd import Letterboxd
 from .purge import PurgeCog
 from .reminders import Reminder
+from .roblox import Roblox
 from .tags import Tags
 
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context
 
-ROBLOX_TIMEOUT = aiohttp.ClientTimeout(total=10)
-
 param = commands.param
+
+
+def _qr_safe_text(value: object, limit: int = 1_500) -> str:
+    text = discord.utils.escape_mentions(escape_markdown(str(value or ""))).strip()
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text or "(empty)"
+
+
+def _make_qr_png(text: str) -> bytes:
+    """Generate a QR PNG without importing the optional package at bot startup."""
+    qrcode = import_module("qrcode")
+    image = qrcode.make(text)
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _decode_qr_values(data: bytes) -> list[str]:
+    """Decode one or more QR codes from image bytes with OpenCV."""
+    cv2 = import_module("cv2")
+    numpy = import_module("numpy")
+    image = cv2.imdecode(numpy.frombuffer(data, dtype=numpy.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        return []
+
+    detector = cv2.QRCodeDetector()
+    values: list[str] = []
+    try:
+        result = detector.detectAndDecodeMulti(image)
+        if result and result[0]:
+            values.extend(str(value) for value in result[1] if value)
+    except (AttributeError, cv2.error):
+        # Older OpenCV builds may not expose multi-code detection.
+        pass
+
+    if not values:
+        try:
+            value, _points, _straight = detector.detectAndDecode(image)
+        except (AttributeError, cv2.error):
+            value = ""
+        if value:
+            values.append(str(value))
+    return list(dict.fromkeys(values))
 
 
 class ScreenshotFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
@@ -102,6 +141,7 @@ class Tools(
     CommandStats,
     Letterboxd,
     Calculator,
+    Roblox,
 ):
     """Quality of life tools"""
 
@@ -112,6 +152,221 @@ class Tools(
         self._highlight_activity: dict[tuple[int, int], float] = {}
         self._highlight_cache: dict[int, list[tuple[int, str, re.Pattern[str]]]] = {}
         self._highlight_tasks: set[asyncio.Task[None]] = set()
+
+    @cast(Any, commands.hybrid_group)(
+        name="text",
+        invoke_without_command=True,
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def text(self, ctx: Context) -> None:
+        """Transform text with Fishie's text utilities."""
+        await ctx.send_help(ctx.command)
+
+    @text.command(name="cyrillic", aliases=("cryllic",))
+    @app_commands.describe(words="Text to replace with similar-looking characters.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def text_cyrillic(self, ctx: Context, *, words: str) -> None:
+        """Replace Latin letters with similar-looking Cyrillic characters."""
+        await self._send_cyrillic(ctx, words)
+
+    @text.command(name="merica", aliases=("cm",))
+    @app_commands.describe(words="Text to separate with United States flag emojis.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def text_merica(self, ctx: Context, *, words: str) -> None:
+        """Separate words with United States flag emojis."""
+        await ctx.send(
+            re.sub(" ", " \U0001f1fa\U0001f1f8 ", words)[:2000],
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @cast(Any, commands.hybrid_group)(
+        name="pokemon",
+        aliases=("poke",),
+        invoke_without_command=True,
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def pokemon(self, ctx: Context) -> None:
+        """Show how many Pokémon names are currently cached."""
+        await ctx.send(f"There are currently {len(self.bot.pokemon):,} cached.")
+
+    @pokemon.command(name="update")
+    @commands.is_owner()
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def pokemon_update(self, ctx: Context) -> None:
+        """Refresh the cached Pokémon name list (owner only)."""
+        await update_pokemon(self.bot)
+        await ctx.send(
+            "Pokémon cache updated.", allowed_mentions=discord.AllowedMentions.none()
+        )
+
+    @pokemon.command(name="add")
+    @commands.is_owner()
+    @app_commands.describe(name="Pokémon name to add to the solver cache.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def pokemon_add(self, ctx: Context, *, name: str) -> None:
+        """Add a Pokémon name to the solver cache (owner only)."""
+        name = name.strip()
+        if not name:
+            raise commands.BadArgument("Provide a Pokémon name to add.")
+        await self.bot.pool.execute(
+            "INSERT INTO added_pokemon (name, created_at) VALUES ($1, $2)",
+            name.casefold(),
+            discord.utils.utcnow(),
+        )
+        await update_pokemon(self.bot)
+        await ctx.send("Pokémon added to the solver cache.")
+
+    @pokemon.command(name="solve")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def pokemon_solve(self, ctx: Context) -> None:
+        """Solve a replied Pokétwo hint message."""
+        await self.solve(ctx)
+
+    @pokemon.command(name="solved")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def pokemon_solved(self, ctx: Context) -> None:
+        """Show which Pokémon you have asked Fishie to solve most often."""
+        await self.pokesolved(ctx)
+
+    @pokemon.command(name="practice")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def pokemon_practice(self, ctx: Context) -> None:
+        """Practice identifying a Pokémon from your solve history."""
+        await self.pokepractice(ctx)
+
+    async def _send_qr_make(self, ctx: Context, text: str) -> None:
+        text = str(text).strip()
+        if not text:
+            raise commands.BadArgument("Provide text to encode in the QR code.")
+        if len(text) > 2_000:
+            raise commands.BadArgument(
+                "QR text cannot be longer than 2,000 characters."
+            )
+        try:
+            image_data = await asyncio.to_thread(_make_qr_png, text)
+        except ImportError as error:
+            raise commands.BadArgument(
+                "QR support is not installed on this bot."
+            ) from error
+        view = discord.ui.LayoutView(timeout=300)
+        view.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"## QR code\n**Text:** {_qr_safe_text(text)}"),
+                discord.ui.Separator(),
+                discord.ui.MediaGallery(
+                    discord.MediaGalleryItem("attachment://qrcode.png")
+                ),
+                discord.ui.TextDisplay("Generated by Fishie."),
+                accent_color=self.bot.embedcolor,
+            )
+        )
+        await ctx.send(
+            view=view,
+            file=discord.File(BytesIO(image_data), filename="qrcode.png"),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def _send_qr_read(
+        self,
+        ctx: Context,
+        media: str | None,
+        attachment: discord.Attachment | None,
+    ) -> None:
+        data: bytes | None = None
+        if attachment is None:
+            message = getattr(ctx, "message", None)
+            attachments = getattr(message, "attachments", ())
+            attachment = next(iter(attachments), None)
+        if attachment is not None:
+            if attachment.size > 10 * 1024 * 1024:
+                raise commands.BadArgument("The QR image is too large (10 MB maximum).")
+            data = await attachment.read()
+            if len(data) > 10 * 1024 * 1024:
+                raise commands.BadArgument("The QR image is too large (10 MB maximum).")
+        elif media:
+            media = media.strip().strip("<>")
+            fetched = await fetch_public_bytes(
+                ctx.session,
+                media,
+                max_bytes=10 * 1024 * 1024,
+                allowed_content_prefixes=("image/",),
+            )
+            data = fetched.data
+        if not data:
+            raise commands.BadArgument("Provide an image attachment or image URL.")
+
+        try:
+            values = await asyncio.to_thread(_decode_qr_values, data)
+        except ImportError as error:
+            raise commands.BadArgument(
+                "QR support is not installed on this bot."
+            ) from error
+        if not values:
+            raise commands.BadArgument(
+                "I couldn't find a readable QR code in that image."
+            )
+
+        lines = ["## QR code contents"]
+        lines.extend(
+            f"{index}. `{_qr_safe_text(value, 1_800)}`"
+            for index, value in enumerate(values, 1)
+        )
+        lines.append("\n*Decoded with OpenCV.*")
+        view = discord.ui.LayoutView(timeout=300)
+        view.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("\n".join(lines)),
+                accent_color=self.bot.embedcolor,
+            )
+        )
+        await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
+
+    @cast(Any, commands.hybrid_group)(
+        name="qr",
+        aliases=("qrcode",),
+        fallback="make",
+        invoke_without_command=True,
+    )
+    @app_commands.describe(text="The text or URL to encode in a QR code.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def qr(self, ctx: Context, *, text: str) -> None:
+        """Generate a QR code from text. Use `qr read` to decode one."""
+        await self._send_qr_make(ctx, text)
+
+    @qr.command(name="generate")
+    @app_commands.describe(text="The text or URL to encode in a QR code.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def qr_generate(self, ctx: Context, *, text: str) -> None:
+        """Generate a QR code from text or a URL."""
+        await self._send_qr_make(ctx, text)
+
+    @qr.command(name="read", aliases=("decode", "scan"))
+    @app_commands.describe(
+        media="An image URL containing a QR code.",
+        attachment="An image attachment containing a QR code.",
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def qr_read(
+        self,
+        ctx: Context,
+        media: str | None = None,
+        attachment: discord.Attachment | None = None,
+    ) -> None:
+        """Read one or more QR codes from an image URL or attachment."""
+        async with ctx.typing():
+            await self._send_qr_read(ctx, media, attachment)
 
     def cog_unload(self) -> None:
         for task in self._highlight_tasks:
@@ -427,40 +682,6 @@ class Tools(
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    async def self_send_asset(
-        self,
-        ctx: Context,
-        url: str,
-        extra: dict,
-        *,
-        cached_at: Optional[datetime.datetime] = None,
-    ) -> None:
-        image = await to_image(self.bot.session, url)
-        file = discord.File(image, filename=f"{extra.get('name', 'template')[:32]}.png")
-
-        e = discord.Embed(
-            title=str(extra.get("name", "Unknown")).title(), color=self.bot.embedcolor
-        )
-        e.set_image(url=f"attachment://{file.filename}")
-
-        creator_name = extra.get("creator", "Unknown")
-        creator_id = extra.get("creator_id")
-        creator_type = extra.get("creator_type", "User")
-        if creator_id:
-            if creator_type == "Group":
-                link = f"https://www.roblox.com/groups/{creator_id}/"
-            else:
-                link = f"https://www.roblox.com/users/{creator_id}/profile"
-            e.add_field(name="Made by", value=f"[{creator_name}]({link})")
-        else:
-            e.add_field(name="Made by", value=creator_name)
-
-        e.set_footer(text="Saved")
-        if cached_at:
-            e.timestamp = cached_at
-
-        await ctx.send(embed=e, file=file)
-
     cyrillic_letters = {
         "A": "А",
         "B": "В",
@@ -525,6 +746,10 @@ class Tools(
     )
     async def cyrillic(self, ctx: Context, *, words: str):
         """Replace Latin letters with similar-looking Cyrillic characters."""
+        await self._send_cyrillic(ctx, words)
+
+    async def _send_cyrillic(self, ctx: Context, words: str) -> None:
+        """Send the shared Cyrillic text transformation."""
         words = discord.utils.escape_markdown(words, ignore_links=False)
         all_letters = [letter for word in words for letter in word]
         new_words = []
@@ -696,172 +921,8 @@ class Tools(
 
         await ctx.send("\n".join(found))
 
-    @commands.hybrid_group("roblox", hidden=True)
-    async def roblox_group(self, ctx: Context):
-        """Roblox related commands."""
-        await ctx.send_help(ctx.command)
-
-    @roblox_group.command("asset")
-    async def roblox_asset(self, ctx: Context, asset_id: str):
-        """Get the 2D clothing template for a Roblox classic t-shirt, shirt, or pants"""
-        async with ctx.typing():
-            try:
-                aid = int(asset_id)
-            except ValueError:
-                result = ROBLOX_ASSET_RE.search(asset_id)
-                if not result or not result.group(4):
-                    raise commands.CommandError(
-                        "Could not find an asset ID in that URL. Provide a Roblox catalog URL or a raw asset ID."
-                    )
-                aid = int(result.group(4))
-
-            cached = self.bot.cached_roblox_templates.get(aid)
-            if cached and len(cached) == 3:
-                await self.self_send_asset(
-                    ctx, cached[0], cached[1], cached_at=cached[2]
-                )
-                return
-            elif cached:
-                del self.bot.cached_roblox_templates[aid]
-
-            row = await self.bot.pool.fetchrow(
-                "SELECT image_url, extra, cached_at FROM roblox_templates WHERE asset_id = $1",
-                aid,
-            )
-            if row:
-                extra = (
-                    json.loads(row["extra"])
-                    if isinstance(row["extra"], str)
-                    else (row["extra"] or {})
-                )
-                extra.setdefault("name", "Unknown")
-                self.bot.cached_roblox_templates[aid] = (
-                    row["image_url"],
-                    extra,
-                    row["cached_at"],
-                )
-                await self.self_send_asset(
-                    ctx, row["image_url"], extra, cached_at=row["cached_at"]
-                )
-                return
-
-            async with self.bot.session.get(
-                f"https://economy.roblox.com/v2/assets/{aid}/details",
-                timeout=ROBLOX_TIMEOUT,
-            ) as response:
-                validate_connected_peer(response)
-                if response.status != 200:
-                    raise commands.CommandError(
-                        "Failed to reach Roblox. Try again later."
-                    )
-                details = json.loads(await read_bounded_response(response, 1_000_000))
-            asset_type = details.get("AssetTypeId")
-            if asset_type not in (2, 11, 12):
-                raise commands.CommandError(
-                    f"Asset {aid} is type {asset_type}, not a classic t-shirt (2), shirt (11), or pants (12)."
-                )
-
-            creator = details.get("Creator", {})
-            creator_name = creator.get("Name", "Unknown")
-            creator_id = creator.get("Id")
-            creator_type = creator.get("CreatorType", "User")
-            extra = {
-                "name": details.get("Name", "Unknown"),
-                "creator": creator_name,
-                "creator_id": creator_id,
-                "creator_type": creator_type,
-                "type": asset_type,
-            }
-            if creator_type == "Group":
-                extra["owner"] = creator_name
-
-            cookie = self.bot.config["keys"].get("roblox", "")
-            asset_url = f"https://assetdelivery.roblox.com/v1/asset?id={aid}"
-            headers = {"Cookie": f".ROBLOSECURITY={cookie}"} if cookie else None
-            async with self.bot.session.get(
-                asset_url,
-                headers=headers,
-                allow_redirects=False,
-                timeout=ROBLOX_TIMEOUT,
-            ) as response:
-                validate_connected_peer(response)
-                if 300 <= response.status < 400 and response.headers.get("Location"):
-                    # Never forward the account cookie to the redirect target.
-                    redirected = urljoin(asset_url, response.headers["Location"])
-                    await validate_public_url(redirected)
-                    async with self.bot.session.get(
-                        redirected, allow_redirects=False, timeout=ROBLOX_TIMEOUT
-                    ) as redirected_response:
-                        validate_connected_peer(redirected_response)
-                        if redirected_response.status != 200:
-                            raise commands.CommandError(
-                                "Failed to fetch asset XML. Try again later."
-                            )
-                        stdout = await read_bounded_response(
-                            redirected_response, 5_000_000
-                        )
-                elif response.status == 200:
-                    stdout = await read_bounded_response(response, 5_000_000)
-                else:
-                    raise commands.CommandError(
-                        "Failed to fetch asset XML. Try again later."
-                    )
-            if stdout.startswith(b"{"):
-                await ctx.send(
-                    "Something went wrong while trying to get the asset, please try again later, we may be rate limited."
-                )
-                return
-
-            try:
-                root = ET.fromstring(stdout)
-            except ET.ParseError:
-                raise commands.CommandError(
-                    "Roblox returned invalid XML. The asset may not be a classic t-shirt, shirt, or pants."
-                )
-
-            url_elem = root.find(".//Item/Properties/Content/url")
-            if url_elem is None or not url_elem.text:
-                raise commands.CommandError(
-                    "No texture reference found in the asset XML."
-                )
-
-            texture_match = re.search(r"id=(\d+)", url_elem.text)
-            if not texture_match:
-                raise commands.CommandError(
-                    "Could not parse the texture ID from the asset XML."
-                )
-
-            texture_id = texture_match.group(1)
-
-            async with self.bot.session.get(
-                "https://thumbnails.roblox.com/v1/assets",
-                params={"assetIds": texture_id, "size": "420x420", "format": "Png"},
-                timeout=ROBLOX_TIMEOUT,
-            ) as response:
-                validate_connected_peer(response)
-                if response.status != 200:
-                    raise commands.CommandError(
-                        "Failed to fetch template thumbnail. Try again later."
-                    )
-                thumb_data = json.loads(
-                    await read_bounded_response(response, 1_000_000)
-                )
-            image_url = thumb_data["data"][0]["imageUrl"]
-
-            await self.bot.pool.execute(
-                "INSERT INTO roblox_templates (asset_id, image_url, item_name, extra) VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (asset_id) DO UPDATE SET image_url = $2, item_name = $3, extra = $4::jsonb, cached_at = now() at time zone 'utc'",
-                aid,
-                image_url,
-                extra["name"],
-                json.dumps(extra),
-            )
-            now = datetime.datetime.now(datetime.timezone.utc)
-            self.bot.cached_roblox_templates[aid] = (image_url, extra, now)
-
-            await self.self_send_asset(ctx, image_url, extra, cached_at=now)
-
-    @commands.command(name="pokehelp")
-    async def pokehelp(self, ctx: Context):
+    @commands.command(name="pokesolved")
+    async def pokesolved(self, ctx: Context):
         """Shows which Pokémon you ask for help solving the most."""
 
         rows = await self.bot.pool.fetch(
