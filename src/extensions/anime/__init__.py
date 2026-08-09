@@ -116,6 +116,7 @@ query ($search: String!, $type: MediaType!) {
   Page(perPage: 1) {
     media(search: $search, type: $type, sort: SEARCH_MATCH) {
       id
+      type
       siteUrl
       title { romaji english native userPreferred }
       description
@@ -133,6 +134,51 @@ query ($search: String!, $type: MediaType!) {
       coverImage { extraLarge }
       isFavourite
       mediaListEntry { id status progress score }
+      relations {
+        edges {
+          relationType
+          node {
+            id
+            type
+            title { romaji english native userPreferred }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+ANILIST_MEDIA_BY_ID_QUERY = """
+query ($id: Int!) {
+  Media(id: $id) {
+    id
+    type
+    siteUrl
+    title { romaji english native userPreferred }
+    description
+    format
+    status
+    episodes
+    chapters
+    volumes
+    duration
+    season
+    seasonYear
+    averageScore
+    genres
+    isAdult
+    coverImage { extraLarge }
+    isFavourite
+    mediaListEntry { id status progress score }
+    relations {
+      edges {
+        relationType
+        node {
+          id
+          type
+          title { romaji english native userPreferred }
+        }
+      }
     }
   }
 }
@@ -478,6 +524,52 @@ def _anime_title(media: dict[str, Any]) -> str:
     return "Unknown anime"
 
 
+def _media_relation_edges(media: dict[str, Any]) -> list[dict[str, Any]]:
+    relations = media.get("relations")
+    edges = relations.get("edges") if isinstance(relations, dict) else None
+    return (
+        [edge for edge in edges if isinstance(edge, dict)]
+        if isinstance(edges, list)
+        else []
+    )
+
+
+def _media_relation_target(
+    media: dict[str, Any],
+    *,
+    relation_types: set[str] | None = None,
+    media_type: str | None = None,
+    preferred_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Return the first usable related media node matching the requested view."""
+
+    candidates: list[dict[str, Any]] = []
+    for edge in _media_relation_edges(media):
+        node = edge.get("node")
+        if not isinstance(node, dict) or node.get("id") is None:
+            continue
+        relation_type = str(edge.get("relationType") or "").upper()
+        node_type = str(node.get("type") or "").upper()
+        if relation_types is not None and relation_type not in relation_types:
+            continue
+        if media_type is not None and node_type != media_type.upper():
+            continue
+        try:
+            node_id = int(node["id"])
+        except (TypeError, ValueError):
+            continue
+        if node_id == int(media.get("id") or 0):
+            continue
+        node = dict(node)
+        node["_relationType"] = relation_type
+        candidates.append(node)
+    if preferred_id is not None:
+        for candidate in candidates:
+            if int(candidate.get("id") or 0) == preferred_id:
+                return candidate
+    return candidates[0] if candidates else None
+
+
 def _media_enum_label(value: object) -> str:
     """Format AniList enum values for the compact media details block."""
 
@@ -488,8 +580,30 @@ def _media_score_format(media: dict[str, Any]) -> str:
     return str(media.get("_viewerScoreFormat") or "POINT_100")
 
 
-def _media_rating_limit(media: dict[str, Any]) -> int:
-    return ANILIST_SCORE_LIMITS.get(_media_score_format(media), 100)
+def _media_rating_limit(media: dict[str, Any]) -> float:
+    return float(ANILIST_SCORE_LIMITS.get(_media_score_format(media), 100))
+
+
+def _media_rating_limit_text(media: dict[str, Any]) -> str:
+    """Return the score limit in the format the user selected on AniList."""
+
+    score_format = _media_score_format(media)
+    limit = _media_rating_limit(media)
+    return f"{limit:.1f}" if score_format == "POINT_10_DECIMAL" else str(int(limit))
+
+
+def _normalise_media_rating(media: dict[str, Any], value: float) -> float:
+    """Clamp and round a rating to AniList's selected score format."""
+
+    if value <= 0:
+        return 0.0
+
+    score = min(value, _media_rating_limit(media))
+    if _media_score_format(media) == "POINT_10_DECIMAL":
+        score = round(score, 1)
+    else:
+        score = float(round(score))
+    return score if score > 0 else 0.0
 
 
 def _media_user_rating(media: dict[str, Any]) -> str | None:
@@ -515,10 +629,12 @@ def _media_user_rating(media: dict[str, Any]) -> str | None:
         index = max(0, min(len(ANILIST_SMILEY_EMOJIS) - 1, round(score) - 1))
         return ANILIST_SMILEY_EMOJIS[index]
 
-    denominator = ANILIST_SCORE_LIMITS.get(score_format, 100)
     if score_format == "POINT_10_DECIMAL":
         score_text = f"{score:.1f}"
-    elif score.is_integer():
+        return f"{score_text}/10.0"
+
+    denominator = int(ANILIST_SCORE_LIMITS.get(score_format, 100))
+    if score.is_integer():
         score_text = str(int(score))
     else:
         score_text = f"{score:g}"
@@ -1156,12 +1272,18 @@ class CharacterLookupView(discord.ui.LayoutView):
     async def _toggle_description(self, interaction: discord.Interaction) -> None:
         self.description_expanded = not self.description_expanded
         self._render()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def _show_appearances(self, interaction: discord.Interaction) -> None:
         self.appearances_shown = True
         self._render()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 def _display_character_value(value: object) -> str:
@@ -1219,10 +1341,15 @@ class MediaRatingModal(discord.ui.Modal, title="Set Rating"):
         super().__init__()
         self.view = view
         self.source_message = source_message
-        maximum = _media_rating_limit(view.media)
+        maximum = _media_rating_limit_text(view.media)
+        score_range = (
+            f"0.0-{maximum}"
+            if _media_score_format(view.media) == "POINT_10_DECIMAL"
+            else f"0-{maximum}"
+        )
         self.rating = discord.ui.TextInput(
             label=f"Rating (0 removes it, max {maximum})",
-            placeholder=f"Enter 0-{maximum}; 0 removes your rating",
+            placeholder=f"Enter {score_range}; 0 removes your rating",
             required=True,
             max_length=6,
         )
@@ -1248,15 +1375,7 @@ class MediaRatingModal(discord.ui.Modal, title="Set Rating"):
                 ephemeral=True,
             )
             return
-        score: float
-        if value < 1:
-            score = 0
-        else:
-            score = min(value, _media_rating_limit(self.view.media))
-            if _media_score_format(self.view.media) == "POINT_10_DECIMAL":
-                score = round(score, 1)
-            else:
-                score = round(score)
+        score = _normalise_media_rating(self.view.media, value)
         await interaction.response.defer()
         saved = await self.view._save_entry(
             interaction,
@@ -1288,7 +1407,6 @@ class MediaRatingChoiceView(discord.ui.LayoutView):
 
     def _render(self) -> None:
         title = _anime_title(self.media_view.media)
-        current = _media_user_rating(self.media_view.media) or "No rating"
         children: list[discord.ui.Item[Any]] = [
             discord.ui.TextDisplay(
                 f"### Set rating for {discord.utils.escape_markdown(title)}\n"
@@ -1642,7 +1760,10 @@ class MediaListView(discord.ui.LayoutView):
             return
         self.selected_index = int(self.media_select.values[0])
         self._render()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def _previous_page(self, interaction: discord.Interaction) -> None:
         if self.page <= 0:
@@ -1655,7 +1776,10 @@ class MediaListView(discord.ui.LayoutView):
         ):
             self.selected_index = start
         self._render()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def _next_page(self, interaction: discord.Interaction) -> None:
         if self.page >= self.page_count - 1:
@@ -1668,7 +1792,10 @@ class MediaListView(discord.ui.LayoutView):
         ):
             self.selected_index = start
         self._render()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def _decrease_progress(self, interaction: discord.Interaction) -> None:
         await self._change_progress(interaction, -1)
@@ -1749,7 +1876,10 @@ class MediaListView(discord.ui.LayoutView):
             return
         entry.update(updated)
         self._render()
-        await interaction.edit_original_response(view=self)
+        await interaction.edit_original_response(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 class MediaLookupView(discord.ui.LayoutView):
@@ -1768,6 +1898,12 @@ class MediaLookupView(discord.ui.LayoutView):
         self.access_token = access_token
         self.media_kind = media_kind
         self.description_expanded = False
+        self._last_media_by_kind: dict[str, int] = {}
+        try:
+            self._last_media_by_kind[media_kind] = int(media["id"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        self._navigation_lock = asyncio.Lock()
         self._render()
 
     def _progress(self) -> int:
@@ -1783,7 +1919,7 @@ class MediaLookupView(discord.ui.LayoutView):
         self.clear_items()
         title = _anime_title(self.media)
         site_url = self.media.get("siteUrl") or (
-            f"https://anilist.co/anime/{self.media.get('id')}"
+            f"https://anilist.co/{self.media_kind}/{self.media.get('id')}"
         )
         title_text = f"## [{discord.utils.escape_markdown(title)}]({site_url})"
         cover = (
@@ -1968,6 +2104,131 @@ class MediaLookupView(discord.ui.LayoutView):
             *children, accent_color=self.ctx.bot.embedcolor
         )
         self.add_item(container)
+        navigation: list[discord.ui.Button] = []
+        previous = _media_relation_target(
+            self.media,
+            relation_types={"PREQUEL"},
+            media_type=self.media_kind.upper(),
+        )
+        if previous is not None:
+            previous_button = discord.ui.Button(
+                label="<",
+                style=discord.ButtonStyle.secondary,
+            )
+            previous_button.callback = self._show_previous_media
+            navigation.append(previous_button)
+
+        sequel = _media_relation_target(
+            self.media,
+            relation_types={"SEQUEL"},
+            media_type=self.media_kind.upper(),
+        )
+        if sequel is not None:
+            next_button = discord.ui.Button(
+                label=">",
+                style=discord.ButtonStyle.secondary,
+            )
+            next_button.callback = self._show_next_media
+            navigation.append(next_button)
+
+        opposite_kind = "manga" if self.media_kind == "anime" else "anime"
+        opposite = _media_relation_target(
+            self.media,
+            media_type=opposite_kind.upper(),
+            preferred_id=self._last_media_by_kind.get(opposite_kind),
+        )
+        if opposite is not None:
+            type_button = discord.ui.Button(
+                label=opposite_kind.title(),
+                style=discord.ButtonStyle.secondary,
+            )
+            type_button.callback = self._show_opposite_media
+            navigation.append(type_button)
+        if navigation:
+            self.add_item(discord.ui.ActionRow(*navigation))
+
+    async def _show_related_media(
+        self,
+        interaction: discord.Interaction,
+        relation: dict[str, Any] | None,
+    ) -> None:
+        if relation is None:
+            await interaction.response.send_message(
+                "That related AniList title is not available.", ephemeral=True
+            )
+            return
+        try:
+            media_id = int(relation["id"])
+        except (KeyError, TypeError, ValueError):
+            await interaction.response.send_message(
+                "AniList did not return a valid related title.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        async with self._navigation_lock:
+            try:
+                response_status, payload = await self.cog._anilist_request(
+                    ANILIST_MEDIA_BY_ID_QUERY,
+                    {"id": media_id},
+                    self.access_token,
+                )
+            except commands.BadArgument as error:
+                await interaction.followup.send(str(error), ephemeral=True)
+                return
+            error_message = _graphql_error(payload)
+            data = payload.get("data") if isinstance(payload, dict) else None
+            media = data.get("Media") if isinstance(data, dict) else None
+            if response_status != 200 or error_message or not isinstance(media, dict):
+                detail = f" ({error_message})" if error_message else ""
+                await interaction.followup.send(
+                    f"AniList could not load that related title{detail}.",
+                    ephemeral=True,
+                )
+                return
+            score_format = self.media.get("_viewerScoreFormat")
+            if score_format:
+                media["_viewerScoreFormat"] = score_format
+            media_type = str(media.get("type") or "").casefold()
+            if media_type not in {"anime", "manga"}:
+                await interaction.followup.send(
+                    "AniList returned an unsupported related title.", ephemeral=True
+                )
+                return
+            self.media = media
+            self.media_kind = media_type
+            self._last_media_by_kind[media_type] = media_id
+            self.description_expanded = False
+            self._render()
+            await interaction.edit_original_response(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+    async def _show_previous_media(self, interaction: discord.Interaction) -> None:
+        relation = _media_relation_target(
+            self.media,
+            relation_types={"PREQUEL"},
+            media_type=self.media_kind.upper(),
+        )
+        await self._show_related_media(interaction, relation)
+
+    async def _show_next_media(self, interaction: discord.Interaction) -> None:
+        relation = _media_relation_target(
+            self.media,
+            relation_types={"SEQUEL"},
+            media_type=self.media_kind.upper(),
+        )
+        await self._show_related_media(interaction, relation)
+
+    async def _show_opposite_media(self, interaction: discord.Interaction) -> None:
+        opposite_kind = "manga" if self.media_kind == "anime" else "anime"
+        relation = _media_relation_target(
+            self.media,
+            media_type=opposite_kind.upper(),
+            preferred_id=self._last_media_by_kind.get(opposite_kind),
+        )
+        await self._show_related_media(interaction, relation)
 
     async def _expand_description(self, interaction: discord.Interaction) -> None:
         self.description_expanded = not self.description_expanded

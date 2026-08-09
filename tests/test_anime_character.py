@@ -32,6 +32,7 @@ from extensions.anime import (
     _media_description_parts,
     _media_enum_label,
     _media_user_rating,
+    _normalise_media_rating,
 )
 from extensions.context import Context
 
@@ -161,10 +162,15 @@ def test_media_user_rating_uses_the_selected_score_format() -> None:
         "mediaListEntry": {"score": 8.5},
         "_viewerScoreFormat": "POINT_10_DECIMAL",
     }
-    assert _media_user_rating(media) == "8.5/10"
+    assert _media_user_rating(media) == "8.5/10.0"
+    media["mediaListEntry"]["score"] = 0.5
+    assert _media_user_rating(media) == "0.5/10.0"
     media["_viewerScoreFormat"] = "POINT_100"
     media["mediaListEntry"]["score"] = 87
     assert _media_user_rating(media) == "87/100"
+    media["_viewerScoreFormat"] = "POINT_5"
+    media["mediaListEntry"]["score"] = 4
+    assert _media_user_rating(media) == "4/5"
     media["_viewerScoreFormat"] = "POINT_3"
     media["mediaListEntry"]["score"] = 1
     assert _media_user_rating(media) == "😿"
@@ -176,6 +182,18 @@ def test_media_user_rating_uses_the_selected_score_format() -> None:
     assert _media_user_rating(media) == "😸"
     media["mediaListEntry"]["score"] = 0
     assert _media_user_rating(media) is None
+
+
+def test_media_rating_input_supports_decimal_scores_and_limits() -> None:
+    decimal_media = {"_viewerScoreFormat": "POINT_10_DECIMAL"}
+    assert _normalise_media_rating(decimal_media, 0.5) == 0.5
+    assert _normalise_media_rating(decimal_media, 8.56) == 8.6
+    assert _normalise_media_rating(decimal_media, 12) == 10
+    assert _normalise_media_rating(decimal_media, 0) == 0
+
+    five_point_media = {"_viewerScoreFormat": "POINT_5"}
+    assert _normalise_media_rating(five_point_media, 4.4) == 4
+    assert _normalise_media_rating(five_point_media, 8) == 5
 
 
 def test_media_query_requests_authenticated_list_details() -> None:

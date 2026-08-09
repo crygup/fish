@@ -66,6 +66,10 @@ class Top(Cog):
         await pages.start(ctx)
 
     @commands.hybrid_group(name="top", fallback="artists")
+    @app_commands.describe(
+        time_period="Time range to include, such as weekly or overall.",
+        user="Last.fm user to look up. Defaults to yourself.",
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @interaction_only()
@@ -81,6 +85,10 @@ class Top(Cog):
             await self.list_top(ctx, user, "gettopartists", time_period)
 
     @top_group.command(name="albums")
+    @app_commands.describe(
+        time_period="Time range to include, such as weekly or overall.",
+        user="Last.fm user to look up. Defaults to yourself.",
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @interaction_only()
@@ -96,6 +104,10 @@ class Top(Cog):
             await self.list_top(ctx, user, "gettopalbums", time_period)
 
     @top_group.command(name="tracks")
+    @app_commands.describe(
+        time_period="Time range to include, such as weekly or overall.",
+        user="Last.fm user to look up. Defaults to yourself.",
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @interaction_only()

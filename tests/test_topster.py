@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any, cast
 
 from PIL import Image, ImageDraw
 
@@ -53,7 +54,7 @@ def test_topster_uses_a_sole_prefix_mention_as_the_target_user() -> None:
         message=SimpleNamespace(mentions=[target]),
     )
 
-    assert _topster_target_user(ctx, author) is target
+    assert _topster_target_user(cast(Any, ctx), cast(Any, author)) is target
 
 
 def test_topster_truncates_labels_to_the_text_column() -> None:

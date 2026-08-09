@@ -56,30 +56,48 @@ class Spotify(Cog):
             raise commands.BadArgument("No info found for this query")
         return data[0]["external_urls"]["spotify"]
 
-    @commands.hybrid_command(name="spotify", aliases=("sp", "s", "song", "track"))
+    @commands.hybrid_group(
+        name="spotify",
+        fallback="track",
+        aliases=("sp", "s", "song", "sptrack"),
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.describe(query="The name of the track")
     async def spotify(self, ctx: Context, *, query: str):
         """Search for a track on Spotify."""
-        await ctx.typing()
-        await ctx.send(await self.search(ctx=ctx, mode="track", query=query))
+        async with ctx.typing():
+            await ctx.send(await self.search(ctx=ctx, mode="track", query=query))
 
-    @commands.hybrid_command(name="album", aliases=("ab",))
+    @spotify.command(name="album", aliases=("ab",))
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.describe(query="The name of the album")
-    async def album(self, ctx: Context, *, query: str):
+    async def spotify_album(self, ctx: Context, *, query: str):
         """Search for an album on Spotify."""
-        await ctx.send(await self.search(ctx=ctx, mode="album", query=query))
+        async with ctx.typing():
+            await ctx.send(await self.search(ctx=ctx, mode="album", query=query))
 
-    @commands.hybrid_command(name="artist", aliases=("art",))
+    @spotify.command(name="artist", aliases=("art",))
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.describe(query="The name of the artist")
-    async def artist(self, ctx: Context, *, query: str):
+    async def spotify_artist(self, ctx: Context, *, query: str):
         """Search for an artist on Spotify."""
-        await ctx.send(await self.search(ctx=ctx, mode="artist", query=query))
+        async with ctx.typing():
+            await ctx.send(await self.search(ctx=ctx, mode="artist", query=query))
+
+    @commands.command(name="spalbum", aliases=("ab",))
+    async def spalbums_text(self, ctx: Context, *, query: str):
+        """Search for an album on Spotify using a text command."""
+        async with ctx.typing():
+            await ctx.send(await self.search(ctx=ctx, mode="album", query=query))
+
+    @commands.command(name="spartist", aliases=("art",))
+    async def spartists_text(self, ctx: Context, *, query: str):
+        """Search for an artist on Spotify using a text command."""
+        async with ctx.typing():
+            await ctx.send(await self.search(ctx=ctx, mode="artist", query=query))
 
     @commands.hybrid_command(name="cover", aliases=("co",))
     @app_commands.allowed_installs(guilds=True, users=True)

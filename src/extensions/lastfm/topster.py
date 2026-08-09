@@ -236,6 +236,10 @@ class Topster(Cog):
         return entries[:TOPSTER_COUNT]
 
     @commands.hybrid_command(name="topster")
+    @app_commands.describe(
+        time_period="Time range to include, such as weekly or overall.",
+        user="Last.fm user to look up. Defaults to yourself.",
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @lastfm_command()

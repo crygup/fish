@@ -37,6 +37,8 @@ roblox = PartialEmoji(id=1095791384893603840, name="roblox")
 mudae_circle = PartialEmoji(id=1522435062765715526, name="mudae_circle")
 drpepper = PartialEmoji(id=1526723524587421778, name="drpepper", animated=True)
 spotify = PartialEmoji(id=1526723506631479377, name="Spotify")
+apple_music = PartialEmoji(id=1535923469072474162, name="apple_music")
+youtube = PartialEmoji(id=1535923472385970206, name="youtube")
 
 # discord
 balance = PartialEmoji(id=949147429733793832, name="balance")
@@ -109,6 +111,8 @@ spP = PartialEmoji(name="SpP", id=1437140625844867244)
 
 class Emojis:
     spotify = spotify
+    apple_music = apple_music
+    youtube = youtube
     starla = starla
     ori = ori
     sac = sac
@@ -199,6 +203,8 @@ class Emojis:
 
 emoji_list = [
     spotify,
+    apple_music,
+    youtube,
     starla,
     ori,
     sac,

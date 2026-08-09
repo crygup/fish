@@ -32,6 +32,9 @@ modeName = {"gettopartists": "artist", "gettopalbums": "album", "gettoptracks": 
 SPOTIFY_COVER_CACHE: TTLCache[tuple[str, str, str], str] = TTLCache[
     tuple[str, str, str], str
 ](maxsize=512, ttl=3600)
+SPOTIFY_METADATA_CACHE: TTLCache[tuple[str, str, str], dict[str, Any]] = TTLCache[
+    tuple[str, str, str], dict[str, Any]
+](maxsize=512, ttl=3600)
 LASTFM_BLANK_COVER = "2a96cbd8b46e442fc41c2b86b821562f.png"
 
 
@@ -108,17 +111,17 @@ async def chart_cmd(
     await ctx.send(view=view, file=file)
 
 
-async def search_spotify(
+async def search_spotify_data(
     ctx: Context,
     mode: str,
     title: str,
     artist: str | None = None,
-) -> str | None:
+) -> dict[str, Any] | None:
     normalized_title = _normalize_match(title)
     normalized_artist = _normalize_match(artist or "")
     cache_key = (mode, normalized_title, normalized_artist)
     try:
-        return SPOTIFY_COVER_CACHE[cache_key]
+        return SPOTIFY_METADATA_CACHE[cache_key]
     except KeyError:
         pass
 
@@ -160,18 +163,47 @@ async def search_spotify(
                 }
             ):
                 continue
+            SPOTIFY_METADATA_CACHE[cache_key] = item
             image_source = item.get("album") if mode == "track" else item
             images = (
                 image_source.get("images") if isinstance(image_source, dict) else None
             )
-            if not isinstance(images, list) or not images:
-                continue
-            cover_url = images[0].get("url")
-            if not cover_url:
-                continue
-            SPOTIFY_COVER_CACHE[cache_key] = str(cover_url)
-            return str(cover_url)
+            if isinstance(images, list) and images:
+                cover_url = (
+                    images[0].get("url") if isinstance(images[0], dict) else None
+                )
+                if cover_url:
+                    SPOTIFY_COVER_CACHE[cache_key] = str(cover_url)
+            return item
         return None
+
+
+async def search_spotify(
+    ctx: Context,
+    mode: str,
+    title: str,
+    artist: str | None = None,
+) -> str | None:
+    normalized_title = _normalize_match(title)
+    normalized_artist = _normalize_match(artist or "")
+    cache_key = (mode, normalized_title, normalized_artist)
+    try:
+        return SPOTIFY_COVER_CACHE[cache_key]
+    except KeyError:
+        pass
+
+    item = await search_spotify_data(ctx, mode, title, artist)
+    if not item:
+        return None
+    image_source = item.get("album") if mode == "track" else item
+    images = image_source.get("images") if isinstance(image_source, dict) else None
+    if not isinstance(images, list) or not images:
+        return None
+    cover_url = images[0].get("url") if isinstance(images[0], dict) else None
+    if not cover_url:
+        return None
+    SPOTIFY_COVER_CACHE[cache_key] = str(cover_url)
+    return str(cover_url)
 
 
 def _normalize_match(value: str) -> str:
@@ -296,6 +328,11 @@ def _parse_format(raw: str) -> tuple[int, int, int]:
 
 class Charts(Cog):
     @commands.hybrid_group(name="chart", fallback="albums", aliases=("c",))
+    @app_commands.describe(
+        size="Chart grid size such as 3x3 or 5x5.",
+        time_period="Time range to include, such as weekly or overall.",
+        user="Last.fm user to look up. Defaults to yourself.",
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @lastfm_command()
@@ -322,6 +359,11 @@ class Charts(Cog):
             )
 
     @chart.command(name="artists", aliases=("artist", "a"))
+    @app_commands.describe(
+        size="Chart grid size such as 3x3 or 5x5.",
+        time_period="Time range to include, such as weekly or overall.",
+        user="Last.fm user to look up. Defaults to yourself.",
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @lastfm_command()
@@ -348,6 +390,11 @@ class Charts(Cog):
             )
 
     @chart.command(name="tracks", aliases=("track", "t"))
+    @app_commands.describe(
+        size="Chart grid size such as 3x3 or 5x5.",
+        time_period="Time range to include, such as weekly or overall.",
+        user="Last.fm user to look up. Defaults to yourself.",
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @lastfm_command()
