@@ -199,8 +199,6 @@ class GuildDirectoryPaginator(discord.ui.LayoutView):
         if self.status and self.status_index == self.index:
             lines.append(f"\n-# {self.status}")
         self.details.content = "\n".join(lines)
-        self.previous.disabled = self.index == 0
-        self.next.disabled = self.index >= len(self.snapshots) - 1
         removed = (
             self.status is not None
             and self.status_index == self.index
@@ -238,13 +236,13 @@ class GuildDirectoryPaginator(discord.ui.LayoutView):
         )
 
     async def _previous(self, interaction: discord.Interaction) -> None:
-        if self.index > 0:
-            self.index -= 1
+        if self.snapshots:
+            self.index = (self.index - 1) % len(self.snapshots)
         await self._edit(interaction)
 
     async def _next(self, interaction: discord.Interaction) -> None:
-        if self.index < len(self.snapshots) - 1:
-            self.index += 1
+        if self.snapshots:
+            self.index = (self.index + 1) % len(self.snapshots)
         await self._edit(interaction)
 
     async def _leave_quiet(self, interaction: discord.Interaction) -> None:
@@ -481,7 +479,10 @@ class Owner(Cog):
             return False
         return True
 
-    @commands.command(name="servers", aliases=("guilds",))
+    # ``guilds`` is reserved for the user avatar command's server-history
+    # alias. Keep the owner command available as ``servers`` without
+    # registering a conflicting alias during cog loading.
+    @commands.command(name="servers")
     async def servers(self, ctx: Context) -> None:
         """Browse guild details and manage Fishie's guild membership."""
         async with ctx.typing():

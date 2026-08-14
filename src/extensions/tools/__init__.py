@@ -5,13 +5,12 @@ import datetime
 import re
 from importlib import import_module
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional, cast
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 from discord.utils import escape_markdown
-from playwright.async_api import async_playwright
 
 from extensions.context import Context
 from utils import (
@@ -21,23 +20,19 @@ from utils import (
     SimplePages,
     TenorUrlConverter,
     UrbanPageSource,
-    URLConverter,
     fetch_public_bytes,
     get_or_fetch_user,
     plural,
     to_image,
+    translate,
     update_pokemon,
-    validate_public_url,
 )
 
 from .calculator import Calculator
 from .command_stats import CommandStats
 from .downloads import Downloads
-from .google import Google
-from .letterboxd import Letterboxd
 from .purge import PurgeCog
 from .reminders import Reminder
-from .roblox import Roblox
 from .tags import Tags
 
 if TYPE_CHECKING:
@@ -91,9 +86,32 @@ def _decode_qr_values(data: bytes) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-class ScreenshotFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
-    delay: int = commands.flag(default=0, aliases=["d"])
-    full_page: bool = commands.flag(default=False, aliases=["fp"])
+def _translate_display_text(value: object, limit: int = 3_500) -> str:
+    """Keep translated text from becoming a mention or overflowing a display."""
+    text = discord.utils.escape_mentions(escape_markdown(str(value or ""))).strip()
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text or "(empty)"
+
+
+class TranslateView(discord.ui.LayoutView):
+    """Components V2 presentation for a translation result."""
+
+    def __init__(self, ctx: Context, result: Any) -> None:
+        super().__init__(timeout=120)
+        source = _translate_display_text(result.source_language, 100)
+        target = _translate_display_text(result.target_language, 100)
+        original = _translate_display_text(result.original)
+        translated = _translate_display_text(result.translated)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("## Translated"),
+                discord.ui.TextDisplay(f"**From {source}:**\n{original}"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"**To {target}:**\n{translated}"),
+                accent_color=ctx.bot.embedcolor,
+            )
+        )
 
 
 class EndView(discord.ui.View):
@@ -136,12 +154,9 @@ class Tools(
     Tags,
     Downloads,
     Reminder,
-    Google,
     PurgeCog,
     CommandStats,
-    Letterboxd,
     Calculator,
-    Roblox,
 ):
     """Quality of life tools"""
 
@@ -762,71 +777,6 @@ class Tools(
         fmt = "".join(new_words)
         await ctx.send(fmt[:2000])
 
-    @commands.command(
-        name="screenshot",
-        aliases=("ss",),
-        extras={"usage": "<website> [-delay 0 -full-page]"},
-    )
-    @commands.cooldown(1, 30, commands.BucketType.user)
-    async def screenshot(
-        self,
-        ctx: Context,
-        website: str = param(description="The website's url.", converter=URLConverter),
-        *,
-        flags: ScreenshotFlags = param(
-            description="Flags to use while screenshotting."
-        ),
-    ):
-        """Take a screenshot of a website.
-
-        -# -delay        Wait up to 10 seconds before taking the screenshot.
-        -# -full-page    Capture the full page instead of the visible area.
-        """
-        if flags.delay < 0 or flags.delay > 10:
-            raise commands.BadArgument(
-                "Screenshot delay must be between 0 and 10 seconds."
-            )
-        await validate_public_url(website)
-        async with self.bot.media_semaphore, ctx.typing():
-            async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch(
-                    args=["--disable-dev-shm-usage", "--no-first-run"]
-                )
-                browser_context = await browser.new_context(
-                    locale="en-US", service_workers="block"
-                )
-                page = await browser_context.new_page()
-
-                async def guard_request(route):
-                    try:
-                        await validate_public_url(route.request.url)
-                    except commands.CommandError:
-                        await route.abort("blockedbyclient")
-                    else:
-                        await route.continue_()
-
-                await page.route("**/*", guard_request)
-                await page.goto(website, wait_until="domcontentloaded", timeout=15_000)
-                await asyncio.sleep(flags.delay)
-                if flags.full_page:
-                    height = await page.evaluate(
-                        "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
-                    )
-                    if int(height) > 12_000:
-                        raise commands.BadArgument(
-                            "The page is too tall for a full-page screenshot."
-                        )
-                file = discord.File(
-                    BytesIO(
-                        await page.screenshot(
-                            type="png", timeout=15 * 1000, full_page=flags.full_page
-                        )
-                    ),
-                    filename="screenshot.png",
-                )
-
-        await ctx.send(file=file)
-
     @commands.command(name="tenor")
     async def tenor(self, ctx: commands.Context, url: TenorUrlConverter):
         """Gets the actual gif URL from a tenor link"""
@@ -1059,6 +1009,33 @@ class Tools(
             await msg.edit(embed=embed)
 
         await msg.edit(embed=embed, view=EndView(self, ctx))
+
+    @commands.command(hidden=True)
+    async def translate(
+        self,
+        ctx: Context,
+        *,
+        message: Annotated[Optional[str], commands.clean_content] = None,
+    ):
+        """Translates a message to English using Google translate."""
+
+        if message is None:
+            reply = ctx.ref
+            if reply is None:
+                return await ctx.send("Missing a message to translate")
+            message = reply.content
+
+        try:
+            result = await translate(message, session=self.bot.session)
+        except Exception as error:
+            return await ctx.send(
+                f"An error occurred: {error.__class__.__name__}: {error}"
+            )
+
+        await ctx.send(
+            view=TranslateView(ctx, result),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 async def setup(bot: Fishie):

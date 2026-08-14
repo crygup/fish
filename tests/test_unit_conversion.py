@@ -4,8 +4,12 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+import utils.unit_conversion as unit_conversion
 from utils.unit_conversion import (
     _CURRENCY_RATE_CACHE,
+    _MARKET_PRICE_CACHE,
     convert_request,
     parse_conversion_expression,
 )
@@ -111,6 +115,51 @@ def test_currency_parser_accepts_vbucks_and_devex_chains() -> None:
         "ROBUX",
         True,
     )
+
+
+def test_currency_parser_defaults_single_assets_to_usd() -> None:
+    for expression, source in (
+        ("1btc", "BTC"),
+        ("1 bitcoin", "BTC"),
+        ("100 robux", "ROBUX"),
+        ("1 eth", "ETH"),
+        ("1 doge", "DOGE"),
+        ("1 trump", "TRUMP"),
+        ("1 tsla", "TSLA"),
+    ):
+        request = unit_conversion.parse_conversion_expression(expression)
+        assert request is not None, expression
+        assert (request.source, request.target) == (source, "USD")
+
+
+@pytest.mark.asyncio
+async def test_market_assets_convert_through_usd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _MARKET_PRICE_CACHE.clear()
+
+    async def fake_market_json(
+        _ctx: Any, url: str, *, params: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        if "coingecko" in url:
+            assert params is not None
+            return {params["ids"]: {"usd": 50_000}}
+        assert url.endswith("/TSLA")
+        return {"chart": {"result": [{"meta": {"regularMarketPrice": 250}}]}}
+
+    monkeypatch.setattr(unit_conversion, "_market_json", fake_market_json)
+    ctx = SimpleNamespace(session=_Session())
+
+    bitcoin = unit_conversion.parse_conversion_expression("1btc")
+    stock = unit_conversion.parse_conversion_expression("2 tsla to usd")
+    assert bitcoin is not None and stock is not None
+    assert await unit_conversion.convert_request(ctx, bitcoin) == "1 BTC ≈ 50,000 USD"
+    assert await unit_conversion.convert_request(ctx, stock) == "2 TSLA ≈ 500 USD"
+
+
+def test_market_aliases_are_not_measurement_units() -> None:
+    measurement = unit_conversion.parse_conversion_expression("5m into sec")
+    assert measurement is not None and measurement.kind == "measurement"
 
 
 def test_virtual_currency_and_devex_conversion() -> None:

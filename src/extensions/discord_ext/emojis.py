@@ -212,13 +212,6 @@ class Emojis(Cog):
         guild_id: int | None = None,
         author_id: int | None = None,
     ) -> None:
-        if (
-            author_id is not None
-            and author_id != ctx.author.id
-            and not self.bot.db_cache.user_history_is_public(author_id)
-        ):
-            await ctx.send("That user's emoji statistics are private.")
-            return
         clauses: list[str] = []
         arguments: list[int] = []
         if guild_id is not None:
@@ -281,7 +274,7 @@ class Emojis(Cog):
         user = await self._resolve_stats_user(ctx, target)
         await self._send_emoji_stats(
             ctx,
-            title=f"Emoji stats for {user}",
+            title=f"Emoji stats for {user.name}",
             author_id=user.id,
             guild_id=ctx.guild.id if ctx.guild is not None else None,
         )
@@ -292,7 +285,7 @@ class Emojis(Cog):
         """Send a user's emoji usage across all servers."""
         user = await self._resolve_stats_user(ctx, target)
         await self._send_emoji_stats(
-            ctx, title=f"Global emoji stats for {user}", author_id=user.id
+            ctx, title=f"Global emoji stats for {user.name}", author_id=user.id
         )
 
     @emoji_group.group(name="stats", invoke_without_command=True)

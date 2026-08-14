@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -31,6 +32,48 @@ _CURRENCY_SYMBOLS = {
 }
 _ROBUX_ALIASES = frozenset({"robux", "rbx", "robucks"})
 _VBUCKS_ALIASES = frozenset({"vbucks", "vbuck"})
+_CRYPTO_IDS = {
+    "BTC": "bitcoin",
+    "LTC": "litecoin",
+    "ETH": "ethereum",
+    "DOGE": "dogecoin",
+    "TRUMP": "official-trump",
+}
+_CRYPTO_ALIASES = {
+    "bitcoin": "BTC",
+    "btc": "BTC",
+    "xbt": "BTC",
+    "litecoin": "LTC",
+    "ltc": "LTC",
+    "ethereum": "ETH",
+    "ether": "ETH",
+    "eth": "ETH",
+    "dogecoin": "DOGE",
+    "doge": "DOGE",
+    "trump": "TRUMP",
+    "officialtrump": "TRUMP",
+}
+# These are common stock symbols. Keeping the list explicit avoids treating
+# measurement abbreviations such as ``m`` or ``lb`` as stock tickers.
+_STOCK_ALIASES = {
+    "tsla": "TSLA",
+    "tesla": "TSLA",
+    "aapl": "AAPL",
+    "apple": "AAPL",
+    "msft": "MSFT",
+    "microsoft": "MSFT",
+    "nvda": "NVDA",
+    "nvidia": "NVDA",
+    "amzn": "AMZN",
+    "amazon": "AMZN",
+    "googl": "GOOGL",
+    "google": "GOOGL",
+    "meta": "META",
+    "spy": "SPY",
+    "qqq": "QQQ",
+    "gme": "GME",
+    "amc": "AMC",
+}
 # These are retail-value estimates. Virtual-currency prices vary by region,
 # platform, and package, so results involving either currency are approximate.
 ROBUX_PER_USD = 80.0
@@ -38,8 +81,11 @@ VBUCKS_PER_USD = 800.0 / 8.99
 # Roblox's current standard DevEx rate for Earned Robux.
 DEVEX_USD_PER_ROBUX = 0.0038
 # Currency rates are slow-moving and can be reused across command invocations.
-_CURRENCY_RATE_CACHE: TTLCache[str, dict[str, float]] = TTLCache(
+_CURRENCY_RATE_CACHE: TTLCache[str, dict[str, float]] = TTLCache[str, dict[str, float]](
     maxsize=64, ttl=12 * 60 * 60
+)
+_MARKET_PRICE_CACHE: TTLCache[str, float] = TTLCache[str, float](
+    maxsize=128, ttl=12 * 60 * 60
 )
 
 
@@ -128,6 +174,12 @@ def _build_currency_aliases() -> dict[str, str]:
             # but "Argentinian pesos" is a common user-facing spelling.
             "argentinianpeso": "ARS",
             "argentinianpesos": "ARS",
+        }
+    )
+    aliases.update(
+        {
+            _normalize(alias): code
+            for alias, code in {**_CRYPTO_ALIASES, **_STOCK_ALIASES}.items()
         }
     )
     return aliases
@@ -229,6 +281,14 @@ def _currency_code(value: str | None) -> str | None:
     return CURRENCY_ALIASES.get(normalized)
 
 
+def _market_kind(code: str) -> Literal["crypto", "stock"] | None:
+    if code in _CRYPTO_IDS:
+        return "crypto"
+    if code in set(_STOCK_ALIASES.values()):
+        return "stock"
+    return None
+
+
 def _unit_candidates(value: str | None) -> tuple[Unit, ...]:
     if not value:
         return ()
@@ -317,6 +377,14 @@ def parse_conversion_expression(expression: str) -> ConversionRequest | None:
 
     target_currency = _currency_code(target_raw)
     source_currency = _currency_code(source_raw)
+
+    # A bare asset expression such as ``1btc`` or ``100 robux`` is a request
+    # to value that asset in USD. Keep explicit ``to`` expressions unchanged.
+    if target_currency and source_currency is None:
+        if devex and target_currency == "ROBUX":
+            source_currency = target_currency
+        else:
+            source_currency, target_currency = target_currency, "USD"
 
     if target_currency and source_currency:
         return ConversionRequest(
@@ -410,6 +478,72 @@ async def _currency_rates(ctx: Any, base: str) -> dict[str, float]:
     return parsed
 
 
+async def _market_json(
+    ctx: Any,
+    url: str,
+    *,
+    params: dict[str, str] | None = None,
+) -> Any:
+    try:
+        async with asyncio.timeout(10):
+            async with ctx.session.get(
+                url,
+                params=params,
+                headers={"User-Agent": "Fishie currency converter"},
+            ) as response:
+                if response.status != 200:
+                    raise ConversionError("The market price service is unavailable.")
+                return await response.json(content_type=None)
+    except ConversionError:
+        raise
+    except Exception as error:
+        raise ConversionError("The market price service is unavailable.") from error
+
+
+async def _market_price_usd(ctx: Any, code: str) -> float:
+    cache_key = f"market:{code}"
+    try:
+        return _MARKET_PRICE_CACHE[cache_key]
+    except KeyError:
+        pass
+
+    market_kind = _market_kind(code)
+    if market_kind == "crypto":
+        coin_id = _CRYPTO_IDS[code]
+        data = await _market_json(
+            ctx,
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": coin_id, "vs_currencies": "usd"},
+        )
+        value = data.get(coin_id, {}).get("usd") if isinstance(data, dict) else None
+    elif market_kind == "stock":
+        if not re.fullmatch(r"[A-Z]{1,5}", code):
+            raise ConversionError(f"Unsupported stock symbol: {code}")
+        data = await _market_json(
+            ctx,
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{code}",
+            params={"range": "1d", "interval": "1d"},
+        )
+        try:
+            meta = data["chart"]["result"][0]["meta"]
+            value = meta.get("regularMarketPrice") or meta.get("chartPreviousClose")
+        except (KeyError, IndexError, TypeError):
+            value = None
+    else:
+        raise ConversionError(f"Unsupported market asset: {code}")
+
+    if value is None or isinstance(value, bool):
+        raise ConversionError(f"No USD price was found for {code}.")
+    try:
+        price = float(str(value))
+    except (TypeError, ValueError) as error:
+        raise ConversionError(f"No USD price was found for {code}.") from error
+    if not math.isfinite(price) or price <= 0:
+        raise ConversionError(f"No USD price was found for {code}.")
+    _MARKET_PRICE_CACHE[cache_key] = price
+    return price
+
+
 async def _to_usd(ctx: Any, amount: float, currency: str) -> float:
     if currency == "USD":
         return amount
@@ -417,6 +551,8 @@ async def _to_usd(ctx: Any, amount: float, currency: str) -> float:
         return amount / ROBUX_PER_USD
     if currency == "VBUCKS":
         return amount / VBUCKS_PER_USD
+    if _market_kind(currency) is not None:
+        return amount * await _market_price_usd(ctx, currency)
     rates = await _currency_rates(ctx, currency)
     usd_rate = rates.get("USD")
     if usd_rate is None:
@@ -431,6 +567,8 @@ async def _from_usd(ctx: Any, amount: float, currency: str) -> float:
         return amount * ROBUX_PER_USD
     if currency == "VBUCKS":
         return amount * VBUCKS_PER_USD
+    if _market_kind(currency) is not None:
+        return amount / await _market_price_usd(ctx, currency)
     rates = await _currency_rates(ctx, "USD")
     target_rate = rates.get(currency)
     if target_rate is None:
@@ -462,7 +600,13 @@ async def convert_request(ctx: Any, request: ConversionRequest) -> str:
             )
 
         converted = await _from_usd(ctx, usd, target)
-        separator = "≈" if {source, target} & {"ROBUX", "VBUCKS"} else "="
+        separator = (
+            "≈"
+            if {source, target} & {"ROBUX", "VBUCKS"}
+            or _market_kind(source) is not None
+            or _market_kind(target) is not None
+            else "="
+        )
         return (
             f"{_format_number(request.amount)} {source} {separator} "
             f"{_format_number(converted)} {target}"

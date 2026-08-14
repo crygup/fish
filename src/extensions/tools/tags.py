@@ -362,7 +362,7 @@ class Tags(Cog):
         if row is None:
             raise commands.BadArgument("Tag statistics are unavailable right now.")
         await ctx.send(
-            f"**Tag stats for {escape_markdown(str(member))}**\n"
+            f"**Tag stats for {escape_markdown(member.name)}**\n"
             f"Tags: `{int(row['tags']):,}`\nUses: `{int(row['uses']):,}`",
             allowed_mentions=discord.AllowedMentions.none(),
         )
