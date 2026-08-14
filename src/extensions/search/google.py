@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import random
-import textwrap
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import discord
 from discord import app_commands
@@ -13,7 +13,7 @@ from extensions.events.youtube import normalize_youtube_events
 from utils import (
     AuthorView,
     GoogleImageData,
-    GoogleImagePageSource,
+    LayoutPager,
     Pager,
     response_checker,
 )
@@ -33,6 +33,81 @@ link_converter = {
     "channel": "channel/",
     "playlist": "playlist?list=",
 }
+
+
+def _discord_component_text(value: object, limit: int = 100) -> str:
+    """Keep component labels within Discord's UTF-16 length limit."""
+    text = " ".join(str(value or "").split()) or "Untitled"
+    if len(text.encode("utf-16-le")) // 2 <= limit:
+        return text
+
+    suffix = "…"
+    budget = limit - (len(suffix.encode("utf-16-le")) // 2)
+    result = ""
+    for character in text:
+        candidate = result + character
+        if len(candidate.encode("utf-16-le")) // 2 > budget:
+            break
+        result = candidate
+    return result.rstrip() + suffix
+
+
+def _image_display_text(value: object, limit: int = 1_500) -> str:
+    """Keep Google result text safe and within Components V2 limits."""
+    text = discord.utils.escape_mentions(
+        discord.utils.escape_markdown(" ".join(str(value or "").split()))
+    ).strip()
+    if len(text) > limit:
+        text = text[: limit - 1].rsplit(" ", 1)[0].rstrip() + "…"
+    return text or "Image result"
+
+
+IMAGE_EXTENSIONS = frozenset(
+    {
+        ".avif",
+        ".bmp",
+        ".gif",
+        ".ico",
+        ".jfif",
+        ".jpeg",
+        ".jpg",
+        ".png",
+        ".tif",
+        ".tiff",
+        ".webp",
+    }
+)
+
+
+def _looks_like_image_url(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    path = urlsplit(value.strip()).path.casefold()
+    return any(path.endswith(extension) for extension in IMAGE_EXTENSIONS)
+
+
+class GoogleImageLayoutSource:
+    """Components V2 page source for Google image result URLs."""
+
+    def __init__(self, entries: list[GoogleImageData]) -> None:
+        self.entries = entries
+
+    def get_max_pages(self) -> int:
+        return len(self.entries)
+
+    def format_page(self, page_number: int) -> list[discord.ui.Item[Any]]:
+        entry = self.entries[page_number]
+        title = _image_display_text(entry.snippet)
+
+        return [
+            discord.ui.TextDisplay(f"## {title}"),
+            discord.ui.MediaGallery(discord.MediaGalleryItem(entry.image_url)),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"-# Page {page_number + 1}/{self.get_max_pages()} · "
+                f"Google Image search: {_image_display_text(entry.query, 300)}"
+            ),
+        ]
 
 
 class Google(Cog):
@@ -105,6 +180,7 @@ class Google(Cog):
             "q": query,
             "key": random.choice(self.bot.config["keys"]["google"]),
             "searchType": "image",
+            "num": 10,
             "safe": (
                 "off"
                 if isinstance(
@@ -120,27 +196,57 @@ class Google(Cog):
         }
 
         await ctx.typing()
-        async with self.bot.session.get(url, params=params) as r:
-            response_checker(r)
-            results = await r.json()
 
-            items = results.get("items")
+        async def fetch_items(start: int) -> list[object]:
+            request_params = dict(params)
+            if start > 1:
+                request_params["start"] = start
+            async with self.bot.session.get(url, params=request_params) as response:
+                response_checker(response)
+                data = await response.json()
+            return data.get("items") or []
 
-            if items is None:
-                raise commands.BadArgument("No search results found for this query.")
+        items = await fetch_items(1)
+        if not items:
+            raise commands.BadArgument("No search results found for this query.")
 
-            entries = [
-                GoogleImageData(
-                    image_url=data["link"],
-                    url=data["image"]["contextLink"],
-                    snippet=data["snippet"],
-                    query=query,
-                    author=ctx.author,
+        entries: list[GoogleImageData] = []
+        next_start = 1
+        for _ in range(10):
+            if not items:
+                break
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                image_url = str(item.get("link") or "").strip()
+                if not _looks_like_image_url(image_url):
+                    continue
+                image_info = item.get("image")
+                context_url = (
+                    image_info.get("contextLink")
+                    if isinstance(image_info, dict)
+                    else None
                 )
-                for data in results["items"]
-            ]
+                entries.append(
+                    GoogleImageData(
+                        image_url=image_url,
+                        url=str(context_url or image_url),
+                        snippet=str(item.get("title") or item.get("snippet") or query),
+                        query=query,
+                        author=ctx.author,
+                    )
+                )
+                if len(entries) >= 10:
+                    break
+            if len(entries) >= 10:
+                break
+            next_start += 10
+            items = await fetch_items(next_start)
 
-        pager = Pager(GoogleImagePageSource(entries), ctx=ctx)
+        if not entries:
+            raise commands.BadArgument("No image results found for this query.")
+
+        pager = LayoutPager(GoogleImageLayoutSource(entries), ctx=ctx)
         await pager.start(ctx)
 
     async def search_method(
@@ -414,7 +520,7 @@ class YoutubeDropdown(discord.ui.Select):
         for vid in videos:
             options.append(
                 discord.SelectOption(
-                    label=textwrap.shorten(vid["snippet"]["title"], width=100),
+                    label=_discord_component_text(vid["snippet"].get("title")),
                     value=str(start),
                     emoji="<:yt:1097399470842466334>",
                 )
@@ -422,7 +528,7 @@ class YoutubeDropdown(discord.ui.Select):
             start += 1
 
         super().__init__(
-            placeholder=textwrap.shorten(videos[0]["snippet"]["title"], width=100),
+            placeholder=_discord_component_text(videos[0]["snippet"].get("title")),
             options=options,
         )
 

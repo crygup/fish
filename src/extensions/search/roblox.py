@@ -4,8 +4,9 @@ import asyncio
 import datetime
 import json
 import re
+import shlex
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from urllib.parse import urljoin
 
 import aiohttp
@@ -19,6 +20,8 @@ from core import Cog
 from extensions.context import Context
 from utils import (
     ROBLOX_ASSET_RE,
+    LayoutPager,
+    LayoutPageSource,
     read_bounded_response,
     validate_connected_peer,
     validate_public_url,
@@ -29,6 +32,104 @@ if TYPE_CHECKING:
     from core import Fishie
 
 ROBLOX_TIMEOUT = aiohttp.ClientTimeout(total=10)
+
+_ROBLOX_ITEM_BOOLEAN_FLAGS = frozenset({"limited", "offsale", "onsale", "roblox"})
+_ROBLOX_ITEM_VALUE_FLAGS = frozenset({"creator", "type"})
+_ROBLOX_ASSET_TYPE_ALIASES = {
+    "image": 1,
+    "tshirt": 2,
+    "audio": 3,
+    "mesh": 4,
+    "hat": 8,
+    "shirt": 11,
+    "pants": 12,
+    "decal": 13,
+    "head": 17,
+    "face": 18,
+    "gear": 19,
+    "animation": 24,
+    "torso": 27,
+    "rightarm": 28,
+    "leftarm": 29,
+    "leftleg": 30,
+    "rightleg": 31,
+    "hair": 41,
+    "hairaccessory": 41,
+    "faceaccessory": 42,
+    "neckaccessory": 43,
+    "shoulderaccessory": 44,
+    "frontaccessory": 45,
+    "backaccessory": 46,
+    "waistaccessory": 47,
+}
+
+
+def _roblox_asset_type_id(value: str) -> int | None:
+    normalized = re.sub(r"[^a-z0-9]", "", value.casefold())
+    if normalized.isdigit():
+        parsed = int(normalized)
+        return parsed if parsed > 0 else None
+    return _ROBLOX_ASSET_TYPE_ALIASES.get(normalized)
+
+
+def _parse_roblox_item_query(argument: str) -> tuple[str, dict[str, Any]]:
+    """Split an item query from text-command filters such as ``-limited``."""
+    try:
+        tokens = shlex.split(argument)
+    except ValueError as error:
+        raise commands.BadArgument(
+            "The item search contains an unmatched quote."
+        ) from error
+
+    query: list[str] = []
+    filters: dict[str, Any] = {}
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        flag = token.lstrip("-").casefold() if token.startswith("-") else ""
+        if flag in _ROBLOX_ITEM_BOOLEAN_FLAGS:
+            filters[flag] = True
+            index += 1
+            continue
+        if flag in _ROBLOX_ITEM_VALUE_FLAGS:
+            index += 1
+            values: list[str] = []
+            while index < len(tokens):
+                candidate = tokens[index]
+                candidate_flag = (
+                    candidate.lstrip("-").casefold()
+                    if candidate.startswith("-")
+                    else ""
+                )
+                if (
+                    candidate_flag in _ROBLOX_ITEM_BOOLEAN_FLAGS
+                    or candidate_flag in _ROBLOX_ITEM_VALUE_FLAGS
+                ):
+                    break
+                values.append(candidate)
+                index += 1
+            if not values:
+                raise commands.BadArgument(f"The `-{flag}` flag needs a value.")
+            filters[flag] = " ".join(values)
+            continue
+        query.append(token)
+        index += 1
+
+    if filters.get("offsale") and filters.get("onsale"):
+        raise commands.BadArgument("Use either `-offsale` or `-onsale`, not both.")
+    if filters.get("roblox") and not filters.get("creator"):
+        filters["creator"] = "Roblox"
+    if "type" in filters:
+        type_id = _roblox_asset_type_id(str(filters["type"]))
+        if type_id is None:
+            raise commands.BadArgument(
+                f"Unknown Roblox asset type `{filters['type']}`. Use an asset type ID or name."
+            )
+        filters["type_id"] = type_id
+    item_query = " ".join(query).strip()
+    if not item_query:
+        raise commands.BadArgument("Give me a Roblox item name, ID, or URL.")
+    return item_query, filters
 
 
 def _roblox_text(value: object, limit: int = 1_200) -> str:
@@ -226,13 +327,15 @@ class RobloxOutfitPaginator(discord.ui.LayoutView):
         self.container = discord.ui.Container(
             self.details_display, accent_color=self.ctx.bot.embedcolor
         )
-        self.previous = discord.ui.Button(label="<", style=discord.ButtonStyle.primary)
-        self.next = discord.ui.Button(label=">", style=discord.ButtonStyle.primary)
+        self.previous = discord.ui.Button(
+            label="<", style=discord.ButtonStyle.secondary
+        )
+        self.next = discord.ui.Button(label=">", style=discord.ButtonStyle.secondary)
         self.page_button = discord.ui.Button(
             label="#", style=discord.ButtonStyle.secondary
         )
         self.delete_button = discord.ui.Button(
-            label="\U0001f5d1\ufe0f", style=discord.ButtonStyle.danger
+            label="\U0001f5d1\ufe0f", style=discord.ButtonStyle.secondary
         )
         self.profile_button = discord.ui.Button(
             label="Open profile",
@@ -256,8 +359,12 @@ class RobloxOutfitPaginator(discord.ui.LayoutView):
         self._render_navigation()
 
     def _render_navigation(self) -> None:
-        self.previous.disabled = self.index == 0
-        self.next.disabled = self.index >= len(self.outfits) - 1
+        # Previous/next navigation wraps around.  Only an empty result set
+        # should leave these controls unavailable, while normal edge pages
+        # remain clickable so the user can cycle back to the other end.
+        has_outfits = bool(self.outfits)
+        self.previous.disabled = not has_outfits
+        self.next.disabled = not has_outfits
 
     @property
     def page_count(self) -> int:
@@ -394,7 +501,14 @@ class RobloxOutfitPaginator(discord.ui.LayoutView):
                 pass
 
     async def _change_page(self, interaction: discord.Interaction, change: int) -> None:
-        self.index = max(0, min(len(self.outfits) - 1, self.index + change))
+        if not self.outfits:
+            await interaction.response.send_message(
+                "No outfits are available to browse.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        self.index = (self.index + change) % len(self.outfits)
         self.page = self.index
         await interaction.response.defer()
         await self.load_current()
@@ -448,13 +562,15 @@ class RobloxInventoryPaginator(discord.ui.LayoutView):
         self.container = discord.ui.Container(
             self.details_display, self.footer, accent_color=self.ctx.bot.embedcolor
         )
-        self.previous = discord.ui.Button(label="<", style=discord.ButtonStyle.primary)
-        self.next = discord.ui.Button(label=">", style=discord.ButtonStyle.primary)
+        self.previous = discord.ui.Button(
+            label="<", style=discord.ButtonStyle.secondary
+        )
+        self.next = discord.ui.Button(label=">", style=discord.ButtonStyle.secondary)
         self.page_button = discord.ui.Button(
             label="#", style=discord.ButtonStyle.secondary
         )
         self.delete_button = discord.ui.Button(
-            label="\U0001f5d1\ufe0f", style=discord.ButtonStyle.danger
+            label="\U0001f5d1\ufe0f", style=discord.ButtonStyle.secondary
         )
         profile_url = (
             f"https://www.roblox.com/users/{int(profile['id'])}/profile#!/creations"
@@ -483,8 +599,10 @@ class RobloxInventoryPaginator(discord.ui.LayoutView):
         return max(1, (len(self.items) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
 
     def _render_navigation(self) -> None:
-        self.previous.disabled = self.page == 0
-        self.next.disabled = self.page >= self.page_count - 1
+        # Keep both arrows active at the ends so navigation loops from the
+        # final page to the first and vice versa.
+        self.previous.disabled = False
+        self.next.disabled = False
 
     @staticmethod
     def _asset_id(item: dict[str, Any]) -> int | None:
@@ -665,7 +783,7 @@ class RobloxInventoryPaginator(discord.ui.LayoutView):
                 pass
 
     async def _change_page(self, interaction: discord.Interaction, change: int) -> None:
-        self.page = max(0, min(self.page_count - 1, self.page + change))
+        self.page = (self.page + change) % self.page_count
         await interaction.response.defer()
         await self.load_page()
         if self.message:
@@ -731,13 +849,15 @@ class RobloxListPaginator(discord.ui.LayoutView):
         self.container = discord.ui.Container(
             self.details, self.footer, accent_color=self.ctx.bot.embedcolor
         )
-        self.previous = discord.ui.Button(label="<", style=discord.ButtonStyle.primary)
-        self.next = discord.ui.Button(label=">", style=discord.ButtonStyle.primary)
+        self.previous = discord.ui.Button(
+            label="<", style=discord.ButtonStyle.secondary
+        )
+        self.next = discord.ui.Button(label=">", style=discord.ButtonStyle.secondary)
         self.page_button = discord.ui.Button(
             label="#", style=discord.ButtonStyle.secondary
         )
         self.delete_button = discord.ui.Button(
-            label="\U0001f5d1\ufe0f", style=discord.ButtonStyle.danger
+            label="\U0001f5d1\ufe0f", style=discord.ButtonStyle.secondary
         )
         profile_url = f"https://www.roblox.com/users/{self.user_id}/profile"
         self.profile_button = discord.ui.Button(
@@ -800,8 +920,10 @@ class RobloxListPaginator(discord.ui.LayoutView):
         self._render()
 
     def _render_navigation(self) -> None:
-        self.previous.disabled = self.page <= 0
-        self.next.disabled = self.exhausted and self.page >= self.page_count - 1
+        # Cursor-backed pages can be extended on demand.  Once the end is
+        # known, both arrows still remain available and wrap around.
+        self.previous.disabled = False
+        self.next.disabled = False
 
     @staticmethod
     def _linked(text: str, url: str) -> str:
@@ -946,17 +1068,22 @@ class RobloxListPaginator(discord.ui.LayoutView):
                 pass
 
     async def _change_page(self, interaction: discord.Interaction, change: int) -> None:
-        target = self.page + change
-        if target < 0:
-            await interaction.response.send_message(
-                "You are on the first page.",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
         await interaction.response.defer()
         try:
-            available = await self.ensure_page_number(target)
+            if change < 0 and self.page == 0:
+                # A cursor paginator does not know its final page until the
+                # API reports an empty next cursor. Load the remaining pages
+                # before wrapping backwards from page one.
+                while not self.exhausted:
+                    if not await self.ensure_page_number(len(self.pages)):
+                        break
+                target = self.page_count - 1
+            elif change > 0:
+                target = self.page + 1
+                if not await self.ensure_page_number(target):
+                    target = 0
+            else:
+                target = (self.page + change) % self.page_count
         except commands.CommandError as error:
             await interaction.followup.send(
                 str(error),
@@ -964,13 +1091,7 @@ class RobloxListPaginator(discord.ui.LayoutView):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
-        if not available:
-            await interaction.followup.send(
-                "There are no more results.",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
+
         self.page = target
         self._render()
         if self.message:
@@ -995,6 +1116,60 @@ class RobloxListPaginator(discord.ui.LayoutView):
         else:
             await interaction.delete_original_response()
         self.stop()
+
+
+class RobloxLeaksPageSource(LayoutPageSource):
+    """Render Roblox's recently surfaced, not-for-sale catalog entries.
+
+    Roblox does not publish the private/unreleased feed used by Rolimon's.
+    This source intentionally only renders records returned by the official
+    catalog API and labels the result accordingly.
+    """
+
+    PAGE_SIZE = 8
+
+    def __init__(self, items: list[dict[str, Any]]) -> None:
+        self.items = items
+
+    def get_max_pages(self) -> int:
+        return max(1, (len(self.items) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+
+    def format_page(self, page_number: int) -> list[discord.ui.Item[Any]]:
+        start = page_number * self.PAGE_SIZE
+        page = self.items[start : start + self.PAGE_SIZE]
+        lines = [
+            "## Recent Roblox catalog items",
+            "",
+        ]
+        if not page:
+            lines.append("No recently surfaced items were returned.")
+        for item in page:
+            try:
+                raw_item_id = item.get("id")
+                if raw_item_id is None:
+                    continue
+                item_id = int(str(raw_item_id))
+            except (TypeError, ValueError):
+                continue
+            name = _roblox_text(item.get("name") or "Unnamed item", 160)
+            name = name.replace("[", "\\[").replace("]", "\\]")
+            created = _roblox_date(item.get("itemCreatedUtc"))
+            creator = _roblox_text(item.get("creatorName") or "Unknown", 100)
+            status = "Off-sale" if item.get("isOffSale") else "Not for sale"
+            if item.get("priceStatus"):
+                status = _roblox_text(item["priceStatus"], 40)
+            details = [
+                f"[{name}](https://www.roblox.com/catalog/{item_id}/) (ID: `{item_id}`)",
+                f"**Creator:** {creator} · **Status:** {status}",
+            ]
+            if created:
+                details.append(f"**Created:** {created}")
+            lines.append("\n".join(details))
+            lines.append("")
+        lines.append(
+            f"-# Page {page_number + 1}/{self.get_max_pages()} · Data from Roblox"
+        )
+        return [discord.ui.TextDisplay("\n".join(lines)[:4_000])]
 
 
 class Roblox(Cog):
@@ -1089,7 +1264,19 @@ class Roblox(Cog):
         return None
 
     async def _roblox_user(self, value: str | None, ctx: Context) -> dict[str, Any]:
-        query = (value or ctx.author.name).strip().lstrip("@")
+        linked_account: object | None = None
+        if value is None:
+            try:
+                row = await self.bot.pool.fetchrow(
+                    "SELECT roblox FROM accounts WHERE user_id = $1",
+                    ctx.author.id,
+                )
+            except Exception:
+                row = None
+            if row:
+                linked_account = row["roblox"]
+
+        query = str(value or linked_account or ctx.author.name).strip().lstrip("@")
         user_id = self._roblox_id(
             query,
             r"roblox\.com/users/(\d+)",
@@ -1809,6 +1996,7 @@ class Roblox(Cog):
         *,
         title: str,
         url: str,
+        title_suffix: str | None = None,
         description: str | None = None,
         sections: list[str] | None = None,
         media_url: str | None = None,
@@ -1830,8 +2018,9 @@ class Roblox(Cog):
         if not title_link_text:
             title_link_text = "Roblox game"
         safe_title_url = str(url).replace("\\", "%5C").replace(")", "%29")
+        suffix = _roblox_text(title_suffix, 120) if title_suffix else ""
         title_display = discord.ui.TextDisplay(
-            f"## [{title_link_text}]({safe_title_url})"
+            f"## [{title_link_text}]({safe_title_url}){suffix}"
         )
         children: list[discord.ui.Item] = []
         if media_url and thumbnail:
@@ -2145,8 +2334,9 @@ class Roblox(Cog):
             f"**Username:** `{_roblox_text(profile.get('name') or 'Unknown', 120)}`",
             f"**User ID:** `{user_id}`",
             f"**Status:** {presence_names.get(presence_type, 'Unknown')}",
-            f"**Banned:** {'Yes' if profile.get('isBanned') else 'No'}",
         ]
+        if profile.get("isBanned") is True:
+            profile_fields.append("**Banned:** Yes")
         for label, key in (
             ("Friends", "friends"),
             ("Followers", "followers"),
@@ -2192,6 +2382,156 @@ class Roblox(Cog):
         async with ctx.typing():
             profile = await self._roblox_user(username, ctx)
             await self._send_roblox_profile(ctx, profile)
+
+    async def _roblox_recent_catalog_items(self) -> list[dict[str, Any]]:
+        """Return recent not-for-sale entries from Roblox's public catalog.
+
+        Rolimon's leak list is a private third-party dataset. Roblox does not
+        expose unpublished assets or a historical leak feed, so this command
+        deliberately uses the closest official-only substitute.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cached = getattr(self, "_roblox_catalog_recent_cache", None)
+        if isinstance(cached, tuple) and len(cached) == 2:
+            cached_at, cached_items = cached
+            if (
+                isinstance(cached_at, datetime.datetime)
+                and isinstance(cached_items, list)
+                and (now - cached_at).total_seconds() < 900
+            ):
+                return list(cached_items)
+
+        entries: dict[int, dict[str, Any]] = {}
+        creator_ids: set[int] = set()
+
+        def is_not_for_sale(item: dict[str, Any]) -> bool:
+            status = str(item.get("priceStatus") or "").casefold()
+            sale_location = str(item.get("saleLocationType") or "").casefold()
+            raw_item_status = item.get("itemStatus") or []
+            if isinstance(raw_item_status, str):
+                raw_item_status = [raw_item_status]
+            item_status = {str(value).casefold() for value in raw_item_status}
+            return bool(
+                item.get("isOffSale") is True
+                or status in {"offsale", "notforsale", "noresellers"}
+                or "offsale" in item_status
+                or sale_location
+                in {"experiencesdevapionly", "notapplicable", "notavailable"}
+            )
+
+        # Query Roblox-owned entries directly, then query a broader result set
+        # so Roblox administrators can be identified from their official
+        # administrator/moderator badge. A verified badge alone is not enough
+        # because many ordinary UGC creators are verified too.
+        queries = (
+            {"CreatorTargetId": "1"},
+            {},
+        )
+        # Past day and past week keep the result useful even when Roblox has
+        # no newly surfaced entries in the shorter window.
+        for aggregation in ("1", "3"):
+            for creator_filter in queries:
+                params: dict[str, Any] = {
+                    "Category": "1",
+                    "IncludeNotForSale": "true",
+                    "CreatorType": "User",
+                    "Limit": 30,
+                    "SortType": 3,
+                    "SortAggregation": aggregation,
+                }
+                params.update(creator_filter)
+                payload = await self._roblox_json(
+                    "GET",
+                    "https://catalog.roblox.com/v2/search/items/details",
+                    params=params,
+                )
+                rows = payload.get("data", []) if isinstance(payload, dict) else []
+                for item in rows:
+                    if not isinstance(item, dict) or not is_not_for_sale(item):
+                        continue
+                    try:
+                        raw_item_id = item.get("id")
+                        if raw_item_id is None:
+                            continue
+                        item_id = int(str(raw_item_id))
+                        creator_id = int(str(item.get("creatorTargetId")))
+                    except (TypeError, ValueError):
+                        continue
+                    entries[item_id] = item
+                    if creator_id != 1:
+                        creator_ids.add(creator_id)
+
+        # The public Roblox APIs do not expose a role field for staff. The
+        # Roblox administrator/moderator badge is the only official signal
+        # available here, so never include a creator unless that badge check
+        # succeeds. Keep this bounded and cache the result to avoid a request
+        # per catalog row on every invocation.
+        admin_check = getattr(self, "_roblox_admin_status", None)
+        allowed_admins: set[int] = set()
+        if callable(admin_check):
+            admin_check_fn = cast(Any, admin_check)
+            now = datetime.datetime.now(datetime.timezone.utc)
+            admin_cache = getattr(self, "_roblox_catalog_admin_cache", {})
+            if not isinstance(admin_cache, dict):
+                admin_cache = {}
+            pending: list[int] = []
+            for creator_id in sorted(creator_ids):
+                cached = admin_cache.get(creator_id)
+                if (
+                    isinstance(cached, tuple)
+                    and len(cached) == 2
+                    and isinstance(cached[0], datetime.datetime)
+                    and (now - cached[0]).total_seconds() < 86_400
+                ):
+                    if cached[1] is True:
+                        allowed_admins.add(creator_id)
+                elif len(pending) < 25:
+                    pending.append(creator_id)
+            if pending:
+                results = await asyncio.gather(
+                    *(admin_check_fn(creator_id) for creator_id in pending),
+                    return_exceptions=True,
+                )
+                for creator_id, result in zip(pending, results):
+                    is_admin = result == "Yes"
+                    admin_cache[creator_id] = (now, is_admin)
+                    if is_admin:
+                        allowed_admins.add(creator_id)
+            self._roblox_catalog_admin_cache = admin_cache
+
+        filtered_entries: dict[int, dict[str, Any]] = {}
+        for item_id, item in entries.items():
+            try:
+                creator_id = int(str(item.get("creatorTargetId")))
+            except (TypeError, ValueError):
+                continue
+            if creator_id == 1 or creator_id in allowed_admins:
+                filtered_entries[item_id] = item
+        entries = filtered_entries
+
+        items = sorted(
+            entries.values(),
+            key=lambda item: str(item.get("itemCreatedUtc") or ""),
+            reverse=True,
+        )
+        self._roblox_catalog_recent_cache = (now, items)
+        return items
+
+    @roblox_group.command("leaks", aliases=("leak",))
+    async def roblox_leaks(self, ctx: Context) -> None:
+        """Show recently surfaced off-sale Roblox-owned or staff catalog items."""
+        async with ctx.typing():
+            items = await self._roblox_recent_catalog_items()
+            if not items:
+                raise commands.BadArgument(
+                    "Roblox did not return any recently surfaced off-sale catalog items."
+                )
+            view = LayoutPager(
+                RobloxLeaksPageSource(items),
+                ctx=ctx,
+                accent_color=self.bot.embedcolor,
+            )
+        await view.start()
 
     async def _send_roblox_list(
         self, ctx: Context, username: Optional[str], kind: str
@@ -2636,26 +2976,267 @@ class Roblox(Cog):
         )
         await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
 
-    @roblox_group.command("item")
-    @app_commands.describe(item="Roblox catalog item ID or URL.")
+    @roblox_group.command(
+        "item",
+        extras={
+            "usage": (
+                "<item> [-creator <name> -roblox -limited -offsale -onsale "
+                "-type <id/name>]"
+            )
+        },
+    )
+    @app_commands.describe(
+        item="Roblox item ID, URL, or name. Text flags: -creator, -limited, -offsale, -onsale, -type, -roblox."
+    )
     async def roblox_item(self, ctx: Context, *, item: str) -> None:
-        """Look up a Roblox catalog item by ID, URL, or name."""
-        async with ctx.typing():
-            await self._roblox_item(ctx, item)
+        """Look up a Roblox item with optional creator, sale, limited, and type filters.
 
-    async def _roblox_item(self, ctx: Context, item: str) -> None:
+        -# -creator <name>  Only match items by this creator.
+        -# -roblox           Use Roblox as the creator filter.
+        -# -limited          Only match limited or collectible items.
+        -# -offsale          Only match items that are off sale.
+        -# -onsale           Only match items currently on sale.
+        -# -type <id/name>   Filter by Roblox asset type, such as `41` or `hair`.
+        """
+        async with ctx.typing():
+            query, filters = _parse_roblox_item_query(item)
+            await self._roblox_item(ctx, query, filters=filters)
+
+    async def _roblox_item_resale_data(
+        self, item_id: int, catalog: dict[str, Any], economy: dict[str, Any]
+    ) -> dict[str, Any]:
+        collectible_id = catalog.get("collectibleItemId") or economy.get(
+            "CollectibleItemId"
+        )
+        if collectible_id:
+            url = (
+                "https://apis.roblox.com/marketplace-sales/v1/item/"
+                f"{collectible_id}/resale-data"
+            )
+        else:
+            url = f"https://economy.roblox.com/v1/assets/{item_id}/resale-data"
+        resale = await self._roblox_optional_json("GET", url)
+        return resale if isinstance(resale, dict) else {}
+
+    async def _roblox_item_reseller_count(
+        self, catalog: dict[str, Any], *, max_pages: int = 20
+    ) -> int | None:
+        """Count current official reseller listings for a collectible item."""
+        count, _ = await self._roblox_item_resellers(catalog, max_pages=max_pages)
+        return count
+
+    async def _roblox_item_resellers(
+        self, catalog: dict[str, Any], *, max_pages: int = 20
+    ) -> tuple[int | None, int | None]:
+        """Return the count and lowest current price for official resellers."""
+        collectible_id = catalog.get("collectibleItemId")
+        if not collectible_id:
+            return None, None
+        count = 0
+        lowest_price: int | None = None
+        cursor: str | None = None
+        for _ in range(max_pages):
+            params: dict[str, Any] = {"limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            data = await self._roblox_optional_json(
+                "GET",
+                f"https://apis.roblox.com/marketplace-sales/v1/item/{collectible_id}/resellers",
+                params=params,
+            )
+            if not isinstance(data, dict):
+                return None, None
+            rows = data.get("data")
+            if not isinstance(rows, list):
+                return None, None
+            count += len(rows)
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                price = _roblox_price(
+                    row.get("priceInRobux", row.get("price", row.get("priceInRobux")))
+                )
+                if price is not None and price > 0:
+                    lowest_price = (
+                        price if lowest_price is None else min(lowest_price, price)
+                    )
+            next_cursor = data.get("nextPageCursor") or data.get("next_cursor")
+            if not next_cursor:
+                return count, lowest_price
+            next_cursor = str(next_cursor)
+            if next_cursor == cursor:
+                return count, lowest_price
+            cursor = next_cursor
+        # Avoid presenting a partial count as an exact total.
+        return None, lowest_price
+
+    @staticmethod
+    def _roblox_item_sale_fields(
+        catalog: dict[str, Any],
+        economy: dict[str, Any],
+        resale: dict[str, Any],
+        reseller_count: int | None = None,
+        reseller_lowest_price: int | None = None,
+    ) -> tuple[list[str], bool]:
+        restrictions = [
+            str(value).casefold() for value in (catalog.get("itemRestrictions") or [])
+        ]
+        limited = bool(
+            economy.get("IsLimited")
+            or economy.get("IsLimitedUnique")
+            or any(
+                value in {"limited", "limitedunique", "collectible"}
+                for value in restrictions
+            )
+        )
+        status = (
+            str(catalog.get("priceStatus") or "")
+            .replace("_", "")
+            .replace(" ", "")
+            .casefold()
+        )
+        original = _roblox_price(catalog.get("price"))
+        if original is None:
+            original = _roblox_price(economy.get("PriceInRobux"))
+        lowest = _roblox_price(catalog.get("lowestPrice"))
+        if lowest is None or lowest <= 0:
+            lowest = _roblox_price(catalog.get("lowestResalePrice"))
+        fields: list[str] = []
+        is_free = status == "free" or (
+            not limited and original == 0 and economy.get("IsForSale") is not False
+        )
+        is_off_sale = status in {"offsale", "notforsale", "notapplicable"} or (
+            economy.get("IsForSale") is False
+        )
+        if limited:
+            if original is not None:
+                fields.append(f"**Original price:** {original:,} Robux")
+            current_price = reseller_lowest_price or lowest
+            if current_price is not None and current_price > 0:
+                fields.append(f"**Price:** {current_price:,} Robux")
+            elif is_free:
+                fields.append("**Price:** Free")
+            else:
+                fields.append("**Price:** No current sellers.")
+        elif is_free:
+            fields.append("**Price:** Free")
+        elif is_off_sale:
+            fields.append("**Price:** Off-sale")
+        elif status == "noresellers":
+            fields.append("**Price:** No resellers")
+        elif original is not None:
+            fields.append(f"**Price:** {original:,} Robux")
+
+        rap = _roblox_price(resale.get("recentAveragePrice"))
+        if limited and rap is not None:
+            fields.append(f"**RAP:** {rap:,} Robux")
+
+        # Roblox does not publish Rolimon's community Value metric. Do not
+        # substitute RAP or the lowest listing and present it as Value.
+        if reseller_count is not None:
+            fields.append(f"**Resellers:** {reseller_count:,}")
+        return fields, limited
+
+    @staticmethod
+    def _roblox_item_favourite_count(
+        catalog: dict[str, Any], economy: dict[str, Any]
+    ) -> int | None:
+        for source in (catalog, economy):
+            for key in (
+                "favoriteCount",
+                "favoritedCount",
+                "FavoriteCount",
+                "FavoritedCount",
+            ):
+                value = _roblox_price(source.get(key))
+                if value is not None:
+                    return value
+        return None
+
+    @staticmethod
+    def _roblox_item_matches_filters(
+        item: dict[str, Any],
+        filters: dict[str, Any],
+        *,
+        economy: dict[str, Any] | None = None,
+    ) -> bool:
+        economy = economy or {}
+        creator_filter = filters.get("creator")
+        if creator_filter:
+            creator_name = str(item.get("creatorName") or "")
+            creator_id = str(item.get("creatorTargetId") or "")
+            if str(creator_filter).casefold() == "roblox":
+                if creator_id != "1" and creator_name.casefold() != "roblox":
+                    return False
+            elif creator_name.casefold() != str(creator_filter).casefold():
+                return False
+
+        type_id = filters.get("type_id")
+        if type_id is not None:
+            item_type = item.get("assetType", item.get("assetTypeId"))
+            try:
+                if int(str(item_type)) != int(type_id):
+                    return False
+            except (TypeError, ValueError):
+                return False
+
+        restrictions = {
+            str(value).casefold() for value in (item.get("itemRestrictions") or [])
+        }
+        limited = bool(
+            item.get("isLimited")
+            or item.get("isLimitedUnique")
+            or economy.get("IsLimited")
+            or economy.get("IsLimitedUnique")
+            or restrictions.intersection({"limited", "limitedunique", "collectible"})
+        )
+        if filters.get("limited") and not limited:
+            return False
+
+        status = str(item.get("priceStatus") or "").replace("_", "").replace(" ", "")
+        off_sale = status in {"offsale", "notforsale", "noresellers", "notapplicable"}
+        off_sale = off_sale or item.get("isOffSale") is True
+        off_sale = off_sale or economy.get("IsForSale") is False
+        current_listing = _roblox_price(item.get("lowestPrice"))
+        if current_listing is None or current_listing <= 0:
+            current_listing = _roblox_price(item.get("lowestResalePrice"))
+        if current_listing is not None and current_listing > 0:
+            off_sale = False
+        if filters.get("offsale") and not off_sale:
+            return False
+        if filters.get("onsale") and off_sale:
+            return False
+        return True
+
+    async def _roblox_item(
+        self,
+        ctx: Context,
+        item: str,
+        *,
+        filters: dict[str, Any] | None = None,
+    ) -> None:
         """Look up a Roblox catalog item."""
+        filters = filters or {}
         item_id = self._roblox_id(item, r"roblox\.com/(?:catalog|library)/(\d+)")
         if item_id is None:
+            search_params: dict[str, Any] = {
+                "Keyword": item[:100],
+                "Category": "All",
+                "Limit": 30,
+                "SortType": "Relevance",
+            }
+            if filters.get("creator"):
+                search_params["CreatorName"] = str(filters["creator"])
+            if filters.get("type_id") is not None:
+                search_params["AssetTypes"] = str(filters["type_id"])
+            if filters.get("offsale") or filters.get("limited"):
+                search_params["IncludeNotForSale"] = "true"
+            elif filters.get("onsale"):
+                search_params["IncludeNotForSale"] = "false"
             search = await self._roblox_json(
                 "GET",
                 "https://catalog.roblox.com/v2/search/items/details",
-                params={
-                    "Keyword": item[:100],
-                    "Category": "All",
-                    "Limit": 10,
-                    "SortType": "Relevance",
-                },
+                params=search_params,
             )
             candidates = search.get("data", []) if isinstance(search, dict) else []
             selected = next(
@@ -2664,8 +3245,17 @@ class Roblox(Cog):
                     for candidate in candidates
                     if isinstance(candidate, dict)
                     and str(candidate.get("name", "")).casefold() == item.casefold()
+                    and self._roblox_item_matches_filters(candidate, filters)
                 ),
-                candidates[0] if candidates else None,
+                next(
+                    (
+                        candidate
+                        for candidate in candidates
+                        if isinstance(candidate, dict)
+                        and self._roblox_item_matches_filters(candidate, filters)
+                    ),
+                    None,
+                ),
             )
             item_id = (
                 int(selected["id"])
@@ -2679,9 +3269,24 @@ class Roblox(Cog):
         )
         if not isinstance(data, dict) or not data.get("Name"):
             raise commands.BadArgument(f"Could not find Roblox item `{item_id}`.")
+        catalog_data = await self._roblox_optional_json(
+            "GET",
+            f"https://catalog.roblox.com/v1/catalog/items/{item_id}/details",
+            params={"itemType": "Asset"},
+        )
+        catalog = catalog_data if isinstance(catalog_data, dict) else {}
+        if filters and not self._roblox_item_matches_filters(
+            catalog, filters, economy=data
+        ):
+            raise commands.BadArgument(
+                "That Roblox item does not match the filters you provided."
+            )
         creator = data.get("Creator") or {}
-        creator_name = _roblox_text(creator.get("Name") or "Unknown", 180)
-        creator_id = creator.get("Id")
+        creator_name = _roblox_text(
+            catalog.get("creatorName") or creator.get("Name") or "Unknown", 180
+        )
+        creator_id = catalog.get("creatorTargetId") or creator.get("Id")
+        creator_type = catalog.get("creatorType") or creator.get("CreatorType")
         thumb_data = await self._roblox_json(
             "GET",
             "https://thumbnails.roblox.com/v1/assets",
@@ -2694,10 +3299,12 @@ class Roblox(Cog):
         if creator_id:
             creator_url = (
                 f"https://www.roblox.com/groups/{creator_id}/"
-                if creator.get("CreatorType") == "Group"
+                if creator_type == "Group"
                 else f"https://www.roblox.com/users/{creator_id}/profile"
             )
             creator_name = f"[{_roblox_text(creator_name, 180)}]({creator_url})"
+            if str(creator_id) == "1":
+                creator_name += " (Official)"
         sections = [
             "\n".join(
                 (
@@ -2707,8 +3314,30 @@ class Roblox(Cog):
                 )
             )
         ]
-        if data.get("PriceInRobux") is not None:
-            sections.append(f"**Price:** {int(data['PriceInRobux']):,} Robux")
+        limited = bool(
+            data.get("IsLimited")
+            or data.get("IsLimitedUnique")
+            or any(
+                str(value).casefold() in {"limited", "limitedunique", "collectible"}
+                for value in (catalog.get("itemRestrictions") or [])
+            )
+        )
+        if limited:
+            resale, reseller_data = await asyncio.gather(
+                self._roblox_item_resale_data(item_id, catalog, data),
+                self._roblox_item_resellers(catalog),
+            )
+            reseller_count, reseller_lowest_price = reseller_data
+        else:
+            resale, reseller_count, reseller_lowest_price = {}, None, None
+        sale_fields, _ = self._roblox_item_sale_fields(
+            catalog, data, resale, reseller_count, reseller_lowest_price
+        )
+        if sale_fields:
+            sections.append("\n".join(sale_fields))
+        favourite_count = self._roblox_item_favourite_count(catalog, data)
+        if favourite_count is not None:
+            sections.append(f"**Favourites:** {favourite_count:,}")
         sales = data.get("Sales")
         try:
             sales_count = int(sales) if sales is not None else 0
@@ -2783,17 +3412,18 @@ class Roblox(Cog):
         return view
 
     async def _roblox_inventory_items(self, user_id: int) -> list[dict[str, Any]]:
-        visibility = await self._roblox_json(
-            "GET", f"https://inventory.roblox.com/v1/users/{user_id}/can-view-inventory"
-        )
-        if isinstance(visibility, dict) and visibility.get("canView") is False:
-            raise commands.BadArgument(
-                "This Roblox inventory is private and cannot be viewed."
+        # ``can-view-inventory`` is viewer-sensitive and can report false for
+        # inventories that the public inventory endpoints still expose. Treat
+        # the actual category and item responses as authoritative instead.
+        try:
+            categories = await self._roblox_json(
+                "GET", f"https://inventory.roblox.com/v1/users/{user_id}/categories"
             )
-
-        categories = await self._roblox_json(
-            "GET", f"https://inventory.roblox.com/v1/users/{user_id}/categories"
-        )
+        except commands.BadArgument:
+            # A private inventory may reject the category request. Continue
+            # with the known public asset types so the final result can still
+            # distinguish a false visibility response from available items.
+            categories = {}
         asset_type_ids = {
             int(item["id"])
             for category in (

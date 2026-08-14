@@ -109,7 +109,3 @@ class Spotify(Cog):
         url, nsfw = await get_sp_cover(self.bot, query)
         fp = await to_image(ctx.session, url)
         await ctx.send(file=discord.File(fp=fp, filename="cover.png", spoiler=nsfw))
-
-
-async def setup(bot: Fishie):
-    await bot.add_cog(Spotify(bot))

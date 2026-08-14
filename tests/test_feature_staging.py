@@ -5,7 +5,7 @@ from discord.ext import commands
 
 from extensions.fun.corn import Corn
 from extensions.owner import Owner
-from extensions.spotify import Spotify
+from extensions.search.spotify import Spotify
 
 
 def test_fishing_is_not_in_the_live_extension_tree() -> None:

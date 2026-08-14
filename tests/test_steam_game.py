@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlparse
 import discord
 import pytest
 
-from extensions.steam import (
+from extensions.search.steam import (
     Steam,
     _steam_format_review_summary,
     _steam_free_to_keep_games,

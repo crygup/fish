@@ -1365,7 +1365,3 @@ class Steam(Cog):
         embed.add_field(name="Members", value=f"{data['members']:,}", inline=True)
         embed.set_footer(text=f"ID: {data['gid']}", icon_url=STEAM_ICON)
         return embed
-
-
-async def setup(bot: Fishie):
-    await bot.add_cog(Steam(bot))

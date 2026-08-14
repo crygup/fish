@@ -1,4 +1,4 @@
-from extensions.steam import (
+from extensions.search.steam import (
     STEAM_BADGE_AVERAGE_COST_USD,
     _steam_badge_estimate,
     _steam_level_xp,
