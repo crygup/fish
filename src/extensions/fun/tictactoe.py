@@ -982,6 +982,26 @@ class TicTacToeController:
         if game.recorded:
             return
         game.recorded = True
+        # Game tracking can be disabled independently for either human
+        # participant.  Do not persist a row containing someone who has opted
+        # out, while still cleaning up the in-memory game below.
+        bot_id = (
+            self.bot.user.id
+            if self.bot.user is not None
+            else int(self.bot.config["ids"]["bot_id"])
+        )
+        human_ids = {
+            int(player_id)
+            for player_id in game.players.values()
+            if int(player_id) != bot_id
+        }
+        if any(
+            not self.bot.db_cache.user_game_tracking_enabled(player_id)
+            for player_id in human_ids
+        ):
+            self.cancel_move_timeout(game)
+            self.remove_game(game)
+            return
         winner_id: int | None = None
         loser_id: int | None = None
         if game.result in MARKS:
@@ -1020,7 +1040,7 @@ class TicTacToeController:
             user = self.bot.get_user(user_id)
             if user is None:
                 user = await self.bot.fetch_user(user_id)
-            return discord.utils.escape_markdown(user.display_name)
+            return discord.utils.escape_markdown(user.name)
         except (discord.HTTPException, discord.NotFound):
             return f"User {user_id}"
 
@@ -1046,6 +1066,19 @@ class TicTacToeController:
             FROM tictactoe_games
             WHERE against_bot OR winner_id IS NOT NULL OR loser_id IS NOT NULL
             """)
+        viewer_id = ctx.author.id
+        rows = [
+            row
+            for row in rows
+            if any(
+                self.bot.db_cache.game_history_visible_to(int(owner_id), viewer_id)
+                for owner_id in (
+                    row["player_x_id"],
+                    row["player_o_id"],
+                )
+                if owner_id is not None
+            )
+        ]
         player_wins: Counter[int] = Counter()
         player_losses: Counter[int] = Counter()
         fishie_wins: defaultdict[str, Counter[int]] = defaultdict(Counter)
@@ -1079,17 +1112,30 @@ class TicTacToeController:
                         if human_id is not None:
                             fishie_draws[difficulty][human_id] += 1
                     elif winner_id is not None and int(winner_id) == bot_id:
-                        if loser_id is not None:
+                        if (
+                            loser_id is not None
+                            and self.bot.db_cache.game_history_visible_to(
+                                int(loser_id), viewer_id
+                            )
+                        ):
                             fishie_losses[difficulty][int(loser_id)] += 1
-                    elif winner_id is not None:
+                    elif (
+                        winner_id is not None
+                        and self.bot.db_cache.game_history_visible_to(
+                            int(winner_id), viewer_id
+                        )
+                    ):
                         fishie_wins[difficulty][int(winner_id)] += 1
                 continue
 
             if winner_id is None:
                 continue
             winner_id = int(winner_id)
-            player_wins[winner_id] += 1
-            if loser_id is not None:
+            if self.bot.db_cache.game_history_visible_to(winner_id, viewer_id):
+                player_wins[winner_id] += 1
+            if loser_id is not None and self.bot.db_cache.game_history_visible_to(
+                int(loser_id), viewer_id
+            ):
                 player_losses[int(loser_id)] += 1
 
         ranked_groups = [

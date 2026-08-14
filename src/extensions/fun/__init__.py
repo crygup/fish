@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import re
 from dataclasses import dataclass, field
@@ -16,8 +17,16 @@ from utils import get_or_fetch_user, to_image
 from utils.paths import FILES_ROOT
 
 from .about import About
+from .connectfour import (
+    ConnectFourChallengeView,
+    ConnectFourController,
+    ConnectFourSetupView,
+)
 from .corn import Corn
+from .game_2048 import Game2048, Game2048View, highest_tile
 from .helpers import RPSView, WTPView, dagpi
+from .lightsout import LightsOutGame, LightsOutView
+from .memory import MemoryGame, MemoryView
 from .minigames import (
     COLOR_MEMORIZE_DIFFICULTIES,
     COLOR_MEMORIZE_EMOJIS,
@@ -29,7 +38,28 @@ from .minigames import (
     scramble_word,
     unscramble_content,
 )
+from .reactions import ReactionStats
+from .streak_games import (
+    HeadsOrTailsGame,
+    HeadsOrTailsView,
+    HigherOrLowerGame,
+    HigherOrLowerView,
+    StreakGame,
+)
 from .tictactoe import TicTacToeController
+from .video import VideoCommands
+from .wordle import (
+    WORDLE_WORDS,
+    WordleBoardView,
+    WordleGame,
+    WordleSettingsView,
+    get_wordle_settings,
+    message_guess,
+    new_wordle_game,
+    record_wordle_result,
+    render_wordle_board,
+    save_wordle_settings,
+)
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -255,7 +285,7 @@ PHONE_LOG_MAX_ENTRIES = 500
 PHONE_LOG_MAX_BYTES = 200_000
 
 
-class Fun(About, Corn):
+class Fun(VideoCommands, About, Corn, ReactionStats):
     """Fun miscellaneous commands"""
 
     emoji = discord.PartialEmoji(name="\U0001f604")
@@ -272,6 +302,12 @@ class Fun(About, Corn):
         self._phone_consent_prompts: set[int] = set()
         self._color_memorize_games: dict[int, ColorMemorizeGame] = {}
         self._unscramble_games: dict[int, UnscrambleGame] = {}
+        self._2048_games: dict[int, Game2048] = {}
+        self._lightsout_games: dict[int, LightsOutGame] = {}
+        self._higher_or_lower_games: dict[int, HigherOrLowerGame] = {}
+        self._heads_or_tails_games: dict[int, HeadsOrTailsGame] = {}
+        self._wordle_games: dict[tuple[int, int], WordleGame] = {}
+        self._memory_games: dict[int, MemoryGame] = {}
         self.phone_logs = discord.Webhook.from_url(
             self.bot.config["webhooks"]["phone_logs"], session=self.bot.session
         )
@@ -280,6 +316,7 @@ class Fun(About, Corn):
             self.bot.config["ids"]["bot_id"], permissions=self.bot.bot_permissions
         )
         self._tictactoe_controller = TicTacToeController(self)
+        self._connectfour_controller = ConnectFourController(self)
 
     async def _click_total(self) -> int:
         value = await self.bot.pool.fetchval(
@@ -289,6 +326,10 @@ class Fun(About, Corn):
 
     async def _record_click(self, user_id: int, guild_id: int | None) -> int:
         """Atomically increment the global, user, and optional guild counters."""
+        if not self.bot.db_cache.user_game_tracking_enabled(user_id):
+            # Keep the public board usable without writing a user's activity
+            # after they disable game tracking.
+            return await self._click_total()
         async with self.bot.pool.acquire() as connection:
             async with connection.transaction():
                 total = await connection.fetchval(
@@ -320,6 +361,14 @@ class Fun(About, Corn):
         return int(total or 0)
 
     async def _send_click_stats(self, ctx: Context, user: discord.User) -> None:
+        viewer_id = ctx.author.id
+        user_visible = self.bot.db_cache.game_history_visible_to(user.id, viewer_id)
+        if not user_visible:
+            await ctx.send(
+                "That user's click history is private.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
         user_row = await self.bot.pool.fetchrow(
             "SELECT clicks FROM click_user_totals WHERE user_id = $1", user.id
         )
@@ -328,13 +377,18 @@ class Fun(About, Corn):
             "SELECT user_id, clicks FROM click_user_totals "
             "ORDER BY clicks DESC, user_id ASC LIMIT 10"
         )
+        user_rows = [
+            row
+            for row in user_rows
+            if self.bot.db_cache.game_history_visible_to(int(row["user_id"]), viewer_id)
+        ]
         guild_rows = await self.bot.pool.fetch(
             "SELECT guild_id, clicks FROM click_guild_totals "
             "ORDER BY clicks DESC, guild_id ASC LIMIT 10"
         )
 
         safe_name = discord.utils.escape_markdown(
-            discord.utils.escape_mentions(getattr(user, "display_name", user.name))
+            discord.utils.escape_mentions(user.name)
         )
         lines = [
             f"## Click stats for {safe_name}",
@@ -373,32 +427,29 @@ class Fun(About, Corn):
         )
         await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
 
-    @cast(Any, commands.hybrid_group)(
+    @commands.group(
         name="click",
         aliases=("clicks",),
-        fallback="start",
         invoke_without_command=True,
     )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def click(self, ctx: Context) -> None:
         """Show a button that increments the global click counter."""
+        await self._start_click(ctx)
+
+    @click.command(name="stats", aliases=("leaderboard", "top", "lb"))
+    async def click_stats(
+        self, ctx: Context, user: discord.User = commands.Author
+    ) -> None:
+        """Show a user's clicks and the global user and guild leaderboards."""
+        await self._send_click_stats(ctx, user)
+
+    async def _start_click(self, ctx: Context) -> None:
         view = ClickView(
             self,
             ctx.guild.id if ctx.guild is not None else None,
             await self._click_total(),
         )
         await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
-
-    @click.command(name="stats", aliases=("leaderboard", "top", "lb"))
-    @app_commands.describe(user="The user whose click total you want to see.")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def click_stats(
-        self, ctx: Context, user: discord.User = commands.Author
-    ) -> None:
-        """Show a user's clicks and the global user and guild leaderboards."""
-        await self._send_click_stats(ctx, user)
 
     @cast(Any, commands.hybrid_group)(
         name="game",
@@ -420,6 +471,16 @@ class Fun(About, Corn):
     ) -> None:
         """Play Tic-Tac-Toe against another user or Fishie."""
         await self.tictactoe(ctx, user)
+
+    @game.command(name="connect-four", aliases=("connect4", "c4", "connect"))
+    @app_commands.describe(user="The user to challenge. Omit this to play Fishie.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_connect_four(
+        self, ctx: Context, user: discord.User | None = None
+    ) -> None:
+        """Play Connect Four against another user or Fishie."""
+        await self.connectfour(ctx, user)
 
     @game.command(name="unscramble")
     @app_commands.describe(difficulty="Difficulty: easy, normal, hard, or random.")
@@ -453,6 +514,169 @@ class Fun(About, Corn):
         """Memorize a flashing sequence of colors."""
         await self._start_color_memorize(ctx, difficulty)
 
+    @game.command(name="click", aliases=("clicks",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_click(self, ctx: Context) -> None:
+        """Show a button that increments the global click counter."""
+        await self._start_click(ctx)
+
+    @game.command(name="dice", aliases=("roll",))
+    @app_commands.describe(
+        sides="Number of sides on each die, from 2 to 1,000,000.",
+        rolls="Number of dice to roll, from 1 to 10.",
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_dice(
+        self,
+        ctx: Context,
+        sides: int = commands.param(
+            default=6, description="Number of sides on each die (defaults to 6)."
+        ),
+        rolls: int = commands.param(
+            default=1, description="Number of dice to roll, up to 10."
+        ),
+    ) -> None:
+        """Roll one or more dice."""
+        await self._roll_dice(ctx, sides, rolls)
+
+    @game.command(name="8ball")
+    @app_commands.describe(question="Question to ask the magic 8-ball.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_8ball(
+        self,
+        ctx: Context,
+        *,
+        question: str = commands.param(
+            displayed_name="question", description="What shall you ask?"
+        ),
+    ) -> None:
+        """Ask the magic 8-ball a question."""
+        await self._ask_eight_ball(ctx, question)
+
+    @commands.command(name="2048", aliases=("twentyfortyeight",))
+    async def twenty_forty_eight(self, ctx: Context) -> None:
+        """Play a solo game of 2048 on a four by four board."""
+        await self._start_2048(ctx)
+
+    @game.command(name="2048", aliases=("twentyfortyeight",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_2048(self, ctx: Context) -> None:
+        """Play a solo game of 2048 on a four by four board."""
+        await self._start_2048(ctx)
+
+    @game.command(name="lights-out", aliases=("lightsout", "lights"))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_lights_out(self, ctx: Context) -> None:
+        """Turn off every light in a randomized five by five puzzle."""
+        await self._start_lightsout(ctx)
+
+    @commands.command(
+        name="lightsout",
+        aliases=("lights-out", "lights"),
+    )
+    async def lightsout(self, ctx: Context) -> None:
+        """Turn off every light in a randomized five by five puzzle."""
+        await self._start_lightsout(ctx)
+
+    @commands.group(
+        name="higher-or-lower",
+        aliases=(
+            "hol",
+            "higher",
+            "lower",
+            "higherorlower",
+            "highorlow",
+            "higherlower",
+            "highlow",
+        ),
+        invoke_without_command=True,
+    )
+    async def higher_or_lower(self, ctx: Context) -> None:
+        """Guess whether each new card is higher or lower."""
+        await self._start_higher_or_lower(ctx)
+
+    @higher_or_lower.command(name="stats", aliases=("leaderboard", "top", "lb"))
+    async def higher_or_lower_stats(
+        self, ctx: Context, user: discord.User = commands.Author
+    ) -> None:
+        """Show Higher or Lower streak statistics."""
+        await self._send_streak_game_stats(
+            ctx, "higher_or_lower", "Higher or Lower", user
+        )
+
+    @game.command(name="higher-or-lower")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_higher_or_lower(self, ctx: Context) -> None:
+        """Guess whether each new card is higher or lower."""
+        await self._start_higher_or_lower(ctx)
+
+    @commands.group(
+        name="heads-or-tails",
+        aliases=("headsortails", "headortail", "coinflip", "cf"),
+        invoke_without_command=True,
+    )
+    async def heads_or_tails(self, ctx: Context) -> None:
+        """Guess an endless series of coin flips."""
+        await self._start_heads_or_tails(ctx)
+
+    @heads_or_tails.command(name="stats", aliases=("leaderboard", "top", "lb"))
+    async def heads_or_tails_stats(
+        self, ctx: Context, user: discord.User = commands.Author
+    ) -> None:
+        """Show Heads or Tails streak statistics."""
+        await self._send_streak_game_stats(
+            ctx, "heads_or_tails", "Heads or Tails", user
+        )
+
+    @game.command(name="heads-or-tails")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_heads_or_tails(self, ctx: Context) -> None:
+        """Guess an endless series of coin flips."""
+        await self._start_heads_or_tails(ctx)
+
+    @commands.group(name="wordle", aliases=("wdl",), invoke_without_command=True)
+    async def wordle(self, ctx: Context) -> None:
+        """Play a solo six-guess Wordle game."""
+        await self._start_wordle(ctx)
+
+    @wordle.command(name="settings")
+    async def wordle_settings(self, ctx: Context) -> None:
+        """Configure your Wordle hard-mode and colourblind preferences."""
+        hard, colourblind = await get_wordle_settings(self.bot.pool, ctx.author.id)
+        view = WordleSettingsView(
+            ctx.author.id,
+            hard,
+            colourblind,
+            self._save_wordle_settings,
+        )
+        await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
+
+    @game.command(name="wordle")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_wordle(self, ctx: Context) -> None:
+        """Play a solo six-guess Wordle game."""
+        await self._start_wordle(ctx)
+
+    @game.command(name="memory", aliases=("matching",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_memory(self, ctx: Context) -> None:
+        """Play a solo four by four memory matching game."""
+        await self._start_memory(ctx)
+
+    @commands.command(name="memory", aliases=("matching",))
+    async def memory(self, ctx: Context) -> None:
+        """Play a solo four by four memory matching game."""
+        await self._start_memory(ctx)
+
     @game.command(name="rock-paper-scissors")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -474,7 +698,7 @@ class Fun(About, Corn):
 
         await ctx.send(
             file=discord.File(
-                FILES_ROOT / "monark" / f"monark{random.randint(1,3)}.png",
+                FILES_ROOT / "monark" / f"monark{random.randint(1, 3)}.png",
                 "monark.png",
             )
         )
@@ -592,13 +816,43 @@ class Fun(About, Corn):
 
         await self._tictactoe_controller.send_stats(ctx)
 
-    @commands.hybrid_command(name="dice", aliases=("roll",))
-    @app_commands.describe(
-        sides="Number of sides on each die, from 2 to 1,000,000.",
-        rolls="Number of dice to roll, from 1 to 10.",
+    @commands.group(
+        name="connect4",
+        aliases=("connect-four", "c4", "connect"),
+        invoke_without_command=True,
     )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def connectfour(self, ctx: Context, user: discord.User | None = None) -> None:
+        """Play Connect Four against another user or Fishie."""
+
+        bot_id = (
+            ctx.bot.user.id
+            if ctx.bot.user is not None
+            else int(ctx.bot.config["ids"]["bot_id"])
+        )
+        if user is None or user.id == bot_id:
+            view = ConnectFourSetupView(self._connectfour_controller, ctx)
+            view.message = await ctx.send(
+                view=view, allowed_mentions=discord.AllowedMentions.none()
+            )
+            return
+        if user.id == ctx.author.id:
+            await ctx.send("You cannot play Connect Four against yourself.")
+            return
+        if user.bot:
+            await ctx.send("You cannot challenge another bot to Connect Four.")
+            return
+        view = ConnectFourChallengeView(self._connectfour_controller, ctx, user)
+        view.message = await ctx.send(
+            view=view, allowed_mentions=discord.AllowedMentions.none()
+        )
+
+    @connectfour.command(name="stats", aliases=("leaderboard", "lb"))
+    async def connectfour_stats(self, ctx: Context) -> None:
+        """Show global Connect Four win and loss leaderboards."""
+
+        await self._connectfour_controller.send_stats(ctx)
+
+    @commands.command(name="dice", aliases=("roll",))
     async def dice(
         self,
         ctx: Context,
@@ -610,6 +864,9 @@ class Fun(About, Corn):
         ),
     ) -> None:
         """Roll one or more dice, such as `fish dice 20 2`."""
+        await self._roll_dice(ctx, sides, rolls)
+
+    async def _roll_dice(self, ctx: Context, sides: int, rolls: int) -> None:
         if sides < 2 or sides > 1_000_000:
             raise commands.BadArgument("Dice must have between 2 and 1,000,000 sides.")
         if rolls < 1 or rolls > 10:
@@ -645,6 +902,13 @@ class Fun(About, Corn):
             "SELECT difficulty, user_id, wins, fails FROM minigame_stats "
             "WHERE game = 'color_memorize' ORDER BY difficulty, wins DESC, fails ASC"
         )
+        rows = [
+            row
+            for row in rows
+            if self.bot.db_cache.game_history_visible_to(
+                int(row["user_id"]), ctx.author.id
+            )
+        ]
         embed = discord.Embed(
             title="Color Memorize stats",
             color=ctx.bot.embedcolor,
@@ -664,7 +928,7 @@ class Fun(About, Corn):
                 lines = []
                 for index, row in enumerate(values, start=1):
                     user = await get_or_fetch_user(ctx.bot, int(row["user_id"]))
-                    name = user.display_name if user else str(row["user_id"])
+                    name = user.name if user else str(row["user_id"])
                     lines.append(
                         f"**{index}. {discord.utils.escape_markdown(name)}** · "
                         f"{int(row['wins']):,} wins · {int(row['fails']):,} fails"
@@ -672,6 +936,444 @@ class Fun(About, Corn):
                 text = "\n".join(lines)
             embed.add_field(name=difficulty.title(), value=text, inline=False)
         await ctx.send(embed=embed)
+
+    async def _start_2048(self, ctx: Context) -> None:
+        if ctx.author.id in self._2048_games:
+            await ctx.send(
+                "You already have an active 2048 game.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        game = Game2048(
+            owner_id=ctx.author.id,
+            guild_id=ctx.guild.id if ctx.guild else None,
+            channel_id=ctx.channel.id,
+        )
+        view = Game2048View(
+            game,
+            accent_color=self.bot.embedcolor,
+            on_finish=self._finish_2048,
+        )
+        self._2048_games[ctx.author.id] = game
+        try:
+            view.message = await ctx.send(
+                view=view,
+                file=view.render_file(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except Exception:
+            self._2048_games.pop(ctx.author.id, None)
+            view.stop()
+            raise
+
+    async def _finish_2048(self, game: Game2048, timed_out: bool) -> None:
+        if self._2048_games.get(game.owner_id) is not game:
+            return
+        self._2048_games.pop(game.owner_id, None)
+        if not self.bot.db_cache.user_game_tracking_enabled(game.owner_id):
+            return
+        await self.bot.pool.execute(
+            """
+            INSERT INTO game_2048_games
+                (user_id, guild_id, channel_id, score, highest_tile,
+                 move_count, move_history, timed_out, gave_up,
+                 duration_seconds, started_at, finished_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, now())
+            """,
+            game.owner_id,
+            game.guild_id,
+            game.channel_id,
+            game.score,
+            highest_tile(game.board),
+            game.move_count,
+            json.dumps(game.move_history, separators=(",", ":")),
+            game.timed_out,
+            game.gave_up,
+            round(game.duration_seconds, 3),
+            game.started_at,
+        )
+        await self.bot.pool.execute(
+            """
+            INSERT INTO game_2048_stats
+                (user_id, high_score, total_playtime_seconds, games_completed)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (user_id) DO UPDATE SET
+                high_score = GREATEST(game_2048_stats.high_score, EXCLUDED.high_score),
+                total_playtime_seconds = game_2048_stats.total_playtime_seconds
+                    + EXCLUDED.total_playtime_seconds,
+                games_completed = game_2048_stats.games_completed
+                    + EXCLUDED.games_completed,
+                updated_at = now()
+            """,
+            game.owner_id,
+            game.score,
+            0 if timed_out else int(game.duration_seconds),
+            0 if timed_out else 1,
+        )
+
+    async def _start_lightsout(self, ctx: Context) -> None:
+        if ctx.author.id in self._lightsout_games:
+            await ctx.send(
+                "You already have an active Lights Out game.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        game = LightsOutGame.new(
+            ctx.author.id,
+            guild_id=ctx.guild.id if ctx.guild is not None else None,
+            channel_id=ctx.channel.id,
+        )
+        view = LightsOutView(
+            game,
+            accent_color=self.bot.embedcolor,
+            on_finish=self._finish_lightsout,
+        )
+        self._lightsout_games[ctx.author.id] = game
+        try:
+            view.message = await ctx.send(
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except Exception:
+            self._lightsout_games.pop(ctx.author.id, None)
+            view.stop()
+            raise
+
+    async def _finish_lightsout(
+        self,
+        game: LightsOutGame,
+        timed_out: bool,
+    ) -> None:
+        if self._lightsout_games.get(game.user_id) is not game:
+            return
+        self._lightsout_games.pop(game.user_id, None)
+        if timed_out or not game.finished:
+            return
+        if not self.bot.db_cache.user_game_tracking_enabled(game.user_id):
+            return
+        await self.bot.pool.execute(
+            """
+            INSERT INTO lightsout_games
+                (user_id, guild_id, channel_id, move_count,
+                 duration_seconds, started_at, finished_at)
+            VALUES ($1, $2, $3, $4, $5, $6, now())
+            """,
+            game.user_id,
+            game.guild_id,
+            game.channel_id,
+            game.move_count,
+            int(round(game.duration_seconds)),
+            game.started_at,
+        )
+
+    async def _record_streak_game(
+        self, game_name: str, tracking_key: str, game: StreakGame
+    ) -> None:
+        if not self.bot.db_cache.user_game_tracking_enabled(game.user_id):
+            return
+        try:
+            await self.bot.pool.execute(
+                """
+                INSERT INTO streak_game_stats (game, user_id, highest_streak)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (game, user_id) DO UPDATE SET
+                    highest_streak = GREATEST(
+                        streak_game_stats.highest_streak,
+                        EXCLUDED.highest_streak
+                    ),
+                    updated_at = now()
+                """,
+                game_name,
+                game.user_id,
+                game.streak,
+            )
+        except Exception:
+            self.bot.logger.exception("Failed to record %s streak", game_name)
+
+    async def _record_higher_or_lower_progress(self, game: StreakGame) -> None:
+        await self._record_streak_game("higher_or_lower", "higher_lower", game)
+
+    async def _record_heads_or_tails_progress(self, game: StreakGame) -> None:
+        await self._record_streak_game("heads_or_tails", "heads_tails", game)
+
+    async def _start_higher_or_lower(self, ctx: Context) -> None:
+        if ctx.author.id in self._higher_or_lower_games:
+            await ctx.send(
+                "You already have an active Higher or Lower game.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        game = HigherOrLowerGame(ctx.author.id)
+        view = HigherOrLowerView(
+            game,
+            accent_color=self.bot.embedcolor,
+            on_finish=self._finish_higher_or_lower,
+            on_progress=self._record_higher_or_lower_progress,
+        )
+        self._higher_or_lower_games[ctx.author.id] = game
+        try:
+            view.message = await ctx.send(
+                view=view,
+                file=view.card_file(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except Exception:
+            self._higher_or_lower_games.pop(ctx.author.id, None)
+            view.stop()
+            raise
+
+    async def _finish_higher_or_lower(self, game: StreakGame, _timed_out: bool) -> None:
+        active = self._higher_or_lower_games.get(game.user_id)
+        if active is not game:
+            return
+        self._higher_or_lower_games.pop(game.user_id, None)
+        await self._record_higher_or_lower_progress(game)
+
+    async def _start_heads_or_tails(self, ctx: Context) -> None:
+        if ctx.author.id in self._heads_or_tails_games:
+            await ctx.send(
+                "You already have an active Heads or Tails game.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        game = HeadsOrTailsGame(ctx.author.id)
+        view = HeadsOrTailsView(
+            game,
+            accent_color=self.bot.embedcolor,
+            on_finish=self._finish_heads_or_tails,
+            on_progress=self._record_heads_or_tails_progress,
+        )
+        self._heads_or_tails_games[ctx.author.id] = game
+        try:
+            view.message = await ctx.send(
+                view=view, allowed_mentions=discord.AllowedMentions.none()
+            )
+        except Exception:
+            self._heads_or_tails_games.pop(ctx.author.id, None)
+            view.stop()
+            raise
+
+    async def _finish_heads_or_tails(self, game: StreakGame, _timed_out: bool) -> None:
+        active = self._heads_or_tails_games.get(game.user_id)
+        if active is not game:
+            return
+        self._heads_or_tails_games.pop(game.user_id, None)
+        await self._record_heads_or_tails_progress(game)
+
+    async def _send_streak_game_stats(
+        self,
+        ctx: Context,
+        game_name: str,
+        title: str,
+        user: discord.User,
+    ) -> None:
+        visible = self.bot.db_cache.game_history_visible_to(user.id, ctx.author.id)
+        highest = None
+        if visible:
+            highest = await self.bot.pool.fetchval(
+                "SELECT highest_streak FROM streak_game_stats "
+                "WHERE game = $1 AND user_id = $2",
+                game_name,
+                user.id,
+            )
+        rows = await self.bot.pool.fetch(
+            "SELECT user_id, highest_streak FROM streak_game_stats "
+            "WHERE game = $1 ORDER BY highest_streak DESC, updated_at ASC, "
+            "user_id ASC LIMIT 5",
+            game_name,
+        )
+        rows = [
+            row
+            for row in rows
+            if self.bot.db_cache.game_history_visible_to(
+                int(row["user_id"]), ctx.author.id
+            )
+        ]
+        safe_name = discord.utils.escape_markdown(
+            discord.utils.escape_mentions(user.name)
+        )
+        lines = [
+            f"## {title} stats for {safe_name}",
+            f"**Highest streak:** {int(highest or 0):,}",
+            "### Highest streaks",
+        ]
+        if rows:
+            for index, row in enumerate(rows, start=1):
+                listed_user = await get_or_fetch_user(self.bot, int(row["user_id"]))
+                listed_name = getattr(listed_user, "name", None) or str(row["user_id"])
+                safe_listed_name = discord.utils.escape_markdown(
+                    discord.utils.escape_mentions(listed_name)
+                )
+                lines.append(
+                    f"**#{index} {safe_listed_name}** · {int(row['highest_streak']):,}"
+                )
+        else:
+            lines.append("No streaks have been recorded yet.")
+
+        view = discord.ui.LayoutView(timeout=300)
+        view.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("\n".join(lines)),
+                accent_color=self.bot.embedcolor,
+            )
+        )
+        await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
+
+    async def _save_wordle_settings(
+        self, user_id: int, hard_mode: bool, colourblind_mode: bool
+    ) -> None:
+        await save_wordle_settings(self.bot.pool, user_id, hard_mode, colourblind_mode)
+
+    def _wordle_key(self, game: WordleGame) -> tuple[int, int]:
+        return game.user_id, game.channel_id
+
+    async def _start_wordle(self, ctx: Context) -> None:
+        key = (ctx.author.id, ctx.channel.id)
+        if key in self._wordle_games:
+            await ctx.send(
+                "You already have an active Wordle game in this channel.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        hard_mode, colourblind_mode = await get_wordle_settings(
+            self.bot.pool, ctx.author.id
+        )
+        game = new_wordle_game(
+            user_id=ctx.author.id,
+            channel_id=ctx.channel.id,
+            guild_id=ctx.guild.id if ctx.guild else None,
+            hard_mode=hard_mode,
+            colourblind_mode=colourblind_mode,
+        )
+        view = WordleBoardView(
+            game,
+            self._wordle_interaction_guess,
+            on_timeout=self._finish_wordle_timeout,
+        )
+        game.view = view
+        self._wordle_games[key] = game
+        try:
+            game.message = await ctx.send(
+                view=view,
+                file=view.board_file,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except Exception:
+            self._wordle_games.pop(key, None)
+            view.stop()
+            raise
+
+    async def _wordle_interaction_guess(
+        self,
+        interaction: discord.Interaction,
+        game: WordleGame,
+        guess: str,
+    ) -> None:
+        await self._submit_wordle_guess(game, guess, interaction=interaction)
+
+    async def _submit_wordle_guess(
+        self,
+        game: WordleGame,
+        guess: str,
+        *,
+        interaction: discord.Interaction | None = None,
+        message: discord.Message | None = None,
+    ) -> bool:
+        async with game.lock:
+            if self._wordle_games.get(self._wordle_key(game)) is not game:
+                if interaction is not None:
+                    await interaction.response.send_message(
+                        "This Wordle game is no longer active.", ephemeral=True
+                    )
+                return False
+            try:
+                game.submit(guess, set(WORDLE_WORDS))
+            except ValueError as error:
+                if interaction is not None:
+                    await interaction.response.send_message(str(error), ephemeral=True)
+                elif message is not None:
+                    try:
+                        await message.reply(
+                            str(error),
+                            delete_after=5,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+                    except discord.HTTPException:
+                        pass
+                return False
+
+            view = game.view
+            if not isinstance(view, WordleBoardView):
+                return False
+            view.refresh()
+            attachment = view.board_file
+            finished = game.completed
+            if finished:
+                view.stop()
+                self._wordle_games.pop(self._wordle_key(game), None)
+            if interaction is not None:
+                await interaction.response.edit_message(
+                    view=view,
+                    attachments=[attachment],
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            elif game.message is not None:
+                try:
+                    await game.message.edit(
+                        view=view,
+                        attachments=[attachment],
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    pass
+            if finished and self.bot.db_cache.user_game_tracking_enabled(game.user_id):
+                await record_wordle_result(self.bot.pool, game)
+            return True
+
+    async def _finish_wordle_timeout(self, game: WordleGame) -> None:
+        key = self._wordle_key(game)
+        if self._wordle_games.get(key) is not game:
+            return
+        self._wordle_games.pop(key, None)
+        view = game.view
+        if isinstance(view, WordleBoardView):
+            view.refresh()
+            if game.message is not None:
+                try:
+                    await game.message.edit(
+                        view=view,
+                        attachments=[view.board_file],
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    pass
+        if self.bot.db_cache.user_game_tracking_enabled(game.user_id):
+            await record_wordle_result(self.bot.pool, game)
+
+    async def _start_memory(self, ctx: Context) -> None:
+        if ctx.author.id in self._memory_games:
+            await ctx.send(
+                "You already have an active Memory game.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        game = MemoryGame(user_id=ctx.author.id)
+        view = MemoryView(ctx, game, on_finish=self._finish_memory)
+        self._memory_games[ctx.author.id] = game
+        try:
+            view.message = await ctx.send(
+                "## Memory\nMatch all eight pairs.",
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except Exception:
+            self._memory_games.pop(ctx.author.id, None)
+            view.stop()
+            raise
+
+    async def _finish_memory(self, game: MemoryGame) -> None:
+        if self._memory_games.get(game.user_id) is game:
+            self._memory_games.pop(game.user_id, None)
 
     @commands.command(name="unscramble")
     async def unscramble(
@@ -788,6 +1490,8 @@ class Fun(About, Corn):
         wins: int = 0,
         fails: int = 0,
     ) -> None:
+        if not self.bot.db_cache.user_game_tracking_enabled(user_id):
+            return
         try:
             await self.bot.pool.execute(
                 "INSERT INTO minigame_stats (game, user_id, difficulty, wins, fails) "
@@ -931,6 +1635,20 @@ class Fun(About, Corn):
                     )
                 except discord.HTTPException:
                     pass
+
+    @commands.Cog.listener("on_message")
+    async def wordle_listener(self, message: discord.Message) -> None:
+        """Accept only five-letter guesses from the active game's owner."""
+        if message.author.bot:
+            return
+        key = (message.author.id, message.channel.id)
+        game = self._wordle_games.get(key)
+        if game is None:
+            return
+        guess = message_guess(message, game)
+        if guess is None:
+            return
+        await self._submit_wordle_guess(game, guess, message=message)
 
     def tictactoe_mode_view(self, ctx: Context):
         from .tictactoe import TicTacToeModeView
@@ -1102,7 +1820,7 @@ class Fun(About, Corn):
     @commands.hybrid_command(
         name="phone",
         aliases=("ring", "userphone", "call", "fishiephone", "fishphone"),
-        extras={"usage": "[-onlyme]"},
+        extras={"usage": "[-onlyme/-om/-private]"},
     )
     @commands.guild_only()
     @app_commands.allowed_installs(guilds=True)
@@ -1110,7 +1828,7 @@ class Fun(About, Corn):
     async def phone(self, ctx: Context, *, flags: PhoneFlags):
         """Ring for a user in another server and connect the two channels.
 
-        -# -onlyme    Only relay messages sent by you from this channel.
+        -# -onlyme/-om/-private  Only relay messages sent by you from this channel.
         """
 
         if ctx.guild is None:
@@ -1314,10 +2032,7 @@ class Fun(About, Corn):
         except discord.HTTPException:
             pass
 
-    @commands.hybrid_command(name="8ball")
-    @app_commands.describe(question="Question to ask the magic 8-ball.")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="8ball")
     async def _8ball(
         self,
         ctx: Context,
@@ -1329,6 +2044,11 @@ class Fun(About, Corn):
         """Ask the magic 8-ball a question.
 
         tony wanted this command"""
+
+        await self._ask_eight_ball(ctx, question)
+
+    async def _ask_eight_ball(self, ctx: Context, question: str) -> None:
+        """Send a response from the magic 8-ball."""
 
         answers = (
             "It is certain.",
@@ -1387,7 +2107,7 @@ class Fun(About, Corn):
 
     #     await ctx.send(embed=embed, file=file, view=WTPView(ctx, data))
 
-    @commands.hybrid_command(
+    @commands.command(
         name="badapple",
         aliases=(
             "ba",
@@ -1395,8 +2115,6 @@ class Fun(About, Corn):
         ),
     )
     @commands.cooldown(1, 15, commands.BucketType.channel)
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def badapple(self, ctx: Context):
         """Bad Apple!! feat.nomico"""
 
@@ -1432,6 +2150,8 @@ class Fun(About, Corn):
 
     def cog_unload(self) -> None:
         """Stop background minigame timers when the fun extension reloads."""
+        self.unregister_video_views()
+        self._connectfour_controller.close()
         for game in self._color_memorize_games.values():
             if game.animation_task is not None:
                 game.animation_task.cancel()
@@ -1440,9 +2160,36 @@ class Fun(About, Corn):
                 game.timeout_task.cancel()
             if isinstance(game.view, UnscrambleView):
                 game.view.stop()
+        for game in self._2048_games.values():
+            game.finished = True
+        for game in self._lightsout_games.values():
+            game.finished = True
+            if game.view is not None:
+                game.view.stop()
+        for game in self._higher_or_lower_games.values():
+            game.finished = True
+            if game.view is not None:
+                game.view.stop()
+        for game in self._heads_or_tails_games.values():
+            game.finished = True
+            if game.view is not None:
+                game.view.stop()
+        for game in self._wordle_games.values():
+            if isinstance(game.view, WordleBoardView):
+                game.view.stop()
+        for game in self._memory_games.values():
+            game.finished = True
         self._color_memorize_games.clear()
         self._unscramble_games.clear()
+        self._2048_games.clear()
+        self._lightsout_games.clear()
+        self._higher_or_lower_games.clear()
+        self._heads_or_tails_games.clear()
+        self._wordle_games.clear()
+        self._memory_games.clear()
 
 
 async def setup(bot: Fishie):
-    await bot.add_cog(Fun(bot))
+    fun = Fun(bot)
+    await bot.add_cog(fun)
+    await fun.register_video_views()

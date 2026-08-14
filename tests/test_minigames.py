@@ -20,15 +20,41 @@ from extensions.fun.minigames import (
 
 def test_minigame_commands_are_registered() -> None:
     names = {command.name for command in Fun.__cog_commands__}
-    assert {"dice", "game", "color", "unscramble"} <= names
+    assert {"dice", "game", "color", "unscramble", "lightsout"} <= names
     assert {command.name for command in Fun.color.commands} == {"stats"}
     assert getattr(Fun.color, "app_command", None) is None
     assert {command.name for command in Fun.game.commands} == {
         "tic-tac-toe",
+        "connect-four",
         "unscramble",
         "color-memorize",
         "rock-paper-scissors",
+        "2048",
+        "lights-out",
+        "wordle",
+        "memory",
+        "higher-or-lower",
+        "heads-or-tails",
+        "click",
+        "dice",
+        "8ball",
     }
+
+    assert Fun.higher_or_lower.aliases == (
+        "hol",
+        "higher",
+        "lower",
+        "higherorlower",
+        "highorlow",
+        "higherlower",
+        "highlow",
+    )
+    assert Fun.heads_or_tails.aliases == (
+        "headsortails",
+        "headortail",
+        "coinflip",
+        "cf",
+    )
 
 
 def test_dice_and_color_difficulty_contracts() -> None:
@@ -42,6 +68,19 @@ def test_dice_and_color_difficulty_contracts() -> None:
         "impossible": (6, 10),
     }
     assert getattr(Fun.unscramble, "app_command", None) is None
+    for name in (
+        "click",
+        "dice",
+        "twenty_forty_eight",
+        "lightsout",
+        "higher_or_lower",
+        "heads_or_tails",
+        "wordle",
+        "memory",
+        "connectfour",
+        "_8ball",
+    ):
+        assert getattr(getattr(Fun, name), "app_command", None) is None
     difficulty = Fun.game.app_command.get_command("unscramble").get_parameter(
         "difficulty"
     )
