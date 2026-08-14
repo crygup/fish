@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import random
 import shutil
 import subprocess
+import threading
+import traceback
 from array import array
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -19,11 +23,16 @@ from discord import app_commands
 from discord.ext import commands
 from PIL import Image, ImageChops
 
+import extensions.media_effects.audio_effects as audio_effects_module
 import extensions.media_effects.commands as media_effect_commands
+import extensions.media_effects.delivery as media_effect_delivery
+import extensions.media_effects.processing as media_effect_processing
+import extensions.media_effects.runtime as media_effect_runtime
 from extensions.fun import Fun
 from extensions.media_effects import MediaEffects
 from extensions.media_effects.audio_effects import (
     audio_effect_catalog,
+    audio_effect_data,
     find_audio_effect,
 )
 from extensions.media_effects.commands import (
@@ -67,6 +76,7 @@ from extensions.media_effects.processing import (
     _overlay,
     _recursive_zoom_frame,
     _sample_heavy_animation,
+    compress_media_to_size_sync,
     convert_media_sync,
     make_flag_asset,
     probe_media_sync,
@@ -74,9 +84,12 @@ from extensions.media_effects.processing import (
     render_combine_effect_sync,
     render_image_effect_sync,
     render_overlay_effect_sync,
+    render_sound_effect_batch_sync,
     render_text_effect_sync,
     render_video_effect_sync,
 )
+from extensions.media_effects.runtime import cancellable_to_thread
+from extensions.media_effects.subprocesses import run_media_command
 from extensions.media_effects.video_assets import video_asset_catalog
 from utils.converters import (
     KlipyUrlConverter,
@@ -94,6 +107,12 @@ def _png_bytes() -> bytes:
         for x in range(image.width):
             image.putpixel((x, y), (x * 7, y * 10, (x + y) * 4, 255))
     image.save(output, "PNG")
+    return output.getvalue()
+
+
+def _odd_png_bytes() -> bytes:
+    output = BytesIO()
+    Image.new("RGBA", (435, 435), (240, 20, 10, 255)).save(output, "PNG")
     return output.getvalue()
 
 
@@ -438,7 +457,15 @@ def test_effect_pipeline_keeps_order_and_effect_specific_flags() -> None:
     assert source == "https://example.com/a.gif"
     assert effects == [
         ("invert", {"preserve_transparency": False}),
-        ("blur", {"radius": 8.0, "blur_type": "motion"}),
+        (
+            "blur",
+            {
+                "radius": 8.0,
+                "blur_type": "motion",
+                "position": "",
+                "shape": "square",
+            },
+        ),
         ("pixelate", {"size": 10}),
     ]
     assert skipped == []
@@ -466,7 +493,7 @@ def test_effect_pipeline_recognizes_qualified_image_commands() -> None:
         ("crop", {"shape": "triangle"}),
         ("mirror", {"direction": "top"}),
         ("fadeout", {"duration": 3.0}),
-        ("globe", {"speed": 2.0, "clockwise": True}),
+        ("globe", {"speed": 2.0, "axis": "y", "rotation": 0.0, "clockwise": True}),
     ]
     assert skipped == []
 
@@ -551,8 +578,8 @@ def test_overlay_text_parser_accepts_positional_and_flagged_media() -> None:
             "media https://example.com/overlay.mp4",
             ("media", "https://example.com/overlay.mp4"),
         ),
-        ("asset image", ("asset", None)),
-        ("image random", ("asset", None)),
+        ("asset image", ("image", None)),
+        ("image random", ("image", None)),
         ("flag United States", ("flag", "United States")),
         ("random flag de", ("flag", "de")),
     ),
@@ -573,9 +600,93 @@ def test_overlay_text_parser_accepts_named_source_with_flags() -> None:
     assert options["fullrandom"] is True
 
 
+@pytest.mark.parametrize(
+    ("argument", "expected_overlay"),
+    (
+        ("base.png video", "video"),
+        ("base.png video 67", "video 67"),
+        (
+            "base.png video https://example.com/overlay.mp4",
+            "video https://example.com/overlay.mp4",
+        ),
+        ("base.png image", "image"),
+        ("base.png image 67", "image 67"),
+        ("base.png image Bad Apple", "image Bad Apple"),
+        (
+            "base.png image https://example.com/overlay.png",
+            "image https://example.com/overlay.png",
+        ),
+    ),
+)
+def test_overlay_text_parser_accepts_video_and_image_selectors(
+    argument: str,
+    expected_overlay: str,
+) -> None:
+    source, overlay, options = _parse_overlay_text_argument(argument)
+
+    assert source == "base.png"
+    assert overlay == expected_overlay
+    assert options["opacity"] == 70.0
+
+
+@pytest.mark.parametrize("kind", ("video", "image"))
+def test_overlay_text_parser_keeps_full_random_with_typed_sources(kind: str) -> None:
+    source, overlay, options = _parse_overlay_text_argument(f"base.png {kind} 67 -fr")
+
+    assert source == "base.png"
+    assert overlay == f"{kind} 67"
+    assert options["fullrandom"] is True
+
+
+def test_asset_remains_an_alias_for_image_overlay_sources() -> None:
+    assert _parse_overlay_selector("asset") == _parse_overlay_selector("image")
+    assert _parse_overlay_selector("asset 67") == _parse_overlay_selector("image 67")
+    assert _parse_overlay_selector("asset Bad Apple") == _parse_overlay_selector(
+        "image Bad Apple"
+    )
+
+
 def test_overlay_text_parser_rejects_more_than_two_media_items() -> None:
     with pytest.raises(commands.BadArgument, match="background and one overlay"):
         _parse_overlay_text_argument("base.png overlay.png extra.png")
+
+
+@pytest.mark.parametrize(
+    ("pipeline", "expected_overlay", "full_random"),
+    (
+        ("base.mp4 overlay", "random", False),
+        ("base.mp4 overlay video", "video", False),
+        ("base.mp4 overlay video 67", "video 67", False),
+        (
+            "base.mp4 overlay video https://example.com/overlay.mp4",
+            "video https://example.com/overlay.mp4",
+            False,
+        ),
+        ("base.mp4 overlay image", "image", False),
+        ("base.mp4 overlay image 67", "image 67", False),
+        ("base.mp4 overlay image Bad Apple", "image Bad Apple", False),
+        (
+            "base.mp4 overlay image https://example.com/overlay.png",
+            "image https://example.com/overlay.png",
+            False,
+        ),
+        ("base.mp4 overlay video 67 -fr", "video 67", True),
+        ("base.mp4 overlay image Bad Apple -fr", "image Bad Apple", True),
+    ),
+)
+def test_effect_pipeline_accepts_typed_overlay_sources(
+    pipeline: str,
+    expected_overlay: str,
+    full_random: bool,
+) -> None:
+    source, effects, skipped = _parse_effect_pipeline(pipeline)
+
+    assert source == "base.mp4"
+    assert len(effects) == 1
+    assert effects[0][0] == "overlay"
+    assert effects[0][1]["overlay"] == expected_overlay
+    assert bool(effects[0][1].get("fullrandom")) is full_random
+    assert skipped == []
 
 
 @pytest.mark.parametrize(
@@ -584,7 +695,7 @@ def test_overlay_text_parser_rejects_more_than_two_media_items() -> None:
         ("random", "all"),
         ("random emoji", "emoji"),
         ("random user", "user"),
-        ("random asset", "asset"),
+        ("random asset", "image"),
     ),
 )
 def test_random_overlay_kind(value: str, expected: str) -> None:
@@ -592,14 +703,15 @@ def test_random_overlay_kind(value: str, expected: str) -> None:
 
 
 def test_random_overlay_kind_rejects_unknown_sources() -> None:
-    with pytest.raises(commands.BadArgument, match="must be emoji, user, or asset"):
+    with pytest.raises(commands.BadArgument, match="must be emoji, user, image, video"):
         _random_overlay_kind("random sound")
 
 
 def test_random_overlay_labels_are_readable() -> None:
     assert _random_overlay_label("😄") == "grinning face with smiling eyes"
     assert _random_overlay_label("<:party:123>") == "party"
-    assert _random_overlay_display("user: notyyton") == "overlay image (user: notyyton)"
+    assert _random_overlay_display("user: notyyton") == "overlay user notyyton"
+    assert _random_overlay_display("video: 67") == "overlay video 67"
 
 
 def test_full_random_overlay_stays_inside_the_background() -> None:
@@ -620,7 +732,16 @@ def test_full_random_overlay_stays_inside_the_background() -> None:
     assert "size" not in options
 
 
-def test_random_asset_overlay_returns_bundled_image_bytes() -> None:
+def test_random_asset_overlay_returns_bundled_image_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    threaded_reads: list[Any] = []
+
+    async def fake_to_thread(function: Any, /, *args: Any, **kwargs: Any) -> Any:
+        threaded_reads.append(function)
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(media_effect_commands.asyncio, "to_thread", fake_to_thread)
     ctx = SimpleNamespace(
         guild=None,
         author=SimpleNamespace(display_avatar=None),
@@ -628,9 +749,10 @@ def test_random_asset_overlay_returns_bundled_image_bytes() -> None:
         session=None,
     )
     images = Images.__new__(Images)
-    data, label = asyncio.run(images._random_overlay_data(ctx, "random asset"))
+    data, label = asyncio.run(images._random_overlay_data(ctx, "random image"))
 
-    assert label.startswith("asset: ")
+    assert threaded_reads
+    assert label.startswith("image: ")
     if data.startswith((b"\x89PNG", b"GIF8", b"RIFF")):
         with Image.open(BytesIO(data)) as image:
             assert image.width > 0
@@ -639,7 +761,15 @@ def test_random_asset_overlay_returns_bundled_image_bytes() -> None:
         assert data[4:8] == b"ftyp"
 
 
-def test_named_video_asset_overlay_returns_video_bytes() -> None:
+@pytest.mark.parametrize("selector", ("1", "Hattori"))
+def test_image_asset_overlay_accepts_id_or_name(
+    monkeypatch: pytest.MonkeyPatch,
+    selector: str,
+) -> None:
+    async def fake_to_thread(function: Any, /, *args: Any, **kwargs: Any) -> Any:
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(media_effect_commands.asyncio, "to_thread", fake_to_thread)
     ctx = SimpleNamespace(
         guild=None,
         author=SimpleNamespace(display_avatar=None),
@@ -647,10 +777,157 @@ def test_named_video_asset_overlay_returns_video_bytes() -> None:
         session=None,
     )
     images = Images.__new__(Images)
-    data, label = asyncio.run(images._random_overlay_data(ctx, "asset Bad Apple"))
+    data, label = asyncio.run(images._random_overlay_data(ctx, f"image {selector}"))
 
-    assert label == "asset: Bad Apple"
-    assert data[4:8] == b"ftyp"
+    assert label == "image: Hattori"
+    assert data.startswith(b"\x89PNG")
+
+
+def test_uploaded_video_overlay_resolves_an_approved_library_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queries: list[tuple[str, tuple[Any, ...]]] = []
+
+    class Pool:
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
+            queries.append((query, args))
+            return {
+                "id": 67,
+                "source_url": "https://cdn.discordapp.com/attachments/video.mp4",
+                "review_message_id": 123,
+            }
+
+    async def fake_refresh(_bot: Any, url: str) -> str:
+        return url
+
+    async def fake_fetch(*_args: Any, **_kwargs: Any) -> Any:
+        return SimpleNamespace(data=b"approved-video")
+
+    monkeypatch.setattr(
+        media_effect_commands,
+        "refresh_discord_attachment_url",
+        fake_refresh,
+    )
+    monkeypatch.setattr(media_effect_commands, "fetch_public_bytes", fake_fetch)
+    images = Images.__new__(Images)
+    images.bot = cast(
+        Any,
+        SimpleNamespace(
+            pool=Pool(),
+            session=object(),
+            get_cog=lambda _name: None,
+        ),
+    )
+
+    ctx = cast(Any, SimpleNamespace(session=object()))
+    data, label = asyncio.run(images._approved_video_overlay(ctx, "67"))
+
+    assert data == b"approved-video"
+    assert label == "video: 67"
+    assert queries and queries[0][1] == (67,)
+    assert "status = 'approved'" in queries[0][0]
+
+
+def test_typed_video_url_bypasses_the_uploaded_video_library(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved: list[tuple[str, bool]] = []
+
+    async def resolve(
+        _ctx: Any,
+        source: str,
+        *,
+        scan_messages: bool,
+    ) -> str:
+        resolved.append((source, scan_messages))
+        return source
+
+    async def fetch(_ctx: Any, source: str) -> bytes:
+        assert source == "https://example.com/overlay.mp4"
+        return b"url-video"
+
+    async def unexpected_library(_selector: str | None) -> tuple[bytes, str]:
+        raise AssertionError("A direct video URL must not query the video library")
+
+    images = Images.__new__(Images)
+    images._resolve_effect_media = cast(Any, resolve)
+    images._fetch_effect_media = cast(Any, fetch)
+    images._approved_video_overlay = cast(Any, unexpected_library)
+
+    data, label = asyncio.run(
+        images._random_overlay_data(
+            cast(Any, SimpleNamespace()),
+            "video https://example.com/overlay.mp4",
+        )
+    )
+
+    assert data == b"url-video"
+    assert label == "video: https://example.com/overlay.mp4"
+    assert resolved == [("https://example.com/overlay.mp4", False)]
+
+
+def test_typed_image_url_bypasses_the_bundled_image_catalog() -> None:
+    resolved: list[tuple[str, bool]] = []
+
+    async def resolve(
+        _ctx: Any,
+        source: str,
+        *,
+        scan_messages: bool,
+    ) -> str:
+        resolved.append((source, scan_messages))
+        return source
+
+    async def fetch(_ctx: Any, source: str) -> bytes:
+        assert source == "https://example.com/overlay.png"
+        return b"url-image"
+
+    images = Images.__new__(Images)
+    images._resolve_effect_media = cast(Any, resolve)
+    images._fetch_effect_media = cast(Any, fetch)
+
+    data, label = asyncio.run(
+        images._random_overlay_data(
+            cast(Any, SimpleNamespace()),
+            "image https://example.com/overlay.png",
+        )
+    )
+
+    assert data == b"url-image"
+    assert label == "image: https://example.com/overlay.png"
+    assert resolved == [("https://example.com/overlay.png", False)]
+
+
+def test_untyped_random_overlay_can_choose_an_approved_video(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Pool:
+        async def fetchval(self, _query: str) -> int:
+            return 1
+
+    class PickVideo:
+        def choice(self, values: Any) -> Any:
+            return "video" if "video" in values else values[0]
+
+    async def approved(_ctx: Any, selector: str | None) -> tuple[bytes, str]:
+        assert selector is None
+        return b"approved-video", "video: 67"
+
+    monkeypatch.setattr(media_effect_commands.random_module, "SystemRandom", PickVideo)
+    images = Images.__new__(Images)
+    images.bot = cast(Any, SimpleNamespace(pool=Pool()))
+    images._approved_video_overlay = cast(Any, approved)
+    ctx = SimpleNamespace(
+        guild=None,
+        author=SimpleNamespace(display_avatar=None),
+        bot=SimpleNamespace(custom_emojis={}, user=None),
+        session=None,
+    )
+
+    data, label = asyncio.run(images._random_overlay_data(ctx, "random"))
+
+    assert data == b"approved-video"
+    assert label == "video: 67"
 
 
 def test_effect_pipeline_recognizes_audio_group_commands() -> None:
@@ -936,6 +1213,17 @@ def test_pipeline_random_randomizes_numeric_options_by_default(
     assert resolved[0][2]["blur_type"] == "gaussian"
 
 
+def test_pipeline_random_pixelate_uses_a_readable_intensity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(media_effect_commands, "RANDOM_EFFECTS", ("pixelate",))
+    for _ in range(25):
+        resolved = _resolve_pipeline_random_effects([("random", {})])
+        assert 2 <= int(resolved[0][2]["size"]) <= 24
+    explicit, _adjustments = _normalize_effect_options("pixelate", {"size": 128})
+    assert explicit["size"] == 128
+
+
 def test_pipeline_random_flags_control_option_randomization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -943,7 +1231,12 @@ def test_pipeline_random_flags_control_option_randomization(
     no_random = _resolve_pipeline_random_effects(
         [("random", {"norandom": True, "fullrandom": False})]
     )
-    assert no_random[0][2] == {"radius": 5.0, "blur_type": "gaussian"}
+    assert no_random[0][2] == {
+        "radius": 5.0,
+        "blur_type": "gaussian",
+        "position": "",
+        "shape": "square",
+    }
 
     full_random = _resolve_pipeline_random_effects(
         [("random", {"norandom": False, "fullrandom": True})]
@@ -1037,6 +1330,64 @@ def test_pipeline_random_audio_requires_audio_and_keeps_random_flags(
             [("random", {"category": "audio"})],
             allow_audio=False,
         )
+
+
+def test_pipeline_random_video_includes_visual_and_video_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        media_effect_commands,
+        "RANDOM_EFFECTS",
+        ("blur", "huerotate"),
+    )
+    monkeypatch.setattr(
+        media_effect_commands,
+        "RANDOM_VIDEO_EFFECTS",
+        ("reverse", "speed"),
+    )
+    resolved = _resolve_pipeline_random_effects(
+        [("random", {})],
+        allow_visual=True,
+        media_is_video=True,
+    )
+    assert resolved[0][0] in {"blur", "huerotate", "reverse", "speed"}
+
+
+def test_media_timing_help_does_not_expose_the_safety_cap() -> None:
+    for command in MediaEffects(cast(Any, SimpleNamespace())).walk_commands():
+        help_text = command.help or ""
+        assert "0 to 600" not in help_text
+
+
+def test_timed_media_usage_documents_start_and_stop_flags() -> None:
+    cog = MediaEffects(cast(Any, SimpleNamespace()))
+    for name in (
+        "invert",
+        "magik",
+        "hallway",
+        "blur",
+        "exposure",
+        "overlay flag",
+    ):
+        command = next(
+            command for command in cog.walk_commands() if command.qualified_name == name
+        )
+        usage = str(command.extras.get("usage", ""))
+        assert "-start" in usage and "-stop" in usage
+
+
+def test_overlay_help_uses_image_and_video_but_hides_asset_alias() -> None:
+    cog = MediaEffects(cast(Any, SimpleNamespace()))
+    command = next(
+        command
+        for command in cog.walk_commands()
+        if command.qualified_name == "overlay"
+    )
+    visible_help = f"{command.help or ''}\n{command.extras.get('usage', '')}".casefold()
+
+    assert "image" in visible_help
+    assert "video" in visible_help
+    assert "asset" not in visible_help
 
 
 def test_pipeline_random_overlay_selects_a_flag(
@@ -1133,6 +1484,7 @@ def test_run_displays_random_overlay_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sent_notes: list[str] = []
+    probed_inputs: list[bytes] = []
 
     async def resolve_media(*_args: Any, **_kwargs: Any) -> str:
         return "https://example.com/media.png"
@@ -1140,7 +1492,8 @@ def test_run_displays_random_overlay_source(
     async def fetch_media(*_args: Any, **_kwargs: Any) -> bytes:
         return b"input"
 
-    async def probe_media(*_args: Any, **_kwargs: Any) -> Any:
+    async def probe_media(data: bytes, **_kwargs: Any) -> Any:
+        probed_inputs.append(data)
         return SimpleNamespace(has_audio=False, has_video=True, duration=1.0)
 
     async def random_overlay(*_args: Any, **_kwargs: Any) -> tuple[bytes, str]:
@@ -1202,7 +1555,8 @@ def test_run_displays_random_overlay_source(
         )
     )
 
-    assert "Applied: removebars, overlay image (user: notyyton)" in sent_notes[0]
+    assert "Applied: removebars, overlay user notyyton" in sent_notes[0]
+    assert probed_inputs[:3] == [b"input", b"image-result", b"result"]
 
 
 def test_image_asset_catalog_contains_only_normalized_media() -> None:
@@ -1344,6 +1698,89 @@ def test_repeated_audio_sfx_aliases_create_separate_steps(pipeline: str) -> None
     assert skipped == []
 
 
+def test_run_batches_consecutive_sound_effects_into_one_render(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_sizes: list[int] = []
+    sent_notes: list[str] = []
+
+    async def resolve_media(*_args: Any, **_kwargs: Any) -> str:
+        return "https://example.com/video.mp4"
+
+    async def fetch_media(*_args: Any, **_kwargs: Any) -> bytes:
+        return b"input"
+
+    async def probe_media(_data: bytes) -> Any:
+        return SimpleNamespace(has_audio=True, has_video=True, duration=10.0)
+
+    async def render_batch(
+        _data: bytes,
+        effects: list[tuple[bytes, float, dict[str, Any]]],
+        **_kwargs: Any,
+    ) -> Any:
+        batch_sizes.append(len(effects))
+        return SimpleNamespace(
+            data=b"batched", filename="audio-overlay.mp4", displayable=True
+        )
+
+    async def send_result(
+        _ctx: Any, _result: Any, *, started: float, note: str = ""
+    ) -> None:
+        assert started > 0
+        sent_notes.append(note)
+
+    @asynccontextmanager
+    async def typing() -> AsyncIterator[None]:
+        yield
+
+    class Progress:
+        def __init__(self, _ctx: Any, _total: int) -> None:
+            pass
+
+        def update(self, _step: int, _label: str) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    first, second = audio_effect_catalog()[:2]
+    monkeypatch.setattr(
+        media_effect_commands,
+        "_parse_effect_pipeline",
+        lambda _pipeline: (
+            "",
+            [
+                ("soundeffect", {"effect": str(first.id)}),
+                ("soundeffect", {"effect": str(second.id)}),
+            ],
+            [],
+        ),
+    )
+    monkeypatch.setattr(media_effect_commands, "probe_media", probe_media)
+    monkeypatch.setattr(media_effect_commands, "_RunProgress", Progress)
+    monkeypatch.setattr(
+        media_effect_commands, "render_sound_effect_batch", render_batch
+    )
+    monkeypatch.setattr(
+        media_effect_commands, "_image_animation_state", lambda _data: (False, False)
+    )
+    instance = SimpleNamespace(
+        bot=SimpleNamespace(media_semaphore=asyncio.Semaphore(1)),
+        _resolve_effect_media=resolve_media,
+        _fetch_effect_media=fetch_media,
+        _send_effect_result=send_result,
+    )
+    ctx = SimpleNamespace(guild=None, typing=typing)
+
+    asyncio.run(
+        Images._run_effect_pipeline(cast(Any, instance), cast(Any, ctx), "audio sfx x2")
+    )
+
+    assert batch_sizes == [2]
+    assert first.display_name in sent_notes[0]
+    assert second.display_name in sent_notes[0]
+
+
 def test_sound_effect_random_time_and_full_random_flags() -> None:
     _, effects, skipped = _parse_effect_pipeline(
         "audio sound-effect random -fr " "audio sound-effect random -random_time false"
@@ -1449,6 +1886,48 @@ def test_bundled_audio_effect_catalog_has_stable_ids_and_special_names() -> None
     assert find_audio_effect("23").name == "joe_biden_soda"
     assert find_audio_effect(str(catalog[0].id)) == catalog[0]
     assert all(effect.path.is_file() for effect in catalog)
+
+
+def test_audio_effect_catalog_skips_malformed_entries(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_path = tmp_path / "valid.mp3"
+    audio_path.write_bytes(b"ID3")
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "effects": [
+                    {
+                        "id": "invalid",
+                        "name": "broken",
+                        "display_name": "Broken",
+                        "category": "test",
+                        "path": "valid.mp3",
+                        "duration": 1.0,
+                    },
+                    {
+                        "id": 1,
+                        "name": "valid",
+                        "display_name": "Valid",
+                        "category": "test",
+                        "path": "valid.mp3",
+                        "duration": 1.0,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(audio_effects_module, "AUDIO_EFFECTS_ROOT", tmp_path)
+    monkeypatch.setattr(audio_effects_module, "AUDIO_EFFECTS_CATALOG", catalog_path)
+    audio_effect_catalog.cache_clear()
+    try:
+        catalog = audio_effect_catalog()
+    finally:
+        audio_effect_catalog.cache_clear()
+
+    assert [effect.name for effect in catalog] == ["valid"]
 
 
 def test_numeric_effect_options_clamp_and_report_adjustment() -> None:
@@ -1664,7 +2143,7 @@ def test_random_text_command_reports_the_selected_effect(
         callback(
             cast(Any, fake_cog),
             cast(Any, fake_ctx),
-            media="https://example.com/source.gif",
+            argument="https://example.com/source.gif",
         )
     )
 
@@ -1820,8 +2299,9 @@ def test_media_application_commands_fit_discords_size_limit() -> None:
             return sum(command_size(item) for item in value)
         return 0
 
+    cog = MediaEffects(cast(Any, SimpleNamespace()))
     bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
-    for group in (Images.image_effect, Images.effect_2, Images.effect_3):
+    for group in (cog.image_effect, cog.effect_2, cog.effect_3):
         assert group.app_command is not None
         payload = group.app_command.to_dict(bot.tree)
         assert command_size(payload) <= 8_000, group.name
@@ -1885,7 +2365,7 @@ def test_audio_app_commands_stay_under_the_effect_audio_namespace() -> None:
     assert root is not None
     audio = next(child for child in root.commands if child.name == "audio")
     assert isinstance(audio, app_commands.Group)
-    assert {child.name for child in root.commands} == {"audio", "adhd"}
+    assert {child.name for child in root.commands} == {"audio"}
     assert cog._media_app_command_size(root) <= 7_600
     assert cog._media_app_command_size(audio) <= 7_600
     assert {child.name for child in audio.commands} >= {
@@ -2535,39 +3015,8 @@ def test_animated_effects_produce_looping_gifs(effect: str) -> None:
         assert output.info.get("loop") == 0
 
 
-@pytest.mark.parametrize("effect", ("gifmagik", "gifswirl"))
-def test_animated_distortions_keep_gif_inputs_as_gifs(effect: str) -> None:
-    result = render_image_effect_sync(
-        _gif_bytes(),
-        effect,
-        strength=20 if effect == "gifmagik" else 180,
-        speed=1,
-    )
-    with Image.open(BytesIO(result.data)) as output:
-        assert output.format == "GIF"
-
-
-@pytest.mark.parametrize("effect", ("gifmagik", "gifswirl"))
-def test_animated_distortions_support_video_inputs(effect: str) -> None:
-    result = render_image_effect_sync(_sample_video(), effect)
-    assert result.filename.endswith(".mp4")
-    assert result.data
-
-
-@pytest.mark.parametrize("effect", ("gifmagik", "gifswirl"))
-def test_animated_distortions_support_videos_over_thirty_seconds(effect: str) -> None:
-    result = render_image_effect_sync(
-        _sample_long_video(),
-        effect,
-        strength=20 if effect == "gifmagik" else 90,
-        speed=1,
-    )
-    assert result.filename.endswith(".mp4")
-    assert result.data
-
-
-@pytest.mark.parametrize("effect", ("gifmagik", "gifswirl"))
-def test_animated_distortions_reject_gifs_over_thirty_seconds(effect: str) -> None:
+@pytest.mark.parametrize("effect", ("magik", "swirl", "gifmagik", "gifswirl"))
+def test_distortions_reject_animated_inputs(effect: str) -> None:
     output = BytesIO()
     first = Image.new("RGBA", (8, 8), "red")
     second = Image.new("RGBA", (8, 8), "blue")
@@ -2579,8 +3028,11 @@ def test_animated_distortions_reject_gifs_over_thirty_seconds(effect: str) -> No
         duration=[15_100, 15_100],
         loop=0,
     )
-    with pytest.raises(ValueError, match="up to 30 seconds"):
+    with pytest.raises(ValueError, match="only support still images"):
         render_image_effect_sync(output.getvalue(), effect)
+
+    with pytest.raises(ValueError, match="only support still images"):
+        render_image_effect_sync(_sample_video(), effect)
 
 
 def test_magik_working_copy_is_bounded_without_upscaling() -> None:
@@ -2648,16 +3100,10 @@ def test_gif_effect_preserves_animation() -> None:
         assert int(getattr(output, "n_frames", 1)) == 2
 
 
-def test_magik_reuses_a_stable_map_without_losing_gif_timing() -> None:
-    result = render_image_effect_sync(_gif_bytes(), "magik", strength=20)
-    with Image.open(BytesIO(result.data)) as output:
-        assert output.format == "GIF"
-        assert int(getattr(output, "n_frames", 1)) == 2
-        durations: list[int] = []
-        for index in range(2):
-            output.seek(index)
-            durations.append(int(output.info["duration"]))
-        assert durations == [80, 120]
+def test_magik_and_swirl_keep_still_image_support() -> None:
+    for effect in ("magik", "swirl"):
+        result = render_image_effect_sync(_png_bytes(), effect, strength=20)
+        assert result.data
 
 
 @pytest.mark.parametrize("effect", ("fadein", "fadeout"))
@@ -3029,8 +3475,6 @@ def test_video_visual_and_audio_effects() -> None:
         ("contrast", {"amount": 1.2}),
         ("saturation", {"amount": 1.2}),
         ("exposure", {"stops": 0.5}),
-        ("magik", {"strength": 20}),
-        ("swirl", {"strength": 45}),
         ("hallway", {}),
         ("parallax", {}),
         ("huerotate", {"degrees": 90}),
@@ -3136,6 +3580,69 @@ def test_sound_effect_supports_loop_and_fades() -> None:
     assert result.data
 
 
+def test_sound_effect_copies_compatible_video_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def video_output(_data: bytes, **options: Any) -> Any:
+        captured.update(options)
+        return media_effect_processing.EffectResult(b"result", "audio-overlay.mp4")
+
+    monkeypatch.setattr(media_effect_processing, "_video_command_output", video_output)
+    base = _sample_video()
+    probe = probe_media_sync(base)
+    render_video_effect_sync(
+        base,
+        "soundeffect",
+        second_data=_sample_audio("sine=frequency=440:duration=0.1"),
+        media_probe=probe,
+        random_time=False,
+    )
+    assert probe.can_copy_video_to_discord_mp4 is True
+    assert captured["copy_video"] is True
+    assert captured["media_probe"] is probe
+
+
+def test_sound_effect_batch_mixes_multiple_effects_in_one_output() -> None:
+    base = _sample_video_for_duration(1.5)
+    probe = probe_media_sync(base)
+    first = _sample_audio("sine=frequency=440:duration=0.2")
+    second = _sample_audio("sine=frequency=880:duration=0.2")
+    result = render_sound_effect_batch_sync(
+        base,
+        [
+            (first, 0.2, {"at": 0.1, "random_time": False}),
+            (second, 0.2, {"at": 0.8, "random_time": False}),
+        ],
+        media_probe=probe,
+    )
+    output_probe = probe_media_sync(result.data)
+    assert result.filename == "audio-overlay.mp4"
+    assert output_probe.has_video is True
+    assert output_probe.has_audio is True
+    assert output_probe.duration >= probe.duration - 0.05
+    assert output_probe.duration <= probe.duration + 0.12
+
+
+def test_audio_effect_bytes_use_a_bounded_cache() -> None:
+    effect = audio_effect_catalog()[0]
+    audio_effect_data.cache_clear()
+    first = audio_effect_data(effect.id)
+    second = audio_effect_data(effect.id)
+    assert first is second
+    assert audio_effect_data.cache_info().maxsize == 32
+
+
+def test_video_size_fitting_uses_a_calculated_target_without_growing_input() -> None:
+    base = _sample_video_for_duration(3)
+    limit = round(len(base) * 0.8)
+    result = compress_media_to_size_sync(base, "video.mp4", limit)
+    assert len(result.data) <= limit
+    assert len(result.data) <= len(base)
+    assert probe_media_sync(result.data).has_video is True
+
+
 def test_sound_effect_keeps_video_when_base_audio_ends_early() -> None:
     result = render_video_effect_sync(
         _sample_video_with_short_audio(),
@@ -3235,7 +3742,125 @@ def test_random_effect_pool_includes_size_but_not_enlarge() -> None:
     assert {"zoom", "resize"} <= set(RANDOM_EFFECTS)
     assert "enlarge" not in RANDOM_EFFECTS
     assert "volume" in media_effect_commands.RANDOM_AUDIO_EFFECTS
+    assert "extract" not in media_effect_commands.RANDOM_AUDIO_EFFECTS
     assert "channelscombine" not in media_effect_commands.RANDOM_AUDIO_EFFECTS
+
+
+def test_cancelled_media_worker_finishes_before_cancellation_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+
+    @cancellable_to_thread
+    def blocking_work() -> str:
+        started.set()
+        return "finished"
+
+    async def exercise() -> None:
+        real_loop = asyncio.get_running_loop()
+        worker: asyncio.Future[str] = real_loop.create_future()
+
+        class FakeLoop:
+            def run_in_executor(self, *_args: Any, **_kwargs: Any) -> Any:
+                started.set()
+                return worker
+
+        monkeypatch.setattr(
+            media_effect_runtime.asyncio,
+            "get_running_loop",
+            lambda: FakeLoop(),
+        )
+        task = asyncio.create_task(blocking_work())
+        await asyncio.sleep(0)
+        assert started.is_set()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        worker.set_result("finished")
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+
+
+def test_effect_delivery_compresses_to_the_discord_limit_and_keeps_footer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compression_limits: list[int] = []
+    sent: list[dict[str, Any]] = []
+
+    async def compress(
+        _data: bytes,
+        filename: str,
+        max_bytes: int,
+    ) -> Any:
+        compression_limits.append(max_bytes)
+        return SimpleNamespace(data=b"small", filename=filename, displayable=True)
+
+    async def send(**kwargs: Any) -> None:
+        sent.append(kwargs)
+
+    monkeypatch.setattr(media_effect_delivery, "compress_media_to_size", compress)
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(filesize_limit=10),
+        author=SimpleNamespace(mention="<@1>"),
+        message=SimpleNamespace(to_reference=lambda **_kwargs: object()),
+        send=send,
+    )
+    result = SimpleNamespace(
+        data=b"too-large!!", filename="effect.png", displayable=True
+    )
+
+    asyncio.run(
+        media_effect_delivery.send_effect_result(
+            SimpleNamespace(embedcolor=discord.Colour.blurple()),
+            ctx,
+            result,
+            started=0.0,
+        )
+    )
+
+    assert compression_limits == [10]
+    assert sent
+    view = sent[0]["view"]
+    text = "\n".join(
+        str(item.content)
+        for item in view.walk_children()
+        if isinstance(item, discord.ui.TextDisplay)
+    )
+    assert "Invoked by <@1>" in text
+
+
+def test_bulk_effect_delivery_keeps_invoker_without_hosted_files() -> None:
+    sent: list[dict[str, Any]] = []
+
+    async def send(**kwargs: Any) -> None:
+        sent.append(kwargs)
+
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(filesize_limit=100),
+        author=SimpleNamespace(mention="<@2>"),
+        message=SimpleNamespace(to_reference=lambda **_kwargs: object()),
+        send=send,
+    )
+    result = SimpleNamespace(data=b"small", filename="effect.png", displayable=True)
+
+    asyncio.run(
+        media_effect_delivery.send_effect_results(
+            SimpleNamespace(embedcolor=discord.Colour.blurple()),
+            ctx,
+            [result],
+            started=0.0,
+        )
+    )
+
+    view = sent[0]["view"]
+    text = "\n".join(
+        str(item.content)
+        for item in view.walk_children()
+        if isinstance(item, discord.ui.TextDisplay)
+    )
+    assert "Invoked by <@2>" in text
 
 
 def test_enlarge_is_rejected_from_run_and_random(
@@ -3315,12 +3940,12 @@ def test_timed_audio_effect_preserves_the_complete_video() -> None:
 def test_timed_visual_effect_preserves_the_complete_video() -> None:
     result = render_image_effect_sync(
         _sample_video(),
-        "swirl",
-        strength=45,
+        "huerotate",
+        degrees=45,
         start=0.1,
         stop=0.35,
     )
-    assert result.filename == "swirl.mp4"
+    assert result.filename == "huerotate.mp4"
     assert result.data
 
 
@@ -3385,6 +4010,56 @@ def test_unified_overlay_turns_an_image_into_a_video_without_resizing_the_base()
     assert probe.duration >= 0.4
 
 
+def test_unified_overlay_normalizes_odd_image_dimensions_for_h264() -> None:
+    result = render_overlay_effect_sync(_odd_png_bytes(), _sample_video())
+    probe = probe_media_sync(result.data)
+
+    assert probe.has_video is True
+    assert probe.width % 2 == 0
+    assert probe.height % 2 == 0
+
+
+def test_unified_overlay_repairs_reserved_h264_color_metadata() -> None:
+    video_path = Path("src/files/videos/QIIYHAPWMTMAIYDHMNYDKMWETHAPWM.mp4")
+    if not video_path.is_file():
+        pytest.skip("The bundled H.264 color-metadata regression asset is unavailable.")
+    result = render_overlay_effect_sync(
+        _png_bytes(),
+        video_path.read_bytes(),
+    )
+    probe = probe_media_sync(result.data)
+    assert result.filename == "overlay-video.mp4"
+    assert probe.has_video is True
+
+
+def test_media_subprocess_error_keeps_full_diagnostic_in_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostic = "Invalid color space\\nConversion failed!"
+
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise subprocess.CalledProcessError(
+            234,
+            ["ffmpeg", "-i", "input.media"],
+            stderr=diagnostic.encode(),
+        )
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(ValueError, match="Conversion failed!") as raised:
+        run_media_command(
+            ["ffmpeg", "-i", "input.media"],
+            timeout=30,
+            timeout_message="timed out",
+            failure_prefix="Could not process that media",
+        )
+    assert raised.value.__notes__ == ["Media subprocess diagnostics:\n" + diagnostic]
+    assert diagnostic in "".join(
+        traceback.format_exception(
+            type(raised.value), raised.value, raised.value.__traceback__
+        )
+    )
+
+
 def test_unified_overlay_extend_only_expands_for_a_longer_second_video() -> None:
     base = _sample_video_for_duration(0.5)
     longer_overlay = _sample_video_for_duration(1.25)
@@ -3435,9 +4110,15 @@ def test_audio_extract_returns_file() -> None:
 
 def test_media_conversion_supports_video_and_audio_outputs() -> None:
     video = _sample_video()
+    mov = convert_media_sync(video, "mov")
     webm = convert_media_sync(video, "webm")
     mp3 = convert_media_sync(video, "mp3")
+    opus = convert_media_sync(video, "opus")
+    assert mov.filename == "converted-1.mov"
     assert webm.filename == "converted-1.webm"
     assert mp3.filename == "converted-1.mp3"
+    assert opus.filename == "converted-1.opus"
+    assert mov.data
     assert webm.data
     assert mp3.data
+    assert opus.data

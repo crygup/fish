@@ -56,16 +56,19 @@ def audio_effect_catalog() -> tuple[AudioEffect, ...]:
             continue
         if not path.is_file() or path.suffix.casefold() != ".mp3":
             continue
-        catalog.append(
-            AudioEffect(
-                id=int(entry["id"]),
-                name=str(entry["name"]),
-                display_name=str(entry["display_name"]),
-                category=str(entry["category"]),
-                path=path,
-                duration=float(entry["duration"]),
+        try:
+            catalog.append(
+                AudioEffect(
+                    id=int(entry["id"]),
+                    name=str(entry["name"]),
+                    display_name=str(entry["display_name"]),
+                    category=str(entry["category"]),
+                    path=path,
+                    duration=float(entry["duration"]),
+                )
             )
-        )
+        except (KeyError, TypeError, ValueError):
+            continue
     if not catalog:
         raise RuntimeError("No bundled audio effects are available.")
     return tuple(sorted(catalog, key=lambda effect: effect.id))
@@ -101,6 +104,14 @@ def find_audio_effect(value: str, *, allow_random: bool = True) -> AudioEffect:
     if len(partial) == 1:
         return partial[0]
     raise ValueError("Unknown sound effect. Use its catalog ID, name, or `random`.")
+
+
+@lru_cache(maxsize=32)
+def audio_effect_data(effect_id: int) -> bytes:
+    """Read a bundled effect through a small bounded in-memory cache."""
+
+    effect = find_audio_effect(str(effect_id), allow_random=False)
+    return effect.path.read_bytes()
 
 
 def audio_effect_choices(query: str, *, limit: int = 25) -> list[AudioEffect]:

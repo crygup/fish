@@ -762,8 +762,10 @@ class Downloader:
         ]
 
         tiktok_extractor_arg_index: int | None = None
+        cookie_arg_index: int | None = None
 
         if cookies := _get_cookies(video):
+            cookie_arg_index = len(args)
             args += ["--cookies", self._prepare_cookie_file(cookies)]
 
         # Instagram returns different DASH manifests over this host's IPv6
@@ -811,7 +813,14 @@ class Downloader:
 
         args.append(video)
 
+        # Instagram can reject an otherwise valid public post with HTTP 400
+        # when the stored session cookie is stale or incompatible with the
+        # current web API. Retry once without that cookie so public posts can
+        # use yt-dlp's logged-out extractor. Private/login-only posts still
+        # fail normally after the anonymous attempt.
         attempts = len(_TIKTOK_EXTRACTOR_PROFILES) if is_tiktok else 1
+        if is_instagram and cookie_arg_index is not None:
+            attempts = 2
         last_returncode: int | None = None
         last_stderr = ""
         last_failure = ""
@@ -820,7 +829,14 @@ class Downloader:
         for attempt in range(attempts):
             if attempt:
                 self._cleanup_output()
-                if tiktok_extractor_arg_index is not None:
+                if is_instagram and cookie_arg_index is not None:
+                    del args[cookie_arg_index : cookie_arg_index + 2]
+                    cookie_arg_index = None
+                    self.ctx.bot.logger.info(
+                        "Retrying Instagram download without stored cookies host=%s",
+                        urlsplit(video).hostname,
+                    )
+                elif tiktok_extractor_arg_index is not None:
                     args[tiktok_extractor_arg_index] = _TIKTOK_EXTRACTOR_PROFILES[
                         attempt
                     ]
@@ -950,7 +966,9 @@ class Downloader:
             ),
         ]
 
+        cookie_arg_index: int | None = None
         if cookies := _get_cookies(video):
+            cookie_arg_index = len(args)
             args += ["--cookies", self._prepare_cookie_file(cookies)]
 
         args += [
@@ -965,50 +983,65 @@ class Downloader:
             video,
         ]
 
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
-        try:
-            _, stderr_raw = await self._communicate_with_timeout(proc)
-        except DownloadError:
-            for path in glob.glob(thumbnail_glob):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
-            raise
+        attempts = 2 if cookie_arg_index is not None else 1
+        last_detail = "no stderr output"
+        for attempt in range(attempts):
+            if attempt:
+                for path in glob.glob(thumbnail_glob):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                if cookie_arg_index is not None:
+                    del args[cookie_arg_index : cookie_arg_index + 2]
+                    cookie_arg_index = None
+                    self.ctx.bot.logger.info(
+                        "Retrying Instagram thumbnail lookup without stored cookies "
+                        "host=%s",
+                        urlsplit(video).hostname,
+                    )
 
-        if proc.returncode != 0:
-            self.ctx.bot.logger.warning(
-                "Instagram thumbnail fallback failed host=%s detail=%s",
-                urlsplit(video).hostname,
-                _summarize_yt_dlp_error(stderr_raw.decode(errors="replace")),
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            for path in glob.glob(thumbnail_glob):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
-            return None
+            try:
+                _, stderr_raw = await self._communicate_with_timeout(proc)
+            except DownloadError:
+                for path in glob.glob(thumbnail_glob):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                raise
 
-        try:
-            paths = [
-                path
-                for path in self._find_outputs(thumbnail_glob)
-                if os.path.splitext(path)[1].casefold() in _IMAGE_SUFFIXES
-            ]
-        except DownloadError:
-            paths = []
-        if paths:
-            return paths
+            last_detail = _summarize_yt_dlp_error(stderr_raw.decode(errors="replace"))
+            if proc.returncode != 0:
+                continue
+
+            try:
+                paths = [
+                    path
+                    for path in self._find_outputs(thumbnail_glob)
+                    if os.path.splitext(path)[1].casefold() in _IMAGE_SUFFIXES
+                ]
+            except DownloadError:
+                paths = []
+            if paths:
+                return paths
+
         for path in glob.glob(thumbnail_glob):
             try:
                 os.remove(path)
             except OSError:
                 pass
+        self.ctx.bot.logger.warning(
+            "Instagram thumbnail fallback failed host=%s detail=%s",
+            urlsplit(video).hostname,
+            last_detail,
+        )
         return None
 
     async def _fetch_page_html(

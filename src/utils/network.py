@@ -14,8 +14,19 @@ MAX_MEDIA_BYTES = 50 * 1024 * 1024
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
-def _is_public_address(address: str) -> bool:
-    ip = ipaddress.ip_address(address)
+def is_public_address(address: str) -> bool:
+    """Return whether *address* is a routable public IP address.
+
+    Browser integrations cannot use :func:`validate_public_url` alone because
+    the browser performs its own DNS lookup.  Keeping this check public lets
+    those integrations validate the address reported by the actual network
+    connection as a second line of defence.
+    """
+
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
     return not (
         ip.is_private
         or ip.is_loopback
@@ -24,6 +35,11 @@ def _is_public_address(address: str) -> bool:
         or ip.is_reserved
         or ip.is_unspecified
     )
+
+
+# Keep the private name available for callers that imported it while this
+# helper was internal.
+_is_public_address = is_public_address
 
 
 async def validate_public_url(
@@ -76,7 +92,7 @@ async def validate_public_url(
         resolved = {str(item[4][0]) for item in addresses}
     else:
         resolved = {str(literal_address)}
-    if not resolved or any(not _is_public_address(address) for address in resolved):
+    if not resolved or any(not is_public_address(address) for address in resolved):
         raise commands.BadArgument(
             "Private and local network addresses are not allowed."
         )
@@ -111,10 +127,12 @@ def validate_connected_peer(response: aiohttp.ClientResponse) -> None:
     connection = response.connection
     transport = connection.transport if connection is not None else None
     peer = transport.get_extra_info("peername") if transport is not None else None
-    if peer and not _is_public_address(str(peer[0])):
+    if not peer or not is_public_address(str(peer[0])):
         response.close()
         raise commands.BadArgument(
-            "Private and local network addresses are not allowed."
+            "The remote server did not provide a public network connection."
+            if not peer
+            else "Private and local network addresses are not allowed."
         )
 
 

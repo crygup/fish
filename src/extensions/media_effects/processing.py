@@ -6,7 +6,6 @@ import math
 import os
 import random
 import re
-import subprocess
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -27,7 +26,6 @@ from PIL import (
     UnidentifiedImageError,
 )
 
-from utils import to_thread
 from utils.rich_text import (
     draw_inline_tokens,
     impact_font_path,
@@ -39,6 +37,8 @@ from utils.rich_text import (
 )
 
 from .fonts import load_effect_font
+from .runtime import cancellable_to_thread as to_thread
+from .subprocesses import probe_media_json, run_media_command
 
 MAX_FRAME_PIXELS = 25_000_000
 MAX_TOTAL_PIXELS = 150_000_000
@@ -46,7 +46,8 @@ MAX_ANIMATION_FRAMES = 300
 MAX_MEDIA_DURATION = 10 * 60.0
 MAX_MEDIA_DURATION_MINUTES = int(MAX_MEDIA_DURATION // 60)
 MAX_MEDIA_DIMENSION = 4096
-FFMPEG_TIMEOUT = 30
+FFMPEG_TIMEOUT = 60
+INVALID_H264_COLOR_VALUES = frozenset({"reserved", "unknown", "unspecified"})
 MAGIK_WORKING_SIZE = 320
 MAGIK_GIF_WORKING_SIZE = 320
 MAGIK_MAX_GIF_FRAMES = 40
@@ -129,6 +130,8 @@ class MediaProbe:
     video_streams: int
     audio_streams: int
     format_names: frozenset[str]
+    video_codecs: tuple[str, ...] = ()
+    video_pixel_formats: tuple[str, ...] = ()
 
     @property
     def has_video(self) -> bool:
@@ -138,50 +141,41 @@ class MediaProbe:
     def has_audio(self) -> bool:
         return self.audio_streams > 0
 
+    @property
+    def can_copy_video_to_discord_mp4(self) -> bool:
+        """Whether the primary video can be remuxed without losing compatibility."""
+
+        return bool(
+            self.video_codecs
+            and self.video_codecs[0] == "h264"
+            and self.video_pixel_formats
+            and self.video_pixel_formats[0] in {"yuv420p", "yuvj420p"}
+        )
+
 
 def _run(command: list[str], *, timeout: int = FFMPEG_TIMEOUT) -> None:
-    try:
-        subprocess.run(
-            command,
-            capture_output=True,
-            timeout=timeout,
-            check=True,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise ValueError(
-            "That effect took longer than 30 seconds. Try a shorter or smaller file."
-        ) from error
-    except subprocess.CalledProcessError as error:
-        detail = error.stderr.decode("utf-8", "replace").strip().splitlines()
-        message = detail[-1] if detail else "ffmpeg could not process that file."
-        raise ValueError(f"Could not process that media: {message[:300]}") from error
+    run_media_command(
+        command,
+        timeout=timeout,
+        timeout_message=(
+            f"That effect took longer than {timeout} seconds. "
+            "Try a shorter or smaller file."
+        ),
+        failure_prefix="Could not process that media",
+    )
 
 
 def _probe_path(path: str) -> MediaProbe:
     try:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "stream=codec_type,width,height:format=duration,format_name",
-                "-of",
-                "json",
-                path,
-            ],
-            capture_output=True,
-            timeout=15,
-            text=True,
-            check=True,
+        payload = probe_media_json(
+            path,
+            show_entries=(
+                "stream=codec_type,codec_name,pix_fmt,width,height:"
+                "format=duration,format_name"
+            ),
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+    except ValueError as error:
         raise ValueError("That file is not supported media.") from error
-
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise ValueError("Could not inspect that media file.") from error
 
     streams = payload.get("streams") or []
     video_streams = [item for item in streams if item.get("codec_type") == "video"]
@@ -205,6 +199,12 @@ def _probe_path(path: str) -> MediaProbe:
         video_streams=len(video_streams),
         audio_streams=len(audio_streams),
         format_names=format_names,
+        video_codecs=tuple(
+            str(item.get("codec_name") or "").casefold() for item in video_streams
+        ),
+        video_pixel_formats=tuple(
+            str(item.get("pix_fmt") or "").casefold() for item in video_streams
+        ),
     )
     if not probe.has_video and not probe.has_audio:
         raise ValueError("That file does not contain video or audio.")
@@ -216,6 +216,79 @@ def _probe_path(path: str) -> MediaProbe:
     if width > MAX_MEDIA_DIMENSION or height > MAX_MEDIA_DIMENSION:
         raise ValueError("Media effects are limited to 4096 pixels per side.")
     return probe
+
+
+def _has_invalid_h264_color_metadata(path: str) -> bool:
+    """Detect H.264 streams whose reserved color metadata breaks FFmpeg filters."""
+
+    try:
+        payload = probe_media_json(
+            path,
+            show_entries=(
+                "stream=codec_name,color_space,color_transfer,color_primaries"
+            ),
+        )
+    except ValueError:
+        return False
+
+    for stream in payload.get("streams") or ():
+        if str(stream.get("codec_name") or "").casefold() != "h264":
+            continue
+        metadata = (
+            stream.get("color_space"),
+            stream.get("color_transfer"),
+            stream.get("color_primaries"),
+        )
+        if any(
+            str(value or "").casefold() in INVALID_H264_COLOR_VALUES
+            for value in metadata
+        ):
+            return True
+    return False
+
+
+def _repair_h264_color_metadata(
+    path: str,
+    directory: str,
+    *,
+    name: str,
+) -> str:
+    """Patch reserved H.264 color metadata before compositing the stream.
+
+    Some mobile/CDN encoders write ``reserved`` color values. FFmpeg then
+    rejects the stream while initializing a filter graph, even though the
+    video itself is otherwise valid. Rewriting the bitstream metadata keeps
+    the original video frames and makes it usable by the overlay filter.
+    """
+
+    if not _has_invalid_h264_color_metadata(path):
+        return path
+
+    repaired_path = os.path.join(directory, f"{name}-color-fixed.mp4")
+    _run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "copy",
+            "-bsf:v",
+            "h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            repaired_path,
+        ],
+    )
+    return repaired_path
 
 
 def probe_media_sync(data: bytes) -> MediaProbe:
@@ -421,10 +494,10 @@ def _blur(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
         raise ValueError("Blur radius must be between 0.1 and 50.")
     blur_type = str(options.get("blur_type", "gaussian")).casefold()
     if blur_type in {"gaussian", "gauss"}:
-        return frame.filter(ImageFilter.GaussianBlur(radius))
-    if blur_type in {"box", "square"}:
-        return frame.filter(ImageFilter.BoxBlur(radius))
-    if blur_type in {"motion", "horizontal"}:
+        blurred = frame.filter(ImageFilter.GaussianBlur(radius))
+    elif blur_type in {"box", "square"}:
+        blurred = frame.filter(ImageFilter.BoxBlur(radius))
+    elif blur_type in {"motion", "horizontal"}:
         # Pillow kernels support 3x3 and 5x5 matrices. A 5-wide horizontal
         # average gives the expected directional blur while keeping all modes.
         kernel_size = 3 if radius < 1.5 else 5
@@ -432,14 +505,77 @@ def _blur(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
         center = kernel_size // 2
         for x in range(kernel_size):
             weights[center * kernel_size + x] = 1 / kernel_size
-        return frame.filter(
+        blurred = frame.filter(
             ImageFilter.Kernel(
                 (kernel_size, kernel_size),
                 weights,
                 scale=1,
             )
         )
-    raise ValueError("Blur type must be gaussian, box, or motion.")
+    else:
+        raise ValueError("Blur type must be gaussian, box, or motion.")
+
+    position = str(options.get("position", "")).strip()
+    if not position:
+        return blurred
+    shape = str(options.get("shape", "square")).casefold().strip()
+    if shape not in {"square", "rectangle", "circle", "triangle"}:
+        raise ValueError("Blur shape must be square, circle, or triangle.")
+    center_x, center_y = _blur_position(position, frame.width, frame.height)
+    region_size = max(16, min(frame.width, frame.height) // 3)
+    left = max(0, min(frame.width - region_size, center_x - region_size // 2))
+    top = max(0, min(frame.height - region_size, center_y - region_size // 2))
+    mask = Image.new("L", frame.size, 0)
+    draw = ImageDraw.Draw(mask)
+    box = (left, top, left + region_size - 1, top + region_size - 1)
+    if shape in {"square", "rectangle"}:
+        draw.rectangle(box, fill=255)
+    elif shape == "circle":
+        draw.ellipse(box, fill=255)
+    else:
+        draw.polygon(
+            (
+                (left + region_size // 2, top),
+                (left + region_size - 1, top + region_size - 1),
+                (left, top + region_size - 1),
+            ),
+            fill=255,
+        )
+    result = frame.copy()
+    result.paste(blurred, (0, 0), mask)
+    return result
+
+
+def _blur_position(value: str, width: int, height: int) -> tuple[int, int]:
+    normalized = value.casefold().replace(" ", "")
+    named = {
+        "center": (width // 2, height // 2),
+        "top-left": (width // 6, height // 6),
+        "top": (width // 2, height // 6),
+        "top-right": (width * 5 // 6, height // 6),
+        "left": (width // 6, height // 2),
+        "right": (width * 5 // 6, height // 2),
+        "bottom-left": (width // 6, height * 5 // 6),
+        "bottom": (width // 2, height * 5 // 6),
+        "bottom-right": (width * 5 // 6, height * 5 // 6),
+    }
+    if normalized in named:
+        return named[normalized]
+    parts = value.split(",", 1)
+    if len(parts) != 2:
+        raise ValueError("Blur position must be x,y coordinates or a named position.")
+    try:
+        x = float(parts[0].strip())
+        y = float(parts[1].strip())
+    except ValueError as error:
+        raise ValueError("Blur position must be x,y coordinates.") from error
+    if 0 <= x <= 1 and 0 <= y <= 1:
+        x *= width
+        y *= height
+    return (
+        max(0, min(width - 1, round(x))),
+        max(0, min(height - 1, round(y))),
+    )
 
 
 def _crop_shape(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
@@ -2151,11 +2287,16 @@ def _rotate_project_vertices(
     angle: float,
     *,
     size: int,
+    axis: Literal["x", "y", "z"] = "y",
     pitch_degrees: float = -10,
     scale: float = 82,
 ) -> tuple[list[tuple[float, float]], list[tuple[float, float, float]]]:
-    yaw_cos = math.cos(angle)
-    yaw_sin = math.sin(angle)
+    axis_value = axis.casefold()
+    if axis_value not in {"x", "y", "z"}:
+        raise ValueError("Rotation axis must be x, y, or z.")
+    axis = cast(Literal["x", "y", "z"], axis_value)
+    rotation_cos = math.cos(angle)
+    rotation_sin = math.sin(angle)
     pitch = math.radians(pitch_degrees)
     pitch_cos = math.cos(pitch)
     pitch_sin = math.sin(pitch)
@@ -2164,15 +2305,25 @@ def _rotate_project_vertices(
     rotated: list[tuple[float, float, float]] = []
     projected: list[tuple[float, float]] = []
     for x, y, z in vertices:
-        yaw_x = x * yaw_cos + z * yaw_sin
-        yaw_z = -x * yaw_sin + z * yaw_cos
-        pitch_y = y * pitch_cos - yaw_z * pitch_sin
-        pitch_z = y * pitch_sin + yaw_z * pitch_cos
+        if axis == "x":
+            rotation_x = x
+            rotation_y = y * rotation_cos - z * rotation_sin
+            rotation_z = y * rotation_sin + z * rotation_cos
+        elif axis == "z":
+            rotation_x = x * rotation_cos - y * rotation_sin
+            rotation_y = x * rotation_sin + y * rotation_cos
+            rotation_z = z
+        else:
+            rotation_x = x * rotation_cos + z * rotation_sin
+            rotation_y = y
+            rotation_z = -x * rotation_sin + z * rotation_cos
+        pitch_y = rotation_y * pitch_cos - rotation_z * pitch_sin
+        pitch_z = rotation_y * pitch_sin + rotation_z * pitch_cos
         perspective = camera_distance / (camera_distance - pitch_z)
-        rotated.append((yaw_x, pitch_y, pitch_z))
+        rotated.append((rotation_x, pitch_y, pitch_z))
         projected.append(
             (
-                center + yaw_x * scale * perspective,
+                center + rotation_x * scale * perspective,
                 center - pitch_y * scale * perspective,
             )
         )
@@ -2272,6 +2423,7 @@ def _render_textured_polyhedron(
     angle: float,
     shape: Literal["cube", "pyramid"],
     *,
+    axis: Literal["x", "y", "z"] = "y",
     size: int = 300,
 ) -> Image.Image:
     if shape == "cube":
@@ -2297,6 +2449,7 @@ def _render_textured_polyhedron(
             vertices,
             angle,
             size=size,
+            axis=axis,
             pitch_degrees=-10,
             scale=78,
         )
@@ -2321,6 +2474,7 @@ def _render_textured_polyhedron(
             vertices,
             angle,
             size=size,
+            axis=axis,
             pitch_degrees=-7,
             scale=88,
         )
@@ -2361,12 +2515,18 @@ def _shape_frames(
     shape: Literal["cube", "pyramid"],
     speed: float,
     clockwise: bool,
+    axis: str = "y",
+    rotation: float = 0.0,
 ) -> tuple[list[Image.Image], list[int]]:
     if not 0.25 <= speed <= 4:
         raise ValueError("Rotation speed must be between 0.25 and 4.")
     count = max(13, min(78, round(39 / speed)))
     duration = 50
     direction = -1 if clockwise else 1
+    axis = axis.casefold()
+    if axis not in {"x", "y", "z"}:
+        raise ValueError("Rotation axis must be x, y, or z.")
+    rotation_offset = math.radians(rotation)
     frames: list[Image.Image] = []
     for index in range(count):
         source = ImageOps.fit(
@@ -2374,8 +2534,15 @@ def _shape_frames(
             (256, 256),
             Image.Resampling.LANCZOS,
         )
-        angle = direction * 2 * math.pi * index / count
-        frames.append(_render_textured_polyhedron(source, angle, shape))
+        angle = direction * 2 * math.pi * index / count + rotation_offset
+        frames.append(
+            _render_textured_polyhedron(
+                source,
+                angle,
+                shape,
+                axis=cast(Literal["x", "y", "z"], axis),
+            )
+        )
     return frames, [duration] * count
 
 
@@ -2491,6 +2658,17 @@ def _video_filter(
         if not 0.1 <= radius <= 50:
             raise ValueError("Blur radius must be between 0.1 and 50.")
         blur_type = str(options.get("blur_type", "gaussian")).casefold()
+        position = str(options.get("position", "")).strip()
+        if position:
+            return (
+                _video_positioned_blur_filter(
+                    radius,
+                    blur_type=blur_type,
+                    position=position,
+                    shape=str(options.get("shape", "square")),
+                ),
+                "blur.mp4",
+            )
         if blur_type in {"gaussian", "gauss"}:
             return f"gblur=sigma={radius:g}", "blur.mp4"
         if blur_type in {"box", "square"}:
@@ -2885,20 +3063,88 @@ def _video_filter(
     raise ValueError("That effect currently supports images and GIFs, not video.")
 
 
+def _video_positioned_blur_filter(
+    radius: float,
+    *,
+    blur_type: str,
+    position: str,
+    shape: str,
+) -> str:
+    """Blur a bounded shape at a requested video position."""
+    shape = shape.casefold().strip()
+    if shape not in {"square", "rectangle", "circle", "triangle"}:
+        raise ValueError("Blur shape must be square, circle, or triangle.")
+    if blur_type in {"gaussian", "gauss"}:
+        blur = f"gblur=sigma={radius:g}"
+    elif blur_type in {"box", "square"}:
+        blur = f"boxblur=luma_radius={radius:g}"
+    elif blur_type in {"motion", "horizontal"}:
+        blur = f"avgblur=sizeX={max(1, min(51, round(radius) * 2 + 1))}:sizeY=1"
+    else:
+        raise ValueError("Blur type must be gaussian, box, or motion.")
+
+    normalized = position.casefold().replace(" ", "")
+    region_width = "iw/3"
+    region_height = "ih/3"
+    named = {
+        "center": ("(iw-iw/3)/2", "(ih-ih/3)/2"),
+        "top-left": ("0", "0"),
+        "top": ("(iw-iw/3)/2", "0"),
+        "top-right": ("iw-iw/3", "0"),
+        "left": ("0", "(ih-ih/3)/2"),
+        "right": ("iw-iw/3", "(ih-ih/3)/2"),
+        "bottom-left": ("0", "ih-ih/3"),
+        "bottom": ("(iw-iw/3)/2", "ih-ih/3"),
+        "bottom-right": ("iw-iw/3", "ih-ih/3"),
+    }
+    if normalized in named:
+        x, y = named[normalized]
+    else:
+        parts = position.split(",", 1)
+        if len(parts) != 2:
+            raise ValueError(
+                "Blur position must be x,y coordinates or a named position."
+            )
+        try:
+            raw_x = float(parts[0].strip())
+            raw_y = float(parts[1].strip())
+        except ValueError as error:
+            raise ValueError("Blur position must be x,y coordinates.") from error
+        x = f"iw*{raw_x:g}-iw/6" if 0 <= raw_x <= 1 else f"{raw_x:g}-iw/6"
+        y = f"ih*{raw_y:g}-ih/6" if 0 <= raw_y <= 1 else f"{raw_y:g}-ih/6"
+
+    mask = ""
+    if shape == "circle":
+        expression = "lte(pow((X-W/2)/(W/2),2)+pow((Y-H/2)/(H/2),2),1)"
+        mask = f",geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if({expression},255,0)'"
+    elif shape == "triangle":
+        expression = "gte(Y,abs(2*X-W)*H/W)"
+        mask = f",geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if({expression},255,0)'"
+    overlay_x = x.replace("iw", "main_w").replace("ih", "main_h")
+    overlay_y = y.replace("iw", "main_w").replace("ih", "main_h")
+    return (
+        "split[blur_base][blur_source];"
+        f"[blur_source]{blur},crop={region_width}:{region_height}:{x}:{y},"
+        f"format=rgba{mask}[blur_region];"
+        f"[blur_base][blur_region]overlay=x={overlay_x}:y={overlay_y}:shortest=1"
+    )
+
+
 def _visual_effect_window(
     options: dict[str, Any],
     total_duration: float,
 ) -> tuple[float, float | None]:
     start = float(options.get("start", 0) or 0)
     stop = float(options.get("stop", 0) or 0)
-    if not 0 <= start <= MAX_MEDIA_DURATION:
-        raise ValueError(
-            f"Effect start must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
-        )
-    if not 0 <= stop <= MAX_MEDIA_DURATION:
-        raise ValueError(
-            f"Effect stop must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
-        )
+    media_limit = (
+        min(MAX_MEDIA_DURATION, total_duration)
+        if total_duration > 0
+        else MAX_MEDIA_DURATION
+    )
+    if not 0 <= start <= media_limit:
+        raise ValueError(f"Effect start must be between 0 and {media_limit:g} seconds.")
+    if not 0 <= stop <= media_limit:
+        raise ValueError(f"Effect stop must be between 0 and {media_limit:g} seconds.")
     end: float | None = stop or None
     if end is not None and end <= start:
         raise ValueError("Effect stop must be after its start time.")
@@ -2978,6 +3224,18 @@ def _render_video_overlay_sync(
 
         base_probe = _probe_path(input_path)
         second_probe = _probe_path(second_path)
+        if not base_is_image:
+            input_path = _repair_h264_color_metadata(
+                input_path,
+                directory,
+                name="input",
+            )
+        if not second_is_image:
+            second_path = _repair_h264_color_metadata(
+                second_path,
+                directory,
+                name="overlay",
+            )
         if not second_probe.has_video:
             raise ValueError("The overlay must contain an image, GIF, or video.")
         if base_is_image and not allow_image_base:
@@ -3057,7 +3315,12 @@ def _render_video_overlay_sync(
                 else f"gte(t,{start:g})"
             )
             filter_complex += f":enable='{enable}'"
-        filter_complex += "[v]"
+        # libx264 with yuv420p requires even output dimensions. Avatar images
+        # often arrive at an odd size (for example 435x435), so trim at most
+        # one pixel after the timed overlay filter is finalized. Keeping this
+        # as a separate filter also ensures a timed overlay's ``enable`` is
+        # applied to the overlay filter, not to ``scale``.
+        filter_complex += ",scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos[v]"
 
         command.extend(["-filter_complex", filter_complex, "-map", "[v]"])
         overlay_audio = bool(options.get("overlay_audio", True))
@@ -3104,6 +3367,10 @@ def _render_video_overlay_sync(
 def _render_video_visual(
     data: bytes, effect: str, options: dict[str, Any]
 ) -> EffectResult:
+    if effect in {"magik", "swirl", "gifmagik", "gifswirl"}:
+        raise ValueError(
+            "Magik and swirl only support still images, not videos or animated media."
+        )
     if effect == "overlay":
         overlay_data = options.get("overlay_data")
         if not isinstance(overlay_data, bytes):
@@ -3297,11 +3564,15 @@ def render_image_effect_sync(
             preserve_transparency=bool(options.get("preserve_transparency")),
         )
     except NotPillowMedia:
+        if effect in {"magik", "swirl", "gifmagik", "gifswirl"}:
+            raise ValueError(
+                "Magik and swirl only support still images, not videos or animated media."
+            )
         return _render_video_visual(data, effect, options)
 
-    if effect in {"gifmagik", "gifswirl"} and animated and sum(durations) > 30_000:
+    if effect in {"magik", "swirl", "gifmagik", "gifswirl"} and animated:
         raise ValueError(
-            "Animated magik and animated swirl only support GIFs up to 30 seconds."
+            "Magik and swirl only support still images, not videos or animated media."
         )
 
     if effect in {"removebars", "removecaption"}:
@@ -3462,6 +3733,8 @@ def render_image_effect_sync(
             shape=cast(Literal["cube", "pyramid"], effect),
             speed=float(options.get("speed", 1)),
             clockwise=bool(options.get("clockwise")),
+            axis=str(options.get("axis", "y")),
+            rotation=float(options.get("rotation", 0)),
         )
         return _save_frames(generated, generated_durations, filename=effect)
     raise ValueError("Unknown image effect.")
@@ -3584,26 +3857,33 @@ def _video_command_output(
     audio_filter: str | None = None,
     second_data: bytes | None = None,
     second_loop: bool = False,
+    additional_inputs: Sequence[tuple[bytes, bool]] | None = None,
     output_extension: str = "mp4",
     map_arguments: list[str] | None = None,
     shortest: bool = False,
     output_duration: float | None = None,
     video_crf: int = 22,
+    video_bitrate: int | None = None,
     video_preset: str = "fast",
     audio_bitrate: str = "128k",
+    copy_video: bool = False,
+    media_probe: MediaProbe | None = None,
 ) -> EffectResult:
     with tempfile.TemporaryDirectory(prefix="fishie-video-effect-") as directory:
         input_path = os.path.join(directory, "input.media")
         output_path = os.path.join(directory, f"output.{output_extension}")
         Path(input_path).write_bytes(input_data)
-        probe = _probe_path(input_path)
-        second_path = os.path.join(directory, "second.media")
+        probe = media_probe or _probe_path(input_path)
         command = ["ffmpeg", "-y", "-i", input_path]
+        extra_inputs = list(additional_inputs or ())
         if second_data is not None:
-            Path(second_path).write_bytes(second_data)
-            if second_loop:
+            extra_inputs.insert(0, (second_data, second_loop))
+        for index, (extra_data, should_loop) in enumerate(extra_inputs, start=1):
+            extra_path = os.path.join(directory, f"input-{index}.media")
+            Path(extra_path).write_bytes(extra_data)
+            if should_loop:
                 command.extend(["-stream_loop", "-1"])
-            command.extend(["-i", second_path])
+            command.extend(["-i", extra_path])
         if filter_complex:
             command.extend(["-filter_complex", filter_complex])
         if video_filter:
@@ -3619,25 +3899,38 @@ def _video_command_output(
 
         if output_extension == "mp4":
             if probe.has_video:
-                command.extend(
-                    [
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        video_preset,
-                        "-crf",
-                        str(video_crf),
-                        "-pix_fmt",
-                        "yuv420p",
-                    ]
-                )
-            if probe.has_audio or second_data is not None:
+                if copy_video:
+                    if video_filter:
+                        raise ValueError(
+                            "Video stream copying cannot be used with a video filter."
+                        )
+                    command.extend(["-c:v", "copy"])
+                else:
+                    command.extend(["-c:v", "libx264", "-preset", video_preset])
+                    if video_bitrate is not None:
+                        command.extend(
+                            [
+                                "-b:v",
+                                str(video_bitrate),
+                                "-maxrate",
+                                str(round(video_bitrate * 1.15)),
+                                "-bufsize",
+                                str(video_bitrate * 2),
+                            ]
+                        )
+                    else:
+                        command.extend(["-crf", str(video_crf)])
+                    command.extend(["-pix_fmt", "yuv420p"])
+            if probe.has_audio or extra_inputs:
                 command.extend(["-c:a", "aac", "-b:a", audio_bitrate])
             command.extend(["-movflags", "+faststart"])
         elif output_extension == "webm":
             if probe.has_video:
-                command.extend(["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0"])
-            if probe.has_audio or second_data is not None:
+                if video_bitrate is not None:
+                    command.extend(["-c:v", "libvpx-vp9", "-b:v", str(video_bitrate)])
+                else:
+                    command.extend(["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0"])
+            if probe.has_audio or extra_inputs:
                 command.extend(["-c:a", "libopus", "-b:a", "96k"])
         elif output_extension == "mp3":
             command.extend(["-vn", "-c:a", "libmp3lame", "-q:a", "2"])
@@ -3677,14 +3970,7 @@ def compress_media_to_size_sync(
     filename: str,
     max_bytes: int,
 ) -> EffectResult:
-    """Re-encode oversized video results until they fit an upload limit.
-
-    Effects are intentionally rendered at their normal quality first. This
-    fallback only runs when the finished file is too large, progressively
-    increasing CRF and then reducing the longest video edge. It preserves the
-    original container and audio whenever possible instead of silently
-    changing a video into a GIF or dropping its soundtrack.
-    """
+    """Fit an oversized video with a duration-based bitrate in at most two passes."""
     extension = Path(filename).suffix.casefold().lstrip(".")
     if max_bytes <= 0 or extension not in {"mp4", "webm"}:
         return EffectResult(data, filename, displayable=True)
@@ -3693,63 +3979,68 @@ def compress_media_to_size_sync(
     if not probe.has_video:
         return EffectResult(data, filename, displayable=True)
 
-    # Leave a small margin for Discord's multipart overhead and future changes
-    # to the upload path. The API limit itself applies to the file bytes, but
-    # targeting 98% prevents borderline results from being rejected.
-    target_bytes = max(1, round(max_bytes * 0.98))
-    attempts = (
-        (26, None),
-        (29, None),
-        (31, 1920),
-        (33, 1440),
-        (35, 1080),
-        (37, 720),
+    if probe.duration <= 0:
+        return EffectResult(data, filename, displayable=True)
+
+    # Reserve space for AAC/Opus, muxing overhead, and Discord's multipart
+    # boundary. Starting below the mathematical maximum makes one pass enough
+    # for most inputs rather than trying a sequence of full CRF encodes.
+    target_bytes = max(1, round(max_bytes * 0.96))
+    total_bitrate = target_bytes * 8 / probe.duration
+    audio_bitrate = (
+        min(96_000, max(24_000, round(total_bitrate * 0.15))) if probe.has_audio else 0
     )
-    current = EffectResult(data, filename, displayable=True)
-    for crf, max_dimension in attempts:
+    video_bitrate = max(24_000, round((total_bitrate - audio_bitrate) * 0.9))
+
+    def dimension_for_bitrate(bitrate: int) -> int | None:
+        if bitrate >= 2_500_000:
+            return None
+        if bitrate >= 1_200_000:
+            return 1080
+        if bitrate >= 700_000:
+            return 720
+        if bitrate >= 350_000:
+            return 480
+        return 360
+
+    original = EffectResult(data, filename, displayable=True)
+    current = original
+    smallest = original
+    for attempt in range(2):
+        max_dimension = dimension_for_bitrate(video_bitrate)
+        if attempt:
+            max_dimension = min(max_dimension or 1440, 720)
         dimensions = _fit_video_dimensions(probe, max_dimension)
         video_filter = (
             f"scale={dimensions[0]}:{dimensions[1]}:flags=lanczos"
             if dimensions is not None
             else None
         )
+        output_extension = extension if attempt == 0 else "mp4"
         try:
             current = _video_command_output(
                 data,
                 filename=Path(filename).stem,
                 video_filter=video_filter,
-                output_extension=extension,
-                video_crf=crf,
+                output_extension=output_extension,
+                video_bitrate=video_bitrate,
                 video_preset="fast",
-                audio_bitrate="96k",
+                audio_bitrate=f"{max(24, audio_bitrate // 1_000)}k",
+                media_probe=probe,
             )
         except ValueError:
             continue
+        if len(current.data) < len(smallest.data):
+            smallest = current
         if len(current.data) <= target_bytes:
             return current
-
-    # Discord clients have much broader playback support for H.264/AAC MP4
-    # than for VP9/WebM. Make the final rescue attempt a compatible MP4 even
-    # when the original result used a WebM container.
-    dimensions = _fit_video_dimensions(probe, 720)
-    video_filter = (
-        f"scale={dimensions[0]}:{dimensions[1]}:flags=lanczos"
-        if dimensions is not None
-        else None
-    )
-    try:
-        current = _video_command_output(
-            data,
-            filename=Path(filename).stem,
-            video_filter=video_filter,
-            output_extension="mp4",
-            video_crf=37,
-            video_preset="fast",
-            audio_bitrate="96k",
+        # Correct the second target using the actual first-pass result while
+        # leaving another safety margin for muxing variance.
+        video_bitrate = max(
+            64_000,
+            round(video_bitrate * target_bytes / len(current.data) * 0.9),
         )
-    except ValueError:
-        pass
-    return current
+    return smallest
 
 
 compress_media_to_size = to_thread(compress_media_to_size_sync)
@@ -4358,17 +4649,22 @@ def _audio_effect_window(
     start = float(options.get("start", 0) or 0)
     stop = float(options.get("stop", 0) or 0)
     duration = float(options.get("duration", 0) or 0)
-    if not 0 <= start <= MAX_MEDIA_DURATION:
+    media_limit = (
+        min(MAX_MEDIA_DURATION, total_duration)
+        if total_duration > 0
+        else MAX_MEDIA_DURATION
+    )
+    if not 0 <= start <= media_limit:
         raise ValueError(
-            f"Audio effect start must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+            f"Audio effect start must be between 0 and {media_limit:g} seconds."
         )
-    if not 0 <= stop <= MAX_MEDIA_DURATION:
+    if not 0 <= stop <= media_limit:
         raise ValueError(
-            f"Audio effect stop must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+            f"Audio effect stop must be between 0 and {media_limit:g} seconds."
         )
-    if not 0 <= duration <= MAX_MEDIA_DURATION:
+    if not 0 <= duration <= media_limit:
         raise ValueError(
-            f"Audio effect duration must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+            f"Audio effect duration must be between 0 and {media_limit:g} seconds."
         )
     end: float | None = start + duration if duration > 0 else stop or None
     if end is not None and end <= start:
@@ -4557,6 +4853,7 @@ def _audio_overlay_output(
         )
         audio_graph = f"{overlay_chain};[overlay]{duration_chain}[a]"
     map_arguments: list[str] = []
+    extension = 0.0
     if probe.has_video:
         extension = max(0.0, target_duration - probe.duration)
         if extension > 0.001:
@@ -4575,7 +4872,176 @@ def _audio_overlay_output(
         filter_complex=audio_graph,
         map_arguments=map_arguments,
         output_extension="mp4" if probe.has_video else "mp3",
+        copy_video=(
+            probe.has_video
+            and extension <= 0.001
+            and probe.can_copy_video_to_discord_mp4
+        ),
+        media_probe=probe,
     )
+
+
+SoundEffectBatchItem = tuple[bytes, float, dict[str, Any]]
+
+
+def render_sound_effect_batch_sync(
+    input_data: bytes,
+    sound_effects: Sequence[SoundEffectBatchItem],
+    *,
+    media_probe: MediaProbe | None = None,
+) -> EffectResult:
+    """Mix bundled sound effects in one FFmpeg pass.
+
+    The video stream is copied when it is already Discord-compatible H.264.
+    Only audio is decoded and encoded in that common case.
+    """
+
+    if not sound_effects:
+        raise ValueError("At least one sound effect is required.")
+    probe = media_probe or probe_media_sync(input_data)
+    prepared: list[tuple[bytes, bool, str]] = []
+    target_duration = probe.duration
+    generator = random.SystemRandom()
+
+    for index, (effect_data, catalog_duration, raw_options) in enumerate(
+        sound_effects,
+        start=1,
+    ):
+        options = raw_options.copy()
+        at = float(options.get("at", 0) or 0)
+        source_start = float(options.get("source_start", 0) or 0)
+        source_stop = float(options.get("source_stop", 0) or 0)
+        duration = float(options.get("duration", 0) or 0)
+        volume = float(options.get("volume", 1) or 0)
+        pitch = float(options.get("pitch", 0) or 0)
+        speed = float(options.get("speed", 1) or 0)
+        loop = bool(options.get("loop"))
+        fade_in = float(options.get("fade_in", 0) or 0)
+        fade_out = float(options.get("fade_out", 0) or 0)
+        if bool(options.get("random_time")):
+            available = max(0.0, probe.duration - min(catalog_duration, 10))
+            at = generator.uniform(0, available) if available else 0
+        if not 0 <= at <= MAX_MEDIA_DURATION:
+            raise ValueError(
+                f"Overlay time must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+            )
+        if not 0 <= source_start <= MAX_MEDIA_DURATION:
+            raise ValueError(
+                "Audio source start must be between 0 and "
+                f"{MAX_MEDIA_DURATION:g} seconds."
+            )
+        if not 0 <= source_stop <= MAX_MEDIA_DURATION:
+            raise ValueError(
+                "Audio source stop must be between 0 and "
+                f"{MAX_MEDIA_DURATION:g} seconds."
+            )
+        if not 0 <= duration <= MAX_MEDIA_DURATION:
+            raise ValueError(
+                f"Audio duration must be between 0 and {MAX_MEDIA_DURATION:g} seconds."
+            )
+        if not 0 <= volume <= 5:
+            raise ValueError("Audio overlay volume must be between 0 and 5.")
+        if not -12 <= pitch <= 12:
+            raise ValueError("Audio overlay pitch must be between -12 and 12.")
+        if not 0.25 <= speed <= 4:
+            raise ValueError("Audio overlay speed must be between 0.25 and 4.")
+        if not 0 <= fade_in <= 30 or not 0 <= fade_out <= 30:
+            raise ValueError("Sound-effect fades must be between 0 and 30 seconds.")
+
+        source_end = source_start + duration if duration > 0 else source_stop or None
+        if source_end is not None and source_end <= source_start:
+            raise ValueError("Audio source stop must be after its start time.")
+        source_duration = max(0.0, catalog_duration - source_start)
+        if source_end is not None:
+            source_duration = min(source_duration, source_end - source_start)
+        remaining_duration = max(0.0, probe.duration - at)
+        overlay_duration = remaining_duration if loop else source_duration / speed
+        item_target = (
+            probe.duration
+            if probe.duration > 0
+            else min(MAX_MEDIA_DURATION, at + overlay_duration)
+        )
+        target_duration = max(target_duration, item_target)
+        effective_duration = max(0.0, min(overlay_duration, max(0.0, item_target - at)))
+
+        trim = f"atrim=start={source_start:g}"
+        if source_end is not None:
+            trim += f":end={source_end:g}"
+        chain = f"[{index}:a]{trim},asetpts=PTS-STARTPTS"
+        if pitch:
+            ratio = 2 ** (pitch / 12)
+            chain += (
+                f",asetrate=44100*{ratio:g},aresample=44100," f"atempo={1 / ratio:g}"
+            )
+        if speed != 1:
+            chain += f",{_atempo_chain(speed)}"
+        if effective_duration and (loop or effective_duration < overlay_duration):
+            chain += f",atrim=duration={effective_duration:g}"
+        if fade_in and effective_duration:
+            chain += f",afade=t=in:st=0:d={min(fade_in, effective_duration):g}"
+        if fade_out and effective_duration:
+            fade_duration = min(fade_out, effective_duration)
+            chain += (
+                f",afade=t=out:st={max(0.0, effective_duration - fade_duration):g}:"
+                f"d={fade_duration:g}"
+            )
+        chain += f",volume={volume:g},adelay={round(at * 1000)}:all=1[overlay{index}]"
+        prepared.append((effect_data, loop, chain))
+
+    target_duration = min(MAX_MEDIA_DURATION, target_duration)
+    graph = [item[2] for item in prepared]
+    mix_inputs: list[str] = []
+    if probe.has_audio:
+        graph.append(
+            f"[0:a]apad=whole_dur={target_duration:g},"
+            f"atrim=duration={target_duration:g}[base]"
+        )
+        mix_inputs.append("[base]")
+    mix_inputs.extend(f"[overlay{index}]" for index in range(1, len(prepared) + 1))
+    if len(mix_inputs) == 1:
+        graph.append(
+            f"{mix_inputs[0]}apad=whole_dur={target_duration:g},"
+            f"atrim=duration={target_duration:g},"
+            "alimiter=limit=0.95:level=0:latency=1[a]"
+        )
+    else:
+        graph.append(
+            f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:"
+            "duration=longest:dropout_transition=0:normalize=0,"
+            "alimiter=limit=0.95:level=0:latency=1,"
+            f"apad=whole_dur={target_duration:g},"
+            f"atrim=duration={target_duration:g}[a]"
+        )
+
+    map_arguments: list[str] = []
+    extension = 0.0
+    if probe.has_video:
+        extension = max(0.0, target_duration - probe.duration)
+        if extension > 0.001:
+            graph.append(
+                f"[0:v]tpad=stop_mode=clone:stop_duration={extension:g}[video]"
+            )
+            map_arguments.extend(["-map", "[video]"])
+        else:
+            map_arguments.extend(["-map", "0:v:0"])
+    map_arguments.extend(["-map", "[a]"])
+    return _video_command_output(
+        input_data,
+        filename="audio-overlay",
+        additional_inputs=[(data, loop) for data, loop, _ in prepared],
+        filter_complex=";".join(graph),
+        map_arguments=map_arguments,
+        output_extension="mp4" if probe.has_video else "mp3",
+        copy_video=(
+            probe.has_video
+            and extension <= 0.001
+            and probe.can_copy_video_to_discord_mp4
+        ),
+        media_probe=probe,
+    )
+
+
+render_sound_effect_batch = to_thread(render_sound_effect_batch_sync)
 
 
 AdhdMode = Literal["fast", "slow", "normal", "lowered", "nightcore"]
@@ -4704,13 +5170,13 @@ def _detect_platform_outro(path: str, duration: float, platform: str) -> float:
         "pipe:1",
     ]
     try:
-        result = subprocess.run(
+        result = run_media_command(
             command,
-            capture_output=True,
             timeout=15,
-            check=True,
+            timeout_message="Could not inspect that video for an outro.",
+            failure_prefix="Could not inspect that video for an outro",
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+    except ValueError as error:
         raise ValueError("Could not inspect that video for an outro.") from error
 
     frame_size = 96 * 96 * 3
@@ -4886,11 +5352,136 @@ def _reverse_video_chunked(input_data: bytes, probe: MediaProbe) -> EffectResult
         return EffectResult(Path(output_path).read_bytes(), "reverse.mp4")
 
 
+def _reverse_video_window(
+    input_data: bytes,
+    probe: MediaProbe,
+    *,
+    start: float,
+    end: float | None,
+) -> EffectResult:
+    """Reverse only a selected video window while preserving the rest."""
+    if start <= 0 and (end is None or end >= probe.duration - 0.001):
+        return _reverse_video_chunked(input_data, probe)
+    if probe.duration <= 0:
+        raise ValueError("Could not determine the video duration for reversing.")
+
+    effective_end = min(probe.duration, end if end is not None else probe.duration)
+    segments: list[tuple[float, float, bool]] = []
+    if start > 0:
+        segments.append((0.0, start, False))
+    segments.append((start, effective_end, True))
+    if effective_end < probe.duration - 0.001:
+        segments.append((effective_end, probe.duration, False))
+
+    with tempfile.TemporaryDirectory(
+        prefix="fishie-video-reverse-window-"
+    ) as directory:
+        input_path = os.path.join(directory, "input.media")
+        output_path = os.path.join(directory, "reverse.mp4")
+        Path(input_path).write_bytes(input_data)
+        filters: list[str] = []
+        video_labels: list[str] = []
+        audio_labels: list[str] = []
+        for index, (segment_start, segment_end, reverse) in enumerate(segments):
+            video_chain = (
+                f"[0:v]trim=start={segment_start:g}:end={segment_end:g},"
+                "setpts=PTS-STARTPTS"
+            )
+            if reverse:
+                video_chain += ",reverse"
+            video_label = f"[v{index}]"
+            filters.append(f"{video_chain}{video_label}")
+            video_labels.append(video_label)
+            if probe.has_audio:
+                audio_chain = (
+                    f"[0:a]atrim=start={segment_start:g}:end={segment_end:g},"
+                    "asetpts=PTS-STARTPTS"
+                )
+                if reverse:
+                    audio_chain += ",areverse"
+                audio_label = f"[a{index}]"
+                filters.append(f"{audio_chain}{audio_label}")
+                audio_labels.append(audio_label)
+        filters.append(
+            f"{''.join(video_labels)}concat=n={len(video_labels)}:v=1:a=0[vout]"
+        )
+        if probe.has_audio:
+            filters.append(
+                f"{''.join(audio_labels)}concat=n={len(audio_labels)}:v=0:a=1[aout]"
+            )
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            input_path,
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[vout]",
+        ]
+        if probe.has_audio:
+            command.extend(["-map", "[aout]"])
+        command.extend(
+            [
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "23",
+                "-pix_fmt",
+                "yuv420p",
+            ]
+        )
+        if probe.has_audio:
+            command.extend(["-c:a", "aac", "-b:a", "128k"])
+        else:
+            command.append("-an")
+        command.extend(["-movflags", "+faststart", output_path])
+        _run(command)
+        return EffectResult(Path(output_path).read_bytes(), "reverse.mp4")
+
+
+def _reverse_image_window(
+    frames: list[Image.Image],
+    durations: list[int],
+    *,
+    start: float,
+    end: float | None,
+) -> tuple[list[Image.Image], list[int]]:
+    """Reverse the frames overlapping a selected time window."""
+    total_duration = sum(durations) / 1_000
+    effective_end = end if end is not None else total_duration
+    offsets: list[tuple[float, float]] = []
+    elapsed = 0.0
+    for duration in durations:
+        next_elapsed = elapsed + duration / 1_000
+        offsets.append((elapsed, next_elapsed))
+        elapsed = next_elapsed
+    selected = [
+        index
+        for index, (frame_start, frame_end) in enumerate(offsets)
+        if frame_end > start and frame_start < effective_end
+    ]
+    if not selected:
+        raise ValueError("The reverse window does not contain any frames.")
+    selected_set = set(selected)
+    reversed_indexes = iter(reversed(selected))
+    output_frames: list[Image.Image] = []
+    for index, frame in enumerate(frames):
+        output_frames.append(
+            frames[next(reversed_indexes)] if index in selected_set else frame
+        )
+    output_durations = [durations[index] for index in range(len(frames))]
+    return output_frames, output_durations
+
+
 def render_video_effect_sync(
     input_data: bytes,
     effect: str,
     *,
     second_data: bytes | None = None,
+    media_probe: MediaProbe | None = None,
     **options: Any,
 ) -> EffectResult:
     if effect == "reverse":
@@ -4900,9 +5491,19 @@ def render_video_effect_sync(
             pass
         else:
             if animated:
+                start, end = _audio_effect_window(
+                    options,
+                    sum(image_durations) / 1_000,
+                )
+                reversed_frames, reversed_durations = _reverse_image_window(
+                    image_frames,
+                    image_durations,
+                    start=start,
+                    end=end,
+                )
                 return _save_frames(
-                    list(reversed(image_frames)),
-                    list(reversed(image_durations)),
+                    reversed_frames,
+                    reversed_durations,
                     filename="reverse",
                 )
             raise ValueError(
@@ -4910,10 +5511,18 @@ def render_video_effect_sync(
                 "A still image has no frames to reverse."
             )
 
-    with tempfile.TemporaryDirectory(prefix="fishie-video-probe-") as directory:
-        path = os.path.join(directory, "input.media")
-        Path(path).write_bytes(input_data)
-        probe = _probe_path(path)
+    if media_probe is None:
+        with tempfile.TemporaryDirectory(prefix="fishie-video-probe-") as directory:
+            path = os.path.join(directory, "input.media")
+            Path(path).write_bytes(input_data)
+            probe = _probe_path(path)
+    else:
+        probe = media_probe
+
+    if effect in {"magik", "swirl", "gifmagik", "gifswirl"}:
+        raise ValueError(
+            "Magik and swirl only support still images, not videos or animated media."
+        )
 
     if effect == "adhd":
         return _adhd_output(input_data, probe)
@@ -4924,12 +5533,19 @@ def render_video_effect_sync(
 
     if effect == "reverse":
         if probe.has_video:
-            return _reverse_video_chunked(input_data, probe)
-        return _video_command_output(
+            start, end = _audio_effect_window(options, probe.duration)
+            return _reverse_video_window(
+                input_data,
+                probe,
+                start=start,
+                end=end,
+            )
+        return _timed_audio_output(
             input_data,
+            probe,
             filename="reverse",
             audio_filter="areverse",
-            output_extension="mp3",
+            options=options,
         )
 
     if effect == "overlay":
@@ -5165,17 +5781,26 @@ render_video_effect = to_thread(render_video_effect_sync)
 
 def convert_media_sync(data: bytes, output_format: str, index: int = 1) -> EffectResult:
     output_format = output_format.casefold()
-    if output_format not in {"mp4", "webm", "gif", "mp3", "wav", "ogg"}:
-        raise ValueError("Format must be mp4, webm, gif, mp3, wav, or ogg.")
+    if output_format not in {
+        "mp4",
+        "mov",
+        "webm",
+        "gif",
+        "mp3",
+        "wav",
+        "ogg",
+        "opus",
+    }:
+        raise ValueError("Format must be mp4, mov, webm, gif, mp3, wav, ogg, or opus.")
     with tempfile.TemporaryDirectory(prefix="fishie-convert-") as directory:
         input_path = os.path.join(directory, "input.media")
         output_path = os.path.join(directory, f"converted.{output_format}")
         Path(input_path).write_bytes(data)
         probe = _probe_path(input_path)
         command = ["ffmpeg", "-y", "-i", input_path]
-        if output_format == "mp4":
+        if output_format in {"mp4", "mov"}:
             if not probe.has_video:
-                raise ValueError("MP4 conversion requires video.")
+                raise ValueError(f"{output_format.upper()} conversion requires video.")
             command.extend(
                 [
                     "-c:v",
@@ -5231,10 +5856,14 @@ def convert_media_sync(data: bytes, output_format: str, index: int = 1) -> Effec
             if not probe.has_audio:
                 raise ValueError("WAV conversion requires audio.")
             command.extend(["-vn", "-c:a", "pcm_s16le"])
-        else:
+        elif output_format == "ogg":
             if not probe.has_audio:
                 raise ValueError("OGG conversion requires audio.")
             command.extend(["-vn", "-c:a", "libvorbis", "-q:a", "5"])
+        else:
+            if not probe.has_audio:
+                raise ValueError("Opus conversion requires audio.")
+            command.extend(["-vn", "-c:a", "libopus", "-b:a", "128k"])
         command.append(output_path)
         _run(command)
         return EffectResult(

@@ -137,12 +137,14 @@ def test_spin3d_flags_are_removed_from_media_argument() -> None:
 
 
 def test_globe_flags_are_removed_from_media_argument() -> None:
-    media, speed, clockwise = _parse_globe_input(
+    media, speed, axis, rotation, clockwise = _parse_globe_input(
         "https://example.com/image.png -speed 2 -clockwise"
     )
 
     assert media == "https://example.com/image.png"
     assert speed == 2
+    assert axis == "y"
+    assert rotation == 0
     assert clockwise is True
 
 

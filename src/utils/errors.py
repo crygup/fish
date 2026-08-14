@@ -27,7 +27,11 @@ class InvalidWebsite(DownloadError):
         super().__init__(message, *args)
 
 
-ignored_errors = commands.NotOwner
+class TrackingConsentRequired(commands.CheckFailure):
+    """Internal stop used after the app-command consent prompt is sent."""
+
+
+ignored_errors = (commands.NotOwner, TrackingConsentRequired)
 valid_errors = (
     commands.BadArgument,
     InvalidWebsite,

@@ -599,7 +599,7 @@ class MediaConverter(commands.Converter[str]):
                     getattr(replied, "author", None), "display_avatar", None
                 )
                 avatar_url = getattr(display_avatar, "url", None)
-                if self._is_media_url(avatar_url):
+                if isinstance(avatar_url, str) and self._is_media_url(avatar_url):
                     return avatar_url
         # 2.5. scan recent messages for media
         if include_message_media and not argument:

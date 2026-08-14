@@ -12,6 +12,7 @@ from .paginator import *
 from .regexes import *
 from .temp_media import *
 from .time import *
+from .translate import *
 from .types import *
 from .vars import *
 from .views import *

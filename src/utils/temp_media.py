@@ -58,16 +58,22 @@ def _config_value(bot: Fishie, key: str) -> str:
     return "https://api.crygup.com/media"
 
 
-def _upload_urls(public_url: str, *, owner_override: bool) -> tuple[str, ...]:
-    """Return upload endpoints, preferring the local origin for owner uploads."""
-    if not owner_override:
-        return (public_url,)
+def _upload_urls(public_url: str) -> tuple[str, ...]:
+    """Return upload endpoints, preferring the local origin when available.
 
+    Cloudflare limits request bodies on the public API route to a much smaller
+    size than Fishie's temporary-media service.  Uploading through the local
+    origin avoids that proxy limit for normal downloads, while the public URL
+    remains a fallback for deployments where the media service is on another
+    host.  Owner uploads use the same route, but still select the owner token
+    and the larger server-side limit in ``upload_temporary_media``.
+    """
     internal_url = os.getenv(
         # The /media/ prefix belongs to the public Nginx route.  The media
         # API listens directly on port 8003 and exposes /uploads and /files
         # at its root, so using /media here would request /media/uploads and
-        # never reach the upload handler.
+        # never reach the upload handler.  The default is the host-local
+        # origin used by the production Docker deployment.
         "FISHIE_TEMP_MEDIA_INTERNAL_URL",
         "http://127.0.0.1:8003",
     ).strip()
@@ -191,7 +197,7 @@ async def upload_temporary_media(
         headers["X-Ignore-Size-Limit"] = "1"
     timeout = aiohttp.ClientTimeout(total=TEMP_MEDIA_TIMEOUT)
     last_error: TemporaryMediaError | None = None
-    upload_urls = _upload_urls(public_url, owner_override=ignore_size_limit)
+    upload_urls = _upload_urls(public_url)
     for upload_url in upload_urls:
         if payload_kind == "bytes":
             payload: bytes | AsyncIterator[bytes] = data  # type: ignore[assignment]
