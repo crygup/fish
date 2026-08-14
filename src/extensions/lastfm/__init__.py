@@ -164,7 +164,7 @@ class Lastfm(Top, Charts, Topster):
         session_key = decrypt_credential(row["lastfm_session_key"]) if row else None
         if not username:
             raise commands.BadArgument(
-                "Connect your Last.fm account first with `fish link lastfm`."
+                "Connect your Last.fm account first with `fish accounts`."
             )
         if not session_key:
             raise commands.BadArgument(
@@ -319,7 +319,6 @@ class Lastfm(Top, Charts, Topster):
             duration_millis = _lastfm_stat(t or {}, "duration")
             if not duration_millis:
                 duration_millis = _lastfm_stat(lt, "duration")
-            duration = format_millis(duration_millis) if duration_millis else "0:00"
             loved_value = t.get("userloved") if isinstance(t, dict) else None
             is_loved = str(loved_value).casefold() in {"1", "true", "yes"}
 
@@ -341,6 +340,9 @@ class Lastfm(Top, Charts, Topster):
                 f"-# {discord.utils.escape_markdown(user.display_name)} "
                 f"{author_name}"
             )
+            footer = f"{track_plays:,} track plays"
+            if duration_millis:
+                footer += f" · 🕑 {format_millis(duration_millis)}"
             view = LastfmInfoView(
                 ctx,
                 track_name,
@@ -349,7 +351,7 @@ class Lastfm(Top, Charts, Topster):
                 "\n".join(detail_lines),
                 image_url=thumbnail_url,
                 url=track_url,
-                footer=f"{track_plays:,} track plays · 🕑 {duration}",
+                footer=footer,
                 title_prefix="##",
                 title_lead=status_line,
                 title_suffix=" ❤️" if is_loved else "",
@@ -370,6 +372,22 @@ class Lastfm(Top, Charts, Topster):
             lines = [f"{ctx.author.display_name} has `{total:,}` plays."]
 
             artist_name = artist.strip() if artist and artist.strip() else None
+            if not artist_name:
+                recent_response = await self.bot.lfm_get(
+                    {
+                        "method": "user.getrecenttracks",
+                        "user": lfm_user,
+                        "limit": 1,
+                    }
+                )
+                recent_tracks = recent_response.get("recenttracks", {}).get("track", [])
+                if isinstance(recent_tracks, dict):
+                    recent_tracks = [recent_tracks]
+                if recent_tracks and isinstance(recent_tracks[0], dict):
+                    artist_name = _lastfm_value(
+                        recent_tracks[0].get("artist"), "#text", "name"
+                    )
+
             if artist_name:
                 artist_response = await self.bot.lfm_get(
                     {
@@ -379,35 +397,62 @@ class Lastfm(Top, Charts, Topster):
                     }
                 )
                 artist_data = artist_response.get("artist", {})
+                if not isinstance(artist_data, dict):
+                    artist_data = {}
                 artist_plays = _lastfm_stat(
                     artist_data.get("stats", {}), "userplaycount"
                 )
                 display_artist = str(artist_data.get("name") or artist_name)
-                lines.append(f"-# {artist_plays:,} {display_artist} plays.")
-            else:
-                top_response = await self.bot.lfm_get(
-                    {
-                        "method": "user.gettopartists",
-                        "user": lfm_user,
-                        "limit": 1,
-                        "period": "overall",
-                    }
+                lines.append(
+                    f"-# *{artist_plays:,} "
+                    f"{discord.utils.escape_markdown(display_artist)} plays.*"
                 )
-                top_artists = top_response.get("topartists", {}).get("artist", [])
-                if isinstance(top_artists, dict):
-                    top_artists = [top_artists]
-                if top_artists:
-                    top_artist = top_artists[0]
-                    lines.append(
-                        f"-# {_lastfm_stat(top_artist, 'playcount'):,} "
-                        f"{top_artist.get('name', 'Top artist')} plays."
-                    )
             await ctx.send(
                 "\n".join(lines), allowed_mentions=discord.AllowedMentions.none()
             )
 
     def _linked_username(self, user: discord.User | discord.Member) -> str | None:
         return self.bot.db_cache.lastfm.get(user.id)
+
+    async def _send_entity_plays(
+        self,
+        ctx: Context,
+        mode: str,
+        query: str | None,
+    ) -> None:
+        username = self._linked_username(ctx.author)
+        if not username:
+            raise commands.BadArgument(
+                "Connect your Last.fm account first to use this command."
+            )
+
+        if not query or not query.strip():
+            if mode == "track":
+                artist, title = await self._lastfm_current_track(username)
+                query = f"{artist} - {title}"
+            elif mode == "album":
+                artist, album = await self._lastfm_current_album(username)
+                query = f"{artist} - {album}"
+            else:
+                query, _ = await self._lastfm_current_track(username)
+
+        item, name = await self._entity_response(mode, query, username=username)
+        if mode == "artist":
+            stats = item.get("stats")
+            plays = _lastfm_stat(
+                stats if isinstance(stats, dict) else {}, "userplaycount"
+            )
+            title = str(item.get("name") or name)
+        else:
+            plays = _lastfm_stat(item, "userplaycount")
+            title = str(item.get("name") or item.get("title") or name)
+        item_url = str(item.get("url") or "https://www.last.fm")
+        linked_title = _lastfm_link({"name": title, "url": item_url}, "name", "title")
+        await ctx.send(
+            f"**{discord.utils.escape_markdown(username)}** has `{plays:,}` "
+            f"{mode} plays for {linked_title}.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def _entity_response(
         self, mode: str, query: str, *, artist: str | None = None, username: str | None
@@ -743,7 +788,7 @@ class Lastfm(Top, Charts, Topster):
         )
         await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
 
-    @commands.hybrid_command(name="track")
+    @commands.hybrid_command(name="track", aliases=("trackinfo",))
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.describe(
@@ -762,7 +807,7 @@ class Lastfm(Top, Charts, Topster):
                 query = f"{artist} - {title}"
             await self._send_entity(ctx, "track", query)
 
-    @commands.hybrid_command(name="artist")
+    @commands.hybrid_command(name="artist", aliases=("artistinfo",))
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.describe(query="Artist name. Leave blank for your current artist.")
@@ -778,7 +823,7 @@ class Lastfm(Top, Charts, Topster):
                 query, _ = await self._lastfm_current_track(username)
             await self._send_entity(ctx, "artist", query)
 
-    @commands.hybrid_command(name="album")
+    @commands.hybrid_command(name="album", aliases=("albuminfo",))
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.describe(
@@ -796,6 +841,27 @@ class Lastfm(Top, Charts, Topster):
                 artist, album = await self._lastfm_current_album(username)
                 query = f"{artist} - {album}"
             await self._send_entity(ctx, "album", query)
+
+    @commands.command(name="trackplays", aliases=("trackplaycount",))
+    @lastfm_command()
+    async def trackplays(self, ctx: Context, *, query: str | None = None) -> None:
+        """Show your Last.fm plays for a track, defaulting to your current track."""
+        async with ctx.typing():
+            await self._send_entity_plays(ctx, "track", query)
+
+    @commands.command(name="albumplays", aliases=("albumplaycount",))
+    @lastfm_command()
+    async def albumplays(self, ctx: Context, *, query: str | None = None) -> None:
+        """Show your Last.fm plays for an album, defaulting to your current album."""
+        async with ctx.typing():
+            await self._send_entity_plays(ctx, "album", query)
+
+    @commands.command(name="artistplays", aliases=("artistplaycount",))
+    @lastfm_command()
+    async def artistplays(self, ctx: Context, *, query: str | None = None) -> None:
+        """Show your Last.fm plays for an artist, defaulting to your current artist."""
+        async with ctx.typing():
+            await self._send_entity_plays(ctx, "artist", query)
 
     @commands.hybrid_command(name="love", aliases=("loved",))
     @app_commands.allowed_installs(guilds=True, users=True)

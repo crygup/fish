@@ -13,8 +13,10 @@ class User(Cog):
     def _server_tag_values(
         user: discord.User,
     ) -> tuple[str | None, int | None, datetime | None, str | None]:
-        primary_guild = user.primary_guild
-        badge = primary_guild.badge
+        primary_guild = getattr(user, "primary_guild", None)
+        if primary_guild is None:
+            return None, None, None, None
+        badge = getattr(primary_guild, "badge", None)
         return (
             primary_guild.tag,
             primary_guild.id,

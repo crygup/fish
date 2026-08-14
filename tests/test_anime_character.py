@@ -31,6 +31,9 @@ from extensions.anime import (
     _favourite_media_entries,
     _media_description_parts,
     _media_enum_label,
+    _media_next_airing_text,
+    _media_status_description,
+    _media_status_label,
     _media_user_rating,
     _normalise_media_rating,
 )
@@ -131,10 +134,73 @@ def test_media_description_source_and_bullets_are_cleaned() -> None:
 
     description, source = _media_description_parts(value)
 
-    assert source == "Dark Horse"
+    assert source is None
     assert "Source:" not in description
     assert "\\-" not in description
-    assert "- Volumes 1-5" in description
+    assert "Volumes 1-5" not in description
+
+
+def test_media_description_notes_are_removed_without_trailing_content() -> None:
+    description, source = _media_description_parts(
+        "A short description.\n\nNotes:\n\n- First note.\n- Second note."
+    )
+
+    assert description == "A short description."
+    assert source is None
+
+
+def test_media_description_special_episode_appendix_is_removed() -> None:
+    description, source = _media_description_parts(
+        "A One Piece description.\n\n"
+        "*This includes the following special episodes:\n\n"
+        "- Chopperman to the Rescue! Protect the TV Station by the Shore! "
+        "(Episode 336)\n\n"
+        "- The Strongest Tag-Team! Luffy and Toriko's Hard Struggle! "
+        "(Episode 492)"
+    )
+
+    assert description == "A One Piece description."
+    assert source is None
+
+
+def test_media_description_source_variants_are_removed() -> None:
+    description, source = _media_description_parts(
+        "A description.\n\n**Description source:** Dark Horse"
+    )
+
+    assert description == "A description."
+    assert source is None
+
+
+def test_media_description_keeps_complete_text_until_discord_limit() -> None:
+    description, _ = _media_description_parts(
+        "Enter Monkey D. Luffy, a 17-year-old boy that defies your standard "
+        "definition of a pirate. Rather than the popular persona of a wicked, "
+        "hardened, toothless pirate who ransacks villages for fun, Luffy's reason "
+        "for being a pirate is one of pure wonder; the thought of an exciting "
+        "adventure and meeting new and intriguing people, along with finding One "
+        "Piece, are his reasons of becoming a pirate. Following in the footsteps "
+        "of his childhood hero, Luffy and his crew travel across the Grand Line, "
+        "experiencing crazy adventures, unveiling dark mysteries and battling "
+        "strong enemies, all in order to reach One Piece."
+    )
+
+    assert "intriguing people" in description
+    assert description.endswith("reach One Piece.")
+    assert not description.endswith("...")
+
+
+def test_description_preview_does_not_cut_an_anilist_link() -> None:
+    value = (
+        "A long description before the link. "
+        "[Alvida](https://anilist.co/character/88572) "
+        "The description continues after the link."
+    )
+
+    preview, truncated = _description_preview(value, max_length=65)
+
+    assert truncated is True
+    assert preview == "A long description before the link."
 
 
 def test_description_preview_stops_at_a_sentence_boundary() -> None:
@@ -155,6 +221,12 @@ def test_character_age_drops_anilist_trailing_dash() -> None:
 def test_media_enum_labels_use_title_case() -> None:
     assert _media_enum_label("RELEASING") == "Releasing"
     assert _media_enum_label("ONE_SHOT") == "One Shot"
+
+
+def test_media_planning_status_is_media_specific() -> None:
+    assert _media_status_label("PLANNING", "anime") == "Plan to watch"
+    assert _media_status_label("PLANNING", "manga") == "Plan to read"
+    assert _media_status_description("PLANNING", "manga") == "Plan to read this manga"
 
 
 def test_media_user_rating_uses_the_selected_score_format() -> None:
@@ -199,12 +271,13 @@ def test_media_rating_input_supports_decimal_scores_and_limits() -> None:
 def test_media_query_requests_authenticated_list_details() -> None:
     assert "isFavourite" in ANILIST_MEDIA_QUERY
     assert "mediaListEntry { id status progress score }" in ANILIST_MEDIA_QUERY
+    assert "nextAiringEpisode { airingAt episode }" in ANILIST_MEDIA_QUERY
     assert "mediaListOptions { scoreFormat }" in ANILIST_VIEWER_OPTIONS_QUERY
     assert "score: $score" not in ANILIST_SAVE_MEDIA_MUTATION
     assert "score: $score" in ANILIST_SAVE_RATING_MUTATION
 
 
-def test_media_view_displays_description_source_in_details() -> None:
+def test_media_view_omits_description_source_from_details() -> None:
     ctx = cast(
         Context,
         SimpleNamespace(bot=SimpleNamespace(embedcolor=discord.Colour.blurple())),
@@ -225,7 +298,47 @@ def test_media_view_displays_description_source_in_details() -> None:
     container = cast(discord.ui.Container, view.children[0])
     details = container.children[3]
     assert isinstance(details, discord.ui.TextDisplay)
-    assert "**Description source:** Dark Horse" in details.content
+    assert "Description source" not in details.content
+
+
+def test_media_editor_controls_are_toggled_outside_the_main_container() -> None:
+    ctx = cast(
+        Context,
+        SimpleNamespace(
+            author=SimpleNamespace(id=1),
+            bot=SimpleNamespace(embedcolor=discord.Colour.blurple()),
+        ),
+    )
+    view = MediaLookupView(
+        cast(Any, SimpleNamespace()),
+        ctx,
+        {
+            "id": 1,
+            "title": {"userPreferred": "Example"},
+            "mediaListEntry": {"status": "CURRENT", "progress": 1},
+        },
+        "token",
+        "anime",
+    )
+
+    container = cast(discord.ui.Container, view.children[0])
+    assert not any(isinstance(item, discord.ui.Select) for item in container.children)
+    navigation = cast(discord.ui.ActionRow, view.children[-1])
+    editor = next(
+        item
+        for item in navigation.children
+        if isinstance(item, discord.ui.Button) and item.label == "Editor"
+    )
+
+    view.editor_open = True
+    view._render()
+    container = cast(discord.ui.Container, view.children[0])
+    assert any(
+        isinstance(child, discord.ui.ActionRow)
+        and any(isinstance(item, discord.ui.Select) for item in child.children)
+        for child in container.children
+    )
+    assert editor.label == "Editor"
 
 
 def test_media_view_displays_release_and_authenticated_rating_details() -> None:
@@ -252,6 +365,8 @@ def test_media_view_displays_release_and_authenticated_rating_details() -> None:
         "token",
         "manga",
     )
+    view.editor_open = True
+    view._render()
     container = cast(discord.ui.Container, view.children[0])
     text = "\n".join(
         child.content
@@ -279,6 +394,92 @@ def test_media_view_displays_release_and_authenticated_rating_details() -> None:
     assert isinstance(container.children[list_status_index - 1], discord.ui.Separator)
 
 
+def test_manga_planning_status_uses_plan_to_read_label() -> None:
+    ctx = cast(
+        Context,
+        SimpleNamespace(
+            author=SimpleNamespace(id=1),
+            bot=SimpleNamespace(embedcolor=discord.Colour.blurple()),
+        ),
+    )
+    view = MediaLookupView(
+        cast(Any, SimpleNamespace()),
+        ctx,
+        {
+            "id": 30002,
+            "title": {"userPreferred": "Berserk"},
+            "mediaListEntry": {"status": "PLANNING", "progress": 0},
+        },
+        "token",
+        "manga",
+    )
+    view.editor_open = True
+    view._render()
+    container = cast(discord.ui.Container, view.children[0])
+    text = "\n".join(
+        child.content
+        for child in container.children
+        if isinstance(child, discord.ui.TextDisplay)
+    )
+    assert "**List status:** Plan to read" in text
+    select = next(
+        item
+        for child in container.children
+        if isinstance(child, discord.ui.ActionRow)
+        for item in child.children
+        if isinstance(item, discord.ui.Select)
+    )
+    planning = next(option for option in select.options if option.value == "PLANNING")
+    assert planning.label == "Plan to read"
+    assert planning.default is True
+
+
+def test_media_view_displays_next_episode_as_discord_timestamps() -> None:
+    airing_at = 1_800_000_000
+    assert (
+        _media_next_airing_text(
+            {"nextAiringEpisode": {"airingAt": airing_at, "episode": 7}}
+        )
+        == f"**Next episode:** Episode 7: <t:{airing_at}:R>"
+    )
+
+    ctx = cast(
+        Context,
+        SimpleNamespace(bot=SimpleNamespace(embedcolor=discord.Colour.blurple())),
+    )
+    view = MediaLookupView(
+        cast(Any, SimpleNamespace()),
+        ctx,
+        {
+            "id": 1,
+            "title": {"userPreferred": "Example Anime"},
+            "nextAiringEpisode": {"airingAt": airing_at, "episode": 7},
+        },
+        None,
+        "anime",
+    )
+    text = "\n".join(
+        child.content
+        for child in cast(discord.ui.Container, view.children[0]).children
+        if isinstance(child, discord.ui.TextDisplay)
+    )
+    assert f"<t:{airing_at}:R>" in text
+
+
+def test_releasing_anime_shows_aired_and_next_episode() -> None:
+    airing_at = 1_800_000_000
+    assert (
+        _media_next_airing_text(
+            {
+                "status": "RELEASING",
+                "episodes": 19,
+                "nextAiringEpisode": {"airingAt": airing_at, "episode": 12},
+            }
+        )
+        == f"**Episodes:** 11/19 (Episode 12 airs <t:{airing_at}:R>)"
+    )
+
+
 async def test_favourite_toggle_uses_anilist_mutation_and_updates_button() -> None:
     class Cog:
         async def _anilist_request(
@@ -303,6 +504,8 @@ async def test_favourite_toggle_uses_anilist_mutation_and_updates_button() -> No
         "isFavourite": True,
     }
     view = MediaLookupView(cast(Any, Cog()), ctx, media, "token", "anime")
+    view.editor_open = True
+    view._render()
     favourite_button = next(
         button for button in _view_buttons(view) if str(button.emoji) == "❤️"
     )
@@ -347,6 +550,8 @@ async def test_rating_button_opens_numeric_modal_with_remove_instructions() -> N
         "token",
         "anime",
     )
+    view.editor_open = True
+    view._render()
     rating_button = next(
         button for button in _view_buttons(view) if button.label == "4/10"
     )
@@ -403,6 +608,8 @@ async def test_smiley_rating_view_updates_score_and_has_remove_button() -> None:
         "_viewerScoreFormat": "POINT_3",
     }
     view = MediaLookupView(cast(Any, Cog()), ctx, media, "token", "anime")
+    view.editor_open = True
+    view._render()
     rating_button = next(
         button
         for button in _view_buttons(view)
@@ -604,6 +811,28 @@ def test_character_metadata_is_moved_out_of_broken_description_markdown() -> Non
     assert metadata["height"] == "174 cm"
     assert metadata["affiliation"] == "Straw Hat Pirates"
     assert metadata["bounty"] == "||500,000,000||"
+
+
+def test_spoiler_prefixed_character_metadata_is_moved_to_details() -> None:
+    description, metadata = _character_description_data(
+        "~!**True Devil Fruit:** Hito Hito no Mi Model: Nika "
+        "(Human-Human Fruit)!~\n\nA character description."
+    )
+
+    assert description == "A character description."
+    assert "True Devil Fruit" not in description
+    assert metadata["true devil fruit"] == (
+        "||Hito Hito no Mi Model: Nika (Human-Human Fruit)||"
+    )
+
+
+def test_trailing_spoiler_marker_is_preserved_for_character_metadata() -> None:
+    description, metadata = _character_description_data(
+        "**True Devil Fruit Type:** Mythical Zoan!~\n\nA character description."
+    )
+
+    assert description == "A character description."
+    assert metadata["true devil fruit type"] == "||Mythical Zoan||"
 
 
 def test_character_appearances_are_spoilered() -> None:

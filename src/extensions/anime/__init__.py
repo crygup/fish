@@ -52,12 +52,21 @@ CHARACTER_HEIGHT_RE = re.compile(
     r"(?im)^[ \t]*(?:\*\*|__)?height(?:\*\*|__)?[ \t]*:[ \t]*(.+?)[ \t]*(?=\n|$)"
 )
 CHARACTER_METADATA_RE = re.compile(
-    r"(?im)^[ \t]*(?P<marker>\*\*|__)(?P<label>[^*_\n:]+):(?P=marker)"
+    r"(?im)^[ \t]*(?P<spoiler>~!)?(?P<marker>\*\*|__)(?P<label>[^*_\n:]+):(?P=marker)"
     r"[ \t]*(?P<value>.*?)[ \t]*$"
 )
 MEDIA_DESCRIPTION_SOURCE_RE = re.compile(
-    r"(?im)^[ \t]*\(?[ \t]*source[ \t]*:[ \t]*"
+    r"(?im)^[ \t]*\(?[ \t]*(?:\*\*|__)?"
+    r"(?:description[ \t]+)?source(?:\*\*|__)?[ \t]*:[ \t]*"
     r"(?P<source>[^)\n]+?)[ \t]*\)?[ \t]*(?=\n|$)"
+)
+MEDIA_DESCRIPTION_NOTES_RE = re.compile(
+    r"(?ims)(?:^|\n)[ \t]*(?:#{1,6}[ \t]*)?"
+    r"(?:\*\*|__)?notes?(?:\*\*|__)?[ \t]*:[ \t]*.*$"
+)
+MEDIA_DESCRIPTION_SPECIAL_EPISODES_RE = re.compile(
+    r"(?ims)(?:^|\n)[ \t]*(?:[*_~!]+[ \t]*)?"
+    r"(?:this includes the following )?special episodes[ \t]*:[ \t]*.*$"
 )
 DESCRIPTION_PREVIEW_LIMIT = 650
 ANILIST_PROFILE_QUERY = """
@@ -126,6 +135,7 @@ query ($search: String!, $type: MediaType!) {
       chapters
       volumes
       duration
+      nextAiringEpisode { airingAt episode }
       season
       seasonYear
       averageScore
@@ -162,6 +172,7 @@ query ($id: Int!) {
     chapters
     volumes
     duration
+    nextAiringEpisode { airingAt episode }
     season
     seasonYear
     averageScore
@@ -389,36 +400,39 @@ def _clean_about(
     for index, item in enumerate(protected):
         text = text.replace(f"\x00{index}\x00", item)
     if len(text) > max_length:
-        text = text[: max_length - 3].rstrip() + "..."
-        if text.count("||") % 2:
-            text = text[: max_length - 5].rstrip() + "...||"
+        preview, _ = _description_preview(text, max_length=max_length - 3)
+        if preview.count("||") % 2:
+            preview, _ = _description_preview(text, max_length=max_length - 5)
+            text = preview.rstrip() + "...||"
+        else:
+            text = preview.rstrip() + "..."
     return text or fallback
 
 
 def _media_description_parts(value: str | None) -> tuple[str, str | None]:
-    """Clean a media description and extract its inline source attribution."""
+    """Clean a media description and remove notes/source attributions."""
 
     fallback = "No description provided."
     if not isinstance(value, str) or not value.strip():
         return fallback, None
     normalized = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
     normalized = html.unescape(re.sub(r"<[^>]+>", "", normalized)).strip()
+    special_episodes_match = MEDIA_DESCRIPTION_SPECIAL_EPISODES_RE.search(normalized)
+    if special_episodes_match:
+        normalized = normalized[: special_episodes_match.start()].rstrip()
+    notes_match = MEDIA_DESCRIPTION_NOTES_RE.search(normalized)
+    if notes_match:
+        normalized = normalized[: notes_match.start()].rstrip()
     source_match = MEDIA_DESCRIPTION_SOURCE_RE.search(normalized)
-    source = None
     if source_match:
-        source = (
-            _clean_about(
-                source_match.group("source"),
-                max_length=300,
-                fallback="",
-            )
-            or None
-        )
         normalized = (
             normalized[: source_match.start()] + normalized[source_match.end() :]
         )
     normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
-    return _clean_about(normalized, fallback=fallback), source
+    # Discord's TextDisplay limit is 4,000 characters.  Keep the complete
+    # cleaned description below that limit so the visual preview can be
+    # expanded without inheriting the shorter preview cutoff.
+    return _clean_about(normalized, max_length=4000, fallback=fallback), None
 
 
 def _description_preview(
@@ -453,9 +467,19 @@ def _description_preview(
         )
     ]
 
+    link_ranges = [
+        (match.start(), match.end())
+        for match in re.finditer(
+            r"\[[^\]\n]*\]\(https?://[^\s<>\)]+\)",
+            value,
+        )
+    ]
+
     def _safe_boundary(position: int) -> bool:
         preview = value[:position].rstrip()
-        return bool(preview) and preview.count("||") % 2 == 0
+        if not preview or preview.count("||") % 2:
+            return False
+        return not any(start < position < end for start, end in link_ranges)
 
     usable_headers = [
         position
@@ -481,18 +505,21 @@ def _description_preview(
             if usable:
                 position = usable[-1]
             else:
-                later = [
-                    position for position in boundaries if _safe_boundary(position)
+                whitespace = [
+                    match.start()
+                    for match in re.finditer(r"\s+", value[: max_length + 1])
+                    if 0 < match.start() <= max_length and _safe_boundary(match.start())
                 ]
-                position = later[0] if later else max_length
-                if position == max_length:
-                    whitespace = [
-                        match.start()
-                        for match in re.finditer(r"\s+", value[: max_length + 1])
-                        if match.start() > 0
-                    ]
-                    if whitespace:
-                        position = whitespace[-1]
+                if whitespace:
+                    position = whitespace[-1]
+                else:
+                    position = max_length
+                    containing_link = next(
+                        (start for start, end in link_ranges if start < position < end),
+                        None,
+                    )
+                    if containing_link is not None:
+                        position = containing_link
 
     preview = value[:position].rstrip()
     return preview, True
@@ -701,12 +728,22 @@ def _character_description_data(
 
     def _metadata_line(match: re.Match[str]) -> str:
         label = re.sub(r"\s+", " ", match.group("label")).strip().casefold()
+        raw_value = str(match.group("value")).strip()
+        trailing_spoiler = bool(re.search(r"!~\s*$", raw_value))
+        spoiler = bool(match.group("spoiler")) or trailing_spoiler
+        value_has_opening_spoiler = raw_value.startswith("~!")
+        if spoiler and not value_has_opening_spoiler:
+            # Some AniList bios wrap the whole metadata line in ~! ... !~
+            # rather than wrapping only the value.
+            raw_value = re.sub(r"\s*!~\s*$", "", raw_value).strip()
         detail = _clean_about(
-            match.group("value"),
+            raw_value,
             max_length=600,
             fallback="",
         )
         if detail:
+            if spoiler and not detail.startswith("||"):
+                detail = f"||{detail}||"
             metadata[label] = detail
         return ""
 
@@ -727,7 +764,7 @@ def _character_description_data(
     return (
         _clean_about(
             normalized,
-            max_length=1800,
+            max_length=4000,
             fallback=fallback,
         ),
         metadata,
@@ -780,10 +817,27 @@ def _character_name_values(value: object) -> list[str]:
 
 
 def _media_status_label(status: str | None, media_kind: str) -> str:
-    labels = {value: label for value, label, _ in ANILIST_LIST_STATUSES}
-    if status == "CURRENT":
-        return "Watching" if media_kind == "anime" else "Reading"
-    return labels.get(status or "", "Not on list")
+    labels = {
+        "CURRENT": "Watching" if media_kind == "anime" else "Reading",
+        "PLANNING": "Plan to watch" if media_kind == "anime" else "Plan to read",
+        "COMPLETED": "Completed",
+        "PAUSED": "On Hold",
+        "DROPPED": "Dropped",
+    }
+    return labels.get(str(status or "").upper(), "Not on list")
+
+
+def _media_status_description(status: str, media_kind: str) -> str:
+    activity = "watching" if media_kind == "anime" else "reading"
+    infinitive = "watch" if media_kind == "anime" else "read"
+    past_activity = "watching" if media_kind == "anime" else "reading"
+    return {
+        "CURRENT": f"Currently {activity} this {media_kind}",
+        "PLANNING": f"Plan to {infinitive} this {media_kind}",
+        "COMPLETED": f"Finished {past_activity} this {media_kind}",
+        "PAUSED": "Temporarily paused",
+        "DROPPED": f"Stopped {activity} this {media_kind}",
+    }.get(status, "Update the AniList list status")
 
 
 def _media_progress_text(media: dict[str, Any], media_kind: str) -> str:
@@ -795,6 +849,45 @@ def _media_progress_text(media: dict[str, Any], media_kind: str) -> str:
     if total:
         return f"**Progress:** {progress:,}/{int(total):,} {unit}"
     return f"**Progress:** {progress:,} {unit}"
+
+
+def _media_next_airing_text(media: dict[str, Any]) -> str | None:
+    airing = media.get("nextAiringEpisode")
+    if not isinstance(airing, dict):
+        return None
+    airing_at_value = airing.get("airingAt")
+    if airing_at_value is None:
+        return None
+    try:
+        airing_at = int(str(airing_at_value))
+    except (TypeError, ValueError):
+        return None
+    if airing_at <= 0:
+        return None
+    episode = airing.get("episode")
+    episode_number: int | None = None
+    if episode is not None:
+        try:
+            episode_number = int(str(episode))
+        except (TypeError, ValueError):
+            pass
+    if (
+        str(media.get("status") or "").upper() == "RELEASING"
+        and episode_number is not None
+    ):
+        total = media.get("episodes")
+        try:
+            total_episodes = int(total) if total else None
+        except (TypeError, ValueError):
+            total_episodes = None
+        aired = max(0, episode_number - 1)
+        episode_count = f"{aired}/{total_episodes}" if total_episodes else str(aired)
+        return (
+            f"**Episodes:** {episode_count} "
+            f"(Episode {episode_number} airs <t:{airing_at}:R>)"
+        )
+    episode_text = f"Episode {episode_number}: " if episode_number else ""
+    return f"**Next episode:** {episode_text}<t:{airing_at}:R>"
 
 
 def _graphql_error(payload: Any) -> str | None:
@@ -1085,7 +1178,10 @@ class AniListProfileView(discord.ui.LayoutView):
             ) -> None:
                 self.media_type = selected
                 self._render()
-                await interaction.response.edit_message(view=self)
+                await interaction.response.edit_message(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
 
             button.callback = _switch
             buttons.append(button)
@@ -1729,12 +1825,10 @@ class MediaListView(discord.ui.LayoutView):
             previous = discord.ui.Button(
                 label="<",
                 style=discord.ButtonStyle.secondary,
-                disabled=self.page <= 0,
             )
             next_page = discord.ui.Button(
                 label=">",
                 style=discord.ButtonStyle.secondary,
-                disabled=self.page >= self.page_count - 1,
             )
             previous.callback = self._previous_page
             next_page.callback = self._next_page
@@ -1766,10 +1860,7 @@ class MediaListView(discord.ui.LayoutView):
         )
 
     async def _previous_page(self, interaction: discord.Interaction) -> None:
-        if self.page <= 0:
-            await interaction.response.defer()
-            return
-        self.page -= 1
+        self.page = (self.page - 1) % self.page_count
         start = self.page * self.PAGE_SIZE
         if self.selected_index is None or not (
             start <= self.selected_index < start + self.PAGE_SIZE
@@ -1782,10 +1873,7 @@ class MediaListView(discord.ui.LayoutView):
         )
 
     async def _next_page(self, interaction: discord.Interaction) -> None:
-        if self.page >= self.page_count - 1:
-            await interaction.response.defer()
-            return
-        self.page += 1
+        self.page = (self.page + 1) % self.page_count
         start = self.page * self.PAGE_SIZE
         if self.selected_index is None or not (
             start <= self.selected_index < start + self.PAGE_SIZE
@@ -1898,6 +1986,7 @@ class MediaLookupView(discord.ui.LayoutView):
         self.access_token = access_token
         self.media_kind = media_kind
         self.description_expanded = False
+        self.editor_open = False
         self._last_media_by_kind: dict[str, int] = {}
         try:
             self._last_media_by_kind[media_kind] = int(media["id"])
@@ -1927,7 +2016,7 @@ class MediaLookupView(discord.ui.LayoutView):
             if _context_allows_adult_art(self.ctx) or not _is_adult_media(self.media)
             else None
         )
-        description, description_source = _media_description_parts(
+        description, _description_source = _media_description_parts(
             self.media.get("description")
         )
         description_preview, description_truncated = _description_preview(description)
@@ -1941,9 +2030,17 @@ class MediaLookupView(discord.ui.LayoutView):
             details.append(
                 f"**Release status:** {_media_enum_label(self.media['status'])}"
             )
+        next_airing = _media_next_airing_text(self.media)
+        if next_airing:
+            details.append(next_airing)
         progress_field = "episodes" if self.media_kind == "anime" else "chapters"
         progress_label = "Episodes" if self.media_kind == "anime" else "Chapters"
-        if self.media.get(progress_field):
+        releasing_airing = (
+            self.media_kind == "anime"
+            and str(self.media.get("status") or "").upper() == "RELEASING"
+            and next_airing is not None
+        )
+        if self.media.get(progress_field) and not releasing_airing:
             details.append(
                 f"**{progress_label}:** {_number(self.media[progress_field])}"
             )
@@ -1957,8 +2054,6 @@ class MediaLookupView(discord.ui.LayoutView):
                 for genre in self.media["genres"][:8]
             )
             details.append(f"**Genres:** {genres}")
-        if description_source:
-            details.append(f"**Description source:** {description_source}")
         children: list[discord.ui.Item[Any]] = []
         profile_text = title_text
         if cover:
@@ -2003,96 +2098,63 @@ class MediaLookupView(discord.ui.LayoutView):
                     ),
                 ]
             )
-            options = [
-                discord.SelectOption(
-                    label=(
-                        "Watching"
-                        if value == "CURRENT" and self.media_kind == "anime"
-                        else "Reading" if value == "CURRENT" else label
-                    ),
-                    description=(
-                        "Currently watching this anime"
-                        if value == "CURRENT" and self.media_kind == "anime"
-                        else (
-                            "Currently reading this manga"
-                            if value == "CURRENT"
-                            else (
-                                "Plan to watch this anime"
-                                if value == "PLANNING" and self.media_kind == "anime"
-                                else (
-                                    "Plan to read this manga"
-                                    if value == "PLANNING"
-                                    else (
-                                        "Finished watching this anime"
-                                        if value == "COMPLETED"
-                                        and self.media_kind == "anime"
-                                        else (
-                                            "Finished reading this manga"
-                                            if value == "COMPLETED"
-                                            else (
-                                                "Stopped watching this anime"
-                                                if value == "DROPPED"
-                                                and self.media_kind == "anime"
-                                                else (
-                                                    "Stopped reading this manga"
-                                                    if value == "DROPPED"
-                                                    else description_text
-                                                )
-                                            )
-                                        )
-                                    )
-                                )
-                            )
-                        )
-                    ),
-                    value=value,
-                    default=status == value,
+            if self.editor_open:
+                options = [
+                    discord.SelectOption(
+                        label=_media_status_label(value, self.media_kind),
+                        description=_media_status_description(value, self.media_kind),
+                        value=value,
+                        default=status == value,
+                    )
+                    for value, _, _ in ANILIST_LIST_STATUSES
+                ]
+                status_select = discord.ui.Select(
+                    placeholder="Update list status",
+                    min_values=1,
+                    max_values=1,
+                    options=options,
                 )
-                for value, label, description_text in ANILIST_LIST_STATUSES
-            ]
-            status_select = discord.ui.Select(
-                placeholder="Update list status",
-                min_values=1,
-                max_values=1,
-                options=options,
-            )
-            self.status_select = status_select
-            status_select.callback = self._status_selected
-            children.append(discord.ui.ActionRow(status_select))
+                self.status_select = status_select
+                status_select.callback = self._status_selected
+                children.append(discord.ui.ActionRow(status_select))
 
-            progress = self._progress()
-            total = self._progress_total()
-            minus = discord.ui.Button(
-                label="-",
-                style=discord.ButtonStyle.secondary,
-                disabled=progress <= 0,
-            )
-            plus = discord.ui.Button(
-                label="+",
-                style=discord.ButtonStyle.secondary,
-                disabled=bool(total and progress >= total),
-            )
-            jump = discord.ui.Button(
-                label="Set Progress",
-                style=discord.ButtonStyle.primary,
-            )
-            favourite = discord.ui.Button(
-                emoji="\u2764\ufe0f" if self.media.get("isFavourite") else "\U0001fa76",
-                style=discord.ButtonStyle.secondary,
-            )
-            rating = _media_user_rating(self.media)
-            rating_button = discord.ui.Button(
-                label=rating or "Rate",
-                style=discord.ButtonStyle.secondary,
-            )
-            minus.callback = self._decrease_progress
-            plus.callback = self._increase_progress
-            jump.callback = self._open_progress_modal
-            favourite.callback = self._toggle_favourite
-            rating_button.callback = self._open_rating
-            children.append(
-                discord.ui.ActionRow(minus, plus, jump, favourite, rating_button)
-            )
+                progress = self._progress()
+                total = self._progress_total()
+                minus = discord.ui.Button(
+                    label="-",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=progress <= 0,
+                )
+                plus = discord.ui.Button(
+                    label="+",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=bool(total and progress >= total),
+                )
+                jump = discord.ui.Button(
+                    label="Set Progress",
+                    style=discord.ButtonStyle.primary,
+                )
+                favourite = discord.ui.Button(
+                    emoji=(
+                        "\u2764\ufe0f"
+                        if self.media.get("isFavourite")
+                        else "\U0001fa76"
+                    ),
+                    style=discord.ButtonStyle.secondary,
+                )
+                rating = _media_user_rating(self.media)
+                rating_button = discord.ui.Button(
+                    label=rating or "Rate",
+                    style=discord.ButtonStyle.secondary,
+                )
+                minus.callback = self._decrease_progress
+                plus.callback = self._increase_progress
+                jump.callback = self._open_progress_modal
+                favourite.callback = self._toggle_favourite
+                rating_button.callback = self._open_rating
+                children.append(
+                    discord.ui.ActionRow(minus, plus, jump, favourite, rating_button)
+                )
         else:
             children.append(
                 discord.ui.TextDisplay(
@@ -2110,7 +2172,14 @@ class MediaLookupView(discord.ui.LayoutView):
             relation_types={"PREQUEL"},
             media_type=self.media_kind.upper(),
         )
-        if previous is not None:
+        sequel = _media_relation_target(
+            self.media,
+            relation_types={"SEQUEL"},
+            media_type=self.media_kind.upper(),
+        )
+        # A title at either end of a season chain still gets both controls so
+        # the buttons can wrap around to the opposite end of the chain.
+        if previous is not None or sequel is not None:
             previous_button = discord.ui.Button(
                 label="<",
                 style=discord.ButtonStyle.secondary,
@@ -2118,12 +2187,7 @@ class MediaLookupView(discord.ui.LayoutView):
             previous_button.callback = self._show_previous_media
             navigation.append(previous_button)
 
-        sequel = _media_relation_target(
-            self.media,
-            relation_types={"SEQUEL"},
-            media_type=self.media_kind.upper(),
-        )
-        if sequel is not None:
+        if previous is not None or sequel is not None:
             next_button = discord.ui.Button(
                 label=">",
                 style=discord.ButtonStyle.secondary,
@@ -2144,6 +2208,17 @@ class MediaLookupView(discord.ui.LayoutView):
             )
             type_button.callback = self._show_opposite_media
             navigation.append(type_button)
+        if self.access_token:
+            editor = discord.ui.Button(
+                label="Editor",
+                style=(
+                    discord.ButtonStyle.primary
+                    if self.editor_open
+                    else discord.ButtonStyle.secondary
+                ),
+            )
+            editor.callback = self._toggle_editor
+            navigation.append(editor)
         if navigation:
             self.add_item(discord.ui.ActionRow(*navigation))
 
@@ -2151,21 +2226,34 @@ class MediaLookupView(discord.ui.LayoutView):
         self,
         interaction: discord.Interaction,
         relation: dict[str, Any] | None,
+        *,
+        deferred: bool = False,
     ) -> None:
         if relation is None:
-            await interaction.response.send_message(
-                "That related AniList title is not available.", ephemeral=True
-            )
+            message = "That related AniList title is not available."
+            if deferred:
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
             return
         try:
             media_id = int(relation["id"])
         except (KeyError, TypeError, ValueError):
-            await interaction.response.send_message(
-                "AniList did not return a valid related title.", ephemeral=True
-            )
+            message = "AniList did not return a valid related title."
+            if deferred:
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
             return
 
-        await interaction.response.defer()
+        if not deferred:
+            await interaction.response.defer()
+        try:
+            current_id = int(self.media["id"])
+        except (KeyError, TypeError, ValueError):
+            current_id = None
+        if current_id == media_id:
+            return
         async with self._navigation_lock:
             try:
                 response_status, payload = await self.cog._anilist_request(
@@ -2205,13 +2293,73 @@ class MediaLookupView(discord.ui.LayoutView):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
+    async def _chain_edge_id(self, relation_type: str) -> int | None:
+        """Find the far end of a season chain by following its relations."""
+
+        try:
+            current_id = int(self.media["id"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        current = self.media
+        seen = {current_id}
+        for _ in range(50):
+            relation = _media_relation_target(
+                current,
+                relation_types={relation_type},
+                media_type=self.media_kind.upper(),
+            )
+            if relation is None:
+                return current_id
+            try:
+                related_id = int(relation["id"])
+            except (KeyError, TypeError, ValueError):
+                return current_id
+            if related_id in seen:
+                return current_id
+            seen.add(related_id)
+            response_status, payload = await self.cog._anilist_request(
+                ANILIST_MEDIA_BY_ID_QUERY,
+                {"id": related_id},
+                self.access_token,
+            )
+            error_message = _graphql_error(payload)
+            data = payload.get("data") if isinstance(payload, dict) else None
+            next_media = data.get("Media") if isinstance(data, dict) else None
+            if (
+                response_status != 200
+                or error_message
+                or not isinstance(next_media, dict)
+            ):
+                detail = f" ({error_message})" if error_message else ""
+                raise commands.BadArgument(
+                    f"AniList could not load the related title{detail}."
+                )
+            current = next_media
+            current_id = related_id
+        raise commands.BadArgument(
+            "AniList returned an excessively long relation chain."
+        )
+
     async def _show_previous_media(self, interaction: discord.Interaction) -> None:
         relation = _media_relation_target(
             self.media,
             relation_types={"PREQUEL"},
             media_type=self.media_kind.upper(),
         )
-        await self._show_related_media(interaction, relation)
+        if relation is not None:
+            await self._show_related_media(interaction, relation)
+            return
+        await interaction.response.defer()
+        try:
+            media_id = await self._chain_edge_id("SEQUEL")
+        except commands.BadArgument as error:
+            await interaction.followup.send(str(error), ephemeral=True)
+            return
+        await self._show_related_media(
+            interaction,
+            {"id": media_id} if media_id is not None else None,
+            deferred=True,
+        )
 
     async def _show_next_media(self, interaction: discord.Interaction) -> None:
         relation = _media_relation_target(
@@ -2219,7 +2367,20 @@ class MediaLookupView(discord.ui.LayoutView):
             relation_types={"SEQUEL"},
             media_type=self.media_kind.upper(),
         )
-        await self._show_related_media(interaction, relation)
+        if relation is not None:
+            await self._show_related_media(interaction, relation)
+            return
+        await interaction.response.defer()
+        try:
+            media_id = await self._chain_edge_id("PREQUEL")
+        except commands.BadArgument as error:
+            await interaction.followup.send(str(error), ephemeral=True)
+            return
+        await self._show_related_media(
+            interaction,
+            {"id": media_id} if media_id is not None else None,
+            deferred=True,
+        )
 
     async def _show_opposite_media(self, interaction: discord.Interaction) -> None:
         opposite_kind = "manga" if self.media_kind == "anime" else "anime"
@@ -2234,6 +2395,14 @@ class MediaLookupView(discord.ui.LayoutView):
         self.description_expanded = not self.description_expanded
         self._render()
         await interaction.response.edit_message(view=self)
+
+    async def _toggle_editor(self, interaction: discord.Interaction) -> None:
+        self.editor_open = not self.editor_open
+        self._render()
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.ctx.author.id:
@@ -2421,7 +2590,10 @@ class AniListSettingsView(discord.ui.LayoutView):
                 )
                 self.default_media = selected
                 self._render()
-                await interaction.response.edit_message(view=self)
+                await interaction.response.edit_message(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
 
             button.callback = _select
             buttons.append(button)
@@ -2441,7 +2613,9 @@ class AniListSettingsView(discord.ui.LayoutView):
         if interaction.user.id == self.ctx.author.id:
             return True
         await interaction.response.send_message(
-            "Run the command yourself to change AniList settings.", ephemeral=True
+            "Run the command yourself to change AniList settings.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
         return False
 
@@ -2990,7 +3164,11 @@ class Anime(Cog):
         )
         if default_media not in {"anime", "manga", "characters"}:
             default_media = "anime"
-        await ctx.send(view=AniListSettingsView(ctx, default_media), ephemeral=True)
+        await ctx.send(
+            view=AniListSettingsView(ctx, default_media),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 async def setup(bot: Fishie):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import random
+import re
 from collections import Counter
 from typing import (
     TYPE_CHECKING,
@@ -26,10 +27,12 @@ from utils import (
     USER_FLAGS,
     AllChannels,
     AuthorView,
-    Pager,
+    LayoutPageModal,
+    LayoutPager,
     Review,
+    ReviewPageSource,
     ReviewSender,
-    ReviewsPageSource,
+    build_layout_pagination_row,
     fish_download,
     fish_edit,
     fish_go_back,
@@ -42,6 +45,12 @@ if TYPE_CHECKING:
 statuses: TypeAlias = Union[
     Literal["online"], Literal["offline"], Literal["dnd"], Literal["idle"]
 ]
+
+
+AVATAR_GRID_RE = re.compile(
+    r"^(?P<width>\d{1,2})\s*x\s*(?P<height>\d{1,2})$", re.IGNORECASE
+)
+
 
 BURPLE = discord.ButtonStyle.blurple
 GREEN = discord.ButtonStyle.green
@@ -435,6 +444,8 @@ class UserView(discord.ui.LayoutView):
         self._page = "index"
         self._reviews: List[Review] = []
         self._review_index = 0
+        self._review_source: ReviewPageSource | None = None
+        self._review_navigation_buttons: tuple[discord.ui.Button, ...] = ()
         self._bot_data: Dict[Any, Any] | None = None
         self.message: Optional[discord.Message] = None
         self._render()
@@ -517,46 +528,26 @@ class UserView(discord.ui.LayoutView):
         self.dropdown = UserDropdown(self)
         self.add_item(discord.ui.ActionRow(self.dropdown))
 
+        self._review_navigation_buttons = ()
         if self._page == "reviews" and self._reviews:
-            previous = discord.ui.Button(
-                label="<",
-                style=discord.ButtonStyle.primary,
-                disabled=self._review_index == 0,
+            row, buttons = build_layout_pagination_row(
+                page=self._review_index,
+                page_count=len(self._reviews),
+                previous=self._previous_review,
+                next_page=self._next_review,
+                shuffle=self._shuffle_review,
+                go_to_page=self._open_review_page_modal,
+                trash=self._delete_review_view,
             )
-            next_button = discord.ui.Button(
-                label=">",
-                style=discord.ButtonStyle.primary,
-                disabled=self._review_index >= len(self._reviews) - 1,
-            )
-            previous.callback = self._previous_review
-            next_button.callback = self._next_review
-            self.add_item(discord.ui.ActionRow(previous, next_button))
+            self._review_navigation_buttons = buttons
+            self.add_item(row)
 
     def _review_children(self) -> list[discord.ui.Item[Any]]:
-        if not self._reviews:
-            return [
-                discord.ui.TextDisplay(f"## Reviews for {self.user}"),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay("This user has no reviews."),
-            ]
-        review = self._reviews[self._review_index]
-        author = review.sender
-        text = (
-            f"## Review by {author.username}\n"
-            f"{review.comment or 'No review text.'}\n\n"
-            f"-# Page {self._review_index + 1}/{len(self._reviews)} · Review ID: {review.id}"
+        source = self._review_source or ReviewPageSource(
+            self._reviews,
+            user_label=str(self.user),
         )
-        items: list[discord.ui.Item[Any]] = [discord.ui.TextDisplay(text)]
-        if author.profilePhoto:
-            items.insert(
-                0,
-                discord.ui.Section(
-                    discord.ui.TextDisplay(text),
-                    accessory=discord.ui.Thumbnail(author.profilePhoto),
-                ),
-            )
-            items.pop(1)
-        return items
+        return list(source.format_page(self._review_index))
 
     def _bot_children(self) -> list[discord.ui.Item[Any]]:
         data = self._bot_data or {}
@@ -602,6 +593,10 @@ class UserView(discord.ui.LayoutView):
             if value == "reviews":
                 self._reviews = await _fetch_review_entries(self.ctx, self.user)
                 self._review_index = 0
+                self._review_source = ReviewPageSource(
+                    self._reviews,
+                    user_label=str(self.user),
+                )
             elif value == "statuses":
                 rows: list[asyncpg.Record] = []
                 if self._guild_id:
@@ -643,36 +638,85 @@ class UserView(discord.ui.LayoutView):
                 exc_info=(type(error), error, error.__traceback__),
             )
             await interaction.followup.send(
-                "Could not load that section right now.", ephemeral=True
+                "Could not load that section right now.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
 
     async def _previous_review(self, interaction: Interaction) -> None:
-        if not self._reviews:
-            await interaction.response.edit_message(
-                view=self,
+        if self._reviews:
+            await self._set_layout_page(
+                interaction, (self._review_index - 1) % len(self._reviews)
+            )
+
+    async def _next_review(self, interaction: Interaction) -> None:
+        if self._reviews:
+            await self._set_layout_page(
+                interaction, (self._review_index + 1) % len(self._reviews)
+            )
+
+    async def _shuffle_review(self, interaction: Interaction) -> None:
+        if len(self._reviews) <= 1:
+            await interaction.response.send_message(
+                "There are no other reviews to choose from.",
+                ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
-        self._review_index = max(0, self._review_index - 1)
+        choices = [
+            index for index in range(len(self._reviews)) if index != self._review_index
+        ]
+        self._review_index = random.choice(choices)
         self._render()
         await interaction.response.edit_message(
             view=self,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    async def _next_review(self, interaction: Interaction) -> None:
+    async def _open_review_page_modal(self, interaction: Interaction) -> None:
         if not self._reviews:
+            await interaction.response.send_message(
+                "This user has no reviews.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        await interaction.response.send_modal(LayoutPageModal(self, len(self._reviews)))
+
+    async def _set_layout_page(self, interaction: Interaction, page: int) -> None:
+        if page < 0 or page >= len(self._reviews):
+            await interaction.response.send_message(
+                "That page does not exist.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        self._review_index = page
+        self._render()
+        if interaction.response.is_done():
+            if self.message:
+                await self.message.edit(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            else:
+                await interaction.edit_original_response(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+        else:
             await interaction.response.edit_message(
                 view=self,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
-            return
-        self._review_index = min(len(self._reviews) - 1, self._review_index + 1)
-        self._render()
-        await interaction.response.edit_message(
-            view=self,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+
+    async def _delete_review_view(self, interaction: Interaction) -> None:
+        await interaction.response.defer()
+        if self.message:
+            await self.message.delete()
+        else:
+            await interaction.delete_original_response()
+        self.stop()
 
     async def interaction_check(self, interaction: Interaction) -> bool:
         if interaction.user.id == self.ctx.author.id:
@@ -680,6 +724,7 @@ class UserView(discord.ui.LayoutView):
         await interaction.response.send_message(
             "Only the person who ran this command can use these controls.",
             ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
         return False
 
@@ -719,9 +764,17 @@ class UserView(discord.ui.LayoutView):
         try:
             message = f"Could not update the review page: {error}"
             if interaction.response.is_done():
-                await interaction.followup.send(message, ephemeral=True)
+                await interaction.followup.send(
+                    message,
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             else:
-                await interaction.response.send_message(message, ephemeral=True)
+                await interaction.response.send_message(
+                    message,
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
         except discord.DiscordException:
             self.ctx.bot.logger.exception("Could not send userinfo view error")
 
@@ -1068,25 +1121,12 @@ class Info(Cog):
         self, ctx: Context, user: discord.User | discord.Member, hidden: bool = False
     ):
         data = await _fetch_review_entries(ctx, user)
-        if not data:
-            view = discord.ui.LayoutView(timeout=120)
-            view.add_item(
-                discord.ui.Container(
-                    discord.ui.TextDisplay(
-                        f"## Reviews for {user}\n\nThis user has no reviews."
-                    ),
-                    accent_color=self.bot.embedcolor,
-                )
-            )
-            await ctx.send(
-                view=view,
-                ephemeral=hidden,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-        source = ReviewsPageSource(entries=data)
-        source.embed.title = f"Review for {user.display_name} (via ReviewDB)"
-        pager = Pager(source, ctx=ctx)
+        source = ReviewPageSource(data, user_label=str(user))
+        pager = LayoutPager(
+            source,
+            ctx=ctx,
+            accent_color=self.bot.embedcolor,
+        )
         await pager.start(ctx, e=hidden)
 
     @commands.hybrid_group(name="user", aliases=("userinfo", "ui"), fallback="info")
@@ -1249,38 +1289,169 @@ class Info(Cog):
 
         await types[type(channel)](ctx, channel)
 
-    @commands.hybrid_group(
-        name="avatar", aliases=("pfp", "av", "avy", "avi"), fallback="get"
+    @commands.hybrid_command(
+        name="avatar",
+        aliases=("pfp", "av", "avy", "avi"),
+        extras={"usage": "[user] [history|grid|list] [server|guild] [WxH]"},
     )
-    @app_commands.describe(user="User whose avatar should be shown.")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.describe(
+        user="Discord user, mention, ID, or name.",
+        mode="history/grid for a grid, or list for a paginated list.",
+        server="Use server/guild to show this server's avatar history.",
+        grid_size="Grid size such as 6x7, used with history/grid.",
+    )
     async def avatar(
         self,
         ctx: Context,
         *,
-        user: Union[discord.Member, discord.User] = commands.Author,
+        user: str | None = None,
+        mode: str | None = None,
+        server: str | None = None,
+        grid_size: str | None = None,
     ):
-        """Get or edit a user's avatar"""
-        await self._send_user_avatar(ctx, user)
-
-    @avatar.command(name="history", aliases=("h",))
-    @app_commands.describe(user="User whose saved avatar history should be shown.")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def avatar_history(
-        self,
-        ctx: Context,
-        *,
-        user: discord.User = commands.Author,
-    ):
-        """Get a user's avatar history"""
+        """Show a user's avatar, history grid, or paginated avatar list."""
         logging = self.bot.logging
-
         if not logging:
             raise commands.BadArgument("Could not find logging cog.")
 
-        await logging.avatars_func(ctx, user)
+        supplied_arguments = [
+            value for value in (user, mode, server, grid_size) if value
+        ]
+        # Text commands expose keyword-only arguments as one remaining string.
+        # Split that string so ``avatar history 6x7 @user`` remains order
+        # independent. Slash commands provide each option separately, so keep
+        # a user name containing spaces intact there.
+        raw_arguments = (
+            [part for value in supplied_arguments for part in value.split()]
+            if ctx.interaction is None
+            else supplied_arguments
+        )
+        selected_mode: Literal["grid", "list"] | None = None
+        use_server = False
+        selected_grid_size: tuple[int, int] | None = None
+        user_arguments: list[str] = []
+
+        for argument in raw_arguments:
+            value = argument.strip()
+            lowered = value.casefold()
+            if lowered.startswith("-"):
+                lowered = lowered.lstrip("-")
+
+            if lowered in {"history", "grid"}:
+                if selected_mode == "list":
+                    raise commands.BadArgument(
+                        "Choose either history/grid or list, not both."
+                    )
+                selected_mode = "grid"
+                continue
+            if lowered == "list":
+                if selected_mode == "grid":
+                    raise commands.BadArgument(
+                        "Choose either history/grid or list, not both."
+                    )
+                selected_mode = "list"
+                continue
+            if lowered in {"server", "guild"}:
+                use_server = True
+                continue
+
+            match = AVATAR_GRID_RE.fullmatch(value)
+            if match:
+                if selected_grid_size is not None:
+                    raise commands.BadArgument("Only one avatar grid size is allowed.")
+                width = int(match.group("width"))
+                height = int(match.group("height"))
+                if not 1 <= width <= 10 or not 1 <= height <= 10:
+                    raise commands.BadArgument(
+                        "Avatar grid sizes must be between 1x1 and 10x10."
+                    )
+                selected_grid_size = (width, height)
+                continue
+
+            user_arguments.append(value)
+
+        if (getattr(ctx, "invoked_with", "") or "").casefold() == "guilds":
+            use_server = True
+
+        if user_arguments:
+            raw_user = " ".join(user_arguments).strip()
+            try:
+                target_user = await commands.UserConverter().convert(ctx, raw_user)
+            except commands.CommandError as error:
+                raise commands.BadArgument(
+                    f"Could not find a user matching {raw_user}."
+                ) from error
+        else:
+            target_user = ctx.author
+
+        if selected_grid_size is not None and selected_mode == "list":
+            raise commands.BadArgument("Grid size can only be used with history/grid.")
+        if selected_grid_size is not None:
+            selected_mode = "grid"
+
+        # ``server`` without another mode keeps the old server-avatar list
+        # behavior. Supplying ``server history`` or ``server 6x7`` selects the
+        # grid instead.
+        if use_server and selected_mode is None:
+            selected_mode = "list"
+
+        if selected_mode is None:
+            await self._send_user_avatar(ctx, target_user)
+            return
+
+        if not await self._ensure_avatar_history_consent(ctx):
+            return
+
+        guild_id: int | None = None
+        if use_server:
+            if ctx.guild is None:
+                raise commands.NoPrivateMessage(
+                    "Server avatar history can only be viewed in a server."
+                )
+            guild_id = ctx.guild.id
+            if not isinstance(target_user, discord.Member):
+                member = ctx.guild.get_member(target_user.id)
+                if member is None:
+                    try:
+                        member = await ctx.guild.fetch_member(target_user.id)
+                    except discord.HTTPException as error:
+                        raise commands.BadArgument(
+                            "That user is not a member of this server."
+                        ) from error
+                target_user = member
+
+        history_user = cast(discord.User, target_user)
+        if selected_mode == "grid":
+            await logging.avatars_grid(
+                ctx, history_user, guild_id, grid_size=selected_grid_size
+            )
+        else:
+            await logging.avatars_func(ctx, history_user, guild_id)
+
+    async def _ensure_avatar_history_consent(self, ctx: Context) -> bool:
+        """Ask for saved-avatar consent only when ``avatar`` opens history."""
+        if (
+            ctx.author.bot
+            or ctx.bot.db_cache.tracking_consent_given(ctx.author.id)
+            or ctx.author.id in ctx.bot.db_cache.tracking_disabled_users
+        ):
+            return True
+
+        # Import lazily to avoid making the info cog depend on the bot module
+        # while the core package is still initializing.
+        from core.bot import TrackingConsentView
+
+        view = TrackingConsentView(ctx)
+        send_kwargs: dict[str, Any] = {
+            "view": view,
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+        if ctx.interaction is not None:
+            send_kwargs["ephemeral"] = True
+        view.message = await ctx.send(**send_kwargs)
+        return False
 
     @commands.command(name="banner")
     async def user_banner(
@@ -1403,6 +1574,19 @@ class Info(Cog):
         if logging is None:
             raise commands.BadArgument("Could not find logging cog.")
         await logging._display_names(ctx, user)
+
+    @userinfo.command(name="discrims", aliases=("discriminators",))
+    @app_commands.describe(user="User whose discriminator history should be shown.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_discrims(
+        self, ctx: Context, *, user: discord.User = commands.Author
+    ) -> None:
+        """Show a user's previous discriminators."""
+        logging = self.bot.logging
+        if logging is None:
+            raise commands.BadArgument("Could not find logging cog.")
+        await logging._discrims(ctx, user)
 
     @userinfo.command(name="servertags", aliases=("stags",))
     @app_commands.describe(user="User whose server tag history should be shown.")
