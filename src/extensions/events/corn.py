@@ -15,7 +15,7 @@ CORN_EMOJI = "\U0001f33d"
 
 
 class CornReacts(Cog):
-    """Track corn emoji reactions, one per giver per message."""
+    """Track corn reactions independently, one per giver per message."""
 
     def __init__(self) -> None:
         self._seen: TTLCache[tuple[int, int], bool] = TTLCache[tuple[int, int], bool](

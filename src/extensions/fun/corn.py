@@ -81,14 +81,14 @@ class Corn(Cog):
             lines = []
             for r in givers:
                 user = await get_or_fetch_user(ctx.bot, r["giver_id"])
-                name = user.display_name if user else str(r["giver_id"])
+                name = user.name if user else str(r["giver_id"])
                 lines.append(f"**{r['total']:,}** {name}")
             embed.add_field(name="Top Givers", value="\n".join(lines), inline=True)
         if receivers:
             lines = []
             for r in receivers:
                 user = await get_or_fetch_user(ctx.bot, r["receiver_id"])
-                name = user.display_name if user else str(r["receiver_id"])
+                name = user.name if user else str(r["receiver_id"])
                 lines.append(f"**{r['total']:,}** {name}")
             embed.add_field(name="Top Receivers", value="\n".join(lines), inline=True)
         await ctx.send(embed=embed)
@@ -118,7 +118,7 @@ class Corn(Cog):
                 user = guild.get_member(r["giver_id"]) or await get_or_fetch_user(
                     ctx.bot, r["giver_id"]
                 )
-                name = user.display_name if user else str(r["giver_id"])
+                name = user.name if user else str(r["giver_id"])
                 lines.append(f"**{r['total']:,}** {name}")
             embed.add_field(name="Top Givers", value="\n".join(lines), inline=True)
         if receivers:
@@ -127,7 +127,7 @@ class Corn(Cog):
                 user = guild.get_member(r["receiver_id"]) or await get_or_fetch_user(
                     ctx.bot, r["receiver_id"]
                 )
-                name = user.display_name if user else str(r["receiver_id"])
+                name = user.name if user else str(r["receiver_id"])
                 lines.append(f"**{r['total']:,}** {name}")
             embed.add_field(name="Top Receivers", value="\n".join(lines), inline=True)
         await ctx.send(embed=embed)
@@ -141,14 +141,12 @@ class Corn(Cog):
         )
 
         if not given_total and not received_total:
-            await ctx.send(
-                f"**{user.display_name}** hasn't given or received any corns yet!"
-            )
+            await ctx.send(f"**{user.name}** hasn't given or received any corns yet!")
             return
 
         embed = discord.Embed(color=ctx.bot.embedcolor)
         embed.set_author(
-            name=f"Corn Stats  •  {user.display_name}", icon_url=user.display_avatar.url
+            name=f"Corn Stats  •  {user.name}", icon_url=user.display_avatar.url
         )
 
         given_rows = await ctx.bot.pool.fetch(
@@ -160,7 +158,7 @@ class Corn(Cog):
             lines = []
             for r in given_rows:
                 target = await get_or_fetch_user(ctx.bot, r["receiver_id"])
-                name = target.display_name if target else str(r["receiver_id"])
+                name = target.name if target else str(r["receiver_id"])
                 lines.append(f"**{r['total']:,}** {name}")
             embed.add_field(
                 name=f"Given ({given_total:,})", value="\n".join(lines), inline=True
@@ -177,7 +175,7 @@ class Corn(Cog):
             lines = []
             for r in received_rows:
                 target = await get_or_fetch_user(ctx.bot, r["giver_id"])
-                name = target.display_name if target else str(r["giver_id"])
+                name = target.name if target else str(r["giver_id"])
                 lines.append(f"**{r['total']:,}** {name}")
             embed.add_field(
                 name=f"Received ({received_total:,})",
