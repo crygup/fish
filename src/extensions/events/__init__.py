@@ -13,6 +13,7 @@ from .command_logs import CommandLogs
 from .corn import CornReacts
 from .guilds import Guilds
 from .pokemon import Pokemon
+from .reactions import ReactionLogs
 from .statuses import StatusCog
 from .tasks import Tasks
 from .xp import XPCog
@@ -34,6 +35,7 @@ class Events(
     XPCog,
     StatusCog,
     CornReacts,
+    ReactionLogs,
 ):
     emoji = discord.PartialEmoji(name="\U0001f3a7")
     hidden: bool = True

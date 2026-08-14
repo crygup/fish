@@ -35,6 +35,13 @@ USER_ID_TABLES = (
     "click_user_totals",
     "click_user_guild_totals",
     "custom_role_assignments",
+    "reaction_tracking",
+    "game_2048_stats",
+    "game_2048_games",
+    "lightsout_games",
+    "wordle_games",
+    "wordle_stats",
+    "streak_game_stats",
 )
 
 GUILD_ID_TABLES = (
@@ -75,6 +82,10 @@ GUILD_ID_TABLES = (
     "custom_role_assignments",
     "channel_locks",
     "tictactoe_games",
+    "connectfour_games",
+    "lightsout_games",
+    "reaction_logs",
+    "wordle_games",
 )
 
 
@@ -124,6 +135,18 @@ async def erase_user(connection: Any, user_id: int) -> int:
 
     deleted += _count(
         await connection.execute(
+            """DELETE FROM connectfour_games
+               WHERE player_yellow_id = $1
+                  OR player_red_id = $1
+                  OR winner_id = $1
+                  OR loser_id = $1
+                  OR started_by_id = $1""",
+            user_id,
+        )
+    )
+
+    deleted += _count(
+        await connection.execute(
             "DELETE FROM reminders WHERE extra #>> '{args,0}' = $1", str(user_id)
         )
     )
@@ -143,6 +166,28 @@ async def erase_user(connection: Any, user_id: int) -> int:
     deleted += _count(
         await connection.execute(
             "DELETE FROM corn_reacts WHERE receiver_id = $1 OR giver_id = $1", user_id
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM reaction_logs WHERE receiver_id = $1 OR giver_id = $1",
+            user_id,
+        )
+    )
+    # Video submissions can identify a user as the uploader, reviewer, or
+    # person blocked from submitting.  Remove all rows that reference them so
+    # account deletion does not leave an identifying audit trail behind.
+    deleted += _count(
+        await connection.execute(
+            """DELETE FROM video_uploads
+               WHERE uploader_id = $1 OR approved_by = $1 OR denied_by = $1""",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM video_upload_blocks WHERE user_id = $1 OR blocked_by = $1",
+            user_id,
         )
     )
     deleted += _count(
@@ -174,4 +219,11 @@ async def erase_guild(connection: Any, guild_id: int) -> int:
                 f"DELETE FROM {table} WHERE guild_id = $1", guild_id
             )
         )
+    # Video library rows use ``source_guild_id`` rather than the conventional
+    # ``guild_id`` name because submissions may originate outside a guild.
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM video_uploads WHERE source_guild_id = $1", guild_id
+        )
+    )
     return deleted

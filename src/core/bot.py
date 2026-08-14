@@ -33,7 +33,14 @@ from discord import app_commands
 from discord.abc import Messageable
 from discord.ext import commands
 
-from utils import MESSAGE_RE, Config, EmojiInputType, Emojis, update_pokemon
+from utils import (
+    MESSAGE_RE,
+    Config,
+    EmojiInputType,
+    Emojis,
+    TrackingConsentRequired,
+    update_pokemon,
+)
 
 from .cache import db_cache
 from .migrations import check_migrations
@@ -42,7 +49,13 @@ SILENT_COMMAND_USERS: dict[str, frozenset[int]] = {
     "crab": frozenset({662378595192274974}),
 }
 
-ERROR_COMPONENT_CHUNK = 3_700
+# Leave room for the code-block wrapper and the report header. Discord applies
+# a 4,000-character displayable-text limit to the Components V2 payload.
+# The inline report also contains the source, author, invocation, and headings.
+# Keep these values comfortably below Components V2's 4,000-character aggregate
+# displayable-text limit. Longer diagnostics are sent in ``large.txt``.
+ERROR_COMPONENT_CHUNK = 2_200
+ERROR_INVOCATION_LIMIT = 700
 _ERROR_URL_QUERY_RE = re.compile(r"(?i)(https?://[^\s<>\"']+)\?[^\s<>\"']*")
 _ERROR_AUTH_RE = re.compile(
     r"(?i)(\b(?:authorization|x-api-key|api[_-]?key|token|secret|password)\s*[:=]\s*(?:bearer\s+)?)\S+"
@@ -167,6 +180,7 @@ ROTATING_STATUSES: tuple[str, ...] = (
     "fish character emilia",
     "fish remind 67 minutes",
     "fish download",
+    "fish video",
     "fish prefix",
     "fish fm",
     "fish anilist",
@@ -210,35 +224,246 @@ def describe_missing_app_parameters(command: Any) -> None:
             internal_parameter.description = app_commands.locale_str(description)
 
 
-class FirstUseNoticeView(discord.ui.View):
-    def __init__(self, ctx: commands.Context[Any]) -> None:
+# These commands read saved, non-game history that is private until the user
+# acknowledges the tracking notice. Live lookups and public statistics such
+# as activity, command/download/emoji stats, and corn are deliberately not
+# included. Snipe and editsnipe have their own moderation/privacy controls.
+TRACKING_CONSENT_COMMANDS = frozenset(
+    {
+        "avatars",
+        "avatarhistory",
+        "discrims",
+        "icons",
+        "joins",
+        "names",
+        "nicknames",
+        "servertags",
+        "servernames",
+        "status",
+        "statuscalendar",
+        "statuscal",
+        "statushistory",
+        "statuses",
+        "usernames",
+        "uptime",
+        "user",
+    }
+)
+
+# ``stats`` is also the parent for a few history leaderboards. Keep those
+# explicitly scoped rather than requiring consent for the public command and
+# download/emoji statistics that use the same parent group.
+TRACKING_CONSENT_EXACT_COMMANDS = frozenset(
+    {
+        "stats joins",
+        "stats join",
+        "tag stats",
+    }
+)
+
+TRACKING_CONSENT_EXCLUDED_COMMANDS = (
+    "stats click",
+    "stats clicks",
+    "stats clickstats",
+    "stats tictactoe",
+    "stats ttt",
+    "stats connectfour",
+    "stats connect4",
+    "stats connect-four",
+    "stats c4",
+    "stats higher-or-lower",
+    "stats hol",
+    "stats higherorlower",
+    "stats highorlow",
+    "stats higherlower",
+    "stats highlow",
+    "stats heads-or-tails",
+    "stats headsortails",
+    "stats headortail",
+    "stats coinflip",
+    "stats cf",
+    "stats reactions",
+    # Reaction history has its own opt-in switch for the person giving a
+    # reaction.  Do not conflate that with the general saved-history consent.
+    "reactions",
+)
+
+TRACKING_CONSENT_EXACT_EXCLUSIONS = frozenset(
+    {
+        "user",
+        "user info",
+        "user avatar",
+        "user avatar get",
+        "user banner",
+    }
+)
+
+
+def command_requires_tracking_consent(
+    command: Any | None,
+) -> bool:
+    """Return whether *command* may expose saved non-game history.
+
+    Extensions can opt in explicitly with ``extras={"tracking_consent":
+    True}``.  The qualified-name fallback keeps older commands covered and
+    means aliases resolve to the canonical command name before this check.
+    """
+
+    if command is None:
+        return False
+    current: Any = command
+    while current is not None:
+        extras = getattr(current, "extras", None)
+        if isinstance(extras, dict) and extras.get("tracking_consent") is True:
+            return True
+        current = getattr(current, "parent", None)
+
+    qualified = str(getattr(command, "qualified_name", "")).casefold()
+    if qualified == "commandstats" or qualified.startswith("commandstats "):
+        qualified = "stats" + qualified[len("commandstats") :]
+    # ``user`` is the fallback for the current user-info lookup. Its history
+    # subcommands are covered by the root below, but the fallback and current
+    # avatar/banner views are not tracking-history commands.
+    if qualified in TRACKING_CONSENT_EXACT_EXCLUSIONS:
+        return False
+    if any(
+        qualified == excluded or qualified.startswith(f"{excluded} ")
+        for excluded in TRACKING_CONSENT_EXCLUDED_COMMANDS
+    ):
+        return False
+    if qualified in TRACKING_CONSENT_EXACT_COMMANDS:
+        return True
+    if qualified in {"stats", "commandstats"}:
+        return False
+    root = qualified.split(" ", 1)[0]
+    if root not in TRACKING_CONSENT_COMMANDS:
+        return False
+    return True
+
+
+class TrackingConsentView(discord.ui.LayoutView):
+    """Consent prompt shown before a user opens saved activity history."""
+
+    def __init__(
+        self,
+        ctx: commands.Context[Any] | None = None,
+        *,
+        bot: Fishie | None = None,
+        user_id: int | None = None,
+    ) -> None:
         super().__init__(timeout=180)
+        if ctx is None and (bot is None or user_id is None):
+            raise TypeError("ctx or both bot and user_id are required")
         self.ctx = ctx
+        self.bot = ctx.bot if ctx is not None else bot
+        self.user_id = ctx.author.id if ctx is not None else user_id
+        self.message: discord.Message | None = None
+        self.status = discord.ui.TextDisplay(
+            "## Tracking consent\n"
+            "Some Fishie commands show saved history such as previous avatars, "
+            "usernames, status, and joins. Please confirm that you want this history to "
+            "be available to others. Accepting makes your saved history public. "
+            "You can make it private or turn tracking off later in `fish settings`."
+        )
+        self.accept = discord.ui.Button(
+            label="I agree", style=discord.ButtonStyle.success
+        )
+        self.decline = discord.ui.Button(
+            label="Not now", style=discord.ButtonStyle.secondary
+        )
+        self.accept.callback = self._accept
+        self.decline.callback = self._decline
+        self._render()
+
+    def _render(self) -> None:
+        self.clear_items()
+        self.add_item(
+            discord.ui.Container(
+                self.status,
+                discord.ui.ActionRow(self.accept, self.decline),
+                accent_color=self.bot.embedcolor if self.bot is not None else None,
+            )
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.ctx.author.id:
+        if interaction.user.id == self.user_id:
             return True
         await interaction.response.send_message(
-            "These settings belong to the person who ran the command.",
+            "This consent prompt belongs to the person who ran the command.",
             ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
         return False
 
-    @discord.ui.button(label="Open settings", style=discord.ButtonStyle.primary)
-    async def open_settings(
-        self,
-        interaction: discord.Interaction,
-        _button: discord.ui.Button,
-    ) -> None:
-        cog = self.ctx.bot.get_cog("Settings")
-        callback = getattr(cog, "send_privacy_settings_interaction", None)
-        if callback is None:
-            await interaction.response.send_message(
-                "Settings are temporarily unavailable.",
-                ephemeral=True,
+    async def on_timeout(self) -> None:
+        self.accept.disabled = True
+        self.decline.disabled = True
+        self._render()
+        if self.message is not None:
+            try:
+                await self.message.edit(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                pass
+
+    async def _accept(self, interaction: discord.Interaction) -> None:
+        assert self.bot is not None and self.user_id is not None
+        user_id = self.user_id
+        await self.bot.pool.execute(
+            """
+            INSERT INTO user_settings (user_id, tracking_consent, history_public)
+            VALUES ($1, TRUE, TRUE)
+            ON CONFLICT (user_id) DO UPDATE
+            SET tracking_consent = TRUE,
+                history_public = TRUE
+            """,
+            user_id,
+        )
+        self.bot.db_cache.set_tracking_consent(user_id)
+        self.bot.db_cache.set_history_public(user_id, True)
+        self.accept.disabled = True
+        self.decline.disabled = True
+        self.status.content = (
+            "## Tracking consent saved\n"
+            "Your saved history is now public. You can change this any time in "
+            "`fish settings`."
+        )
+        self._render()
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        if self.ctx is not None and self.ctx.interaction is None:
+            # Continue the text command that opened the prompt after Discord
+            # has acknowledged the button interaction.
+            await self.bot.invoke(self.ctx)
+        else:
+            self.status.content = (
+                "## Tracking consent saved\n"
+                "Your saved history is now public. Run the command again to "
+                "view it. You can change this any time in `fish settings`."
             )
-            return
-        await callback(self.ctx, interaction)
+            self._render()
+            await interaction.edit_original_response(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+    async def _decline(self, interaction: discord.Interaction) -> None:
+        self.accept.disabled = True
+        self.decline.disabled = True
+        self.status.content = (
+            "## Tracking consent not given\n"
+            "The tracking command was not run. You can accept later by using "
+            "the command again."
+        )
+        self._render()
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 def required_intents() -> discord.Intents:
@@ -351,6 +576,7 @@ class Fishie(commands.Bot):
             strip_after_prefix=True,
         )
         self.add_check(self._check_command_disabled)
+        self.add_check(self._check_tracking_consent)
 
     @staticmethod
     def _command_disable_excluded(command: commands.Command[Any, Any, Any]) -> bool:
@@ -403,35 +629,106 @@ class Fishie(commands.Bot):
                 )
         return True
 
+    async def _check_tracking_consent(self, ctx: commands.Context[Fishie]) -> bool:
+        """Gate hybrid app commands that expose saved non-game history.
+
+        Text commands are intercepted in :meth:`invoke`, while hybrid app
+        commands run through ``Command.prepare`` directly.  This global check
+        covers that second path without changing individual command callbacks.
+        """
+        if (
+            ctx.interaction is None
+            or ctx.command is None
+            or ctx.author.bot
+            or not command_requires_tracking_consent(ctx.command)
+            or self.db_cache.tracking_consent_given(ctx.author.id)
+            or ctx.author.id in self.db_cache.tracking_disabled_users
+        ):
+            return True
+
+        view = TrackingConsentView(ctx)
+        view.message = await ctx.send(
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        raise TrackingConsentRequired()
+
+    async def _check_app_tracking_consent(
+        self, interaction: discord.Interaction[Fishie]
+    ) -> bool:
+        """Gate app-command views of saved non-game history.
+
+        Text commands are gated in :meth:`invoke`. App commands bypass that
+        method, so their leaf commands receive this check after extensions
+        load. The consent prompt is ephemeral and does not expose the
+        original command until the user explicitly accepts it.
+        """
+        command = interaction.command
+        if (
+            command is None
+            or interaction.user.bot
+            or not command_requires_tracking_consent(command)
+            or self.db_cache.tracking_consent_given(interaction.user.id)
+            or interaction.user.id in self.db_cache.tracking_disabled_users
+        ):
+            return True
+
+        view = TrackingConsentView(bot=self, user_id=interaction.user.id)
+        await interaction.response.send_message(
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            view.message = None
+        # Pure app commands use the app-command check failure path. Hybrid
+        # commands are stopped by ``_check_tracking_consent`` before this
+        # leaf check is reached.
+        return False
+
+    def _register_tracking_consent_checks(self) -> None:
+        """Attach the consent check to loaded app-command leaves."""
+
+        def visit(command: Any) -> None:
+            if isinstance(command, app_commands.Group):
+                for child in command.commands:
+                    visit(child)
+                return
+            # Hybrid app commands already pass through the global Context
+            # check, which raises the ignored internal stop after responding.
+            # Registering a second app check would turn that into a visible
+            # ``HybridCommandError``.
+            if getattr(command, "wrapped", None) is not None:
+                return
+            if not command_requires_tracking_consent(command):
+                return
+            if getattr(command, "_fishie_tracking_check", False):
+                return
+            command.add_check(self._check_app_tracking_consent)
+            setattr(command, "_fishie_tracking_check", True)
+
+        for cog in self.cogs.values():
+            for command in cog.get_app_commands():
+                visit(command)
+
     async def invoke(self, ctx: commands.Context[Fishie]) -> None:
         if (
             ctx.command is not None
             and not ctx.author.bot
-            and ctx.author.id not in self.db_cache.first_use_notice_users
+            and command_requires_tracking_consent(ctx.command)
+            and not self.db_cache.tracking_consent_given(ctx.author.id)
+            and ctx.author.id not in self.db_cache.tracking_disabled_users
         ):
-            newly_marked = await self.pool.fetchval(
-                """
-                INSERT INTO user_settings (user_id, first_use_notice_shown)
-                VALUES ($1, TRUE)
-                ON CONFLICT (user_id) DO UPDATE
-                SET first_use_notice_shown = TRUE
-                WHERE user_settings.first_use_notice_shown = FALSE
-                RETURNING TRUE
-                """,
-                ctx.author.id,
+            view = TrackingConsentView(ctx)
+            view.message = await ctx.send(
+                view=view,
+                ephemeral=ctx.interaction is not None,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
-            self.db_cache.first_use_notice_users.add(ctx.author.id)
-            if newly_marked:
-                await ctx.send(
-                    "Before using Fishie for the first time, please review your "
-                    "privacy settings. Tracking is enabled by default and your "
-                    "saved history is public by default. You can change either "
-                    "setting whenever you want. Changing a setting does not "
-                    "delete data that is already saved.",
-                    view=FirstUseNoticeView(ctx),
-                    ephemeral=ctx.interaction is not None,
-                )
-                return
+            return
 
         await super().invoke(ctx)
 
@@ -586,9 +883,13 @@ class Fishie(commands.Bot):
         invocation = discord.utils.escape_mentions(
             _redact_error_text(invocation or "Unavailable", self.redact)
         )
+        if len(invocation) > ERROR_INVOCATION_LIMIT:
+            invocation = invocation[: ERROR_INVOCATION_LIMIT - 1].rstrip() + "…"
 
         chunks = _error_chunks(excinfo)
-        visible_chunk_count = 5 if len(chunks) <= 5 else 4
+        # Keep the inline report comfortably below Discord's aggregate text
+        # limit. The complete traceback is attached whenever it does not fit.
+        visible_chunk_count = 1
         children: list[discord.ui.Item] = [
             discord.ui.TextDisplay("## Fishie error report"),
             discord.ui.TextDisplay(
@@ -604,17 +905,23 @@ class Fishie(commands.Bot):
             discord.ui.TextDisplay(f"### Invocation\n{_error_code_block(invocation)}"),
             discord.ui.Separator(),
         ]
-        for index, chunk in enumerate(chunks[:visible_chunk_count]):
+        # The useful FFmpeg line and the subprocess note are at the end of a
+        # chained traceback. Show that tail inline and send the complete report
+        # as a separate webhook attachment below. Sending the file separately
+        # avoids Discord treating it as part of an invalid Components V2 body.
+        visible_chunks = chunks[:visible_chunk_count]
+        if len(chunks) > visible_chunk_count:
+            visible_chunks = [chunks[-1]]
+        for index, chunk in enumerate(visible_chunks):
             heading = "### Full error\n" if index == 0 else ""
             children.append(discord.ui.TextDisplay(heading + _error_code_block(chunk)))
-        files: list[discord.File] = []
-        if len(chunks) > visible_chunk_count:
+        include_traceback_file = len(chunks) > visible_chunk_count
+        if include_traceback_file:
             children.append(
                 discord.ui.TextDisplay(
                     "-# The complete traceback is attached as `large.txt`."
                 )
             )
-            files.append(self.too_big(excinfo))
 
         view = discord.ui.LayoutView(timeout=None)
         view.add_item(
@@ -628,9 +935,39 @@ class Fishie(commands.Bot):
         try:
             await self.error_logs.send(
                 view=view,
-                files=files,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+            if include_traceback_file:
+                await self.error_logs.send(
+                    content="Full Fishie traceback attached as `large.txt`.",
+                    file=self.too_big(excinfo),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+        except discord.HTTPException:
+            # A malformed/oversized Components V2 payload must not hide the
+            # original exception. Retry as a short plain webhook message and
+            # recreate the attachment because the first request may consume
+            # its file stream before Discord rejects the payload.
+            self.logger.exception("Failed to send component error report")
+            fallback = (
+                "Fishie error report (plain fallback)\n"
+                f"Source: {source}\n"
+                f"Author: {author_text}\n"
+                f"Invocation: {invocation}"
+            )[:1900]
+            try:
+                await self.error_logs.send(
+                    content=fallback,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                if include_traceback_file:
+                    await self.error_logs.send(
+                        content="Full Fishie traceback attached as `large.txt`.",
+                        file=self.too_big(excinfo),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+            except Exception:
+                self.logger.exception("Failed to send plain error report fallback")
         except Exception:
             self.logger.exception("Failed to send error report")
 
@@ -659,6 +996,7 @@ class Fishie(commands.Bot):
             "extensions.events",
             "extensions.logging",
             "extensions.moderation",
+            "extensions.search",
             "extensions.settings",
             "extensions.tools",
         }
@@ -694,6 +1032,7 @@ class Fishie(commands.Bot):
             except Exception:
                 self.logger.exception(f"Failed to reload extension: {ext}")
                 continue
+        self._register_tracking_consent_checks()
 
     async def setup_hook(self) -> None:
         async with self.pool.acquire() as connection:
@@ -709,6 +1048,7 @@ class Fishie(commands.Bot):
         )
 
         await self.load_extensions()
+        self._register_tracking_consent_checks()
         for cog in self.cogs.values():
             for command in cog.get_app_commands():
                 describe_missing_app_parameters(command)
@@ -852,6 +1192,17 @@ class Fishie(commands.Bot):
         await self.session.close()
         self.logger.info("Closed aiohttp session")
 
+    async def refresh_account_cache(self, user_id: int) -> None:
+        """Refresh cached Last.fm and AniList names after an account change."""
+        row = await self.pool.fetchrow(
+            "SELECT lastfm, anilist FROM accounts WHERE user_id = $1", user_id
+        )
+        self.db_cache.update_accounts(
+            user_id,
+            last_fm=row["lastfm"] if row else None,
+            anilist=row["anilist"] if row else None,
+        )
+
     async def populate_cache(self):
         self.db_cache.prefixes.clear()
         self.db_cache.opted_out.clear()
@@ -861,10 +1212,19 @@ class Fishie(commands.Bot):
         self.db_cache.nsfw_covers.clear()
         self.db_cache.pinboard.clear()
         self.db_cache.lastfm.clear()
+        self.db_cache.anilist.clear()
         self.db_cache.disabled_commands.clear()
         self.db_cache.tracking_disabled_users.clear()
         self.db_cache.private_history_users.clear()
-        self.db_cache.first_use_notice_users.clear()
+        self.db_cache.public_history_users.clear()
+        self.db_cache.game_tracking_disabled_users.clear()
+        self.db_cache.private_game_history_users.clear()
+        self.db_cache.public_game_history_users.clear()
+        self.db_cache.guild_tracking_disabled.clear()
+        self.db_cache.private_guild_history.clear()
+        self.db_cache.public_guild_history.clear()
+        self.db_cache.tracking_consent_users.clear()
+        self.db_cache.reaction_tracking_users.clear()
         self.cached_roblox_templates.clear()
         self.cached_mudae_consent.clear()
         self.cached_honeypots.clear()
@@ -906,17 +1266,29 @@ class Fishie(commands.Bot):
                 user_id,
                 tracking_enabled,
                 history_public,
-                first_use_notice_shown
+                game_tracking_enabled,
+                game_history_public,
+                tracking_consent
             FROM user_settings
             """)
         for row in user_privacy_settings:
             user_id = row["user_id"]
             if not row["tracking_enabled"]:
                 self.db_cache.tracking_disabled_users.add(user_id)
-            if not row["history_public"]:
-                self.db_cache.private_history_users.add(user_id)
-            if row["first_use_notice_shown"]:
-                self.db_cache.first_use_notice_users.add(user_id)
+            self.db_cache.set_history_public(user_id, bool(row["history_public"]))
+            if not row["game_tracking_enabled"]:
+                self.db_cache.game_tracking_disabled_users.add(user_id)
+            self.db_cache.set_game_history_public(
+                user_id, bool(row["game_history_public"])
+            )
+            if row["tracking_consent"]:
+                self.db_cache.set_tracking_consent(user_id)
+
+        reaction_tracking = await self.pool.fetch(
+            "SELECT user_id FROM reaction_tracking WHERE enabled = TRUE"
+        )
+        for row in reaction_tracking:
+            self.db_cache.enable_reaction_tracking(row["user_id"])
 
         guild_settings = await self.pool.fetch("SELECT * FROM guild_settings")
         for row in guild_settings:
@@ -925,6 +1297,11 @@ class Fishie(commands.Bot):
             poketwo = row["poketwo"]
             auto_reactions = row["auto_reactions"]
             pinboard = row["pinboard"]
+            if not row["tracking_enabled"]:
+                self.db_cache.guild_tracking_disabled.add(guild_id)
+            self.db_cache.set_guild_history_public(
+                guild_id, bool(row["history_public"])
+            )
 
             if adl:
                 self.db_cache.add_adl(adl)
@@ -946,15 +1323,21 @@ class Fishie(commands.Bot):
                 self.db_cache.add_reaction_guilds(guild_id)
                 self.logger.info(f'Added auto media reactions to guild "{guild_id}"')
 
-        accounts = await self.pool.fetch("SELECT * FROM accounts")
+        accounts = await self.pool.fetch(
+            "SELECT user_id, lastfm, anilist FROM accounts"
+        )
         for row in accounts:
-            last_fm: Optional[str] = row["lastfm"]
             user_id: int = row["user_id"]
-
+            last_fm: Optional[str] = row["lastfm"]
+            anilist: Optional[str] = row["anilist"]
+            self.db_cache.update_accounts(user_id, last_fm=last_fm, anilist=anilist)
             if last_fm:
-                self.db_cache.add_account(user_id=user_id, last_fm=last_fm)
                 self.logger.info(
                     f'Added last.fm account "{last_fm}" to user "{user_id}"'
+                )
+            if anilist:
+                self.logger.info(
+                    f'Added AniList account "{anilist}" to user "{user_id}"'
                 )
 
         roblox_templates = await self.pool.fetch(

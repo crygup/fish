@@ -25,6 +25,8 @@ async def test_full_user_erasure_covers_linked_and_legacy_data() -> None:
         "fishing_accounts",
         "pokemon_solves",
         "corn_reacts",
+        "reaction_logs",
+        "reaction_tracking",
         "stag_logs",
         "user_statuses_legacy_backup",
         "user_status_history",
@@ -32,6 +34,13 @@ async def test_full_user_erasure_covers_linked_and_legacy_data() -> None:
         "click_user_totals",
         "click_user_guild_totals",
         "tictactoe_games",
+        "connectfour_games",
+        "game_2048_stats",
+        "lightsout_games",
+        "wordle_games",
+        "wordle_stats",
+        "streak_game_stats",
+        "reaction_logs",
         "assigned_by",
         "locked_by",
     ):
@@ -57,5 +66,7 @@ async def test_full_guild_erasure_covers_logs_configuration_and_deliveries() -> 
         "user_statuses_legacy_backup",
         "user_status_history",
         "tictactoe_games",
+        "connectfour_games",
+        "lightsout_games",
     ):
         assert table in sql

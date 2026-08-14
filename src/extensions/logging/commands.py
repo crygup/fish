@@ -39,6 +39,10 @@ from .status_calendar import (
     render_status_calendar,
 )
 
+AVATAR_GRID_RE = re.compile(
+    r"^(?P<width>\d{1,2})\s*x\s*(?P<height>\d{1,2})$", re.IGNORECASE
+)
+
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
 
@@ -88,7 +92,9 @@ class Commands(Cog):
         if user.id != ctx.author.id and not self.bot.db_cache.user_history_is_public(
             user.id
         ):
-            raise commands.BadArgument(f"{user} has made their saved history private.")
+            raise commands.BadArgument(
+                f"{user} has their saved history private. Manage this in `fish settings`"
+            )
 
     async def refresh_urls(self, attachment_urls: List[str]) -> List[str]:
         json = {"attachment_urls": attachment_urls}
@@ -241,21 +247,27 @@ class Commands(Cog):
             await pager.start(ctx)
 
     async def avatars_grid(
-        self, ctx: Context, user: discord.User, guild_id: Optional[int] = None
+        self,
+        ctx: Context,
+        user: discord.User,
+        guild_id: Optional[int] = None,
+        grid_size: tuple[int, int] | None = None,
     ):
         self.ensure_history_visible(ctx, user)
+        xbound, ybound = grid_size or (0, 0)
+        record_limit = xbound * ybound if grid_size else 100
         sql = (
-            """SELECT * FROM guild_avatars WHERE member_id = $1 AND guild_id = $2 ORDER BY created_at DESC LIMIT 100"""
+            """SELECT * FROM guild_avatars WHERE member_id = $1 AND guild_id = $2 ORDER BY created_at DESC LIMIT $3"""
             if guild_id
-            else """SELECT * FROM avatars WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100"""
+            else """SELECT * FROM avatars WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2"""
         )
 
         if guild_id:
-            args = (sql, user.id, guild_id)
+            args = (sql, user.id, guild_id, record_limit)
             table = "guild_avatars"
             user_id = "member_id"
         else:
-            args = (sql, user.id)
+            args = (sql, user.id, record_limit)
             table = "avatars"
             user_id = "user_id"
 
@@ -280,11 +292,13 @@ class Commands(Cog):
                 await format_bytes(
                     ctx.guild.filesize_limit if ctx.guild else 8388608,
                     avatars,  # type: ignore
+                    xbound=xbound,
+                    ybound=ybound,
                 ),
                 f"{user.id}_avatar_history.png",
             )
 
-            if len(records) >= 100:
+            if len(records) >= record_limit:
                 first_avatar: datetime.datetime = await self.bot.pool.fetchval(
                     f"""SELECT created_at FROM {table} WHERE {user_id} = $1 ORDER BY created_at ASC""",
                     user.id,
@@ -301,7 +315,43 @@ class Commands(Cog):
             )
             embed.set_footer(text="First avatar saved")
             embed.description = f"-# View all avatars [here](https://crygup.com/discord?tab=user&subtab=avatars&q={user.id})"
-            await ctx.send(file=file, embed=embed)
+        await ctx.send(file=file, embed=embed)
+
+    @staticmethod
+    async def _avatar_history_arguments(
+        ctx: Context,
+        arguments: tuple[str, ...],
+    ) -> tuple[discord.User, tuple[int, int] | None]:
+        """Parse an optional WxH grid and user in either order."""
+        grid_size: tuple[int, int] | None = None
+        user_arguments: list[str] = []
+
+        for argument in arguments:
+            match = AVATAR_GRID_RE.fullmatch(argument.strip())
+            if match:
+                if grid_size is not None:
+                    raise commands.BadArgument("Only one avatar grid size is allowed.")
+                width = int(match.group("width"))
+                height = int(match.group("height"))
+                if not 1 <= width <= 10 or not 1 <= height <= 10:
+                    raise commands.BadArgument(
+                        "Avatar grid sizes must be between 1x1 and 10x10."
+                    )
+                grid_size = (width, height)
+            else:
+                user_arguments.append(argument)
+
+        if not user_arguments:
+            return ctx.author, grid_size  # type: ignore[return-value]
+
+        raw_user = " ".join(user_arguments).strip()
+        try:
+            user = await commands.UserConverter().convert(ctx, raw_user)
+        except commands.UserNotFound as error:
+            raise commands.BadArgument(
+                f"Could not find a user matching {raw_user}."
+            ) from error
+        return user, grid_size
 
     @commands.group(name="avatars", aliases=("pfps", "avis", "avs"))
     async def avatars(self, ctx: Context, *, user: discord.User = commands.Author):
@@ -321,23 +371,32 @@ class Commands(Cog):
     @commands.group(
         name="avatarhistory",
         aliases=("avyh", "avatar-history", "avatar_history", "pfph", "avh"),
+        extras={"usage": "[grid_size] [user]"},
     )
-    async def avatar_history(
-        self, ctx: Context, *, user: discord.User = commands.Author
-    ):
-        """Shows a user's previous avatars in a grid view"""
+    async def avatar_history(self, ctx: Context, *arguments: str):
+        """Shows a user's previous avatars in a grid view.
 
-        await self.avatars_grid(ctx, user)
+        The optional WxH grid size and user can be supplied in either order.
+        """
+        user, grid_size = await self._avatar_history_arguments(ctx, arguments)
 
-    @avatar_history.command(name="server", aliases=("guild", "s"))
+        await self.avatars_grid(ctx, user, grid_size=grid_size)
+
+    @avatar_history.command(
+        name="server",
+        aliases=("guild", "s"),
+        extras={"usage": "[grid_size] [user]"},
+    )
     @commands.guild_only()
-    async def server_avatar_history(
-        self, ctx: Context, *, user: discord.User = commands.Author
-    ):
-        """Shows a user's previous avatars in a grid view"""
+    async def server_avatar_history(self, ctx: Context, *arguments: str):
+        """Shows a user's previous server avatars in a grid view.
+
+        The optional WxH grid size and user can be supplied in either order.
+        """
         assert ctx.guild
 
-        await self.avatars_grid(ctx, user, ctx.guild.id)
+        user, grid_size = await self._avatar_history_arguments(ctx, arguments)
+        await self.avatars_grid(ctx, user, ctx.guild.id, grid_size=grid_size)
 
     async def _usernames(self, ctx: Context, user: discord.User) -> None:
         self.ensure_history_visible(ctx, user)
@@ -471,11 +530,16 @@ class Commands(Cog):
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
-    @commands.hybrid_command(name="discrims", aliases=("discriminators",))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="discrims", aliases=("discriminators",))
     async def discrims(self, ctx: Context, *, member: discord.Member = commands.Author):
         """Shows a user's previous discrims"""
+
+        await self._discrims(ctx, member)
+
+    async def _discrims(
+        self, ctx: Context, member: discord.User | discord.Member
+    ) -> None:
+        """Render a user's discriminator history for another command."""
 
         self.ensure_history_visible(ctx, member)
         results = await self.bot.pool.fetch(
@@ -738,7 +802,7 @@ class Commands(Cog):
             ):
                 continue
             user = await get_or_fetch_user(ctx.bot, r["member_id"])
-            name = user.display_name if user else str(r["member_id"])
+            name = user.name if user else str(r["member_id"])
             lines.append(f"**{r['total']:,}** {name}")
         if not lines:
             await ctx.send("No public join data yet!")
@@ -813,14 +877,14 @@ class Commands(Cog):
                     guild_total = 1
                     global_total = 1
                 else:
-                    await ctx.send(f"**{user.display_name}** has no join records yet!")
+                    await ctx.send(f"**{user.name}** has no join records yet!")
                     return
             else:
-                await ctx.send(f"**{user.display_name}** has no join records yet!")
+                await ctx.send(f"**{user.name}** has no join records yet!")
                 return
 
         guild_name = ctx.guild.name if ctx.guild else "this server"
         await ctx.send(
-            f"**{utils.escape_markdown(user.display_name)}** has joined {guild_name} "
+            f"**{utils.escape_markdown(user.name)}** has joined {guild_name} "
             f"{plural(int(guild_total)):time}.\n-# *{plural(int(global_total)):join} across all servers*"
         )

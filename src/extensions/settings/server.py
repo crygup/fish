@@ -1,26 +1,21 @@
 from __future__ import annotations
 
-import re
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
-from utils import AuthorView, FieldPageSource, Pager
+from utils import AuthorLayoutView, LayoutPager
 
 if TYPE_CHECKING:
     from core import Fishie
-    from extensions.context import Context, GuildContext
-    from extensions.events import Events
+    from extensions.context import GuildContext
 
 
 def to_lower(argument: str):
     return argument.lower()
-
-
-TWITCH_CHANNEL_RE = re.compile(r"^[A-Za-z0-9_]{1,25}$")
 
 
 class Dropdown(discord.ui.ChannelSelect):
@@ -41,106 +36,277 @@ class Dropdown(discord.ui.ChannelSelect):
 
         await self.ctx.bot.settings.add_adl_channel(channel)
 
-        if interaction.message is None:
-            raise commands.BadArgument(
-                "Message is none somehow. However the auto-download channel was set, enjoy."
+        if isinstance(self.view, DropdownView):
+            self.view.status.content = f"## Auto-download settings\nAuto-download channel set to {channel.mention}."
+            self.disabled = True
+            await interaction.response.edit_message(
+                view=self.view,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
+            return
 
-        await interaction.message.edit(
-            content=f"Auto-download channel set to {channel.mention}", view=None
+        await interaction.response.send_message(
+            f"Auto-download channel set to {channel.mention}.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
-        await interaction.response.defer()
 
 
-class DropdownView(AuthorView):
+class DropdownView(AuthorLayoutView):
     def __init__(self, ctx: GuildContext):
-        super().__init__(ctx)
-
-        self.add_item(Dropdown(ctx))
-
-
-class TwitchMessageModal(discord.ui.Modal, title="Twitch Live Message"):
-    message = discord.ui.TextInput(
-        label="Announcement text",
-        style=discord.TextStyle.paragraph,
-        required=False,
-        max_length=2000,
-        placeholder="Leave blank to post only the embed.",
-    )
-
-    def __init__(self, bot, author_id: int, guild_id: int, channel_name: str):
-        super().__init__()
-        self.bot = bot
-        self.author_id = author_id
-        self.guild_id = guild_id
-        self.channel_name = channel_name
-
-    async def on_submit(self, interaction: discord.Interaction):
-        message_template = (self.message.value or "").strip() or None
-        result = await self.bot.pool.execute(
-            "UPDATE twitch_follows SET message_template = $3 "
-            "WHERE guild_id = $1 AND channel_name = $2",
-            self.guild_id,
-            self.channel_name,
-            message_template,
+        super().__init__(ctx, timeout=180)
+        self.status = discord.ui.TextDisplay(
+            "## Auto-download settings\nChoose the channel for automatic downloads."
         )
-        if result == "UPDATE 0":
-            await interaction.response.send_message(
-                "That Twitch channel is no longer being followed.", ephemeral=True
+        self.dropdown = Dropdown(ctx)
+        self.add_item(
+            discord.ui.Container(
+                self.status,
+                discord.ui.ActionRow(self.dropdown),
+                accent_color=ctx.bot.embedcolor,
             )
-            return
-
-        if message_template:
-            await interaction.response.send_message(
-                "The custom Twitch announcement text was saved. Mentions will be allowed when it posts.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(
-                "The custom Twitch announcement text was cleared; only the embed will post.",
-                ephemeral=True,
-            )
+        )
 
 
-class TwitchFollowView(AuthorView):
-    def __init__(
-        self,
-        ctx: Context,
-        bot: Fishie,
-        author_id: int,
-        guild_id: int,
-        channel_name: str,
-    ):
+class SettingsMessageView(AuthorLayoutView):
+    """Render a one-off server-settings response as Components V2."""
+
+    def __init__(self, ctx: GuildContext, text: str) -> None:
+        super().__init__(ctx, timeout=120)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(text),
+                accent_color=ctx.bot.embedcolor,
+            )
+        )
+
+
+class PrefixPageSource:
+    def __init__(self, entries: list[tuple[str, str]], guild_name: str) -> None:
+        self.entries = entries
+        self.guild_name = guild_name
+
+    def get_max_pages(self) -> int:
+        return max(1, (len(self.entries) + 3) // 4)
+
+    def format_page(self, page_number: int) -> list[discord.ui.Item[Any]]:
+        start = page_number * 4
+        page_entries = self.entries[start : start + 4]
+        lines = [f"## Prefixes in {self.guild_name}"]
+        lines.extend(f"**{prefix}**\n{details}" for prefix, details in page_entries)
+        lines.append(f"\n-# Page {page_number + 1}/{self.get_max_pages()}")
+        return [discord.ui.TextDisplay("\n\n".join(lines))]
+
+
+class ServerSettingsView(AuthorLayoutView):
+    """Interactive server settings panel used by ``settings server``."""
+
+    def __init__(self, ctx: GuildContext, values: dict[str, object]) -> None:
         super().__init__(ctx, timeout=300)
-        self.bot = bot
-        self.ctx = ctx
-        self.author_id = author_id
-        self.guild_id = guild_id
-        self.channel_name = channel_name
+        if ctx.guild is None:
+            raise ValueError("Server settings can only be used in a guild.")
+        self.guild = ctx.guild
+        self.values = values
+        self._render()
 
-    @discord.ui.button(
-        label="Customize announcement", style=discord.ButtonStyle.blurple
-    )
-    async def customize(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ):
-        row = await self.bot.pool.fetchrow(
-            "SELECT message_template FROM twitch_follows "
-            "WHERE guild_id = $1 AND channel_name = $2",
-            self.guild_id,
-            self.channel_name,
+    @classmethod
+    async def create(cls, ctx: GuildContext) -> "ServerSettingsView":
+        row = await ctx.bot.pool.fetchrow(
+            """
+            SELECT tracking_enabled, history_public, auto_download, poketwo,
+                   auto_reactions, pinboard
+            FROM guild_settings WHERE guild_id = $1
+            """,
+            ctx.guild.id,
         )
-        if not row:
-            await interaction.response.send_message(
-                "That Twitch channel is no longer being followed.", ephemeral=True
+        honeypot = await ctx.bot.pool.fetchval(
+            "SELECT channel_id FROM honeypot_channels WHERE guild_id = $1",
+            ctx.guild.id,
+        )
+        values = {
+            "tracking_enabled": bool(row["tracking_enabled"]) if row else True,
+            "history_public": bool(row["history_public"]) if row else False,
+            "auto_download": row["auto_download"] if row else None,
+            "poketwo": bool(row["poketwo"]) if row else False,
+            "auto_reactions": bool(row["auto_reactions"]) if row else False,
+            "pinboard": row["pinboard"] if row else None,
+            "honeypot": honeypot,
+        }
+        return cls(ctx, values)
+
+    @staticmethod
+    def _channel_mention(channel_id: object) -> str:
+        return f"<#{channel_id}>" if channel_id else "Disabled"
+
+    @property
+    def content(self) -> str:
+        tracking = "Enabled" if self.values["tracking_enabled"] else "Disabled"
+        visibility = "Public" if self.values["history_public"] else "Private"
+        poketwo = "Enabled" if self.values["poketwo"] else "Disabled"
+        reactions = "Enabled" if self.values["auto_reactions"] else "Disabled"
+        return (
+            f"## Server settings · {self.guild.name}\n"
+            f"**Tracking:** {tracking}\n"
+            f"**Saved history:** {visibility}\n"
+            f"**Pokétwo auto-solving:** {poketwo}\n"
+            f"**Auto reactions:** {reactions}\n"
+            f"**Auto-download:** {self._channel_mention(self.values['auto_download'])}\n"
+            f"**Pinboard:** {self._channel_mention(self.values['pinboard'])}\n"
+            f"**Honeypot:** {self._channel_mention(self.values['honeypot'])}\n\n"
+            "Use the channel selectors to choose destinations. Server history is "
+            "private until an administrator makes it public."
+        )
+
+    def _render(self) -> None:
+        self.clear_items()
+        buttons: list[discord.ui.Button] = []
+        controls = (
+            (
+                (
+                    "Disable tracking"
+                    if self.values["tracking_enabled"]
+                    else "Enable tracking"
+                ),
+                "tracking_enabled",
+            ),
+            (
+                (
+                    "Make history private"
+                    if self.values["history_public"]
+                    else "Make history public"
+                ),
+                "history_public",
+            ),
+            (
+                "Disable Pokétwo" if self.values["poketwo"] else "Enable Pokétwo",
+                "poketwo",
+            ),
+            (
+                (
+                    "Disable auto reactions"
+                    if self.values["auto_reactions"]
+                    else "Enable auto reactions"
+                ),
+                "auto_reactions",
+            ),
+        )
+        for label, setting in controls:
+            button = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
+
+            async def callback(
+                interaction: discord.Interaction,
+                selected: str = setting,
+            ) -> None:
+                value = not bool(self.values[selected])
+                await self.ctx.bot.pool.execute(
+                    f"""
+                    INSERT INTO guild_settings (guild_id, {selected})
+                    VALUES ($1, $2)
+                    ON CONFLICT (guild_id) DO UPDATE
+                    SET {selected} = EXCLUDED.{selected}
+                    """,
+                    self.guild.id,
+                    value,
+                )
+                self.values[selected] = value
+                cache = self.ctx.bot.db_cache
+                if selected == "tracking_enabled":
+                    if value:
+                        cache.guild_tracking_disabled.discard(self.guild.id)
+                    else:
+                        cache.guild_tracking_disabled.add(self.guild.id)
+                elif selected == "history_public":
+                    cache.set_guild_history_public(self.guild.id, value)
+                elif selected == "poketwo":
+                    (cache.add_poketwo if value else cache.remove_poketwo)(
+                        self.guild.id
+                    )
+                elif selected == "auto_reactions":
+                    (
+                        cache.add_reaction_guilds
+                        if value
+                        else cache.remove_reaction_guilds
+                    )(self.guild.id)
+                self._render()
+                await interaction.response.edit_message(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+
+            button.callback = callback
+            buttons.append(button)
+
+        controls = [discord.ui.ActionRow(*buttons)]
+        for kind, label in (
+            ("auto_download", "Set auto-download channel"),
+            ("pinboard", "Set pinboard channel"),
+            ("honeypot", "Set honeypot channel"),
+        ):
+            select = discord.ui.ChannelSelect(
+                placeholder=label,
+                min_values=1,
+                max_values=1,
+                channel_types=[discord.ChannelType.text],
             )
-            return
 
-        modal = TwitchMessageModal(
-            self.bot, self.author_id, self.guild_id, self.channel_name
+            async def select_callback(
+                interaction: discord.Interaction,
+                selected_kind: str = kind,
+                channel_select: discord.ui.ChannelSelect = select,
+            ) -> None:
+                channel = channel_select.values[0]
+                if not isinstance(channel, discord.TextChannel):
+                    await interaction.response.send_message(
+                        "Please choose a text channel.", ephemeral=True
+                    )
+                    return
+                await self._set_channel(selected_kind, channel.id)
+                self._render()
+                await interaction.response.edit_message(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+
+            select.callback = select_callback
+            controls.append(discord.ui.ActionRow(select))
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(self.content),
+                *controls,
+                accent_color=self.ctx.bot.embedcolor,
+            )
         )
-        modal.message.default = row["message_template"] or ""
-        await interaction.response.send_modal(modal)
+
+    async def _set_channel(self, kind: str, channel_id: int) -> None:
+        guild_id = self.guild.id
+        if kind in {"auto_download", "pinboard"}:
+            old = self.values.get(kind)
+            await self.ctx.bot.pool.execute(
+                f"""
+                INSERT INTO guild_settings (guild_id, {kind}) VALUES ($1, $2)
+                ON CONFLICT (guild_id) DO UPDATE SET {kind} = EXCLUDED.{kind}
+                """,
+                guild_id,
+                channel_id,
+            )
+            if kind == "auto_download":
+                if isinstance(old, int):
+                    self.ctx.bot.db_cache.remove_adl(old)
+                self.ctx.bot.db_cache.add_adl(channel_id)
+            else:
+                self.ctx.bot.db_cache.add_pinboard(guild_id, channel_id)
+        else:
+            await self.ctx.bot.pool.execute(
+                """
+                INSERT INTO honeypot_channels (guild_id, channel_id) VALUES ($1, $2)
+                ON CONFLICT (guild_id) DO UPDATE SET channel_id = EXCLUDED.channel_id
+                """,
+                guild_id,
+                channel_id,
+            )
+            self.ctx.bot.cached_honeypots[guild_id] = channel_id
+        self.values[kind] = channel_id
 
 
 class Server(Cog):
@@ -164,9 +330,7 @@ class Server(Cog):
             for record in records
         ]
 
-        p = FieldPageSource(entries, per_page=4)
-        p.embed.title = f"Prefixes in {ctx.guild}"
-        menu = Pager(p, ctx=ctx)
+        menu = LayoutPager(PrefixPageSource(entries, str(ctx.guild)), ctx=ctx)
         await menu.start(ctx)
 
     @prefix.command(name="add", aliases=("set", "a", "+"))
@@ -190,7 +354,12 @@ class Server(Cog):
         sql = """INSERT INTO guild_prefixes (guild_id, prefix, author_id, time) VALUES ($1, $2, $3, $4)"""
         await bot.pool.execute(sql, ctx.guild.id, prefix, ctx.author.id, now)
         bot.db_cache.add_prefix(ctx.guild.id, prefix)
-        await ctx.send(f"Added prefix `{prefix}` to the server.")
+        await ctx.send(
+            view=SettingsMessageView(
+                ctx, f"## Prefix settings\nAdded prefix `{prefix}` to the server."
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @prefix.command(name="remove", aliases=("delete", "r", "d", "del", "-"))
     @commands.has_guild_permissions(manage_guild=True, manage_messages=True)
@@ -209,7 +378,12 @@ class Server(Cog):
         sql = """DELETE FROM guild_prefixes WHERE guild_id = $1 AND prefix = $2"""
         await bot.pool.execute(sql, ctx.guild.id, prefix)
         bot.db_cache.remove_prefix(ctx.guild.id, prefix)
-        await ctx.send(f"Removed prefix `{prefix}` from the server.")
+        await ctx.send(
+            view=SettingsMessageView(
+                ctx, f"## Prefix settings\nRemoved prefix `{prefix}` from the server."
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def add_adl_channel(self, channel: discord.TextChannel):
         sql = """
@@ -228,9 +402,9 @@ class Server(Cog):
         await self.bot.pool.execute(sql, channel.guild.id)
         self.bot.db_cache.remove_adl(channel.id)
 
-    @commands.hybrid_group(
+    @commands.group(
         name="auto-download",
-        fallback="set",
+        invoke_without_command=True,
         aliases=("adl", "autodownload", "auto_download"),
     )
     @commands.has_guild_permissions(manage_guild=True)
@@ -248,12 +422,19 @@ class Server(Cog):
 
         if not channel:
             return await ctx.send(
-                "Choose a channel to enable auto-downloads in", view=DropdownView(ctx)
+                view=DropdownView(ctx),
+                allowed_mentions=discord.AllowedMentions.none(),
             )
 
         await self.add_adl_channel(channel)
 
-        await ctx.send(f"Set auto-download channel to {channel.mention}")
+        await ctx.send(
+            view=SettingsMessageView(
+                ctx,
+                f"## Auto-download settings\nSet auto-download channel to {channel.mention}.",
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @auto_download.command(
         name="remove",
@@ -301,7 +482,13 @@ class Server(Cog):
             )
 
         await self.remove_adl_channel(channel)
-        await ctx.send(f"Removed auto-downloads from {channel.mention}")
+        await ctx.send(
+            view=SettingsMessageView(
+                ctx,
+                f"## Auto-download settings\nRemoved auto-downloads from {channel.mention}.",
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @commands.command(
         name="auto-solve",
@@ -333,7 +520,11 @@ class Server(Cog):
         func[value](ctx.guild.id)
 
         await ctx.send(
-            f"{['Disabled', 'Enabled'][value]} Pokétwo auto-solving for this server."
+            view=SettingsMessageView(
+                ctx,
+                f"## Server settings\n{['Disabled', 'Enabled'][value]} Pokétwo auto-solving for this server.",
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @commands.command(
@@ -367,172 +558,9 @@ class Server(Cog):
         func[value](ctx.guild.id)
 
         await ctx.send(
-            f"{['Disabled', 'Enabled'][value]} auto media reactions for this server."
-        )
-
-    @commands.hybrid_group(name="twitch", fallback="list")
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.guild_only()
-    async def twitch(self, ctx: GuildContext):
-        """Manage Twitch live announcements for this server."""
-        rows = await self.bot.pool.fetch(
-            "SELECT channel_name, announce_channel_id, message_template "
-            "FROM twitch_follows "
-            "WHERE guild_id = $1 ORDER BY channel_name",
-            ctx.guild.id,
-        )
-        if not rows:
-            return await ctx.send("No Twitch channels are being followed.")
-
-        lines = [
-            f"**{row['channel_name']}** → <#{row['announce_channel_id']}>"
-            f" ({'custom text' if row['message_template'] else 'embed only'})"
-            for row in rows
-        ]
-        await ctx.send("Twitch live announcements:\n" + "\n".join(lines))
-
-    @twitch.command(name="follow")
-    @app_commands.describe(
-        channel_name="Twitch channel name or handle to follow.",
-        announcement_channel="Text channel for live announcements. Defaults to this channel.",
-    )
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.guild_only()
-    async def twitch_follow(
-        self,
-        ctx: GuildContext,
-        channel_name: str,
-        announcement_channel: Optional[discord.TextChannel] = None,
-    ):
-        """Follow a Twitch channel and announce live streams here or elsewhere."""
-        channel_name = channel_name.strip().lstrip("@").lower()
-        if not TWITCH_CHANNEL_RE.fullmatch(channel_name):
-            raise commands.BadArgument(
-                "Enter a valid Twitch channel name (letters, numbers, and underscores only)."
-            )
-
-        events = cast("Events | None", self.bot.get_cog("Events"))
-        if events is None or not hasattr(events, "_get_twitch_user"):
-            raise commands.BadArgument("Twitch monitoring is not available right now.")
-        twitch_user = await events._get_twitch_user(channel_name)
-        if not twitch_user or not twitch_user.get("id"):
-            raise commands.BadArgument(
-                f"Could not find a Twitch channel named **{channel_name}**."
-            )
-        broadcaster_id = str(twitch_user["id"])
-
-        target = announcement_channel or ctx.channel
-        if not hasattr(target, "send"):
-            raise commands.BadArgument(
-                "Choose a text channel for Twitch announcements."
-            )
-
-        async with self.bot.pool.acquire() as connection:
-            async with connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1))",
-                    f"fishie:twitch:{ctx.guild.id}",
-                )
-                existing = await connection.fetchval(
-                    "SELECT 1 FROM twitch_follows "
-                    "WHERE guild_id = $1 AND channel_name = $2",
-                    ctx.guild.id,
-                    channel_name,
-                )
-                if not existing:
-                    count = await connection.fetchval(
-                        "SELECT COUNT(*) FROM twitch_follows WHERE guild_id = $1",
-                        ctx.guild.id,
-                    )
-                    if count >= 3:
-                        raise commands.BadArgument(
-                            "You can follow up to 3 Twitch channels per server."
-                        )
-
-                await connection.execute(
-                    """INSERT INTO twitch_follows
-                       (guild_id, channel_name, announce_channel_id, broadcaster_id)
-                       VALUES ($1, $2, $3, $4)
-                       ON CONFLICT (guild_id, channel_name) DO UPDATE
-                       SET announce_channel_id = EXCLUDED.announce_channel_id,
-                           broadcaster_id = EXCLUDED.broadcaster_id""",
-                    ctx.guild.id,
-                    channel_name,
-                    target.id,
-                    broadcaster_id,
-                )
-
-        try:
-            await events.ensure_twitch_eventsub_subscription(broadcaster_id)
-        except Exception as error:
-            self.bot.logger.warning(
-                "Could not enable Twitch EventSub for %s: %s",
-                channel_name,
-                error,
-            )
-
-        if ctx.interaction and not ctx.interaction.response.is_done():
-            await ctx.interaction.response.send_modal(
-                TwitchMessageModal(self.bot, ctx.author.id, ctx.guild.id, channel_name)
-            )
-            return
-
-        await ctx.send(
-            f"Now following **{channel_name}**; live announcements will be posted in {target.mention}.",
-            view=TwitchFollowView(
-                ctx, ctx.bot, ctx.author.id, ctx.guild.id, channel_name
+            view=SettingsMessageView(
+                ctx,
+                f"## Server settings\n{['Disabled', 'Enabled'][value]} auto media reactions for this server.",
             ),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
-
-    @twitch.command(name="message", aliases=("customize", "text"))
-    @app_commands.describe(channel_name="Followed Twitch channel name or handle.")
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.guild_only()
-    async def twitch_message(self, ctx: GuildContext, channel_name: str):
-        """Customize the text sent above a Twitch live embed."""
-        channel_name = channel_name.strip().lstrip("@").lower()
-        exists = await self.bot.pool.fetchval(
-            "SELECT 1 FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
-            ctx.guild.id,
-            channel_name,
-        )
-        if not exists:
-            raise commands.BadArgument(
-                f"This server is not following **{channel_name}**."
-            )
-        await ctx.send(
-            f"Customize the announcement text for **{channel_name}**:",
-            view=TwitchFollowView(
-                ctx, ctx.bot, ctx.author.id, ctx.guild.id, channel_name
-            ),
-        )
-
-    @twitch.command(name="unfollow", aliases=("remove", "delete"))
-    @app_commands.describe(channel_name="Followed Twitch channel name or handle.")
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.guild_only()
-    async def twitch_unfollow(self, ctx: GuildContext, channel_name: str):
-        """Stop following a Twitch channel in this server."""
-        channel_name = channel_name.strip().lstrip("@").lower()
-        broadcaster_id = await self.bot.pool.fetchval(
-            "SELECT broadcaster_id FROM twitch_follows "
-            "WHERE guild_id = $1 AND channel_name = $2",
-            ctx.guild.id,
-            channel_name,
-        )
-        result = await self.bot.pool.execute(
-            "DELETE FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
-            ctx.guild.id,
-            channel_name,
-        )
-        if result == "DELETE 0":
-            raise commands.BadArgument(
-                f"This server is not following **{channel_name}**."
-            )
-        if broadcaster_id:
-            events = cast("Events | None", self.bot.get_cog("Events"))
-            if events is not None and hasattr(
-                events, "remove_twitch_eventsub_subscription"
-            ):
-                await events.remove_twitch_eventsub_subscription(str(broadcaster_id))
-        await ctx.send(f"Stopped following **{channel_name}**.")

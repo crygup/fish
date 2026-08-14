@@ -735,6 +735,7 @@ async def _refresh_discord_accounts_message(
                 steam_connected=bool(row and row["steam"]),
                 anilist_connected=bool(row and row["anilist"]),
             ),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
     except Exception as error:
         bot_ref.logger.warning(
@@ -1150,7 +1151,9 @@ async def _history_visible_to(
         "SELECT history_public FROM user_settings WHERE user_id = $1",
         user_id,
     )
-    if history_public is not False:
+    # Saved history is private unless the owner explicitly enables public
+    # visibility.  This also protects users who have no user_settings row yet.
+    if history_public is True:
         return
 
     viewer_id: int | None = None
@@ -1191,6 +1194,8 @@ VALID_OPTOUTS = {
     "corn",
     "emoji",
     "downloads",
+    "higher_lower",
+    "heads_tails",
 }
 
 
@@ -1255,7 +1260,7 @@ async def get_user_privacy_settings(
     )
     return {
         "tracking_enabled": row["tracking_enabled"] if row else True,
-        "history_public": row["history_public"] if row else True,
+        "history_public": row["history_public"] if row else False,
     }
 
 
@@ -1277,11 +1282,17 @@ async def set_user_privacy_settings(
         )
     await _check_pool().execute(
         """
-        INSERT INTO user_settings (user_id, tracking_enabled, history_public)
-        VALUES ($1, $2, $3)
+        INSERT INTO user_settings (
+            user_id, tracking_enabled, history_public, tracking_consent
+        )
+        VALUES ($1, $2, $3, $3)
         ON CONFLICT (user_id) DO UPDATE
         SET tracking_enabled = EXCLUDED.tracking_enabled,
-            history_public = EXCLUDED.history_public
+            history_public = EXCLUDED.history_public,
+            tracking_consent = CASE
+                WHEN EXCLUDED.history_public THEN TRUE
+                ELSE user_settings.tracking_consent
+            END
         """,
         user_id,
         tracking_enabled,
@@ -1292,10 +1303,9 @@ async def set_user_privacy_settings(
             bot_ref.db_cache.tracking_disabled_users.discard(user_id)
         else:
             bot_ref.db_cache.tracking_disabled_users.add(user_id)
+        bot_ref.db_cache.set_history_public(user_id, history_public)
         if history_public:
-            bot_ref.db_cache.private_history_users.discard(user_id)
-        else:
-            bot_ref.db_cache.private_history_users.add(user_id)
+            bot_ref.db_cache.set_tracking_consent(user_id)
     return {
         "tracking_enabled": tracking_enabled,
         "history_public": history_public,
@@ -1986,7 +1996,7 @@ async def lastfm_callback(token: str = Query(...), state: str = Query(...)):
         username,
         encrypt_credential(session_key),
     )
-    bot_ref.db_cache.add_account(user_id, username)
+    await bot_ref.refresh_account_cache(user_id)
     await _refresh_discord_accounts_message(user_id, channel_id, message_id)
     return {"username": username, "source": source}
 
@@ -2309,6 +2319,7 @@ async def anilist_callback(code: str = Query(...), state: str = Query(...)):
         username,
         encrypt_credential(access_token),
     )
+    await bot_ref.refresh_account_cache(user_id)
     await _refresh_discord_accounts_message(user_id, channel_id, message_id)
     return {"username": username, "source": source}
 
@@ -2600,7 +2611,7 @@ async def delete_user_data(
                     )
                     deleted += int(r.split()[-1])
     if bot_ref:
-        bot_ref.db_cache.lastfm.pop(user_id, None)
+        await bot_ref.refresh_account_cache(user_id)
         bot_ref.db_cache.opted_out.pop(user_id, None)
         bot_ref.cached_mudae_consent.discard(user_id)
         tools = bot_ref.get_cog("Tools")
@@ -2999,7 +3010,7 @@ async def disconnect_lastfm(
         user_id,
     )
     if bot_ref:
-        bot_ref.db_cache.lastfm.pop(user_id, None)
+        await bot_ref.refresh_account_cache(user_id)
     return {"disconnected": True}
 
 
@@ -3034,6 +3045,8 @@ async def disconnect_anilist(
         "WHERE user_id = $1",
         user_id,
     )
+    if bot_ref:
+        await bot_ref.refresh_account_cache(user_id)
     return {"disconnected": True}
 
 
@@ -3755,8 +3768,13 @@ async def delete_logger_setting(
 
 
 @app.get("/guild/{guild_id}/prefixes")
-async def get_guild_prefixes(guild_id: int):
-    """Get custom prefixes for a guild."""
+async def get_guild_prefixes(
+    guild_id: int,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=SESSION_COOKIE),
+):
+    """Get custom prefixes for a guild managed by the authenticated user."""
+    await _managed_guild(guild_id, authorization, session_id)
     pool = _check_pool()
     rows = await pool.fetch(
         "SELECT prefix, author_id, time FROM guild_prefixes WHERE guild_id = $1 ORDER BY time",

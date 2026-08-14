@@ -110,6 +110,8 @@ def test_activity_is_available_as_an_individual_tracking_opt_out() -> None:
     assert "activity" in api.VALID_OPTOUTS
     assert "emoji" in api.VALID_OPTOUTS
     assert "downloads" in api.VALID_OPTOUTS
+    assert "higher_lower" in api.VALID_OPTOUTS
+    assert "heads_tails" in api.VALID_OPTOUTS
 
 
 @pytest.mark.asyncio

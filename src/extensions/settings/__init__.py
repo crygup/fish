@@ -105,16 +105,47 @@ def _steam_authorization_url(
     )
 
 
-def _lastfm_link_view(url: str) -> discord.ui.View:
-    view = discord.ui.View(timeout=10 * 60)
-    view.add_item(
-        discord.ui.Button(
-            label="Authorize on Last.fm",
-            style=discord.ButtonStyle.link,
-            url=url,
+class SettingsLinkView(discord.ui.LayoutView):
+    """Components V2 authorization prompt used by account settings."""
+
+    def __init__(self, prompt: str, label: str, url: str) -> None:
+        super().__init__(timeout=10 * 60)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"## Connected accounts\n{prompt}"),
+                discord.ui.ActionRow(
+                    discord.ui.Button(
+                        label=label,
+                        style=discord.ButtonStyle.link,
+                        url=url,
+                    )
+                ),
+            )
         )
+
+
+def _lastfm_link_view(url: str) -> SettingsLinkView:
+    return SettingsLinkView(
+        "Authorize Fishie on Last.fm to connect your account.",
+        "Authorize on Last.fm",
+        url,
     )
-    return view
+
+
+def _steam_link_view(url: str) -> SettingsLinkView:
+    return SettingsLinkView(
+        "Authorize Fishie on Steam to connect your account.",
+        "Authorize on Steam",
+        url,
+    )
+
+
+def _anilist_link_view(url: str) -> SettingsLinkView:
+    return SettingsLinkView(
+        "Authorize Fishie on AniList to connect your account.",
+        "Authorize on AniList",
+        url,
+    )
 
 
 async def _send_lastfm_link(ctx: Context, interaction: discord.Interaction) -> None:
@@ -127,22 +158,10 @@ async def _send_lastfm_link(ctx: Context, interaction: discord.Interaction) -> N
         message_id=message.id if message and can_refresh else None,
     )
     await interaction.response.send_message(
-        "Authorize Fishie on Last.fm to connect your account.",
         view=_lastfm_link_view(url),
         ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
     )
-
-
-def _steam_link_view(url: str) -> discord.ui.View:
-    view = discord.ui.View(timeout=10 * 60)
-    view.add_item(
-        discord.ui.Button(
-            label="Authorize on Steam",
-            style=discord.ButtonStyle.link,
-            url=url,
-        )
-    )
-    return view
 
 
 def _anilist_authorization_url(
@@ -189,22 +208,10 @@ async def _send_steam_link(ctx: Context, interaction: discord.Interaction) -> No
         message_id=message.id if message and can_refresh else None,
     )
     await interaction.response.send_message(
-        "Authorize Fishie on Steam to connect your account.",
         view=_steam_link_view(url),
         ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
     )
-
-
-def _anilist_link_view(url: str) -> discord.ui.View:
-    view = discord.ui.View(timeout=10 * 60)
-    view.add_item(
-        discord.ui.Button(
-            label="Authorize on AniList",
-            style=discord.ButtonStyle.link,
-            url=url,
-        )
-    )
-    return view
 
 
 async def _send_anilist_link(ctx: Context, interaction: discord.Interaction) -> None:
@@ -217,9 +224,9 @@ async def _send_anilist_link(ctx: Context, interaction: discord.Interaction) -> 
         message_id=message.id if message and can_refresh else None,
     )
     await interaction.response.send_message(
-        "Authorize Fishie on AniList to connect your account.",
         view=_anilist_link_view(url),
         ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
@@ -228,7 +235,7 @@ async def _disconnect_lastfm(bot: Fishie, user_id: int) -> None:
         "UPDATE accounts SET lastfm = NULL, lastfm_session_key = NULL WHERE user_id = $1",
         user_id,
     )
-    bot.db_cache.lastfm.pop(user_id, None)
+    await bot.refresh_account_cache(user_id)
 
 
 async def _disconnect_steam(bot: Fishie, user_id: int) -> None:
@@ -244,6 +251,7 @@ async def _disconnect_anilist(bot: Fishie, user_id: int) -> None:
         "WHERE user_id = $1",
         user_id,
     )
+    await bot.refresh_account_cache(user_id)
 
 
 def _accounts_text(row) -> str:
@@ -270,9 +278,7 @@ class Settings(Logging, Server):
         super().__init__()
         self.bot = bot
 
-    @commands.hybrid_command(name="accounts")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="accounts")
     async def accounts(self, ctx: Context):
         """View and manage your connected accounts"""
         row = await self.bot.pool.fetchrow(
@@ -290,41 +296,10 @@ class Settings(Logging, Server):
             steam_connected=steam_connected,
             anilist_connected=anilist_connected,
         )
-        await ctx.send(view=view)
-
-
-class LastfmConnectView(discord.ui.View):
-    def __init__(self, ctx: Context, *, connected: bool):
-        super().__init__(timeout=120)
-        self.ctx = ctx
-        self.connected = connected
-        if connected:
-            self.connect_lastfm.label = "Disconnect Last.fm"
-            self.connect_lastfm.style = discord.ButtonStyle.red
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.ctx.author.id:
-            return True
-        await interaction.response.send_message(
-            "Run the command yourself to connect your Last.fm account.",
-            ephemeral=True,
+        await ctx.send(
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
-        return False
-
-    @discord.ui.button(label="Connect Last.fm", style=discord.ButtonStyle.green)
-    async def connect_lastfm(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ):
-        if self.connected:
-            await _disconnect_lastfm(self.ctx.bot, interaction.user.id)
-            self.connected = False
-            self.connect_lastfm.label = "Connect Last.fm"
-            self.connect_lastfm.style = discord.ButtonStyle.green
-            await interaction.response.edit_message(
-                content="Your Last.fm account has been disconnected.", view=self
-            )
-            return
-        await _send_lastfm_link(self.ctx, interaction)
 
 
 class ManageAccountsView(discord.ui.LayoutView):
@@ -393,6 +368,7 @@ class ManageAccountsView(discord.ui.LayoutView):
         await interaction.response.send_message(
             "Run the accounts command yourself to manage your accounts.",
             ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
         return False
 
@@ -401,9 +377,14 @@ class ManageAccountsView(discord.ui.LayoutView):
             await _disconnect_lastfm(self.ctx.bot, interaction.user.id)
             row = await self._fetch_accounts(interaction.user.id)
             self.update_accounts(row)
-            await interaction.response.edit_message(view=self)
+            await interaction.response.edit_message(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             await interaction.followup.send(
-                "Your Last.fm account has been disconnected.", ephemeral=True
+                "Your Last.fm account has been disconnected.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
         await _send_lastfm_link(self.ctx, interaction)
@@ -413,9 +394,14 @@ class ManageAccountsView(discord.ui.LayoutView):
             await _disconnect_steam(self.ctx.bot, interaction.user.id)
             row = await self._fetch_accounts(interaction.user.id)
             self.update_accounts(row)
-            await interaction.response.edit_message(view=self)
+            await interaction.response.edit_message(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             await interaction.followup.send(
-                "Your Steam account has been disconnected.", ephemeral=True
+                "Your Steam account has been disconnected.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
         await _send_steam_link(self.ctx, interaction)
@@ -425,9 +411,14 @@ class ManageAccountsView(discord.ui.LayoutView):
             await _disconnect_anilist(self.ctx.bot, interaction.user.id)
             row = await self._fetch_accounts(interaction.user.id)
             self.update_accounts(row)
-            await interaction.response.edit_message(view=self)
+            await interaction.response.edit_message(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             await interaction.followup.send(
-                "Your AniList account has been disconnected.", ephemeral=True
+                "Your AniList account has been disconnected.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
         await _send_anilist_link(self.ctx, interaction)
@@ -515,79 +506,16 @@ class ManageAccountsModal(discord.ui.Modal, title="Manage Other Accounts"):
         )
         self._view.update_accounts(row)
         if interaction.message:
-            await interaction.message.edit(view=self._view)
+            await interaction.message.edit(
+                view=self._view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
         await interaction.followup.send(
-            "\n".join(msg) if msg else "No changes made.", ephemeral=True
-        )
-
-
-class SteamConnectView(discord.ui.View):
-    def __init__(self, ctx: Context, *, connected: bool):
-        super().__init__(timeout=120)
-        self.ctx = ctx
-        self.connected = connected
-        if connected:
-            self.connect_steam.label = "Disconnect Steam"
-            self.connect_steam.style = discord.ButtonStyle.red
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.ctx.author.id:
-            return True
-        await interaction.response.send_message(
-            "Run the command yourself to connect your Steam account.",
+            "\n".join(msg) if msg else "No changes made.",
             ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
-        return False
-
-    @discord.ui.button(label="Connect Steam", style=discord.ButtonStyle.green)
-    async def connect_steam(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ):
-        if self.connected:
-            await _disconnect_steam(self.ctx.bot, interaction.user.id)
-            self.connected = False
-            self.connect_steam.label = "Connect Steam"
-            self.connect_steam.style = discord.ButtonStyle.green
-            await interaction.response.edit_message(
-                content="Your Steam account has been disconnected.", view=self
-            )
-            return
-        await _send_steam_link(self.ctx, interaction)
-
-
-class AnilistConnectView(discord.ui.View):
-    def __init__(self, ctx: Context, *, connected: bool):
-        super().__init__(timeout=120)
-        self.ctx = ctx
-        self.connected = connected
-        if connected:
-            self.connect_anilist.label = "Disconnect AniList"
-            self.connect_anilist.style = discord.ButtonStyle.red
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.ctx.author.id:
-            return True
-        await interaction.response.send_message(
-            "Run the command yourself to connect your AniList account.",
-            ephemeral=True,
-        )
-        return False
-
-    @discord.ui.button(label="Connect AniList", style=discord.ButtonStyle.green)
-    async def connect_anilist(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ):
-        if self.connected:
-            await _disconnect_anilist(self.ctx.bot, interaction.user.id)
-            self.connected = False
-            self.connect_anilist.label = "Connect AniList"
-            self.connect_anilist.style = discord.ButtonStyle.green
-            await interaction.response.edit_message(
-                content="Your AniList account has been disconnected.", view=self
-            )
-            return
-        await _send_anilist_link(self.ctx, interaction)
 
 
 async def setup(bot: Fishie):
