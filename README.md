@@ -3,21 +3,8 @@
 This repository keeps the bot source in `src`, database migrations in
 `migrations`, and the Docker setup in the repository root.
 
-## What you need
-
-- Docker Engine with the Compose plugin
-- Git
-- A Discord application and bot from the
-  [Discord Developer Portal](https://discord.com/developers/applications)
-- PostgreSQL 18 if you are running outside Docker
-- Python 3.13 and FFmpeg if you are running outside Docker
-
 Copy `examples/config.toml` to `config.toml` and fill in the values you plan to
-use. `config.toml` is ignored by Git and should stay private.
-
-The Discord bot token comes from the Bot page in the Discord Developer Portal.
-The application ID and client secret come from the OAuth2 page. Enable the
-gateway intents Fishie uses on the Bot page before inviting it.
+use.
 
 Most third-party keys are optional until you use their related commands:
 
@@ -28,14 +15,7 @@ Most third-party keys are optional until you use their related commands:
 - Google keys come from the [Google Cloud console](https://console.cloud.google.com/)
 - Steam keys come from the [Steam Web API key page](https://steamcommunity.com/dev/apikey)
 
-Create `.env` from `.env.example`. Use a long random PostgreSQL password and
-generate the credential key with:
-
-```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
-Do not commit `.env`, `config.toml`, cookie files, logs, or credential keys.
+Create `.env` from `.env.example`.
 
 ## Run with Docker
 
