@@ -11,8 +11,17 @@ from discord.ext import commands
 import extensions
 from extensions.context import Context
 from extensions.fun import Fun
-from extensions.help import command_usage, make_command_embed
+from extensions.help import (
+    HelpBackButton,
+    HelpLayoutView,
+    _command_description,
+    _command_flag_lines,
+    command_usage,
+    make_command_embed,
+)
 from extensions.media_effects.commands import Images
+from extensions.search import Search
+from extensions.search.roblox import Roblox
 from extensions.tools import Tools
 from extensions.tools.purge import ReactionPurgeFlags
 
@@ -58,13 +67,9 @@ def test_generic_parser_arguments_have_custom_help_usage() -> None:
 def test_help_uses_custom_usage_and_qualified_command_names() -> None:
     ctx = cast(Context, SimpleNamespace(get_prefix="fish "))
 
-    assert command_usage(ctx, Images.cube) == (
-        "fish cube <media> [-speed 1 -clockwise]"
-    )
+    assert command_usage(ctx, Images.cube) == "fish cube <media> [flags...]"
     assert command_usage(ctx, Images.overlay_group) == (
-        "fish overlay <media> <user|media|emoji|asset|flag> [name|random] "
-        "[-opacity 70 -scale 1 -size 100x100 -start 0 -stop 0 "
-        "-position center -x 0 -y 0 -stretch -extend -no-audio -fr]"
+        "fish overlay <media> <user|media|emoji|image|video|flag> [name|id|random] [flags...]"
     )
 
 
@@ -113,10 +118,116 @@ def test_every_command_help_embed_respects_discord_limits() -> None:
 def test_flag_commands_document_their_flags() -> None:
     assert "-skip" in (Tools.purge.help or "")
     assert "-format" in (Tools.download.help or "")
-    assert "-delay" in (Tools.screenshot.help or "")
+    assert "-delay" in (Search.screenshot.help or "")
     assert "-onlyme" in (Fun.phone.help or "")
     assert "-clockwise" in (Images.cube.help or "")
     assert "-audio" in (Images.audio_group_replace.help or "")
+
+
+def test_detailed_help_renders_flags_and_excludes_effect_groups() -> None:
+    assert "-skip" in "\n".join(_command_flag_lines(Tools.purge))
+    assert "-reaction_id" in "\n".join(_command_flag_lines(Tools.purge_reactions))
+    assert "-speed" in "\n".join(_command_flag_lines(Images.cube))
+    assert _command_flag_lines(Images.effect_2) == []
+
+    ctx = cast(
+        Context,
+        SimpleNamespace(
+            bot=SimpleNamespace(embedcolor=0),
+            get_prefix="fish ",
+        ),
+    )
+    purge_embed = make_command_embed(ctx, Tools.purge)
+    flags = [
+        field.value or ""
+        for field in purge_embed.fields
+        if (field.name or "").startswith("Flags")
+    ]
+    assert flags
+    assert all(value.startswith("```") and value.endswith("```") for value in flags)
+    assert "-skip" in "\n".join(flags)
+    assert command_usage(ctx, Tools.purge) == "fish purge [amount] [flags...]"
+    assert command_usage(ctx, Tools.purge_reactions) == (
+        "fish purge reactions [amount] [flags...]"
+    )
+
+
+def test_flag_codeblocks_align_syntax_and_description() -> None:
+    ctx = cast(
+        Context,
+        SimpleNamespace(
+            bot=SimpleNamespace(embedcolor=0),
+            get_prefix="fish ",
+        ),
+    )
+    blur_embed = make_command_embed(ctx, Images.blur)
+    flags = next(
+        (field.value or "") for field in blur_embed.fields if field.name == "Flags"
+    )
+
+    assert "-radius              Change the blur strength." in flags
+    assert "-type                Choose gaussian, box, or motion blur." in flags
+
+
+def test_detailed_help_keeps_flags_out_of_command_description() -> None:
+    command = next(
+        command
+        for command in Roblox.__cog_commands__
+        if command.qualified_name == "roblox item"
+    )
+    description = _command_description(command)
+
+    assert description == (
+        "Look up a Roblox item with optional creator, sale, limited, and type filters."
+    )
+    assert "-creator" not in description
+    assert "-creator" in "\n".join(_command_flag_lines(command))
+
+
+def test_help_detail_has_back_button_and_restores_category_commands() -> None:
+    category = SimpleNamespace(
+        qualified_name="Media Effects",
+        emoji="🌐",
+        description="Media effects",
+        hidden=False,
+    )
+    ctx = cast(
+        Context,
+        SimpleNamespace(
+            bot=SimpleNamespace(embedcolor=0),
+            author=SimpleNamespace(id=1),
+            clean_prefix="fish",
+            get_prefix="fish ",
+        ),
+    )
+    view = HelpLayoutView(
+        ctx,
+        [category],
+        selected_cog=category,
+        commands_list=[Images.cube],
+        detail=Images.cube,
+    )
+
+    rows = [item for item in view.children if hasattr(item, "children")]
+    assert any(
+        isinstance(child, HelpBackButton) for row in rows for child in row.children
+    )
+
+    class Response:
+        async def edit_message(self, **kwargs):
+            self.kwargs = kwargs
+
+    interaction = SimpleNamespace(response=Response())
+    import asyncio
+
+    asyncio.run(view.back_to_category(interaction))
+    assert view.detail is None
+    assert any(
+        type(child).__name__ == "HelpCommandSelect"
+        for row in view.children
+        for child in row.children
+    )
+    assert interaction.response.kwargs["allowed_mentions"].replied_user is False
 
 
 def test_reaction_purge_documents_and_parses_reaction_filters() -> None:
