@@ -41,7 +41,7 @@ class HoneypotSetupView(AuthorView):
 class Honeypot(Cog):
     """Honeypot channel instantly bans anyone who sends a message in it."""
 
-    @commands.hybrid_group(name="honeypot")
+    @commands.group(name="honeypot", invoke_without_command=True)
     @commands.has_guild_permissions(manage_channels=True, ban_members=True)
     @commands.bot_has_guild_permissions(manage_channels=True, ban_members=True)
     async def honeypot(self, ctx: GuildContext):

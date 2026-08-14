@@ -27,11 +27,11 @@ LOGGER_EVENTS: dict[str, str] = {
     "member": "Member joins, leaves, name, and tag changes",
     "activity": "Member game and activity changes",
     "voice": "Voice channel joins, leaves, moves, mutes, deafens, and disconnects",
-    "channel": "Channel changes",
+    "channel": "Channel, thread, and webhook changes",
     "role": "Role changes",
     "server": "Server, emoji, and sticker changes",
-    "moderation": "Bans, kicks, unbans, and timeouts",
-    "message": "Message edits, deletions, and purges",
+    "moderation": "Bans, kicks, prunes, automod, and timeouts",
+    "message": "Message edits, deletions, pins, and purges",
 }
 LOGGER_EVENT_ALIASES = {
     "vc": "voice",
@@ -53,6 +53,41 @@ def _display(value: object | None) -> str:
         return "None"
     value = discord.utils.escape_mentions(discord.utils.escape_markdown(str(value)))
     return value if len(value) <= 1000 else value[:997] + "..."
+
+
+def _attachment_signature(attachment: discord.Attachment) -> tuple[object, ...]:
+    return (
+        getattr(attachment, "id", None),
+        getattr(attachment, "filename", None),
+        getattr(attachment, "size", None),
+        getattr(attachment, "content_type", None),
+        getattr(attachment, "url", None),
+    )
+
+
+def _embed_signature(embed: discord.Embed) -> str:
+    try:
+        return repr(embed.to_dict())
+    except (AttributeError, TypeError):
+        return repr(embed)
+
+
+def _message_sticker_signature(sticker: object) -> tuple[object, ...]:
+    return (
+        getattr(sticker, "id", None),
+        getattr(sticker, "name", None),
+        getattr(sticker, "format", None),
+    )
+
+
+def _attachment_lines(attachments: Sequence[discord.Attachment]) -> str:
+    if not attachments:
+        return "None"
+    lines = []
+    for attachment in attachments:
+        filename = discord.utils.escape_markdown(str(attachment.filename))
+        lines.append(f"[{filename}]({attachment.url})")
+    return "\n".join(lines)[:1024]
 
 
 def _canonical_logger_event(event: str) -> str:
@@ -444,6 +479,8 @@ class Logger(Cog):
     _pending_purges: dict[tuple[int, int], float]
     _webhook_locks: dict[tuple[int, str], asyncio.Lock]
     _logged_webhook_creations: dict[tuple[int, int, str], float]
+    _logged_prunes: dict[int, float]
+    _logged_audit_events: dict[int, float]
     _channel_move_batches: dict[int, list[_ChannelPositionChange]]
     _channel_move_tasks: dict[int, asyncio.Task[None]]
 
@@ -509,6 +546,7 @@ class Logger(Cog):
                 embed,
                 audit_action=discord.AuditLogAction.channel_update,
                 audit_target_id=changes[0].channel_id if len(changes) == 1 else None,
+                audit_target_ids={change.channel_id for change in changes},
             )
         finally:
             tasks: dict[int, asyncio.Task[None]] = getattr(
@@ -577,33 +615,95 @@ class Logger(Cog):
         self._webhook_locks = locks
         return locks.setdefault((guild_id, event), asyncio.Lock())
 
+    @staticmethod
+    def _audit_channel_id(entry: discord.AuditLogEntry) -> int | None:
+        """Return the channel ID carried by an audit entry, when available."""
+        target = getattr(entry, "target", None)
+        for value in (
+            getattr(target, "channel_id", None),
+            getattr(getattr(target, "channel", None), "id", None),
+            getattr(getattr(entry, "extra", None), "channel", None),
+            getattr(
+                getattr(getattr(entry, "extra", None), "channel", None), "id", None
+            ),
+        ):
+            if isinstance(value, int):
+                return value
+            value_id = getattr(value, "id", None)
+            if isinstance(value_id, int):
+                return value_id
+        for state in (getattr(entry, "before", None), getattr(entry, "after", None)):
+            state_channel_id = getattr(state, "channel_id", None)
+            if isinstance(state_channel_id, int):
+                return state_channel_id
+            channel = getattr(state, "channel", None)
+            channel_id = getattr(channel, "id", None)
+            if isinstance(channel_id, int):
+                return channel_id
+        return None
+
+    async def _recent_audit_entry(
+        self,
+        guild: discord.Guild,
+        actions: Sequence[discord.AuditLogAction],
+        *,
+        target_id: int | None = None,
+        target_ids: set[int] | None = None,
+        channel_id: int | None = None,
+        max_age: float = 20,
+    ) -> discord.AuditLogEntry | None:
+        """Find a recent audit entry while tolerating Discord's delayed events."""
+        me = guild.me
+        if me is None or not me.guild_permissions.view_audit_log:
+            return None
+        action_set = set(actions)
+        wanted_ids = target_ids or set()
+        for attempt in range(3):
+            try:
+                async for entry in guild.audit_logs(limit=30):
+                    if entry.action not in action_set:
+                        continue
+                    age = (discord.utils.utcnow() - entry.created_at).total_seconds()
+                    if not -2 <= age <= max_age:
+                        continue
+                    entry_target_id = getattr(entry.target, "id", None)
+                    if target_id is not None and entry_target_id != target_id:
+                        continue
+                    if wanted_ids and entry_target_id not in wanted_ids:
+                        continue
+                    if (
+                        channel_id is not None
+                        and self._audit_channel_id(entry) != channel_id
+                    ):
+                        continue
+                    return entry
+            except (discord.Forbidden, discord.HTTPException):
+                return None
+            if attempt < 2:
+                await asyncio.sleep(0.35)
+        return None
+
     async def _audit_details(
         self,
         guild: discord.Guild,
         action: discord.AuditLogAction,
         target_id: int | None = None,
+        target_ids: set[int] | None = None,
+        channel_id: int | None = None,
     ) -> tuple[discord.User | discord.Member, str | None] | None:
-        me = guild.me
-        if me is None or not me.guild_permissions.view_audit_log:
-            return None
-
-        for attempt in range(2):
-            try:
-                async for entry in guild.audit_logs(limit=8, action=action):
-                    entry_target_id = getattr(entry.target, "id", None)
-                    if target_id is not None and entry_target_id != target_id:
-                        continue
-                    age = (discord.utils.utcnow() - entry.created_at).total_seconds()
-                    if -2 <= age <= 15:
-                        if entry.user is not None:
-                            return entry.user, entry.reason
-            except (discord.Forbidden, discord.HTTPException):
-                return None
-            if attempt == 0:
-                await asyncio.sleep(0.25)
+        entry = await self._recent_audit_entry(
+            guild,
+            (action,),
+            target_id=target_id,
+            target_ids=target_ids,
+            channel_id=channel_id,
+            max_age=30,
+        )
+        if entry is not None and entry.user is not None:
+            return entry.user, entry.reason
         return None
 
-    async def _recent_webhook_change(self, channel: discord.TextChannel) -> (
+    async def _recent_webhook_change(self, channel: discord.abc.GuildChannel) -> (
         tuple[
             discord.AuditLogAction,
             discord.Webhook,
@@ -620,6 +720,7 @@ class Logger(Cog):
         actions = {
             discord.AuditLogAction.webhook_create,
             discord.AuditLogAction.webhook_delete,
+            discord.AuditLogAction.webhook_update,
         }
         seen: dict[tuple[int, int, str], float] = getattr(
             self, "_logged_webhook_creations", {}
@@ -653,17 +754,7 @@ class Logger(Cog):
                     webhook_id = getattr(target, "id", None)
                     if webhook_id is None:
                         continue
-                    target_channel_id = getattr(target, "channel_id", None)
-                    target_channel = getattr(target, "channel", None)
-                    if target_channel_id is None and target_channel is not None:
-                        target_channel_id = getattr(target_channel, "id", None)
-                    if target_channel_id is None:
-                        for state in (entry.before, entry.after):
-                            changed_channel = getattr(state, "channel", None)
-                            if changed_channel is not None:
-                                target_channel_id = getattr(changed_channel, "id", None)
-                                if target_channel_id is not None:
-                                    break
+                    target_channel_id = self._audit_channel_id(entry)
                     if target_channel_id != channel.id:
                         continue
 
@@ -702,6 +793,8 @@ class Logger(Cog):
         guild: discord.Guild,
         action: discord.AuditLogAction,
         target_id: int | None = None,
+        target_ids: set[int] | None = None,
+        channel_id: int | None = None,
         target: discord.User | discord.Member | None = None,
         actor_label: str = "Changed by",
     ) -> None:
@@ -711,7 +804,9 @@ class Logger(Cog):
                 value=f"{target.name}\n{target.mention}",
                 inline=True,
             )
-        details = await self._audit_details(guild, action, target_id)
+        details = await self._audit_details(
+            guild, action, target_id, target_ids, channel_id
+        )
         if details is None:
             return
         actor, reason = details
@@ -1057,7 +1152,7 @@ class Logger(Cog):
     async def logger_channel(
         self, ctx: GuildContext, channel: discord.TextChannel
     ) -> None:
-        """Log channel creation, updates, and deletion."""
+        """Log channel, thread, and webhook creation, updates, and deletion."""
         await self._set_logger_channel(ctx, "channel", channel)
 
     @logger.command(name="role", aliases=("roles",))
@@ -1071,7 +1166,7 @@ class Logger(Cog):
     async def logger_server(
         self, ctx: GuildContext, channel: discord.TextChannel
     ) -> None:
-        """Log server, emoji, and sticker changes."""
+        """Log server settings, emoji, and sticker changes."""
         await self._set_logger_channel(ctx, "server", channel)
 
     @logger.command(name="moderation", aliases=("mod", "bans"))
@@ -1085,7 +1180,7 @@ class Logger(Cog):
     async def logger_message(
         self, ctx: GuildContext, channel: discord.TextChannel
     ) -> None:
-        """Log message edits, deletions, and bulk purges."""
+        """Log message metadata edits, deletions, pins, and bulk purges."""
         await self._set_logger_channel(ctx, "message", channel)
 
     @logger.command(name="clear", aliases=("disable", "remove"))
@@ -1101,9 +1196,16 @@ class Logger(Cog):
         *,
         audit_action: discord.AuditLogAction | None = None,
         audit_target_id: int | None = None,
+        audit_target_ids: set[int] | None = None,
+        audit_channel_id: int | None = None,
         audit_target: discord.User | discord.Member | None = None,
         audit_actor_label: str = "Changed by",
     ) -> None:
+        # A server administrator can disable all logger writes from the
+        # settings panel.  Check the in-memory setting before doing any
+        # database or webhook work so a disabled guild remains quiet.
+        if not self.bot.db_cache.guild_tracking_enabled(guild.id):
+            return
         row = await self.bot.pool.fetchrow(
             "SELECT channel_id, webhook_url "
             "FROM guild_log_channels "
@@ -1122,6 +1224,8 @@ class Logger(Cog):
                 guild,
                 audit_action,
                 audit_target_id,
+                audit_target_ids,
+                audit_channel_id,
                 audit_target,
                 audit_actor_label,
             )
@@ -1161,9 +1265,10 @@ class Logger(Cog):
             webhook = discord.Webhook.from_url(
                 str(webhook_url), session=self.bot.session
             )
+            view = self._embed_view(embed)
             try:
                 await webhook.send(
-                    embed=embed,
+                    view=view,
                     username="Fishie Logger",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -1176,7 +1281,7 @@ class Logger(Cog):
                 await discord.Webhook.from_url(
                     webhook_url, session=self.bot.session
                 ).send(
-                    embed=embed,
+                    view=view,
                     username="Fishie Logger",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -1267,12 +1372,69 @@ class Logger(Cog):
         )
 
     @staticmethod
+    def _embed_view(embed: discord.Embed) -> discord.ui.LayoutView:
+        """Convert a logger event into a Components V2 webhook payload.
+
+        Logger webhooks previously sent legacy embeds. Keeping the event
+        builders embed-shaped lets the existing formatting stay stable while
+        this conversion makes every event a Components V2 message at the
+        transport boundary.
+        """
+        view_type = type("LoggerEventView", (discord.ui.LayoutView,), {})
+        view = view_type(timeout=None)
+        children: list[discord.ui.Item] = []
+        text_parts: list[str] = []
+        if embed.title:
+            text_parts.append(f"## {embed.title}")
+        if embed.description:
+            text_parts.append(embed.description)
+        if embed.author and embed.author.name:
+            text_parts.append(f"-# {embed.author.name}")
+        for field in embed.fields:
+            value = f"**{field.name}**\n{field.value}"
+            text_parts.append(value)
+        text = "\n\n".join(text_parts)
+        while len(text) > 4000:
+            cut = text.rfind("\n", 0, 4000)
+            cut = cut if cut > 0 else 4000
+            children.append(discord.ui.TextDisplay(text[:cut]))
+            text = text[cut:].lstrip("\n")
+        if text:
+            children.append(discord.ui.TextDisplay(text))
+        if embed.image.url:
+            children.append(
+                discord.ui.MediaGallery(discord.MediaGalleryItem(embed.image.url))
+            )
+        elif embed.thumbnail.url:
+            children.append(
+                discord.ui.MediaGallery(discord.MediaGalleryItem(embed.thumbnail.url))
+            )
+        if embed.footer.text:
+            children.append(discord.ui.TextDisplay(f"-# {embed.footer.text}"))
+        elif embed.timestamp is not None:
+            children.append(
+                discord.ui.TextDisplay(
+                    f"-# {discord.utils.format_dt(embed.timestamp, 'R')}"
+                )
+            )
+        if not children:
+            children.append(discord.ui.TextDisplay("Logger event"))
+        view.add_item(
+            discord.ui.Container(
+                *children,
+                accent_color=embed.colour or discord.Colour.blurple(),
+            )
+        )
+        return view
+
+    @staticmethod
     def _add_item_id(
         embed: discord.Embed,
         item: (
             discord.User
             | discord.Member
             | discord.abc.GuildChannel
+            | discord.Thread
             | discord.Role
             | discord.Guild
             | discord.Message
@@ -1289,8 +1451,10 @@ class Logger(Cog):
         profile_changed = (
             before.name != after.name or before.display_name != after.display_name
         )
-        before_tag = before.primary_guild.tag
-        after_tag = after.primary_guild.tag
+        before_primary_guild = getattr(before, "primary_guild", None)
+        after_primary_guild = getattr(after, "primary_guild", None)
+        before_tag = getattr(before_primary_guild, "tag", None)
+        after_tag = getattr(after_primary_guild, "tag", None)
         tag_changed = before_tag != after_tag
         if not avatar_changed and not profile_changed and not tag_changed:
             return
@@ -1617,6 +1781,8 @@ class Logger(Cog):
 
     @commands.Cog.listener("on_member_remove")
     async def logger_member_remove(self, member: discord.Member) -> None:
+        if await self._log_recent_prune(member.guild):
+            return
         was_kicked = (
             await self._audit_details(
                 member.guild, discord.AuditLogAction.kick, member.id
@@ -1679,6 +1845,106 @@ class Logger(Cog):
             audit_target_id=channel.id,
         )
 
+    @staticmethod
+    def _thread_summary(thread: discord.Thread) -> str:
+        parent = getattr(thread, "parent", None)
+        return (
+            f"Parent: {getattr(parent, 'mention', 'Unknown')}\n"
+            f"Type: {_display(getattr(thread, 'type', None))}\n"
+            f"Archived: {'Yes' if getattr(thread, 'archived', False) else 'No'}\n"
+            f"Locked: {'Yes' if getattr(thread, 'locked', False) else 'No'}\n"
+            f"Auto archive: {_display(getattr(thread, 'auto_archive_duration', None))} minutes\n"
+            f"Slowmode: {_display(getattr(thread, 'slowmode_delay', None))} seconds"
+        )
+
+    @commands.Cog.listener("on_thread_create")
+    async def logger_thread_create(self, thread: discord.Thread) -> None:
+        embed = self._embed(
+            "Thread created",
+            f"{thread.mention} was created.",
+            color=discord.Colour.green(),
+        )
+        embed.add_field(
+            name="Details", value=self._thread_summary(thread), inline=False
+        )
+        self._add_item_id(embed, thread)
+        await self._emit_logger(
+            thread.guild,
+            "channel",
+            embed,
+            audit_action=discord.AuditLogAction.thread_create,
+            audit_target_id=thread.id,
+        )
+
+    @commands.Cog.listener("on_thread_delete")
+    async def logger_thread_delete(self, thread: discord.Thread) -> None:
+        embed = self._embed(
+            "Thread deleted",
+            f"`{_display(thread.name)}` was deleted.",
+            color=discord.Colour.red(),
+        )
+        parent = getattr(thread, "parent", None)
+        embed.add_field(
+            name="Parent",
+            value=getattr(parent, "mention", "Unknown"),
+            inline=False,
+        )
+        self._add_item_id(embed, thread)
+        await self._emit_logger(
+            thread.guild,
+            "channel",
+            embed,
+            audit_action=discord.AuditLogAction.thread_delete,
+            audit_target_id=thread.id,
+        )
+
+    @commands.Cog.listener("on_thread_update")
+    async def logger_thread_update(
+        self, before: discord.Thread, after: discord.Thread
+    ) -> None:
+        attributes = (
+            ("name", "Name"),
+            ("archived", "Archived"),
+            ("locked", "Locked"),
+            ("auto_archive_duration", "Auto archive (minutes)"),
+            ("slowmode_delay", "Slowmode (seconds)"),
+            ("invitable", "Invitable"),
+            ("applied_tags", "Applied tags"),
+        )
+        changes: list[tuple[str, object, object]] = []
+        for attribute, label in attributes:
+            old = getattr(before, attribute, None)
+            new = getattr(after, attribute, None)
+            if old != new:
+                changes.append((label, old, new))
+        before_parent = getattr(getattr(before, "parent", None), "id", None)
+        after_parent = getattr(getattr(after, "parent", None), "id", None)
+        if before_parent != after_parent:
+            changes.append(("Parent", before_parent, after_parent))
+        if not changes:
+            return
+        embed = self._embed(
+            "Thread updated",
+            f"{after.mention} was updated.",
+            color=discord.Colour.orange(),
+        )
+        embed.add_field(
+            name="Changes",
+            value="\n".join(
+                f"**{label}:** {_display(old)} -> {_display(new)}"
+                for label, old, new in changes
+            )[:1024],
+            inline=False,
+        )
+        self._add_item_id(embed, after)
+        await self._emit_logger(
+            after.guild,
+            "channel",
+            embed,
+            audit_action=discord.AuditLogAction.thread_update,
+            audit_target_id=after.id,
+        )
+
     @commands.Cog.listener("on_guild_channel_update")
     async def logger_channel_update(
         self,
@@ -1687,9 +1953,33 @@ class Logger(Cog):
     ) -> None:
         before_category = before.category.id if before.category else None
         after_category = after.category.id if after.category else None
-        metadata_changed = (
-            before.name != after.name or before_category != after_category
+        metadata_attributes = (
+            ("name", "Name"),
+            ("topic", "Topic"),
+            ("nsfw", "NSFW"),
+            ("slowmode_delay", "Slowmode (seconds)"),
+            ("bitrate", "Bitrate"),
+            ("user_limit", "User limit"),
+            ("rtc_region", "RTC region"),
+            ("default_auto_archive_duration", "Default auto archive (minutes)"),
+            ("default_thread_slowmode_delay", "Default thread slowmode (seconds)"),
+            ("default_sort_order", "Default sort order"),
+            ("default_forum_layout", "Default forum layout"),
+            ("available_tags", "Available tags"),
+            ("default_reaction_emoji", "Default reaction emoji"),
         )
+        metadata_changes = [
+            (
+                label,
+                getattr(before, attribute, None),
+                getattr(after, attribute, None),
+            )
+            for attribute, label in metadata_attributes
+            if getattr(before, attribute, None) != getattr(after, attribute, None)
+        ]
+        if before_category != after_category:
+            metadata_changes.append(("Category", before.category, after.category))
+        metadata_changed = bool(metadata_changes)
         before_position = getattr(before, "position", None)
         after_position = getattr(after, "position", None)
         position_changed = before_position != after_position
@@ -1710,11 +2000,17 @@ class Logger(Cog):
         if metadata_changed:
             embed.add_field(
                 name="Before",
-                value=f"{_display(before.name)} / {_display(before.category)}",
+                value="\n".join(
+                    f"**{label}:** {_display(old)}"
+                    for label, old, _ in metadata_changes
+                )[:1024],
             )
             embed.add_field(
                 name="After",
-                value=f"{_display(after.name)} / {_display(after.category)}",
+                value="\n".join(
+                    f"**{label}:** {_display(new)}"
+                    for label, _, new in metadata_changes
+                )[:1024],
             )
         if position_changed:
             embed.add_field(
@@ -1749,19 +2045,24 @@ class Logger(Cog):
 
     @commands.Cog.listener("on_webhooks_update")
     async def logger_webhooks_update(self, channel: discord.abc.GuildChannel) -> None:
-        """Log webhook creations and deletions in the channel logger."""
-        if not isinstance(channel, discord.TextChannel):
+        """Log webhook creations, updates, and deletions in channel logs."""
+        if channel.guild is None:
             return
         details = await self._recent_webhook_change(channel)
         if details is None:
             return
         audit_action, webhook, actor, reason = details
         deleted = audit_action is discord.AuditLogAction.webhook_delete
-        action = "deleted" if deleted else "created"
+        updated = audit_action is discord.AuditLogAction.webhook_update
+        action = "deleted" if deleted else "updated" if updated else "created"
         embed = self._embed(
             f"Webhook {action}",
             f"A webhook was {action} in {channel.mention}.",
-            color=discord.Colour.red() if deleted else discord.Colour.green(),
+            color=(
+                discord.Colour.red()
+                if deleted
+                else discord.Colour.orange() if updated else discord.Colour.green()
+            ),
         )
         embed.add_field(
             name="Webhook",
@@ -1774,7 +2075,7 @@ class Logger(Cog):
             inline=True,
         )
         embed.add_field(
-            name="Deleted by" if deleted else "Created by",
+            name="Deleted by" if deleted else "Updated by" if updated else "Created by",
             value=f"{actor.mention} \n`{actor.id}`",
             inline=True,
         )
@@ -1822,11 +2123,23 @@ class Logger(Cog):
         )
         color_changed = before.colour != after.colour
         position_changed = before.position != after.position
+        hoist_changed = before.hoist != after.hoist
+        mentionable_changed = before.mentionable != after.mentionable
+        before_icon = _asset_key(getattr(before, "icon", None))
+        after_icon = _asset_key(getattr(after, "icon", None))
+        icon_changed = before_icon != after_icon
+        before_unicode_emoji = getattr(before, "unicode_emoji", None)
+        after_unicode_emoji = getattr(after, "unicode_emoji", None)
+        unicode_emoji_changed = before_unicode_emoji != after_unicode_emoji
         if (
             before.name == after.name
             and not permission_changes
             and not color_changed
             and not position_changed
+            and not hoist_changed
+            and not mentionable_changed
+            and not icon_changed
+            and not unicode_emoji_changed
         ):
             return
         embed = self._embed(
@@ -1864,6 +2177,38 @@ class Logger(Cog):
                 ),
                 inline=False,
             )
+        if hoist_changed:
+            embed.add_field(
+                name="Hoisted",
+                value=f"Before: {'Yes' if before.hoist else 'No'}\n"
+                f"After: {'Yes' if after.hoist else 'No'}",
+                inline=False,
+            )
+        if mentionable_changed:
+            embed.add_field(
+                name="Mentionable",
+                value=f"Before: {'Yes' if before.mentionable else 'No'}\n"
+                f"After: {'Yes' if after.mentionable else 'No'}",
+                inline=False,
+            )
+        if icon_changed:
+            embed.add_field(
+                name="Role icon",
+                value=f"Before: {_display(before_icon)}\nAfter: {_display(after_icon)}",
+                inline=False,
+            )
+            role_icon = getattr(after, "icon", None)
+            if role_icon is not None:
+                embed.set_thumbnail(url=role_icon.url)
+        if unicode_emoji_changed:
+            embed.add_field(
+                name="Unicode emoji",
+                value=(
+                    f"Before: {_display(before_unicode_emoji)}\n"
+                    f"After: {_display(after_unicode_emoji)}"
+                ),
+                inline=False,
+            )
         self._add_item_id(embed, after)
         await self._emit_logger(
             after.guild,
@@ -1877,19 +2222,91 @@ class Logger(Cog):
     async def logger_guild_update(
         self, before: discord.Guild, after: discord.Guild
     ) -> None:
-        if before.name == after.name and _asset_key(before.icon) == _asset_key(
-            after.icon
-        ):
+        asset_attributes = (
+            ("icon", "Icon"),
+            ("banner", "Banner"),
+            ("splash", "Splash"),
+            ("discovery_splash", "Discovery splash"),
+        )
+        asset_changes = [
+            (
+                label,
+                _asset_key(getattr(before, attribute, None)),
+                _asset_key(getattr(after, attribute, None)),
+            )
+            for attribute, label in asset_attributes
+            if _asset_key(getattr(before, attribute, None))
+            != _asset_key(getattr(after, attribute, None))
+        ]
+        scalar_attributes = (
+            ("name", "Name"),
+            ("description", "Description"),
+            ("verification_level", "Verification level"),
+            ("explicit_content_filter", "Explicit content filter"),
+            ("default_notifications", "Default notifications"),
+            ("afk_timeout", "AFK timeout"),
+            ("system_channel_flags", "System channel flags"),
+            ("preferred_locale", "Preferred locale"),
+        )
+        scalar_changes = [
+            (label, getattr(before, attribute, None), getattr(after, attribute, None))
+            for attribute, label in scalar_attributes
+            if getattr(before, attribute, None) != getattr(after, attribute, None)
+        ]
+        channel_attributes = (
+            ("afk_channel", "AFK channel"),
+            ("rules_channel", "Rules channel"),
+            ("system_channel", "System channel"),
+            ("public_updates_channel", "Public updates channel"),
+            ("safety_alerts_channel", "Safety alerts channel"),
+        )
+        channel_changes = [
+            (label, getattr(before, attribute, None), getattr(after, attribute, None))
+            for attribute, label in channel_attributes
+            if getattr(before, attribute, None) != getattr(after, attribute, None)
+        ]
+        if not asset_changes and not scalar_changes and not channel_changes:
             return
         embed = self._embed(
             "Server updated",
             None,
             color=discord.Colour.orange(),
         )
-        embed.add_field(name="Before", value=_display(before.name))
-        embed.add_field(name="After", value=_display(after.name))
+        if scalar_changes:
+            embed.add_field(
+                name="Before",
+                value="\n".join(
+                    f"**{label}:** {_display(old)}" for label, old, _ in scalar_changes
+                )[:1024],
+            )
+            embed.add_field(
+                name="After",
+                value="\n".join(
+                    f"**{label}:** {_display(new)}" for label, _, new in scalar_changes
+                )[:1024],
+            )
+        if channel_changes:
+            embed.add_field(
+                name="Channel changes",
+                value="\n".join(
+                    f"**{label}:** {_display(old)} -> {_display(new)}"
+                    for label, old, new in channel_changes
+                )[:1024],
+                inline=False,
+            )
+        if asset_changes:
+            embed.add_field(
+                name="Asset changes",
+                value="\n".join(
+                    f"**{label}:** {_display(old)} -> {_display(new)}"
+                    for label, old, new in asset_changes
+                )[:1024],
+                inline=False,
+            )
         if after.icon:
             embed.set_thumbnail(url=after.icon.url)
+        if after.banner:
+            embed.set_image(url=after.banner.url)
         self._add_item_id(embed, after)
         await self._emit_logger(
             after,
@@ -2068,7 +2485,42 @@ class Logger(Cog):
     async def logger_message_edit(
         self, before: discord.Message, after: discord.Message
     ) -> None:
-        if before.guild is None or before.content == after.content:
+        if before.guild is None:
+            return
+        content_changed = before.content != after.content
+        attachments_changed = tuple(
+            _attachment_signature(item) for item in before.attachments
+        ) != tuple(_attachment_signature(item) for item in after.attachments)
+        embeds_changed = tuple(
+            _embed_signature(item) for item in before.embeds
+        ) != tuple(_embed_signature(item) for item in after.embeds)
+        stickers_changed = tuple(
+            _message_sticker_signature(item) for item in before.stickers
+        ) != tuple(_message_sticker_signature(item) for item in after.stickers)
+        metadata_before = (
+            getattr(before.flags, "value", None),
+            before.pinned,
+            before.tts,
+            repr(getattr(before, "components", None)),
+            repr(getattr(before, "poll", None)),
+        )
+        metadata_after = (
+            getattr(after.flags, "value", None),
+            after.pinned,
+            after.tts,
+            repr(getattr(after, "components", None)),
+            repr(getattr(after, "poll", None)),
+        )
+        metadata_changed = metadata_before != metadata_after
+        if not any(
+            (
+                content_changed,
+                attachments_changed,
+                embeds_changed,
+                stickers_changed,
+                metadata_changed,
+            )
+        ):
             return
         channel_name = getattr(after.channel, "mention", "this channel")
         embed = self._embed(
@@ -2079,12 +2531,57 @@ class Logger(Cog):
         embed.add_field(
             name="Author", value=f"{after.author.mention} (`ID: {after.author.id}`)"
         )
-        embed.add_field(
-            name="Before", value=_display(before.content) or "None", inline=False
-        )
-        embed.add_field(
-            name="After", value=_display(after.content) or "None", inline=False
-        )
+        if content_changed:
+            embed.add_field(
+                name="Before", value=_display(before.content) or "None", inline=False
+            )
+            embed.add_field(
+                name="After", value=_display(after.content) or "None", inline=False
+            )
+        if attachments_changed:
+            embed.add_field(
+                name="Attachments before",
+                value=_attachment_lines(before.attachments),
+                inline=True,
+            )
+            embed.add_field(
+                name="Attachments after",
+                value=_attachment_lines(after.attachments),
+                inline=True,
+            )
+        if embeds_changed:
+            embed.add_field(
+                name="Embeds",
+                value=f"Before: {len(before.embeds)}\nAfter: {len(after.embeds)}",
+                inline=True,
+            )
+        if stickers_changed:
+            embed.add_field(
+                name="Stickers",
+                value=(
+                    f"Before: {len(before.stickers)}\n" f"After: {len(after.stickers)}"
+                ),
+                inline=True,
+            )
+        if metadata_changed:
+            metadata_changes = []
+            for label, old, new in (
+                ("Flags", metadata_before[0], metadata_after[0]),
+                ("Pinned", metadata_before[1], metadata_after[1]),
+                ("TTS", metadata_before[2], metadata_after[2]),
+                ("Components", metadata_before[3], metadata_after[3]),
+                ("Poll", metadata_before[4], metadata_after[4]),
+            ):
+                if old != new:
+                    metadata_changes.append(
+                        f"**{label}:** {_display(old)} -> {_display(new)}"
+                    )
+            if metadata_changes:
+                embed.add_field(
+                    name="Metadata changes",
+                    value="\n".join(metadata_changes)[:1024],
+                    inline=False,
+                )
         self._add_item_id(embed, after)
         await self._emit_logger(before.guild, "message", embed)
 
@@ -2108,11 +2605,17 @@ class Logger(Cog):
         if cached is not None:
             embed.add_field(
                 name="Author",
-                value=f"{cached.author.mention} (`ID: {cached.author.id})`",
+                value=f"{cached.author.mention} (`ID: {cached.author.id}`)",
             )
             if cached.content:
                 embed.add_field(
                     name="Content", value=_display(cached.content), inline=False
+                )
+            if cached.attachments:
+                embed.add_field(
+                    name="Attachments",
+                    value=_attachment_lines(cached.attachments),
+                    inline=False,
                 )
         self._add_item_id(embed, discord.Object(payload.message_id))
         await self._emit_logger(
@@ -2120,8 +2623,69 @@ class Logger(Cog):
             "message",
             embed,
             audit_action=discord.AuditLogAction.message_delete,
-            audit_target_id=payload.channel_id,
+            audit_target_id=cached.author.id if cached is not None else None,
+            audit_channel_id=payload.channel_id,
         )
+
+    async def _recent_pin_change(self, channel: discord.abc.GuildChannel) -> (
+        tuple[
+            discord.AuditLogAction,
+            int | None,
+            discord.User | discord.Member | None,
+            str | None,
+        ]
+        | None
+    ):
+        entry = await self._recent_audit_entry(
+            channel.guild,
+            (discord.AuditLogAction.message_pin, discord.AuditLogAction.message_unpin),
+            channel_id=channel.id,
+            max_age=30,
+        )
+        if entry is None:
+            return None
+        message_id = getattr(getattr(entry, "extra", None), "message_id", None)
+        return entry.action, message_id, entry.user, entry.reason
+
+    @commands.Cog.listener("on_guild_channel_pins_update")
+    async def logger_channel_pins_update(
+        self, channel: discord.abc.GuildChannel, last_pin: object | None
+    ) -> None:
+        details = await self._recent_pin_change(channel)
+        if details is None:
+            title = "Channel pins updated"
+            description = f"Pins changed in {getattr(channel, 'mention', 'a channel')}."
+            color = discord.Colour.orange()
+            message_id = None
+            actor = None
+            reason = None
+        else:
+            action, message_id, actor, reason = details
+            pinned = action is discord.AuditLogAction.message_pin
+            title = "Message pinned" if pinned else "Message unpinned"
+            description = (
+                f"A message was {'pinned to' if pinned else 'unpinned from'} "
+                f"{getattr(channel, 'mention', 'a channel')}."
+            )
+            color = discord.Colour.green() if pinned else discord.Colour.red()
+        embed = self._embed(title, description, color=color)
+        if message_id is not None:
+            embed.add_field(name="Message", value=f"`{message_id}`", inline=False)
+            self._add_item_id(embed, discord.Object(message_id))
+        else:
+            self._add_item_id(embed, channel)
+        if last_pin is not None:
+            embed.add_field(name="Last pin", value=_display(last_pin), inline=False)
+        if actor is not None:
+            embed.add_field(
+                name="Changed by",
+                value=f"{actor.mention} (`ID: {actor.id}`)",
+                inline=True,
+            )
+            embed.add_field(
+                name="Reason", value=_display(reason or "Not provided"), inline=False
+            )
+        await self._emit_logger(channel.guild, "message", embed)
 
     @commands.Cog.listener("on_raw_bulk_message_delete")
     async def logger_bulk_message_delete(
@@ -2144,7 +2708,7 @@ class Logger(Cog):
             "message",
             embed,
             audit_action=discord.AuditLogAction.message_bulk_delete,
-            audit_target_id=payload.channel_id,
+            audit_channel_id=payload.channel_id,
         )
 
     @commands.Cog.listener("on_logger_purge_start")
@@ -2173,7 +2737,164 @@ class Logger(Cog):
             "message",
             embed,
             audit_action=discord.AuditLogAction.message_bulk_delete,
-            audit_target_id=channel_id,
+            audit_channel_id=channel_id,
+        )
+
+    async def _log_recent_prune(self, guild: discord.Guild) -> bool:
+        entry = await self._recent_audit_entry(
+            guild, (discord.AuditLogAction.member_prune,), max_age=30
+        )
+        if entry is None:
+            return False
+        seen: dict[int, float] = getattr(self, "_logged_prunes", {})
+        self._logged_prunes = seen
+        now = time.monotonic()
+        for key, expires_at in list(seen.items()):
+            if expires_at <= now:
+                seen.pop(key, None)
+        if entry.id in seen:
+            return True
+        seen[entry.id] = now + 60
+        embed = self._embed(
+            "Member prune",
+            "A member prune was performed in this server.",
+            color=discord.Colour.red(),
+        )
+        extra = getattr(entry, "extra", None)
+        if extra is not None:
+            embed.add_field(
+                name="Members removed",
+                value=_display(getattr(extra, "members_removed", None)),
+                inline=True,
+            )
+            embed.add_field(
+                name="Inactive days",
+                value=_display(getattr(extra, "delete_member_days", None)),
+                inline=True,
+            )
+        self._add_item_id(embed, guild)
+        if entry.user is not None:
+            embed.add_field(
+                name="Moderator",
+                value=f"{entry.user.name}\n{entry.user.mention}",
+                inline=True,
+            )
+        embed.add_field(
+            name="Reason", value=_display(entry.reason or "Not provided"), inline=False
+        )
+        await self._emit_logger(guild, "moderation", embed)
+        return True
+
+    @staticmethod
+    def _audit_action_label(action: discord.AuditLogAction) -> str:
+        return str(action).rsplit(".", 1)[-1].replace("_", " ").title()
+
+    def _mark_audit_event_seen(self, entry_id: int, *, ttl: float = 60) -> bool:
+        seen: dict[int, float] = getattr(self, "_logged_audit_events", {})
+        self._logged_audit_events = seen
+        now = time.monotonic()
+        for key, expires_at in list(seen.items()):
+            if expires_at <= now:
+                seen.pop(key, None)
+        if entry_id in seen:
+            return True
+        seen[entry_id] = now + ttl
+        return False
+
+    @commands.Cog.listener("on_audit_log_entry_create")
+    async def logger_audit_log_entry_create(self, entry: discord.AuditLogEntry) -> None:
+        """Log moderation actions delivered through Discord's audit-log gateway."""
+        guild = getattr(entry, "guild", None)
+        if not isinstance(guild, discord.Guild):
+            return
+
+        action = entry.action
+        moderation_actions = {
+            discord.AuditLogAction.member_prune,
+            discord.AuditLogAction.automod_rule_create,
+            discord.AuditLogAction.automod_rule_update,
+            discord.AuditLogAction.automod_rule_delete,
+            discord.AuditLogAction.automod_block_message,
+            discord.AuditLogAction.automod_flag_message,
+        }
+        if action not in moderation_actions:
+            return
+        if self._mark_audit_event_seen(entry.id):
+            return
+
+        if action is discord.AuditLogAction.member_prune:
+            prunes: dict[int, float] = getattr(self, "_logged_prunes", {})
+            self._logged_prunes = prunes
+            prunes[entry.id] = time.monotonic() + 60
+            title = "Member prune"
+            description = "A member prune was performed in this server."
+        else:
+            title = f"AutoMod {self._audit_action_label(action)}"
+            description = "An AutoMod moderation action was recorded."
+
+        embed = self._embed(title, description, color=discord.Colour.red())
+        target = getattr(entry, "target", None)
+        target_id = getattr(target, "id", None)
+        if target_id is not None:
+            target_name = getattr(target, "name", None)
+            target_text = (
+                f"{_display(target_name)} (`{target_id}`)"
+                if target_name
+                else f"`{target_id}`"
+            )
+            embed.add_field(name="Target", value=target_text, inline=True)
+
+        extra = getattr(entry, "extra", None)
+        if extra is not None:
+            details = []
+            for label, attribute in (
+                ("Members removed", "members_removed"),
+                ("Inactive days", "delete_member_days"),
+                ("Rule", "rule_name"),
+                ("Rule ID", "rule_id"),
+                ("Channel", "channel"),
+                ("Message", "message_id"),
+            ):
+                value = getattr(extra, attribute, None)
+                if value is not None:
+                    details.append(f"**{label}:** {_display(value)}")
+            if details:
+                embed.add_field(
+                    name="Details", value="\n".join(details)[:1024], inline=False
+                )
+        if entry.user is not None:
+            embed.add_field(
+                name="Moderator",
+                value=f"{entry.user.name}\n{entry.user.mention}",
+                inline=True,
+            )
+        embed.add_field(
+            name="Reason", value=_display(entry.reason or "Not provided"), inline=False
+        )
+        self._add_item_id(
+            embed,
+            discord.Object(target_id) if isinstance(target_id, int) else guild,
+        )
+        await self._emit_logger(guild, "moderation", embed)
+
+    @commands.Cog.listener("on_logger_fishie_moderation")
+    async def logger_fishie_moderation_event(
+        self,
+        guild: discord.Guild,
+        title: str,
+        description: str | None,
+        target: discord.User | discord.Member | None,
+        moderator: discord.User | discord.Member | None,
+        reason: str | None,
+    ) -> None:
+        """Receive moderation events emitted by Fishie moderation commands."""
+        await self.log_fishie_moderation(
+            guild,
+            title,
+            description,
+            target=target,
+            moderator=moderator,
+            reason=reason,
         )
 
     @commands.Cog.listener("on_member_ban")
@@ -2209,6 +2930,86 @@ class Logger(Cog):
             audit_target=user,
             audit_actor_label="Moderator",
         )
+
+    @commands.Cog.listener("on_automod_action")
+    async def logger_automod_action(self, action: object) -> None:
+        """Log AutoMod gateway actions when Discord dispatches them.
+
+        discord.py does not expose a strongly typed payload for every gateway
+        version, so this listener intentionally reads the documented fields
+        defensively. Audit-log entries still provide the moderator and reason
+        for rule changes separately.
+        """
+        guild = getattr(action, "guild", None)
+        if not isinstance(guild, discord.Guild):
+            return
+        user_id = getattr(action, "user_id", None)
+        channel_id = getattr(action, "channel_id", None)
+        user = guild.get_member(user_id) if isinstance(user_id, int) else None
+        channel = guild.get_channel(channel_id) if isinstance(channel_id, int) else None
+        description = "An AutoMod action was triggered."
+        if user is not None:
+            description = f"AutoMod acted on {user.mention}."
+        embed = self._embed(description, None, color=discord.Colour.red())
+        embed.add_field(
+            name="Rule",
+            value=_display(
+                getattr(action, "rule_name", None)
+                or getattr(action, "automod_rule_name", None)
+                or getattr(action, "rule_id", None)
+                or "Unknown"
+            ),
+            inline=True,
+        )
+        if user is not None:
+            embed.add_field(
+                name="User", value=f"{user.name}\n{user.mention}", inline=True
+            )
+        if channel is not None:
+            embed.add_field(name="Channel", value=channel.mention, inline=True)
+        content = getattr(action, "content", None)
+        if content:
+            embed.add_field(name="Content", value=_display(content), inline=False)
+        message_id = getattr(action, "message_id", None)
+        self._add_item_id(
+            embed,
+            discord.Object(message_id) if isinstance(message_id, int) else guild,
+        )
+        await self._emit_logger(guild, "moderation", embed)
+
+    async def log_fishie_moderation(
+        self,
+        guild: discord.Guild,
+        title: str,
+        description: str | None = None,
+        *,
+        target: discord.User | discord.Member | None = None,
+        moderator: discord.User | discord.Member | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Emit a moderation event generated by a Fishie command.
+
+        Moderation commands can call this helper after completing an action so
+        the logger can identify Fishie as the source even when Discord has no
+        corresponding audit entry.
+        """
+        embed = self._embed(title, description, color=discord.Colour.red())
+        if target is not None:
+            embed.add_field(
+                name="Target", value=f"{target.name}\n{target.mention}", inline=True
+            )
+        if moderator is not None:
+            embed.add_field(
+                name="Moderator",
+                value=f"{moderator.name}\n{moderator.mention}",
+                inline=True,
+            )
+        embed.add_field(name="Source", value="Fishie moderation command", inline=True)
+        embed.add_field(
+            name="Reason", value=_display(reason or "Not provided"), inline=False
+        )
+        self._add_item_id(embed, target or guild)
+        await self._emit_logger(guild, "moderation", embed)
 
     def cog_unload(self) -> None:
         """Cancel pending channel-move batches when the moderation cog reloads."""

@@ -204,7 +204,7 @@ class Pinboard(Cog):
                 except discord.HTTPException:
                     pass
 
-    @commands.hybrid_group(name="pinboard", aliases=("pb",), fallback="setup")
+    @commands.group(name="pinboard", aliases=("pb",), invoke_without_command=True)
     @commands.guild_only()
     @commands.has_permissions(manage_channels=True)
     async def pinboard(self, ctx: GuildContext):

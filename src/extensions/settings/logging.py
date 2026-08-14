@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
+import re
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
-from utils import AuthorView, interaction_only, to_image
+from utils import AuthorLayoutView, interaction_only, to_image
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
@@ -26,6 +27,74 @@ format_table = {
     "emoji_stats": "author_id",
     "download_stats": "user_id",
 }
+
+
+class ReactionTrackingView(discord.ui.LayoutView):
+    """Explicit opt-in control for reaction history."""
+
+    def __init__(self, ctx: Context, enabled: bool) -> None:
+        super().__init__(timeout=180)
+        self.ctx = ctx
+        self.enabled = enabled
+        self._render()
+
+    def _render(self) -> None:
+        self.clear_items()
+        state = "Enabled" if self.enabled else "Disabled"
+        button = discord.ui.Button(
+            label=(
+                "Disable reaction tracking"
+                if self.enabled
+                else "Enable reaction tracking"
+            ),
+            style=(
+                discord.ButtonStyle.danger
+                if self.enabled
+                else discord.ButtonStyle.success
+            ),
+        )
+        button.callback = self._toggle
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "## Reaction tracking\n"
+                    f"**Status:** {state}\n\n"
+                    "Track the reactions you give to others, you own reactions "
+                    "to yourself are not tracked."
+                ),
+                discord.ui.ActionRow(button),
+                accent_color=self.ctx.bot.embedcolor,
+            )
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.ctx.author.id:
+            return True
+        await interaction.response.send_message(
+            "Only the person who opened this setting can change it.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return False
+
+    async def _toggle(self, interaction: discord.Interaction) -> None:
+        self.enabled = not self.enabled
+        await self.ctx.bot.pool.execute(
+            "INSERT INTO reaction_tracking (user_id, enabled) VALUES ($1, $2) "
+            "ON CONFLICT (user_id) DO UPDATE SET enabled = EXCLUDED.enabled, "
+            "updated_at = now()",
+            self.ctx.author.id,
+            self.enabled,
+        )
+        if self.enabled:
+            self.ctx.bot.db_cache.enable_reaction_tracking(self.ctx.author.id)
+        else:
+            self.ctx.bot.db_cache.disable_reaction_tracking(self.ctx.author.id)
+        self._render()
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 class Dropdown(discord.ui.Select):
@@ -124,23 +193,40 @@ class Dropdown(discord.ui.Select):
         else:
             await self.user_opt()
 
-        if interaction.message is None:
-            raise commands.BadArgument("No message somehow.")
+        await interaction.response.edit_message(
+            view=self.view,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
-        await interaction.message.edit(view=self.view)
-        await interaction.response.defer()
 
-
-class DropdownView(AuthorView):
+class DropdownView(AuthorLayoutView):
     def __init__(
-        self, ctx: Context, data: Dict[str, List], guild_id: Optional[int] = None
+        self,
+        ctx: Context,
+        data: Dict[str, List],
+        guild_id: Optional[int] = None,
+        *,
+        intro: str | None = None,
     ):
-        super().__init__(ctx)
+        super().__init__(ctx, timeout=180)
+        self.status = discord.ui.TextDisplay(
+            intro
+            or (
+                "## Tracking settings\n"
+                "Choose a category to enable or disable its tracking."
+            )
+        )
+        self.dropdown = Dropdown(ctx, data, guild_id=guild_id)
+        self.add_item(
+            discord.ui.Container(
+                self.status,
+                discord.ui.ActionRow(self.dropdown),
+                accent_color=ctx.bot.embedcolor,
+            )
+        )
 
-        self.add_item(Dropdown(ctx, data, guild_id=guild_id))
 
-
-class PrivacySettingsView(AuthorView):
+class PrivacySettingsView(AuthorLayoutView):
     def __init__(
         self,
         ctx: Context,
@@ -151,7 +237,24 @@ class PrivacySettingsView(AuthorView):
         super().__init__(ctx, timeout=180)
         self.tracking_enabled = tracking_enabled
         self.history_public = history_public
+        self.status = discord.ui.TextDisplay("")
+        self.toggle_tracking = discord.ui.Button()
+        self.toggle_history = discord.ui.Button()
+        self.toggle_tracking.callback = self._toggle_tracking
+        self.toggle_history.callback = self._toggle_history
+        self._render()
+
+    def _render(self) -> None:
+        self.clear_items()
         self._update_buttons()
+        self.status.content = "## Settings\n" + self.content
+        self.add_item(
+            discord.ui.Container(
+                self.status,
+                discord.ui.ActionRow(self.toggle_tracking, self.toggle_history),
+                accent_color=self.ctx.bot.embedcolor,
+            )
+        )
 
     @property
     def content(self) -> str:
@@ -202,23 +305,22 @@ class PrivacySettingsView(AuthorView):
             value,
         )
         cache = self.ctx.bot.db_cache
-        target = (
-            cache.tracking_disabled_users
-            if setting == "tracking_enabled"
-            else cache.private_history_users
-        )
-        if value:
-            target.discard(self.ctx.author.id)
+        if setting == "tracking_enabled":
+            if value:
+                cache.tracking_disabled_users.discard(self.ctx.author.id)
+            else:
+                cache.tracking_disabled_users.add(self.ctx.author.id)
         else:
-            target.add(self.ctx.author.id)
-        self._update_buttons()
-        await interaction.response.edit_message(content=self.content, view=self)
+            cache.set_history_public(self.ctx.author.id, value)
+        self._render()
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
-    @discord.ui.button(label="Disable tracking")
-    async def toggle_tracking(
+    async def _toggle_tracking(
         self,
         interaction: discord.Interaction,
-        _button: discord.ui.Button,
     ) -> None:
         self.tracking_enabled = not self.tracking_enabled
         await self._save(
@@ -227,11 +329,9 @@ class PrivacySettingsView(AuthorView):
             value=self.tracking_enabled,
         )
 
-    @discord.ui.button(label="Make history private")
-    async def toggle_history(
+    async def _toggle_history(
         self,
         interaction: discord.Interaction,
-        _button: discord.ui.Button,
     ) -> None:
         self.history_public = not self.history_public
         await self._save(
@@ -241,20 +341,175 @@ class PrivacySettingsView(AuthorView):
         )
 
 
+class TrackingSettingsView(AuthorLayoutView):
+    """Controls for global and game-specific saved activity."""
+
+    def __init__(
+        self,
+        ctx: Context,
+        *,
+        tracking_enabled: bool,
+        history_public: bool,
+        game_tracking_enabled: bool,
+        game_history_public: bool,
+    ) -> None:
+        super().__init__(ctx, timeout=180)
+        self.tracking_enabled = tracking_enabled
+        self.history_public = history_public
+        self.game_tracking_enabled = game_tracking_enabled
+        self.game_history_public = game_history_public
+        self.status = discord.ui.TextDisplay("")
+        self._render()
+
+    @property
+    def content(self) -> str:
+        tracking = "Enabled" if self.tracking_enabled else "Disabled"
+        history = "Public" if self.history_public else "Private"
+        game_tracking = "Enabled" if self.game_tracking_enabled else "Disabled"
+        game_history = "Public" if self.game_history_public else "Private"
+        return (
+            "## Tracking settings\n"
+            f"**Tracking:** {tracking}\n"
+            f"**Saved history:** {history}\n"
+            f"**Game tracking:** {game_tracking}\n"
+            f"**Game history:** {game_history}\n\n"
+            "Tracking controls whether Fishie saves new activity. Saved history "
+            "controls whether other users can look up existing data. Game settings "
+            "apply to game results and leaderboards."
+        )
+
+    def _render(self) -> None:
+        self.clear_items()
+        controls = (
+            (
+                "Disable tracking" if self.tracking_enabled else "Enable tracking",
+                (
+                    discord.ButtonStyle.danger
+                    if self.tracking_enabled
+                    else discord.ButtonStyle.success
+                ),
+                "tracking_enabled",
+            ),
+            (
+                (
+                    "Make history private"
+                    if self.history_public
+                    else "Make history public"
+                ),
+                (
+                    discord.ButtonStyle.secondary
+                    if self.history_public
+                    else discord.ButtonStyle.primary
+                ),
+                "history_public",
+            ),
+            (
+                (
+                    "Disable game tracking"
+                    if self.game_tracking_enabled
+                    else "Enable game tracking"
+                ),
+                (
+                    discord.ButtonStyle.danger
+                    if self.game_tracking_enabled
+                    else discord.ButtonStyle.success
+                ),
+                "game_tracking_enabled",
+            ),
+            (
+                (
+                    "Make game history private"
+                    if self.game_history_public
+                    else "Make game history public"
+                ),
+                (
+                    discord.ButtonStyle.secondary
+                    if self.game_history_public
+                    else discord.ButtonStyle.primary
+                ),
+                "game_history_public",
+            ),
+        )
+        buttons: list[discord.ui.Button] = []
+        for label, style, setting in controls:
+            button = discord.ui.Button(label=label, style=style)
+
+            async def _callback(
+                interaction: discord.Interaction,
+                selected: str = setting,
+            ) -> None:
+                current = bool(getattr(self, selected))
+                value = not current
+                await self.ctx.bot.pool.execute(
+                    f"""
+                    INSERT INTO user_settings (user_id, {selected})
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id) DO UPDATE
+                    SET {selected} = EXCLUDED.{selected}
+                    """,
+                    self.ctx.author.id,
+                    value,
+                )
+                setattr(self, selected, value)
+                cache = self.ctx.bot.db_cache
+                if selected == "tracking_enabled":
+                    if value:
+                        cache.tracking_disabled_users.discard(self.ctx.author.id)
+                    else:
+                        cache.tracking_disabled_users.add(self.ctx.author.id)
+                elif selected == "history_public":
+                    cache.set_history_public(self.ctx.author.id, value)
+                    if value:
+                        await self.ctx.bot.pool.execute(
+                            "UPDATE user_settings SET tracking_consent = TRUE "
+                            "WHERE user_id = $1",
+                            self.ctx.author.id,
+                        )
+                        cache.set_tracking_consent(self.ctx.author.id)
+                elif selected == "game_tracking_enabled":
+                    if value:
+                        cache.game_tracking_disabled_users.discard(self.ctx.author.id)
+                    else:
+                        cache.game_tracking_disabled_users.add(self.ctx.author.id)
+                elif selected == "game_history_public":
+                    cache.set_game_history_public(self.ctx.author.id, value)
+                self._render()
+                await interaction.response.edit_message(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+
+            button.callback = _callback
+            buttons.append(button)
+
+        self.status.content = self.content
+        self.add_item(
+            discord.ui.Container(
+                self.status,
+                discord.ui.ActionRow(*buttons[:2]),
+                discord.ui.ActionRow(*buttons[2:]),
+                accent_color=self.ctx.bot.embedcolor,
+            )
+        )
+
+
 class Logging(Cog):
-    async def privacy_settings_view(self, ctx: Context) -> PrivacySettingsView:
+    async def privacy_settings_view(self, ctx: Context) -> TrackingSettingsView:
         row = await self.bot.pool.fetchrow(
             """
-            SELECT tracking_enabled, history_public
+            SELECT tracking_enabled, history_public,
+                   game_tracking_enabled, game_history_public
             FROM user_settings
             WHERE user_id = $1
             """,
             ctx.author.id,
         )
-        return PrivacySettingsView(
+        return TrackingSettingsView(
             ctx,
-            tracking_enabled=row["tracking_enabled"] if row else True,
-            history_public=row["history_public"] if row else True,
+            tracking_enabled=bool(row["tracking_enabled"]) if row else True,
+            history_public=bool(row["history_public"]) if row else False,
+            game_tracking_enabled=(bool(row["game_tracking_enabled"]) if row else True),
+            game_history_public=(bool(row["game_history_public"]) if row else True),
         )
 
     async def send_privacy_settings_interaction(
@@ -264,18 +519,140 @@ class Logging(Cog):
     ) -> None:
         view = await self.privacy_settings_view(ctx)
         await interaction.response.send_message(
-            view.content,
             view=view,
             ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @commands.hybrid_command(name="settings")
+    @cast(Any, commands.hybrid_group)(
+        name="settings", fallback="user", invoke_without_command=True
+    )
     async def settings(self, ctx: Context) -> None:
         """Manage your Fishie privacy and tracking settings."""
         view = await self.privacy_settings_view(ctx)
         view.message = await ctx.send(
-            view.content,
             view=view,
+            ephemeral=ctx.interaction is not None,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @settings.command(name="wordle")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def settings_wordle(self, ctx: Context) -> None:
+        """Configure your Wordle hard-mode and colourblind preferences."""
+        # Import lazily to avoid loading the Fun extension while settings is
+        # being imported by the extension loader.
+        from extensions.fun.wordle import (
+            WordleSettingsView,
+            get_wordle_settings,
+            save_wordle_settings,
+        )
+
+        hard_mode, colourblind_mode = await get_wordle_settings(
+            self.bot.pool, ctx.author.id
+        )
+
+        async def save(user_id: int, hard: bool, colourblind: bool) -> None:
+            await save_wordle_settings(self.bot.pool, user_id, hard, colourblind)
+
+        await ctx.send(
+            view=WordleSettingsView(
+                ctx.author.id,
+                hard_mode,
+                colourblind_mode,
+                save,
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @settings.command(name="tracking")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def settings_tracking(self, ctx: Context) -> None:
+        """Manage tracking, saved-history, and game-history privacy."""
+        row = await self.bot.pool.fetchrow(
+            """
+            SELECT tracking_enabled, history_public,
+                   game_tracking_enabled, game_history_public
+            FROM user_settings
+            WHERE user_id = $1
+            """,
+            ctx.author.id,
+        )
+        view = TrackingSettingsView(
+            ctx,
+            tracking_enabled=bool(row["tracking_enabled"]) if row else True,
+            history_public=bool(row["history_public"]) if row else False,
+            game_tracking_enabled=(bool(row["game_tracking_enabled"]) if row else True),
+            game_history_public=(bool(row["game_history_public"]) if row else True),
+        )
+        await ctx.send(
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @settings.command(name="accounts")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def settings_accounts(self, ctx: Context) -> None:
+        """Connect or manage your external accounts."""
+        # Keep this view shared with the legacy ``fish accounts`` command so
+        # both entry points always expose the same account actions.
+        from extensions.settings import ManageAccountsView
+
+        row = await self.bot.pool.fetchrow(
+            "SELECT lastfm, steam, roblox, letterboxd, anilist FROM accounts "
+            "WHERE user_id = $1",
+            ctx.author.id,
+        )
+        view = ManageAccountsView(
+            ctx,
+            row=row,
+            lastfm_connected=bool(row and row["lastfm"]),
+            steam_connected=bool(row and row["steam"]),
+            anilist_connected=bool(row and row["anilist"]),
+        )
+        await ctx.send(
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @settings.command(name="anilist")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def settings_anilist(self, ctx: Context) -> None:
+        """Choose whether AniList profiles open on anime, manga, or characters."""
+        from extensions.anime import AniListSettingsView
+
+        default_media = await self.bot.pool.fetchval(
+            "SELECT anilist_default_media FROM user_settings WHERE user_id = $1",
+            ctx.author.id,
+        )
+        if default_media not in {"anime", "manga", "characters"}:
+            default_media = "anime"
+        await ctx.send(
+            view=AniListSettingsView(ctx, default_media),
+            allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @settings.command(name="server")
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def settings_server(self, ctx: GuildContext) -> None:
+        """Manage server tracking and automation channels."""
+        from .server import ServerSettingsView
+
+        view = await ServerSettingsView.create(ctx)
+        view.message = await ctx.send(
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none(),
             ephemeral=ctx.interaction is not None,
         )
 
@@ -305,6 +682,8 @@ class Logging(Cog):
             "emoji": ["Emoji statistics tracking", "\U0001f7e2"],
             "downloads": ["Download site statistics", "\U0001f7e2"],
             "snipe": ["Deleted and edited message sniping", "\U0001f7e2"],
+            "higher_lower": ["Higher or Lower streak tracking", "\U0001f7e2"],
+            "heads_tails": ["Heads or Tails streak tracking", "\U0001f7e2"],
         }
 
         if bool(records):
@@ -313,8 +692,26 @@ class Logging(Cog):
                     data.update({item: [data[item][0], "\U0001f534"]})
 
         await ctx.send(
-            "-# Manage your tracking settings on the [website](https://crygup.com/discord?tab=settings)",
-            view=DropdownView(ctx, data),
+            view=DropdownView(
+                ctx,
+                data,
+                intro=(
+                    "## Tracking settings\n"
+                    "Choose a category to enable or disable its tracking.\n\n"
+                    "Manage these settings on the [website](https://crygup.com/discord?tab=settings).\n"
+                    "Reaction history is opt-in separately with `fish tracking reactions`."
+                ),
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @logging.command(name="reactions", aliases=("reaction",))
+    async def logging_reactions(self, ctx: Context) -> None:
+        """Enable or disable opt-in reaction history tracking."""
+        enabled = self.bot.db_cache.reaction_tracking_enabled(ctx.author.id)
+        await ctx.send(
+            view=ReactionTrackingView(ctx, enabled),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @logging.command(name="guild", aliases=("server",))
@@ -336,8 +733,17 @@ class Logging(Cog):
                     data.update({item: [data[item][0], "\U0001f534"]})
 
         await ctx.send(
-            "-# Manage server tracking settings on the [website](https://crygup.com/discord?tab=settings)",
-            view=DropdownView(ctx, data, guild_id=ctx.guild.id),
+            view=DropdownView(
+                ctx,
+                data,
+                guild_id=ctx.guild.id,
+                intro=(
+                    "## Server tracking settings\n"
+                    "Choose a category to enable or disable its tracking.\n\n"
+                    "Manage these settings on the [website](https://crygup.com/discord?tab=settings)."
+                ),
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @commands.hybrid_group(
@@ -369,6 +775,62 @@ class Logging(Cog):
         await self.bot.pool.execute(sql, ctx.author.id)
 
         await msg.edit(content="Okay, the data was deleted.")
+
+    @logging_delete.command(name="reactions", aliases=("reaction",), hidden=True)
+    @app_commands.describe(emoji="Unicode emoji, custom emoji, or custom emoji ID.")
+    async def logging_delete_reactions(self, ctx: Context, emoji: str) -> None:
+        """Delete your saved reaction rows for one emoji."""
+        emoji_id: int | None = None
+        is_unicode = True
+        emoji_name = emoji.strip()
+        match = re.fullmatch(r"<a?:([A-Za-z0-9_~]+):(\d+)>", emoji_name)
+        if match:
+            emoji_name = match.group(1)
+            emoji_id = int(match.group(2))
+            is_unicode = False
+        elif emoji_name.isdigit():
+            emoji_id = int(emoji_name)
+            is_unicode = False
+            emoji_name = ""
+        elif ctx.guild is not None:
+            for candidate in ctx.guild.emojis:
+                if (
+                    candidate.name
+                    and candidate.name.casefold() == emoji_name.casefold()
+                ):
+                    emoji_name = candidate.name
+                    emoji_id = candidate.id
+                    is_unicode = False
+                    break
+
+        label = emoji_name or str(emoji_id)
+        msg = await ctx.prompt(
+            f"Delete all of your saved reaction logs for {label}? **THIS CANNOT BE UNDONE**",
+            ephemeral=True,
+            delete_after=False,
+        )
+        if not msg:
+            await ctx.send("Good choice.", ephemeral=True)
+            return
+
+        await msg.edit(content="Okay, deleting those reaction logs.", view=None)
+        if emoji_id is None:
+            deleted = await self.bot.pool.execute(
+                "DELETE FROM reaction_logs WHERE (giver_id = $1 OR receiver_id = $1) "
+                "AND emoji_name = $2 AND unicode = $3",
+                ctx.author.id,
+                emoji_name,
+                is_unicode,
+            )
+        else:
+            deleted = await self.bot.pool.execute(
+                "DELETE FROM reaction_logs WHERE (giver_id = $1 OR receiver_id = $1) "
+                "AND emoji_id = $2 AND unicode = FALSE",
+                ctx.author.id,
+                emoji_id,
+            )
+        count = deleted.rsplit(" ", 1)[-1]
+        await msg.edit(content=f"Deleted {count} reaction log(s) for {label}.")
 
     @logging_delete.autocomplete("data")
     async def del_autocomplete(self, _, current: str) -> List[app_commands.Choice[str]]:
@@ -521,7 +983,7 @@ class Logging(Cog):
 
         return [
             app_commands.Choice(
-                name=f'{nick["nickname"]} - {nick["id"]}', value=nick["id"]
+                name=f"{nick['nickname']} - {nick['id']}", value=nick["id"]
             )
             for nick in nicknames
             if current.lower() in str(nick["nickname"]).lower()
@@ -561,7 +1023,7 @@ class Logging(Cog):
 
         return [
             app_commands.Choice(
-                name=f'{dname["display_name"]} - {dname["id"]}', value=dname["id"]
+                name=f"{dname['display_name']} - {dname['id']}", value=dname["id"]
             )
             for dname in display_names
             if current.lower() in str(dname["display_name"]).lower()
@@ -611,7 +1073,7 @@ class Logging(Cog):
 
         return [
             app_commands.Choice(
-                name=f'{tag["tag"] or "No server tag"} - {tag["id"]}'[:100],
+                name=f"{tag['tag'] or 'No server tag'} - {tag['id']}"[:100],
                 value=tag["id"],
             )
             for tag in tags
@@ -654,7 +1116,7 @@ class Logging(Cog):
 
         return [
             app_commands.Choice(
-                name=f'{discrim["discrim"]} - {discrim["id"]}', value=discrim["id"]
+                name=f"{discrim['discrim']} - {discrim['id']}", value=discrim["id"]
             )
             for discrim in discrims
             if current.lower() in str(discrim["discrim"]).lower()

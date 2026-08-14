@@ -37,7 +37,7 @@ PurgeChannels: TypeAlias = Union[
 class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     # fmt: off
     user: Optional[discord.User] = commands.flag(description="Remove messages from this user", default=None)
-    channel: Optional[PurgeChannels] = commands.flag(description="Remove messages from this user", default=None)
+    channel: Optional[PurgeChannels] = commands.flag(description="Remove messages from this channel", default=None)
     contains: Optional[str] = commands.flag(description="Remove messages that contains this string (case sensitive)",default=None,)
     starts: Optional[str] = commands.flag(description="Remove messages that start with this string (case sensitive)",default=None,)
     ends: Optional[str] = commands.flag(description="Remove messages that end with this string (case sensitive)",default=None,)
@@ -85,7 +85,11 @@ class PurgeFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
 
 
 class ReactionPurgeFlags(PurgeFlags):
-    """Message filters plus optional reaction name and ID filters."""
+    """Message filters plus reaction name and ID filters.
+
+    ``-reaction`` also accepts ``-reaction_name`` and ``-emoji_name``.
+    ``-reaction_id`` also accepts ``-emoji_id``.
+    """
 
     reaction: Optional[str] = commands.flag(
         description="Only clear reactions with this name",
@@ -217,15 +221,7 @@ class PurgeCog(Cog):
     @commands.hybrid_group(
         name="purge",
         fallback="start",
-        extras={
-            "usage": (
-                "[amount] [-user <user> -channel <channel> -contains <text> "
-                "-starts <text> -ends <text> -after <message-id> "
-                "-before <message-id> -bot -webhooks -embeds -files "
-                "-emoji -reactions -left -online -offline -idle "
-                "-require any|all -skip]"
-            )
-        },
+        extras={"usage": "[amount] [flags...]"},
     )
     @commands.bot_has_permissions(manage_messages=True)
     @commands.has_guild_permissions(manage_messages=True)
@@ -338,21 +334,21 @@ class PurgeCog(Cog):
                 ctx.bot.dispatch("logger_purge", ctx.guild, channel, tuple(deleted))
             else:
                 ctx.bot.dispatch("logger_purge_cancel", ctx.guild.id, channel.id)
+            ctx.bot.dispatch(
+                "logger_fishie_moderation",
+                ctx.guild,
+                "Messages purged by Fishie",
+                f"Fishie purged {len(deleted):,} messages in {channel.mention}.",
+                None,
+                ctx.author,
+                "Fishie purge command",
+            )
             await ctx.send(f"Deleted {plural(len(deleted)):message}.", delete_after=7)
 
     @purge.command(
         name="reactions",
         description="Clear reactions from messages matching the purge filters.",
-        extras={
-            "usage": (
-                "[amount] [-user <user> -channel <channel> -contains <text> "
-                "-starts <text> -ends <text> -after <message-id> "
-                "-before <message-id> -bot -webhooks -embeds -files "
-                "-emoji -reactions -left -online -offline -idle "
-                "-reaction <name> -reaction_id <id> "
-                "-require any|all -skip]"
-            )
-        },
+        extras={"usage": "[amount] [flags...]"},
     )
     @commands.bot_has_permissions(manage_messages=True)
     @commands.has_guild_permissions(manage_messages=True)
@@ -437,7 +433,8 @@ class PurgeCog(Cog):
                 cancel_label="No",
             )
             if not confirmation_message:
-                return await ctx.send("Reaction purge cancelled.")
+                await ctx.send("Reaction purge cancelled.")
+                return
 
         async with ctx.typing():
             if ctx.interaction is None or not ctx.interaction.response.is_done():
@@ -479,11 +476,13 @@ class PurgeCog(Cog):
                     if message_had_match:
                         matched_messages += 1
             except discord.Forbidden:
-                return await ctx.send(
+                await ctx.send(
                     "I do not have permissions to read or clear reactions in that channel."
                 )
+                return
             except discord.HTTPException as error:
-                return await ctx.send(f"Error: {error} (try a smaller search?)")
+                await ctx.send(f"Error: {error} (try a smaller search?)")
+                return
 
             if not cleared and not failed:
                 await ctx.send(f"No matching reactions found in {scanned} messages.")
@@ -495,6 +494,15 @@ class PurgeCog(Cog):
             )
             if failed:
                 result += f" Failed to clear {plural(failed):reaction}."
+            ctx.bot.dispatch(
+                "logger_fishie_moderation",
+                ctx.guild,
+                "Reactions purged by Fishie",
+                f"Fishie cleared {cleared:,} reactions in {channel.mention}.",
+                None,
+                ctx.author,
+                "Fishie purge reactions command",
+            )
             await ctx.send(result, delete_after=7)
 
     async def purge_guild_invites(
