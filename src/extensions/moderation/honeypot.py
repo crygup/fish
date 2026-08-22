@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
@@ -10,6 +11,12 @@ from core.views import AuthorView
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
+
+
+DEFAULT_HONEYPOT_MESSAGE = (
+    "This channel was made to catch people who spam in every channel, if you type "
+    "here there will be no coming back."
+)
 
 
 class HoneypotSetupView(AuthorView):
@@ -41,9 +48,16 @@ class HoneypotSetupView(AuthorView):
 class Honeypot(Cog):
     """Honeypot channel instantly bans anyone who sends a message in it."""
 
-    @commands.group(name="honeypot", invoke_without_command=True)
+    @commands.hybrid_group(
+        name="honeypot",
+        aliases=("honey-pot",),
+        fallback="setup",
+    )
+    @commands.guild_only()
     @commands.has_guild_permissions(manage_channels=True, ban_members=True)
     @commands.bot_has_guild_permissions(manage_channels=True, ban_members=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
     async def honeypot(self, ctx: GuildContext):
         """Setup or manage a honeypot channel to catch spam bots."""
         if ctx.invoked_subcommand is not None:
@@ -72,6 +86,10 @@ class Honeypot(Cog):
                 await ctx.send("I don't have permission to create channels.")
                 return
 
+        if not isinstance(channel, discord.TextChannel):
+            await ctx.send("The honeypot must use a text channel.")
+            return
+
         await self.bot.pool.execute(
             "INSERT INTO honeypot_channels (guild_id, channel_id) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2",
             ctx.guild.id,
@@ -79,15 +97,20 @@ class Honeypot(Cog):
         )
         self.bot.cached_honeypots[ctx.guild.id] = channel.id
 
-        embed = discord.Embed(
-            color=self.bot.embedcolor,
+        message_template = await self.bot.pool.fetchval(
+            "SELECT message_template FROM honeypot_channels WHERE guild_id = $1",
+            ctx.guild.id,
         )
+        embed = discord.Embed(color=self.bot.embedcolor)
         embed.add_field(
             name="Watch your step!",
-            value="This channel was made to catch people who spam in every channel, if you type here there will be no coming back.",
+            value=message_template or DEFAULT_HONEYPOT_MESSAGE,
             inline=False,
         )
-        await channel.send(embed=embed)  # type: ignore[union-attr]
+        await channel.send(
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
         await ctx.send(
             f"Honeypot set up in {channel.mention}. We recommend changing the channel name since bots have started to check the names of channels to ignore them.",
             delete_after=10,

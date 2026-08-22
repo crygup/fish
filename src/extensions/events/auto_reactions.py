@@ -18,6 +18,10 @@ class Reactions(Cog):
 
         if message.guild.id not in self.bot.db_cache.auto_reaction_guilds:
             return
+        if not self.bot.db_cache.auto_reaction_channel_allowed(
+            message.guild.id, message.channel.id
+        ):
+            return
 
         if message.attachments:
             await self.bot.add_reactions(

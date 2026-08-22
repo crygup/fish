@@ -76,6 +76,9 @@ class Pokemon(Cog):
 
         if message.guild.id not in self.bot.db_cache.poketwo_guilds:
             return
+        target_channel = self.bot.db_cache.poketwo_channels.get(message.guild.id)
+        if target_channel is not None and message.channel.id != target_channel:
+            return
 
         try:
             found = self.auto_solve(message.content)

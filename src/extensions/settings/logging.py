@@ -656,6 +656,133 @@ class Logging(Cog):
             ephemeral=ctx.interaction is not None,
         )
 
+    @settings.command(
+        name="hourly-posts",
+        aliases=("hourly", "hourlyposts", "autoposts"),
+    )
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def settings_hourly_posts(self, ctx: GuildContext) -> None:
+        """Set up hourly library posts, media filters, and repeat interval."""
+        await self._edit_server_destination(ctx, "hourly_posts")
+
+    @settings.command(name="honeypot", aliases=("honey-pot",))
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def settings_honeypot(self, ctx: GuildContext) -> None:
+        """Set up or edit the honeypot channel and warning message."""
+        await self._edit_server_destination(ctx, "honeypot")
+
+    @settings.command(
+        name="auto-reactions", aliases=("auto-reaction", "reactions", "autoreactions")
+    )
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def settings_auto_reactions(self, ctx: GuildContext) -> None:
+        """Enable, disable, or scope automatic reactions to selected channels."""
+        await self._edit_server_destination(ctx, "auto_reactions")
+
+    @settings.group(name="edit", invoke_without_command=True)
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def settings_edit(self, ctx: GuildContext) -> None:
+        """Edit a server automation destination or its filters."""
+        await self._send_server_settings_panel(ctx)
+
+    async def _send_server_settings_panel(self, ctx: GuildContext) -> None:
+        from .server import ServerSettingsView
+
+        view = await ServerSettingsView.create(ctx)
+        view.message = await ctx.send(
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=ctx.interaction is not None,
+        )
+
+    async def _edit_server_destination(self, ctx: GuildContext, kind: str) -> None:
+        from .server import (
+            ServerSettingsView,
+            _AutoReactionChannelsView,
+            _ServerChannelPicker,
+            _ServerMediaView,
+        )
+
+        view = await ServerSettingsView.create(ctx)
+        if kind == "auto_reactions":
+            target: AuthorLayoutView = _AutoReactionChannelsView(view)
+        elif kind in {"auto_upload", "hourly_posts"} and view.values.get(kind):
+            target: AuthorLayoutView = _ServerMediaView(view, kind)
+        else:
+            target = _ServerChannelPicker(view, kind)
+        target.message = await ctx.send(
+            view=target,
+            allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @settings_edit.command(
+        name="auto-downloads", aliases=("auto-download", "autodownload")
+    )
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    async def settings_edit_auto_downloads(self, ctx: GuildContext) -> None:
+        """Set, move, or disable the automatic download channel."""
+        await self._edit_server_destination(ctx, "auto_download")
+
+    @settings_edit.command(
+        name="auto-upload", aliases=("auto-uploads", "autoupload", "uploads")
+    )
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    async def settings_edit_auto_upload(self, ctx: GuildContext) -> None:
+        """Set, move, or filter the automatic upload channel."""
+        await self._edit_server_destination(ctx, "auto_upload")
+
+    @settings_edit.command(
+        name="hourly-posts", aliases=("hourly", "hourlyposts", "autoposts")
+    )
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    async def settings_edit_hourly_posts(self, ctx: GuildContext) -> None:
+        """Set, move, or edit the hourly-post interval and media filters."""
+        await self._edit_server_destination(ctx, "hourly_posts")
+
+    @settings_edit.command(name="pinboard")
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    async def settings_edit_pinboard(self, ctx: GuildContext) -> None:
+        """Set, move, or disable the pinboard channel."""
+        await self._edit_server_destination(ctx, "pinboard")
+
+    @settings_edit.command(name="honeypot", aliases=("honey-pot",))
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    async def settings_edit_honeypot(self, ctx: GuildContext) -> None:
+        """Set, move, or disable the honeypot channel."""
+        await self._edit_server_destination(ctx, "honeypot")
+
+    @settings_edit.command(name="auto-reactions", aliases=("auto-reaction", "reactions"))
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    async def settings_edit_auto_reactions(self, ctx: GuildContext) -> None:
+        """Set, move, or disable the automatic reaction channel."""
+        await self._edit_server_destination(ctx, "auto_reactions")
+
+    @settings_edit.command(name="poketwo", aliases=("auto-solve", "autosolve"))
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    async def settings_edit_poketwo(self, ctx: GuildContext) -> None:
+        """Set, move, or disable the Pokétwo auto-solving channel."""
+        await self._edit_server_destination(ctx, "poketwo")
+
     @commands.hybrid_group(
         name="tracking",
         aliases=("logging",),

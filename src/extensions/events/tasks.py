@@ -5,13 +5,40 @@ import base64
 import os
 import shutil
 import time
+from datetime import timedelta
 from typing import Any, Dict, cast
 
 import discord
 from discord.ext import commands, tasks
 
 from core import Cog
+from utils.downloads import is_discord_media_url
 from utils.paths import DOWNLOADS_ROOT
+
+
+def hourly_post_media_kind(filename: object) -> str:
+    """Return the library media kind used by the hourly-post filter.
+
+    Approved image uploads use the ``post_uploads`` table and are split into
+    images and GIFs by their normalized filename.  Video uploads are kept in
+    their own table and are never treated as GIFs, even when an old filename
+    has an unexpected extension.
+    """
+
+    value = str(filename or "").casefold()
+    return "gif" if value.rsplit("?", 1)[0].endswith(".gif") else "image"
+
+
+def hourly_post_kind_enabled(
+    kind: str, *, images: bool, gifs: bool, videos: bool
+) -> bool:
+    """Check whether a configured media kind is enabled for a guild."""
+
+    return {
+        "image": images,
+        "gif": gifs,
+        "video": videos,
+    }.get(kind, False)
 
 TWITCH_EVENTSUB_CALLBACK = "https://api.crygup.com/fishie/twitch/eventsub"
 
@@ -687,6 +714,211 @@ class Tasks(Cog):
             except OSError:
                 continue
 
+    async def _hourly_post_media(self, settings: dict[str, Any]) -> dict[str, Any] | None:
+        """Select one approved library item for an hourly-post configuration.
+
+        Selection happens in PostgreSQL so a guild with a large library does
+        not require loading every URL into the event loop.  The uploader block
+        list is applied in the query, which also means a blocked uploader can
+        never leak through a retry or an empty-media fallback.
+        """
+
+        blocked = [int(value) for value in settings.get("blocked_users", ())]
+        images = bool(settings.get("images", True))
+        gifs = bool(settings.get("gifs", True))
+        videos = bool(settings.get("videos", True))
+        if not any((images, gifs, videos)):
+            return None
+
+        row = await self.bot.pool.fetchrow(
+            """
+            SELECT item.*
+            FROM (
+                SELECT id, library_id, source_url, filename,
+                       review_message_id, uploader_id, 'post'::text AS media_kind
+                FROM post_uploads
+                WHERE status = 'approved'
+                  AND library_id IS NOT NULL
+                  AND uploader_id <> ALL($1::BIGINT[])
+                  AND (
+                        ($2::boolean AND lower(filename) NOT LIKE '%%.gif')
+                     OR ($3::boolean AND lower(filename) LIKE '%%.gif')
+                  )
+                UNION ALL
+                SELECT id, library_id, source_url, filename,
+                       review_message_id, uploader_id, 'video'::text AS media_kind
+                FROM video_uploads
+                WHERE status = 'approved'
+                  AND library_id IS NOT NULL
+                  AND uploader_id <> ALL($1::BIGINT[])
+                  AND $4::boolean
+                  AND lower(filename) NOT LIKE '%%.gif'
+            ) AS item
+            ORDER BY random()
+            LIMIT 1
+            """,
+            blocked,
+            images,
+            gifs,
+            videos,
+        )
+        return dict(row) if row is not None else None
+
+    async def _hourly_post_url(self, row: dict[str, Any]) -> str:
+        """Resolve a fresh Discord CDN URL for a library row when possible."""
+
+        source_url = str(row.get("source_url") or "")
+        upload_id = int(row["id"])
+        review_message_id = row.get("review_message_id")
+        if review_message_id is None:
+            return source_url if is_discord_media_url(source_url) else ""
+
+        # The library helpers already know how to refresh an attachment URL
+        # from the durable review message and persist the refreshed URL.  Keep
+        # this scheduler independent from the Fun cog so it can still operate
+        # while the cog is being reloaded.
+        fun_cog = cast(Any, self.bot.get_cog("Fun"))
+        if fun_cog is not None:
+            try:
+                if row.get("media_kind") == "video":
+                    return await fun_cog._current_video_url(
+                        upload_id=upload_id,
+                        source_url=source_url,
+                        review_message_id=int(review_message_id),
+                    )
+                return await fun_cog._current_post_url(
+                    upload_id=upload_id,
+                    source_url=source_url,
+                    review_message_id=int(review_message_id),
+                )
+            except (discord.HTTPException, commands.BadArgument):
+                self.bot.logger.warning(
+                    "Could not refresh hourly-post media %s", upload_id, exc_info=True
+                )
+        return source_url if is_discord_media_url(source_url) else ""
+
+    async def _send_hourly_post(
+        self, settings: dict[str, Any], row: dict[str, Any]
+    ) -> bool:
+        """Send one random approved item to one configured guild channel."""
+
+        channel_id = int(settings["channel_id"])
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+                self.bot.logger.warning(
+                    "Hourly-post channel %s is unavailable for guild %s",
+                    channel_id,
+                    settings["guild_id"],
+                    exc_info=True,
+                )
+                return False
+        if not hasattr(channel, "send"):
+            self.bot.logger.warning(
+                "Hourly-post channel %s is not messageable", channel_id
+            )
+            return False
+        messageable = cast(discord.abc.Messageable, channel)
+
+        source_url = await self._hourly_post_url(row)
+        if not source_url:
+            self.bot.logger.warning(
+                "Hourly-post library item %s has no usable Discord URL", row["id"]
+            )
+            return False
+
+        uploader_id = int(row["uploader_id"])
+        uploader = self.bot.get_user(uploader_id)
+        uploader_name = discord.utils.escape_markdown(
+            str(getattr(uploader, "name", None) or f"User {uploader_id}")
+        )[:100]
+        library_id = int(row.get("library_id") or row["id"])
+        media_label = "Video" if row.get("media_kind") == "video" else (
+            "GIF" if hourly_post_media_kind(row.get("filename")) == "gif" else "Image"
+        )
+        view = discord.ui.LayoutView(timeout=300)
+        view.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("## Hourly Fishie post"),
+                discord.ui.Separator(),
+                discord.ui.MediaGallery(discord.MediaGalleryItem(source_url)),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"-# Library ID `{library_id}` · {media_label} · "
+                    f"Uploaded by {uploader_name} (`{uploader_id}`)"
+                ),
+                accent_color=self.bot.embedcolor,
+            )
+        )
+        try:
+            await messageable.send(
+                view=view, allowed_mentions=discord.AllowedMentions.none()
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            self.bot.logger.warning(
+                "Could not send hourly-post library item %s to channel %s",
+                library_id,
+                channel_id,
+                exc_info=True,
+            )
+            return False
+        self.bot.logger.info(
+            "Sent hourly-post library item %s to guild %s channel %s",
+            library_id,
+            settings["guild_id"],
+            channel_id,
+        )
+        return True
+
+    async def publish_hourly_posts(self) -> int:
+        """Publish one random item for each configured guild."""
+        # Settings are loaded into db_cache during bot startup and updated by
+        # the settings commands.  Reading the cache here avoids one settings
+        # query per guild while still reflecting edits immediately.
+        cache = self.bot.db_cache
+        now = discord.utils.utcnow()
+        rows = [
+            {
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "images": "images" in cache.hourly_post_media.get(guild_id, set()),
+                "gifs": "gifs" in cache.hourly_post_media.get(guild_id, set()),
+                "videos": "videos" in cache.hourly_post_media.get(guild_id, set()),
+                "blocked_users": cache.hourly_post_blocks.get(guild_id, set()),
+            }
+            for guild_id, channel_id in cache.hourly_posts.items()
+            if cache.hourly_post_next_at.get(guild_id) is None
+            or cache.hourly_post_next_at[guild_id] <= now
+        ]
+        sent = 0
+        for record in rows:
+            settings = record
+            try:
+                item = await self._hourly_post_media(settings)
+                if item is not None and await self._send_hourly_post(settings, dict(item)):
+                    interval = cache.hourly_post_intervals.get(settings["guild_id"], 60)
+                    next_post_at = discord.utils.utcnow() + timedelta(minutes=interval)
+                    await self.bot.pool.execute(
+                        "UPDATE guild_hourly_posts SET next_post_at=$2 "
+                        "WHERE guild_id=$1",
+                        settings["guild_id"],
+                        next_post_at,
+                    )
+                    cache.set_hourly_post_next_at(
+                        settings["guild_id"], next_post_at
+                    )
+                    sent += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.bot.logger.exception(
+                    "Hourly-post delivery failed for guild %s",
+                    settings.get("guild_id"),
+                )
+        return sent
+
     @tasks.loop(minutes=30.0)
     async def set_key_task(self):
         try:
@@ -749,6 +981,7 @@ class Tasks(Cog):
         self.youtube_websub_sync_task.cancel()
         self.youtube_event_inbox_task.cancel()
         self.youtube_community_task.cancel()
+        self.hourly_posts_task.cancel()
 
     async def cog_load(self) -> None:
         self._twitch_access_token: str | None = None
@@ -762,6 +995,7 @@ class Tasks(Cog):
         self.youtube_websub_sync_task.start()
         self.youtube_event_inbox_task.start()
         self.youtube_community_task.start()
+        self.hourly_posts_task.start()
 
     @tasks.loop(minutes=10.0)
     async def delete_videos_task(self):
@@ -829,4 +1063,19 @@ class Tasks(Cog):
 
     @youtube_community_task.before_loop
     async def before_youtube_community_task(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=1.0)
+    async def hourly_posts_task(self):
+        try:
+            await self.publish_hourly_posts()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A missing migration or a transient database outage should not
+            # stop the rest of the event scheduler.  The next pass will retry.
+            self.bot.logger.exception("Hourly-post scheduler failed")
+
+    @hourly_posts_task.before_loop
+    async def before_hourly_posts_task(self):
         await self.bot.wait_until_ready()

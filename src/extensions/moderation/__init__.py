@@ -70,7 +70,7 @@ def _parse_duration(until: datetime.datetime) -> int:
 
 
 class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles):
-    """Server moderation commands."""
+    """Server moderation commands"""
 
     emoji = discord.PartialEmoji(name="\U0001f528")
 

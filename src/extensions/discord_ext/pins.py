@@ -96,17 +96,25 @@ class DeletePinBoardView(AuthorView):
 
     @discord.ui.button(label="Unlink Pinboard?", style=discord.ButtonStyle.red)
     async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        item: int | None = (
-            await self.ctx.pool.fetchval(
-                "SELECT pinboard FROM guild_settings WHERE guild_id = $1",
-                self.ctx.guild.id,
-            )
-            or 0
+        stored_channel_id = await self.ctx.pool.fetchval(
+            "SELECT pinboard FROM guild_settings WHERE guild_id = $1",
+            self.ctx.guild.id,
         )
+        item = int(stored_channel_id or 0)
         channel: discord.TextChannel | None = self.ctx.bot.get_channel(item)  # type: ignore
 
         if channel is None:
-            raise commands.BadArgument("Channel not found.")
+            await self.ctx.pool.execute(
+                "UPDATE guild_settings SET pinboard = NULL WHERE guild_id = $1",
+                self.ctx.guild.id,
+            )
+            self.ctx.bot.db_cache.remove_pinboard(self.ctx.guild.id, item)
+            await interaction.response.edit_message(
+                content="The missing Pinboard channel was removed from the settings.",
+                view=None,
+                embeds=[],
+            )
+            return
 
         await remove_pinboard_channel(self.ctx, channel)
 
