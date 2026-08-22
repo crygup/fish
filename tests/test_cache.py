@@ -29,6 +29,24 @@ def test_removals_tolerate_stale_cache() -> None:
     cache.remove_reaction_guilds(3)
 
 
+def test_auto_reaction_targets_support_server_wide_and_multiple_channels() -> None:
+    cache = db_cache()
+
+    # No target rows means an enabled rule applies to every channel.
+    assert cache.auto_reaction_channel_allowed(1, 10)
+    cache.set_auto_reaction_channels(1, {10, 20})
+    assert cache.auto_reaction_channel_allowed(1, 10)
+    assert cache.auto_reaction_channel_allowed(1, 20)
+    assert not cache.auto_reaction_channel_allowed(1, 30)
+
+    cache.remove_auto_reaction_channel(1, 10)
+    assert not cache.auto_reaction_channel_allowed(1, 10)
+    assert cache.auto_reaction_channel_allowed(1, 20)
+
+    cache.set_auto_reaction_channels(1, None)
+    assert cache.auto_reaction_channel_allowed(1, 30)
+
+
 def test_account_cache_updates_lastfm_and_anilist_together() -> None:
     cache = db_cache()
     cache.update_accounts(42, last_fm="lastfm-user", anilist="anilist-user")
@@ -60,6 +78,20 @@ def test_global_tracking_and_history_settings_are_separate() -> None:
     assert not cache.guild_history_is_public(7)
     cache.set_guild_history_public(7, True)
     assert cache.guild_history_is_public(7)
+
+
+def test_bot_history_is_public_without_changing_user_settings() -> None:
+    cache = db_cache()
+    cache.set_history_public(99, False)
+    cache.set_game_history_public(99, False)
+    cache.remember_user(99, is_bot=True)
+
+    assert cache.user_history_is_public(99)
+    assert cache.game_history_visible_to(99, 42)
+
+    cache.remember_user(99, is_bot=False)
+    assert not cache.user_history_is_public(99)
+    assert not cache.game_history_visible_to(99, 42)
 
 
 def test_reaction_tracking_is_explicit_and_respects_global_disable() -> None:

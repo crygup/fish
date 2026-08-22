@@ -42,7 +42,11 @@ from utils import (
     update_pokemon,
 )
 
-from .cache import db_cache
+from .cache import (
+    REPUTATION_BONUS_GUILD_ID,
+    REPUTATION_BONUS_USER_ID,
+    db_cache,
+)
 from .migrations import check_migrations
 
 SILENT_COMMAND_USERS: dict[str, frozenset[int]] = {
@@ -505,6 +509,17 @@ async def get_prefix(bot: Fishie, message: discord.Message) -> List[str]:
     return commands.when_mentioned_or(*packed)(bot, message)
 
 
+class FishieCommandTree(app_commands.CommandTree[Any]):
+    """Command tree with Fishie's owner-managed global restrictions."""
+
+    async def interaction_check(self, interaction: discord.Interaction[Any]) -> bool:
+        bot = self.client
+        check = getattr(bot, "_check_app_command_disabled", None)
+        if check is None:
+            return True
+        return await check(interaction)
+
+
 class Fishie(commands.Bot):
     custom_emojis = Emojis()
     cached_covers: Dict[str, Tuple[str, bool]] = {}
@@ -574,15 +589,16 @@ class Fishie(commands.Bot):
             command_prefix=get_prefix,
             intents=required_intents(),
             strip_after_prefix=True,
+            tree_cls=FishieCommandTree,
         )
         self.add_check(self._check_command_disabled)
         self.add_check(self._check_tracking_consent)
 
     @staticmethod
-    def _command_disable_excluded(command: commands.Command[Any, Any, Any]) -> bool:
-        qualified_name = command.qualified_name.casefold()
+    def _command_disable_excluded(command: Any) -> bool:
+        qualified_name = str(getattr(command, "qualified_name", "")).casefold()
         root_name = qualified_name.split(" ", 1)[0]
-        cog = command.cog
+        cog = getattr(command, "cog", None) or getattr(command, "binding", None)
         module = getattr(cog.__class__, "__module__", "") if cog is not None else ""
         return (
             root_name
@@ -595,6 +611,7 @@ class Fishie(commands.Bot):
                 "settings",
                 "tracking",
                 "logging",
+                "dev",
             }
             or qualified_name.startswith(("logging-delete", "tracking-delete"))
             or root_name == "jsk"
@@ -602,10 +619,95 @@ class Fishie(commands.Bot):
             or module.startswith("extensions.jishaku")
         )
 
+    @staticmethod
+    def _global_disable_excluded(command: Any) -> bool:
+        """Keep the owner controls available for recovering disabled commands."""
+
+        qualified_name = str(getattr(command, "qualified_name", "")).casefold()
+        root_name = qualified_name.split(" ", 1)[0]
+        cog = getattr(command, "cog", None) or getattr(command, "binding", None)
+        module = getattr(cog.__class__, "__module__", "") if cog is not None else ""
+        return root_name == "dev" or module.startswith("extensions.owner")
+
+    @staticmethod
+    def _command_cog_name(command: Any) -> str | None:
+        """Return a stable case-folded cog name for text or app commands."""
+
+        cog = getattr(command, "cog", None) or getattr(command, "binding", None)
+        if cog is None:
+            return None
+        name = getattr(cog, "__cog_name__", None) or cog.__class__.__name__
+        return str(name).casefold()
+
+    def _globally_disabled_target(self, command: Any) -> str | None:
+        """Return the global restriction matching *command*, if any."""
+
+        if self._global_disable_excluded(command):
+            return None
+
+        qualified_name = str(getattr(command, "qualified_name", "")).casefold()
+        parts = qualified_name.split()
+        for index in range(len(parts), 0, -1):
+            target = " ".join(parts[:index])
+            if target in self.db_cache.globally_disabled_commands:
+                return target
+
+        cog_name = self._command_cog_name(command)
+        if cog_name and cog_name in self.db_cache.globally_disabled_cogs:
+            return f"{cog_name} cog"
+        return None
+
+    async def _check_app_command_disabled(
+        self, interaction: discord.Interaction[Any]
+    ) -> bool:
+        """Apply owner command and user blocks to application commands."""
+
+        command = interaction.command
+        if command is None:
+            return True
+        user_id = getattr(interaction.user, "id", None)
+        if user_id in self.db_cache.globally_blocked_users:
+            if (
+                interaction.type != discord.InteractionType.autocomplete
+                and not interaction.response.is_done()
+            ):
+                await interaction.response.send_message(
+                    "You are blocked from using Fishie commands.",
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            return False
+
+        target = self._globally_disabled_target(command)
+        if target is None:
+            return True
+        if (
+            interaction.type != discord.InteractionType.autocomplete
+            and not interaction.response.is_done()
+        ):
+            await interaction.response.send_message(
+                f"The `{target}` command is disabled globally.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        return False
+
     async def _check_command_disabled(self, ctx: commands.Context[Fishie]) -> bool:
         if getattr(ctx, "_skip_command_disable_check", False):
             return True
-        if ctx.guild is None or ctx.command is None:
+        if ctx.command is None:
+            return True
+
+        if ctx.author.id in self.db_cache.globally_blocked_users:
+            raise commands.CheckFailure("You are blocked from using Fishie commands.")
+
+        globally_disabled = self._globally_disabled_target(ctx.command)
+        if globally_disabled is not None:
+            raise commands.CheckFailure(
+                f"The `{globally_disabled}` command is disabled globally."
+            )
+
+        if ctx.guild is None:
             return True
         if self._command_disable_excluded(ctx.command):
             return True
@@ -968,7 +1070,7 @@ class Fishie(commands.Bot):
                     )
             except Exception:
                 self.logger.exception("Failed to send plain error report fallback")
-        except Exception:
+        except asyncpg.UndefinedTableError:
             self.logger.exception("Failed to send error report")
 
     async def on_error(self, event: str, *args: Any, **kwargs: Any) -> None:
@@ -1082,6 +1184,14 @@ class Fishie(commands.Bot):
                 )
 
     async def on_ready(self):
+        # Cache bot accounts from the ready member cache so synchronous
+        # history checks can treat them as public without extra API calls.
+        if self.user is not None:
+            self.db_cache.remember_user(self.user.id, is_bot=True)
+        for guild in self.guilds:
+            for member in guild.members:
+                if member.bot:
+                    self.db_cache.remember_user(member.id, is_bot=True)
         if not hasattr(self, "start_time"):
             self.start_time = discord.utils.utcnow()
             self.logger.info(f"Logged into {str(self.user)}")
@@ -1207,16 +1317,32 @@ class Fishie(commands.Bot):
         self.db_cache.prefixes.clear()
         self.db_cache.opted_out.clear()
         self.db_cache.auto_downloads.clear()
+        self.db_cache.auto_uploads.clear()
+        self.db_cache.auto_upload_media.clear()
+        self.db_cache.hourly_posts.clear()
+        self.db_cache.hourly_post_media.clear()
+        self.db_cache.hourly_post_intervals.clear()
+        self.db_cache.hourly_post_next_at.clear()
+        self.db_cache.hourly_post_blocks.clear()
         self.db_cache.poketwo_guilds.clear()
+        self.db_cache.poketwo_channels.clear()
         self.db_cache.auto_reaction_guilds.clear()
+        self.db_cache.auto_reaction_targets.clear()
+        self.db_cache.auto_reaction_channels.clear()
         self.db_cache.nsfw_covers.clear()
         self.db_cache.pinboard.clear()
         self.db_cache.lastfm.clear()
         self.db_cache.anilist.clear()
+        self.db_cache.user_badges.clear()
         self.db_cache.disabled_commands.clear()
+        self.db_cache.globally_disabled_commands.clear()
+        self.db_cache.globally_disabled_cogs.clear()
+        self.db_cache.globally_blocked_users.clear()
         self.db_cache.tracking_disabled_users.clear()
         self.db_cache.private_history_users.clear()
         self.db_cache.public_history_users.clear()
+        self.db_cache.bot_users.clear()
+        self.db_cache.known_non_bot_users.clear()
         self.db_cache.game_tracking_disabled_users.clear()
         self.db_cache.private_game_history_users.clear()
         self.db_cache.public_game_history_users.clear()
@@ -1229,6 +1355,50 @@ class Fishie(commands.Bot):
         self.cached_mudae_consent.clear()
         self.cached_honeypots.clear()
         self.cached_banned_ips.clear()
+
+        # Reputation XP bonuses are shared by Fishie and imported Tatsu
+        # events.  Load only the active UTC day/week once at startup, then
+        # reputation.py updates these sets as new events arrive.
+        now = datetime.datetime.now(datetime.timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = day_start - datetime.timedelta(days=(day_start.weekday() + 1) % 7)
+        self.db_cache.reset_reputation_bonus_cache(now)
+        reputation_events = await self.pool.fetch(
+            """
+            SELECT giver_id, kind, source
+            FROM reputation_events
+            WHERE (
+                kind = 'user'
+                AND receiver_id = $1
+                AND created_at >= $2
+                AND created_at < $5
+            ) OR (
+                kind = 'guild'
+                AND guild_id = $3
+                AND created_at >= $4
+                AND created_at < $5
+            )
+            """,
+            REPUTATION_BONUS_USER_ID,
+            day_start,
+            REPUTATION_BONUS_GUILD_ID,
+            week_start,
+            now,
+        )
+        for row in reputation_events:
+            if row["kind"] == "user":
+                self.db_cache.add_reputation_user_bonus(
+                    row["giver_id"], row["source"], now
+                )
+            else:
+                self.db_cache.add_reputation_guild_bonus(
+                    row["giver_id"], row["source"], now
+                )
+        self.logger.info(
+            "Cached %d reputation user bonus giver(s) and %d guild bonus giver(s)",
+            len(self.db_cache.reputation_user_bonus_givers),
+            len(self.db_cache.reputation_guild_bonus_givers),
+        )
 
         prefixes = await self.pool.fetch("""SELECT * FROM guild_prefixes""")
 
@@ -1245,6 +1415,23 @@ class Fishie(commands.Bot):
             self.db_cache.add_disabled_command(
                 row["guild_id"], row["command"], row["channel_id"]
             )
+
+        global_command_disables = await self.pool.fetch(
+            "SELECT target, target_type FROM global_command_disables"
+        )
+        for row in global_command_disables:
+            target = str(row["target"]).casefold()
+            if row["target_type"] == "cog":
+                self.db_cache.globally_disabled_cogs.add(target)
+            else:
+                self.db_cache.globally_disabled_commands.add(target)
+
+        global_user_blocks = await self.pool.fetch(
+            "SELECT user_id FROM global_user_blocks"
+        )
+        self.db_cache.globally_blocked_users.update(
+            int(row["user_id"]) for row in global_user_blocks
+        )
 
         opted_out = await self.pool.fetch("SELECT * FROM opted_out")
         for row in opted_out:
@@ -1294,8 +1481,20 @@ class Fishie(commands.Bot):
         for row in guild_settings:
             guild_id = row["guild_id"]
             adl = row["auto_download"]
+            auto_upload = row.get("auto_upload")
+            auto_upload_types = {
+                key
+                for key, enabled in (
+                    ("images", row.get("auto_upload_images", True)),
+                    ("gifs", row.get("auto_upload_gifs", True)),
+                    ("videos", row.get("auto_upload_videos", True)),
+                )
+                if enabled
+            }
             poketwo = row["poketwo"]
+            poketwo_channel = row.get("poketwo_channel")
             auto_reactions = row["auto_reactions"]
+            auto_reactions_channel = row.get("auto_reactions_channel")
             pinboard = row["pinboard"]
             if not row["tracking_enabled"]:
                 self.db_cache.guild_tracking_disabled.add(guild_id)
@@ -1309,6 +1508,12 @@ class Fishie(commands.Bot):
                     f'Added auto download channel "{adl}" to guild "{guild_id}"'
                 )
 
+            if auto_upload:
+                self.db_cache.add_auto_upload(auto_upload, auto_upload_types)
+                self.logger.info(
+                    f'Added auto upload channel "{auto_upload}" to guild "{guild_id}"'
+                )
+
             if pinboard:
                 self.db_cache.add_pinboard(guild_id, pinboard)
                 self.logger.info(
@@ -1317,11 +1522,67 @@ class Fishie(commands.Bot):
 
             if poketwo:
                 self.db_cache.add_poketwo(guild_id)
+                self.db_cache.set_poketwo_channel(guild_id, poketwo_channel)
                 self.logger.info(f'Added auto poketwo solving to guild "{guild_id}"')
 
             if auto_reactions:
                 self.db_cache.add_reaction_guilds(guild_id)
+                # A missing target row means the rule applies server-wide.
+                # The legacy column is still loaded for databases that have
+                # not yet run the multi-channel migration.
+                self.db_cache.set_auto_reaction_channel(
+                    guild_id, auto_reactions_channel
+                )
                 self.logger.info(f'Added auto media reactions to guild "{guild_id}"')
+
+        # Multi-channel reaction targets are kept separately from the legacy
+        # guild_settings column.  Loading them after the legacy values lets
+        # the new table take precedence while preserving old installations.
+        try:
+            reaction_targets = await self.pool.fetch(
+                "SELECT guild_id, channel_id FROM guild_auto_reaction_channels"
+            )
+        except Exception:
+            # Older databases may not have the optional table until the next
+            # migration.  Keep the legacy cache in that case.
+            reaction_targets = []
+        for target in reaction_targets:
+            self.db_cache.add_auto_reaction_channel(
+                target["guild_id"], target["channel_id"]
+            )
+
+        # Hourly-post settings live in their own table, so load them
+        # independently of ``guild_settings``.  A guild that only enables
+        # hourly posts must not need an unrelated server setting row to have
+        # its scheduler restored after a restart.
+        hourly_posts = await self.pool.fetch(
+            "SELECT guild_id, channel_id, images, gifs, videos, interval_minutes, "
+            "next_post_at FROM guild_hourly_posts"
+        )
+        for hourly in hourly_posts:
+            guild_id = hourly["guild_id"]
+            hourly_types = {
+                key
+                for key, enabled in (
+                    ("images", hourly["images"]),
+                    ("gifs", hourly["gifs"]),
+                    ("videos", hourly["videos"]),
+                )
+                if enabled
+            }
+            self.db_cache.set_hourly_posts(
+                guild_id,
+                hourly["channel_id"],
+                hourly_types,
+                int(hourly.get("interval_minutes") or 60),
+                hourly.get("next_post_at"),
+            )
+
+        hourly_blocks = await self.pool.fetch(
+            "SELECT guild_id, user_id FROM guild_hourly_post_blocks"
+        )
+        for blocked in hourly_blocks:
+            self.db_cache.add_hourly_post_block(blocked["guild_id"], blocked["user_id"])
 
         accounts = await self.pool.fetch(
             "SELECT user_id, lastfm, anilist FROM accounts"
@@ -1339,6 +1600,25 @@ class Fishie(commands.Bot):
                 self.logger.info(
                     f'Added AniList account "{anilist}" to user "{user_id}"'
                 )
+
+        user_badges = await self.pool.fetch("""
+            SELECT user_id, emoji_name, emoji_id, is_custom, animated,
+                   badge_key, text, created_at
+            FROM user_badges
+            WHERE badge_key = 'custom'
+            ORDER BY id
+            """)
+        for row in user_badges:
+            user_id = int(row["user_id"])
+            self.db_cache.user_badges[user_id] = {
+                "emoji_name": row["emoji_name"],
+                "emoji_id": row["emoji_id"],
+                "is_custom": bool(row["is_custom"]),
+                "animated": bool(row["animated"]),
+                "text": row["text"],
+                "badge_key": row["badge_key"],
+                "created_at": row["created_at"],
+            }
 
         roblox_templates = await self.pool.fetch(
             "SELECT asset_id, image_url, extra FROM roblox_templates"

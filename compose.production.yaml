@@ -10,6 +10,7 @@ services:
     environment:
       FISHIE_CONFIG: /run/secrets/config.toml
       FISHIE_CREDENTIAL_KEY_FILE: /run/secrets/credential.key
+      FISHIE_USER_BADGES_PATH: /app/data/user_badges.json
       FISHIE_API_HOST: 127.0.0.1
       FISHIE_TRUSTED_PROXIES: ${FISHIE_TRUSTED_PROXIES:-127.0.0.1,::1}
       HOME: /tmp
@@ -20,6 +21,7 @@ services:
       - ./config.toml:/run/secrets/config.toml:ro
       - ./src/files/secrets/credential.key:/run/secrets/credential.key:ro
       - ./src/files/cookies:/app/src/files/cookies:ro
+      - ./src/files/data:/app/data
       - ./src/files/downloads:/app/src/files/downloads
       - ./discord.log:/app/discord.log
       - /etc/localtime:/etc/localtime:ro

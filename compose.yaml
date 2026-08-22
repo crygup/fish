@@ -34,9 +34,11 @@ services:
       <<: *fishie-env
       FISHIE_API_HOST: 0.0.0.0
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      FISHIE_USER_BADGES_PATH: /app/data/user_badges.json
     volumes:
       - ./config.toml:/run/secrets/config.toml:ro
       - ./src/files/cookies:/app/src/files/cookies:ro
+      - ./src/files/data:/app/data
       - downloads:/app/src/files/downloads
     ports:
       - "127.0.0.1:8001:8001"

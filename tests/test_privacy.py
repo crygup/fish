@@ -17,6 +17,7 @@ async def test_full_user_erasure_covers_linked_and_legacy_data() -> None:
     assert deleted > 20
     for table in (
         "accounts",
+        "user_badges",
         "web_sessions",
         "reminders",
         "user_fishing",
@@ -40,6 +41,15 @@ async def test_full_user_erasure_covers_linked_and_legacy_data() -> None:
         "wordle_games",
         "wordle_stats",
         "streak_game_stats",
+        "video_aliases",
+        "video_library_blocks",
+        "video_library_hides",
+        "post_uploads",
+        "post_upload_blocks",
+        "post_aliases",
+        "post_library_blocks",
+        "post_library_hides",
+        "reputation_events",
         "reaction_logs",
         "assigned_by",
         "locked_by",
@@ -68,5 +78,9 @@ async def test_full_guild_erasure_covers_logs_configuration_and_deliveries() -> 
         "tictactoe_games",
         "connectfour_games",
         "lightsout_games",
+        "post_uploads",
+        "reputation_events",
+        "guild_rep",
+        "user_rep_logs",
     ):
         assert table in sql

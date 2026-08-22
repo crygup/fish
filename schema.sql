@@ -202,14 +202,66 @@ CREATE TABLE IF NOT EXISTS guild_prefixes (
 CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id BIGINT,
     auto_download BIGINT,
+    auto_upload BIGINT,
+    auto_upload_images BOOLEAN NOT NULL DEFAULT TRUE,
+    auto_upload_gifs BOOLEAN NOT NULL DEFAULT TRUE,
+    auto_upload_videos BOOLEAN NOT NULL DEFAULT TRUE,
     poketwo BOOLEAN DEFAULT FALSE,
+    poketwo_channel BIGINT,
     auto_reactions BOOLEAN DEFAULT FALSE,
+    auto_reactions_channel BIGINT,
     pinboard BIGINT,
     PRIMARY KEY (guild_id)
 );
 
+-- Optional channel targets for automatic reactions.  When a guild has the
+-- feature enabled and no rows here, reactions apply server-wide.
+CREATE TABLE IF NOT EXISTS guild_auto_reaction_channels (
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS guild_auto_reaction_channels_channel_idx
+    ON guild_auto_reaction_channels (channel_id, guild_id);
+
 ALTER TABLE guild_settings
     ADD COLUMN IF NOT EXISTS dehoist BOOLEAN DEFAULT FALSE;
+
+ALTER TABLE guild_settings
+    ADD COLUMN IF NOT EXISTS auto_upload BIGINT;
+
+ALTER TABLE guild_settings
+    ADD COLUMN IF NOT EXISTS auto_upload_images BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE guild_settings
+    ADD COLUMN IF NOT EXISTS auto_upload_gifs BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE guild_settings
+    ADD COLUMN IF NOT EXISTS auto_upload_videos BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- Destination and media filters for hourly library posts.  Keeping these in
+-- their own table avoids adding a collection of nullable fields to the
+-- general server settings row and makes a missing destination unambiguous.
+CREATE TABLE IF NOT EXISTS guild_hourly_posts (
+    guild_id BIGINT PRIMARY KEY,
+    channel_id BIGINT NOT NULL,
+    images BOOLEAN NOT NULL DEFAULT TRUE,
+    gifs BOOLEAN NOT NULL DEFAULT TRUE,
+    videos BOOLEAN NOT NULL DEFAULT TRUE,
+    interval_minutes INTEGER NOT NULL DEFAULT 60,
+    next_post_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS guild_hourly_post_blocks (
+    guild_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    blocked_by BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS guild_hourly_post_blocks_user_idx
+    ON guild_hourly_post_blocks (user_id, guild_id);
 
 CREATE TABLE IF NOT EXISTS guild_log_channels (
     guild_id BIGINT NOT NULL,
@@ -323,13 +375,79 @@ CREATE TABLE IF NOT EXISTS user_rep (
     count INT
 );
 
+-- Owner-managed userinfo badges.  The badge key leaves room for multiple
+-- achievement badges per user while preserving the current custom badge.
+CREATE TABLE IF NOT EXISTS user_badges (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    emoji_name TEXT NOT NULL,
+    emoji_id BIGINT,
+    is_custom BOOLEAN NOT NULL,
+    unicode BOOLEAN NOT NULL DEFAULT FALSE,
+    animated BOOLEAN NOT NULL DEFAULT FALSE,
+    badge_key TEXT NOT NULL DEFAULT 'custom',
+    text TEXT NOT NULL,
+    CHECK (
+        (is_custom AND emoji_id IS NOT NULL AND NOT unicode)
+        OR (NOT is_custom AND emoji_id IS NULL AND unicode)
+    )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS user_badges_user_key_idx
+    ON user_badges (user_id, badge_key);
+CREATE INDEX IF NOT EXISTS user_badges_user_idx
+    ON user_badges (user_id, id DESC);
+
 CREATE TABLE IF NOT EXISTS user_rep_logs (
     id SERIAL,
     user_id BIGINT,
     author_id BIGINT,
     value BOOLEAN,
-    comment TEXT
+    comment TEXT,
+    guild_id BIGINT,
+    source_message_id BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
 );
+
+-- Reputation events retain the giver, recipient, scope, and source so daily
+-- and weekly limits can be enforced without losing the legacy aggregates.
+CREATE TABLE IF NOT EXISTS reputation_events (
+    id BIGSERIAL PRIMARY KEY,
+    giver_id BIGINT NOT NULL,
+    receiver_id BIGINT,
+    guild_id BIGINT,
+    kind TEXT NOT NULL CHECK (kind IN ('user', 'guild')),
+    source TEXT NOT NULL CHECK (source IN ('fishie', 'tatsu')),
+    source_message_id BIGINT,
+    period_start DATE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    CHECK (
+        (kind = 'user' AND receiver_id IS NOT NULL)
+        OR (kind = 'guild' AND receiver_id IS NULL AND guild_id IS NOT NULL)
+    )
+);
+
+CREATE TABLE IF NOT EXISTS guild_rep (
+    guild_id BIGINT PRIMARY KEY,
+    count BIGINT NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS reputation_events_giver_idx
+    ON reputation_events (giver_id, created_at);
+CREATE INDEX IF NOT EXISTS reputation_events_receiver_idx
+    ON reputation_events (receiver_id, created_at);
+CREATE INDEX IF NOT EXISTS reputation_events_guild_idx
+    ON reputation_events (guild_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS reputation_events_source_message_idx
+    ON reputation_events (source_message_id)
+    WHERE source_message_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS reputation_events_fishie_period_idx
+    ON reputation_events (giver_id, kind, period_start)
+    WHERE source = 'fishie';
+CREATE UNIQUE INDEX IF NOT EXISTS user_rep_logs_source_message_idx
+    ON user_rep_logs (source_message_id)
+    WHERE source_message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS pinboard_pins (
     message_id BIGINT,
@@ -478,7 +596,8 @@ CREATE TABLE IF NOT EXISTS phone_consent (
 
 CREATE TABLE IF NOT EXISTS honeypot_channels (
     guild_id BIGINT PRIMARY KEY,
-    channel_id BIGINT NOT NULL
+    channel_id BIGINT NOT NULL,
+    message_template TEXT NOT NULL DEFAULT 'This channel was made to catch people who spam in every channel, if you type here there will be no coming back.'
 );
 
 CREATE TABLE IF NOT EXISTS corn_reacts (

@@ -36,12 +36,17 @@ USER_ID_TABLES = (
     "click_user_guild_totals",
     "custom_role_assignments",
     "reaction_tracking",
+    "global_user_blocks",
     "game_2048_stats",
     "game_2048_games",
     "lightsout_games",
     "wordle_games",
     "wordle_stats",
     "streak_game_stats",
+    "video_aliases",
+    "video_library_blocks",
+    "video_library_hides",
+    "user_badges",
 )
 
 GUILD_ID_TABLES = (
@@ -86,6 +91,7 @@ GUILD_ID_TABLES = (
     "lightsout_games",
     "reaction_logs",
     "wordle_games",
+    "user_rep_logs",
 )
 
 
@@ -114,6 +120,8 @@ async def erase_user(connection: Any, user_id: int) -> int:
         ("custom_roles", "created_by"),
         ("custom_role_assignments", "assigned_by"),
         ("channel_locks", "locked_by"),
+        ("global_user_blocks", "blocked_by"),
+        ("global_command_disables", "disabled_by"),
     ):
         deleted += _count(
             await connection.execute(
@@ -160,6 +168,12 @@ async def erase_user(connection: Any, user_id: int) -> int:
     )
     deleted += _count(
         await connection.execute(
+            "DELETE FROM reputation_events WHERE giver_id = $1 OR receiver_id = $1",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
             "DELETE FROM pinboard_pins WHERE author_id = $1 OR target_id = $1", user_id
         )
     )
@@ -192,6 +206,46 @@ async def erase_user(connection: Any, user_id: int) -> int:
     )
     deleted += _count(
         await connection.execute(
+            "DELETE FROM video_library_blocks WHERE blocked_uploader_id = $1",
+            user_id,
+        )
+    )
+    # Post submissions and personal post-library preferences can identify the
+    # uploader, reviewer, blocker, or alias owner. Remove all references on
+    # account deletion, including rows owned by the deleted uploader.
+    deleted += _count(
+        await connection.execute(
+            """DELETE FROM post_uploads
+               WHERE uploader_id = $1 OR approved_by = $1 OR denied_by = $1""",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM post_upload_blocks WHERE user_id = $1 OR blocked_by = $1",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM post_aliases WHERE user_id = $1",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM post_library_blocks WHERE user_id = $1 OR blocked_uploader_id = $1",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM post_library_hides WHERE user_id = $1",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
             """WITH updated AS (
                    UPDATE mudae_subs
                    SET user_ids = array_remove(user_ids, $1)
@@ -213,17 +267,55 @@ async def erase_guild(connection: Any, guild_id: int) -> int:
     """Remove all database state owned by a Discord guild."""
 
     deleted = 0
+    # User reputation is kept as a legacy aggregate, so remove the events for
+    # this guild from each recipient's count before deleting the event rows.
+    fetch = getattr(connection, "fetch", None)
+    if fetch is not None:
+        for row in await fetch(
+            """
+            SELECT receiver_id, COUNT(*) AS total
+            FROM reputation_events
+            WHERE guild_id = $1 AND receiver_id IS NOT NULL
+            GROUP BY receiver_id
+            """,
+            guild_id,
+        ):
+            deleted += _count(
+                await connection.execute(
+                    """
+                    UPDATE user_rep
+                    SET count = GREATEST(count - $2, 0)
+                    WHERE user_id = $1
+                    """,
+                    row["receiver_id"],
+                    row["total"],
+                )
+            )
+
     for table in GUILD_ID_TABLES:
         deleted += _count(
             await connection.execute(
                 f"DELETE FROM {table} WHERE guild_id = $1", guild_id
             )
         )
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM reputation_events WHERE guild_id = $1", guild_id
+        )
+    )
+    deleted += _count(
+        await connection.execute("DELETE FROM guild_rep WHERE guild_id = $1", guild_id)
+    )
     # Video library rows use ``source_guild_id`` rather than the conventional
     # ``guild_id`` name because submissions may originate outside a guild.
     deleted += _count(
         await connection.execute(
             "DELETE FROM video_uploads WHERE source_guild_id = $1", guild_id
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM post_uploads WHERE source_guild_id = $1", guild_id
         )
     )
     return deleted

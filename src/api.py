@@ -71,6 +71,7 @@ from extensions.media_effects.processing import (
 from utils.credentials import decrypt_credential, encrypt_credential
 from utils.network import fetch_public_bytes, validate_public_url
 from utils.rich_text import resolve_inline_images
+from utils.vars import remove_user_badge
 
 WEB_ORIGINS = frozenset({"https://crygup.com", "https://www.crygup.com"})
 SESSION_COOKIE = "__Host-fishie_session"
@@ -167,6 +168,7 @@ TABLE_MAP = {
     "stag_logs": "stag_logs",
     "user_status_history": "user_status_history",
     "nickname_logs": "nickname_logs",
+    "user_badges": "user_badges",
     "guild_icons": "guild_icons",
     "guild_name_logs": "guild_name_logs",
 }
@@ -1147,6 +1149,21 @@ async def _history_visible_to(
     authorization: str | None,
     session_id: str | None,
 ) -> None:
+    # Bot accounts do not have user-controlled privacy settings.  Resolve the
+    # account once through Discord and cache the result so their saved history
+    # remains viewable without changing any website wording.
+    if bot_ref is not None and user_id not in bot_ref.db_cache.known_non_bot_users:
+        cached_user = bot_ref.get_user(user_id)
+        if cached_user is None:
+            try:
+                cached_user = await bot_ref.fetch_user(user_id)
+            except (discord.HTTPException, discord.NotFound):
+                cached_user = None
+        if cached_user is not None:
+            bot_ref.db_cache.remember_user(cached_user.id, is_bot=cached_user.bot)
+            if cached_user.bot:
+                return
+
     history_public = await _check_pool().fetchval(
         "SELECT history_public FROM user_settings WHERE user_id = $1",
         user_id,
@@ -2612,6 +2629,9 @@ async def delete_user_data(
                     deleted += int(r.split()[-1])
     if bot_ref:
         await bot_ref.refresh_account_cache(user_id)
+        if table is None or table == "user_badges":
+            remove_user_badge(user_id)
+            bot_ref.db_cache.user_badges.pop(user_id, None)
         bot_ref.db_cache.opted_out.pop(user_id, None)
         bot_ref.cached_mudae_consent.discard(user_id)
         tools = bot_ref.get_cog("Tools")
@@ -2620,6 +2640,10 @@ async def delete_user_data(
         fun = bot_ref.get_cog("Fun")
         if fun is not None and hasattr(fun, "_phone_consent_cache"):
             cast(Any, fun)._phone_consent_cache.pop(user_id, None)
+    elif table is None or table == "user_badges":
+        # Keep the editable JSON mirror private-data deletion-safe even when
+        # the API is running without a bot instance attached.
+        remove_user_badge(user_id)
     return {"user_id": user_id, "deleted_rows": deleted}
 
 

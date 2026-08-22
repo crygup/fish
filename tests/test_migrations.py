@@ -1,4 +1,10 @@
-from core.migrations import available_migrations
+import pytest
+
+from core.migrations import (
+    LEGACY_BASELINE_CHECKSUMS,
+    available_migrations,
+    check_migrations,
+)
 
 
 def test_migrations_are_unique_and_have_content_checksums() -> None:
@@ -40,6 +46,18 @@ def test_migrations_are_unique_and_have_content_checksums() -> None:
         37,
         38,
         39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
     ]
     assert len({item.checksum for item in migrations}) == len(migrations)
     assert all(len(item.checksum) == 64 for item in migrations)
@@ -53,12 +71,162 @@ def test_schema_no_longer_runs_from_bot_startup() -> None:
     assert "pool.execute(fp.read())" not in source
 
 
+@pytest.mark.asyncio
+async def test_known_legacy_baseline_checksum_is_retained_for_existing_databases() -> None:
+    migrations = available_migrations()
+    legacy_checksum = next(iter(LEGACY_BASELINE_CHECKSUMS))
+
+    class Connection:
+        async def fetchval(self, _query: str):
+            return "schema_migrations"
+
+        async def fetch(self, _query: str):
+            return [
+                {
+                    "version": migration.version,
+                    "checksum": legacy_checksum
+                    if migration.version == 1
+                    else migration.checksum,
+                    "name": migration.name,
+                }
+                for migration in migrations
+            ]
+
+    await check_migrations(Connection())
+
+
+@pytest.mark.asyncio
+async def test_unknown_baseline_checksum_is_rejected() -> None:
+    migrations = available_migrations()
+
+    class Connection:
+        async def fetchval(self, _query: str):
+            return "schema_migrations"
+
+        async def fetch(self, _query: str):
+            return [
+                {
+                    "version": migration.version,
+                    "checksum": "0" * 64
+                    if migration.version == 1
+                    else migration.checksum,
+                    "name": migration.name,
+                }
+                for migration in migrations
+            ]
+
+    with pytest.raises(RuntimeError, match="differs from the applied version"):
+        await check_migrations(Connection())
+
+
 def test_video_library_migration_tracks_reviews_and_blocks() -> None:
     migration = next(item for item in available_migrations() if item.version == 23)
     assert migration.name == "video_library"
     assert "CREATE TABLE IF NOT EXISTS video_uploads" in migration.sql
     assert "CREATE TABLE IF NOT EXISTS video_upload_blocks" in migration.sql
     assert "status IN ('pending', 'approved', 'denied')" in migration.sql
+
+
+def test_hourly_post_intervals_migration_adds_schedule_columns() -> None:
+    migration = next(item for item in available_migrations() if item.version == 51)
+    assert migration.name == "hourly_post_intervals"
+    assert "interval_minutes" in migration.sql
+    assert "next_post_at" in migration.sql
+
+
+def test_owner_controls_migration_tracks_global_restrictions() -> None:
+    migration = next(item for item in available_migrations() if item.version == 40)
+    assert migration.name == "owner_controls"
+    assert "CREATE TABLE IF NOT EXISTS global_command_disables" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS global_user_blocks" in migration.sql
+
+
+def test_video_library_preferences_migration_tracks_personal_filters() -> None:
+    migration = next(item for item in available_migrations() if item.version == 41)
+    assert migration.name == "video_library_preferences"
+    assert "CREATE TABLE IF NOT EXISTS video_aliases" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS video_library_blocks" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS video_library_hides" in migration.sql
+
+
+def test_post_library_migration_tracks_reviews_and_personal_filters() -> None:
+    migration = next(item for item in available_migrations() if item.version == 42)
+    assert migration.name == "post_library"
+    assert "CREATE TABLE IF NOT EXISTS post_uploads" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS post_upload_blocks" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS post_aliases" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS post_library_blocks" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS post_library_hides" in migration.sql
+
+
+def test_library_id_migration_reserves_deleted_slots() -> None:
+    migration = next(item for item in available_migrations() if item.version == 43)
+    assert migration.name == "library_ids"
+    assert "ADD COLUMN IF NOT EXISTS library_id BIGINT" in migration.sql
+    assert "video_library_deleted_ids" in migration.sql
+    assert "post_library_deleted_ids" in migration.sql
+
+
+def test_reputation_migration_tracks_fishie_and_tatsu_events() -> None:
+    migration = next(item for item in available_migrations() if item.version == 44)
+    assert migration.name == "reputation"
+    assert "CREATE TABLE IF NOT EXISTS reputation_events" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS guild_rep" in migration.sql
+    assert "source_message_id" in migration.sql
+    assert "period_start" in migration.sql
+
+
+def test_library_source_urls_are_nullable_until_review_approval() -> None:
+    migration = next(item for item in available_migrations() if item.version == 45)
+    assert "ALTER TABLE video_uploads" in migration.sql
+    assert "ALTER TABLE post_uploads" in migration.sql
+    assert "DROP NOT NULL" in migration.sql
+    assert "approved_source_required" in migration.sql
+    assert "approved_source_discord" in migration.sql
+
+
+def test_server_media_settings_migration_adds_destinations_and_filters() -> None:
+    migration = next(item for item in available_migrations() if item.version == 46)
+    assert migration.name == "server_media_settings"
+    assert "auto_upload_images" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS guild_hourly_posts" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS guild_hourly_post_blocks" in migration.sql
+    assert "images BOOLEAN" in migration.sql
+    assert "gifs BOOLEAN" in migration.sql
+    assert "videos BOOLEAN" in migration.sql
+
+
+def test_automation_channel_targets_migration_adds_optional_targets() -> None:
+    migration = next(item for item in available_migrations() if item.version == 47)
+    assert migration.name == "automation_channel_targets"
+    assert "poketwo_channel" in migration.sql
+    assert "auto_reactions_channel" in migration.sql
+
+
+def test_user_badges_migration_adds_owner_managed_badges() -> None:
+    migration = next(item for item in available_migrations() if item.version == 48)
+    assert migration.name == "user_badges"
+    assert "CREATE TABLE IF NOT EXISTS user_badges" in migration.sql
+    assert "user_id BIGINT NOT NULL" in migration.sql
+    assert "created_at TIMESTAMP WITH TIME ZONE" in migration.sql
+    assert "emoji_name TEXT NOT NULL" in migration.sql
+    assert "emoji_id BIGINT" in migration.sql
+    assert "is_custom BOOLEAN NOT NULL" in migration.sql
+    assert "unicode BOOLEAN NOT NULL" in migration.sql
+    assert "animated BOOLEAN NOT NULL" in migration.sql
+    assert "badge_key TEXT NOT NULL" in migration.sql
+    assert "text TEXT NOT NULL" in migration.sql
+    assert "user_badges_user_key_idx" in migration.sql
+    assert "ON CONFLICT (user_id, badge_key)" in migration.sql
+
+
+def test_auto_reaction_channels_migration_preserves_existing_targets() -> None:
+    migration = next(item for item in available_migrations() if item.version == 50)
+    assert migration.name == "auto_reaction_channels"
+    assert "CREATE TABLE IF NOT EXISTS guild_auto_reaction_channels" in migration.sql
+    assert "guild_id BIGINT NOT NULL" in migration.sql
+    assert "channel_id BIGINT NOT NULL" in migration.sql
+    assert "SELECT guild_id, auto_reactions_channel" in migration.sql
 
 
 def test_reaction_logs_migration_requires_explicit_consent() -> None:
