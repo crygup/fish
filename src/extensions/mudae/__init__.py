@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 class Mudae(SphereCog):
-    """Mudae tools."""
+    """Mudae tools"""
 
     emoji = mudae_circle
 

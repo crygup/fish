@@ -17,6 +17,7 @@ CardGuess = Literal["higher", "lower"]
 CoinGuess = Literal["heads", "tails"]
 FinishCallback = Callable[["StreakGame", bool], Awaitable[None]]
 ProgressCallback = Callable[["StreakGame"], Awaitable[None]]
+RestartCallback = Callable[["HeadsOrTailsGame"], Awaitable[bool]]
 
 RANK_VALUES = {
     "2": 2,
@@ -120,6 +121,15 @@ class HeadsOrTailsGame(StreakGame):
     )
     last_guess: CoinGuess | None = None
     last_result: CoinGuess | None = None
+
+    def restart(self) -> None:
+        """Reset the game for a new streak after a loss."""
+
+        self.streak = 0
+        self.finished = False
+        self.timed_out = False
+        self.last_guess = None
+        self.last_result = None
 
     def guess(self, choice: CoinGuess) -> bool:
         if self.finished:
@@ -262,12 +272,14 @@ class HeadsOrTailsView(discord.ui.LayoutView):
         accent_color: discord.Colour | int | None = None,
         on_finish: FinishCallback | None = None,
         on_progress: ProgressCallback | None = None,
+        on_restart: RestartCallback | None = None,
     ) -> None:
         super().__init__(timeout=GAME_TIMEOUT)
         self.game = game
         self.game.view = self
         self.on_finish = on_finish
         self.on_progress = on_progress
+        self.on_restart = on_restart
         self.message: discord.Message | None = None
         self.display = discord.ui.TextDisplay(self._text())
         self.heads = discord.ui.Button(
@@ -284,6 +296,12 @@ class HeadsOrTailsView(discord.ui.LayoutView):
             accent_color=accent_color,
         )
         self.add_item(self.container)
+        self.restart = discord.ui.Button(
+            label="Restart", style=discord.ButtonStyle.secondary
+        )
+        self.restart.callback = self._restart
+        # Keep the post-loss action separate from the guessing controls.
+        self.add_item(discord.ui.ActionRow(self.restart))
         self.refresh()
 
     def _text(self) -> str:
@@ -308,9 +326,10 @@ class HeadsOrTailsView(discord.ui.LayoutView):
         self.display.content = self._text()
         self.heads.disabled = self.game.finished
         self.tails.disabled = self.game.finished
+        self.restart.disabled = not self.game.finished
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.game.user_id and not self.game.finished:
+        if interaction.user.id == self.game.user_id:
             return True
         await interaction.response.send_message(
             (
@@ -338,7 +357,6 @@ class HeadsOrTailsView(discord.ui.LayoutView):
         if correct and self.on_progress is not None:
             await self.on_progress(self.game)
         if not correct:
-            self.stop()
             if self.on_finish is not None:
                 await self.on_finish(self.game, False)
 
@@ -347,6 +365,29 @@ class HeadsOrTailsView(discord.ui.LayoutView):
 
     async def _tails(self, interaction: discord.Interaction) -> None:
         await self._guess(interaction, "tails")
+
+    async def _restart(self, interaction: discord.Interaction) -> None:
+        async with self.game.lock:
+            if not self.game.finished:
+                await interaction.response.send_message(
+                    "This Heads or Tails game is still in progress.",
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+            if self.on_restart is not None and not await self.on_restart(self.game):
+                await interaction.response.send_message(
+                    "You already have another Heads or Tails game in progress.",
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+            self.game.restart()
+            self.refresh()
+            await interaction.response.edit_message(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
     async def on_timeout(self) -> None:
         async with self.game.lock:

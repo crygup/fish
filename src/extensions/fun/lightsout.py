@@ -90,6 +90,7 @@ class LightsOutGame:
     move_count: int = 0
     finished: bool = False
     timed_out: bool = False
+    gave_up: bool = False
     completed_duration: float | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     view: LightsOutView | None = field(default=None, repr=False)
@@ -181,9 +182,19 @@ class LightsOutView(discord.ui.LayoutView):
             accent_color=accent_color,
         )
         self.add_item(self.container)
+        self.give_up = discord.ui.Button(
+            label="Give up",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"lights-out-give-up:{game.user_id}",
+        )
+        self.give_up.callback = self._give_up
+        # Keep the session-ending action outside the game board container.
+        self.add_item(discord.ui.ActionRow(self.give_up))
         self.refresh()
 
     def _status_text(self) -> str:
+        if self.game.gave_up:
+            return "## Lights Out\nYou gave up."
         if self.game.timed_out:
             return "## Lights Out\nThe puzzle timed out."
         if self.game.finished:
@@ -204,6 +215,7 @@ class LightsOutView(discord.ui.LayoutView):
                 else discord.ButtonStyle.secondary
             )
             button.disabled = self.game.finished
+        self.give_up.disabled = self.game.finished
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.game.user_id and not self.game.finished:
@@ -243,6 +255,29 @@ class LightsOutView(discord.ui.LayoutView):
                     await self.on_finish(self.game, False)
 
         return callback
+
+    async def _give_up(self, interaction: discord.Interaction) -> None:
+        async with self.game.lock:
+            if self.game.finished:
+                await interaction.response.send_message(
+                    "This Lights Out game is already over.",
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+            self.game.finished = True
+            self.game.gave_up = True
+            self.game.completed_duration = self.game.duration_seconds
+            self.refresh()
+            await interaction.response.edit_message(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        self.stop()
+        if self.on_finish is not None:
+            # A give-up is not a completed puzzle, so treat it like a timeout
+            # for persistence purposes.
+            await self.on_finish(self.game, True)
 
     async def on_timeout(self) -> None:
         async with self.game.lock:
