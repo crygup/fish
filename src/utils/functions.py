@@ -29,7 +29,7 @@ from discord.ext import commands
 from PIL import Image, ImageSequence
 
 from .types import P, T
-from .vars import USER_FLAGS
+from .vars import get_user_badge, render_user_badge
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -67,7 +67,7 @@ async def create_pool(connection_url: str) -> asyncpg.Pool:
 
 
 def format_name(user: Union[discord.User, discord.Member]) -> str:
-    emoji = USER_FLAGS.get(user.id)
+    emoji = render_user_badge(get_user_badge(user.id))
     emoji = f"{emoji} " if emoji else ""
     return f"{emoji}{user}"
 
@@ -273,6 +273,12 @@ async def get_or_fetch_user(bot: Fishie, user_id: int) -> discord.User:
 
     if user is None:
         user = await bot.fetch_user(user_id)
+
+    # Keep history visibility checks aware of bot accounts even when the
+    # account was resolved outside a guild member cache.
+    db_cache = getattr(bot, "db_cache", None)
+    if db_cache is not None:
+        db_cache.remember_user(user.id, is_bot=user.bot)
 
     return user
 

@@ -87,6 +87,7 @@ from extensions.media_effects.processing import (
     render_sound_effect_batch_sync,
     render_text_effect_sync,
     render_video_effect_sync,
+    repair_gif_sync,
 )
 from extensions.media_effects.runtime import cancellable_to_thread
 from extensions.media_effects.subprocesses import run_media_command
@@ -598,6 +599,15 @@ def test_overlay_text_parser_accepts_named_source_with_flags() -> None:
     assert (source, overlay) == ("base.png", "flag United States")
     assert options["opacity"] == 35.0
     assert options["fullrandom"] is True
+
+
+def test_overlay_text_parser_accepts_short_opacity_flag() -> None:
+    source, overlay, options = _parse_overlay_text_argument(
+        "base.png image logo.png -op 42"
+    )
+
+    assert (source, overlay) == ("base.png", "image logo.png")
+    assert options["opacity"] == 42.0
 
 
 @pytest.mark.parametrize(
@@ -1868,6 +1878,15 @@ def test_average_colors_reports_percentages_and_rejects_gifs() -> None:
     assert sum(color.percentage for color in colors) == pytest.approx(100, abs=0.1)
     with pytest.raises(ValueError, match="still images"):
         render_average_colors_sync(_gif_bytes())
+
+
+def test_embedfix_reencodes_opaque_gifs_without_transparency() -> None:
+    result = repair_gif_sync(_gif_bytes())
+    assert result.filename == "embedfix.gif"
+    repaired = Image.open(BytesIO(result.data))
+    assert repaired.n_frames == 2
+    assert "transparency" not in repaired.info
+    assert probe_media_sync(result.data).duration > 0.1
 
 
 def test_average_colors_is_not_a_pipeline_effect() -> None:

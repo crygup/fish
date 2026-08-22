@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
 from utils.downloads import (
+    DIRECT_MEDIA_HOSTS,
     _extract_html_media_urls,
     _extract_threads_json_media_urls,
+    _is_gallery_file,
+    _needs_discord_mp4,
+    _youtube_unavailable_message,
     download_format_selector,
     is_downloadable_media_page,
     normalize_download_site,
+    normalize_download_url,
     record_download,
 )
 from utils.regexes import VIDEOS_RE
@@ -27,12 +33,63 @@ def test_supported_media_pages_use_the_guarded_downloader() -> None:
     assert is_downloadable_media_page("https://www.facebook.com/reel/123456")
     assert is_downloadable_media_page("https://www.pixiv.net/en/artworks/123456")
     assert is_downloadable_media_page("https://example.tumblr.com/post/123456/example")
+    assert is_downloadable_media_page("https://kkinstagram.com/p/DbOiEnrE-bV/")
+    assert is_downloadable_media_page(
+        "https://kktiktok.com/@example/video/1234567890123456789"
+    )
+    assert is_downloadable_media_page("https://www.kkinstagram.com/p/example/")
+    assert is_downloadable_media_page(
+        "https://www.kktiktok.com/@example/video/1234567890123456789"
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "needs_conversion"),
+    (
+        ("download.mp4", False),
+        ("download.mkv", True),
+        ("download.webm", True),
+        ("download.mov", True),
+        ("download.gif", False),
+        ("download.png", False),
+    ),
+)
+def test_non_mp4_videos_are_marked_for_discord_compatibility(
+    path: str, needs_conversion: bool
+) -> None:
+    assert _needs_discord_mp4(path) is needs_conversion
+
+
+def test_non_embeddable_video_containers_stay_outside_media_gallery() -> None:
+    assert _is_gallery_file("download.mp4")
+    assert not _is_gallery_file("download.mkv")
+    assert not _is_gallery_file("download.webm")
+
+
+def test_auto_download_regex_recognizes_mirror_domains() -> None:
+    for url in (
+        "https://www.kkinstagram.com/reel/example",
+        "https://www.kktiktok.com/@example/video/1234567890123456789",
+    ):
+        match = VIDEOS_RE.search(url)
+        assert match is not None
+        assert match.group(0) == url
 
 
 def test_direct_and_unapproved_urls_do_not_use_the_page_downloader() -> None:
     assert not is_downloadable_media_page("https://static.klipy.com/example/video.mp4")
+    assert not is_downloadable_media_page(
+        "https://media1.tenor.com/m/example/example.gif"
+    )
+    assert "media1.tenor.com" in DIRECT_MEDIA_HOSTS
     assert not is_downloadable_media_page("https://example.com/watch/123")
     assert not is_downloadable_media_page("file:///etc/passwd")
+
+
+def test_all_yt_dlp_invocations_use_the_guarded_entry_point() -> None:
+    source = Path("src/utils/downloads.py").read_text()
+    assert '"utils.ytdlp_safe"' in source
+    assert '"yt_dlp",' not in source
 
 
 def test_twitter_selector_falls_back_when_gif_dimensions_are_unknown() -> None:
@@ -81,6 +138,19 @@ def test_auto_download_recognizes_new_sites(url: str) -> None:
     assert match.group(0) == url
 
 
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://kkinstagram.com/p/DbOiEnrE-bV/",
+        "https://kktiktok.com/@example/video/1234567890123456789",
+    ),
+)
+def test_auto_download_recognizes_instagram_and_tiktok_mirrors(url: str) -> None:
+    match = VIDEOS_RE.search(url)
+    assert match is not None
+    assert match.group(0) == url.rstrip("/")
+
+
 def test_audio_selector_is_unchanged() -> None:
     assert (
         download_format_selector(
@@ -92,11 +162,26 @@ def test_audio_selector_is_unchanged() -> None:
     )
 
 
+def test_youtube_claim_block_is_reported_as_unavailable() -> None:
+    stderr = (
+        "ERROR: [youtube] abc: Video unavailable. It was blocked due to the "
+        "claimed content by a rights holder."
+    )
+
+    assert _youtube_unavailable_message(stderr) == (
+        "YouTube blocked this video because of a copyright claim, so it is not "
+        "available for download."
+    )
+    assert _youtube_unavailable_message("ERROR: [youtube] abc: network timeout") is None
+
+
 def test_download_sites_group_mirror_domains() -> None:
     assert normalize_download_site("https://x.com/user/status/1") == "twitter"
     assert normalize_download_site("https://vxtwitter.com/user/status/1") == "twitter"
     assert normalize_download_site("https://fxtwitter.com/user/status/1") == "twitter"
     assert normalize_download_site("https://www.youtube.com/watch?v=1") == "youtube"
+    assert normalize_download_site("https://kkinstagram.com/p/example") == "instagram"
+    assert normalize_download_site("https://kktiktok.com/@example/video/1") == "tiktok"
     assert normalize_download_site("https://static.klipy.com/file.mp4") == "klipy"
     assert (
         normalize_download_site("https://old.reddit.com/r/pics/comments/abc123")
@@ -112,6 +197,17 @@ def test_download_sites_group_mirror_domains() -> None:
     )
     assert normalize_download_site("https://artist.tumblr.com/post/123456") == "tumblr"
     assert normalize_download_site("https://example.com/file.mp4") is None
+
+
+def test_download_mirrors_are_canonicalized_without_changing_the_path() -> None:
+    assert (
+        normalize_download_url("https://kkinstagram.com/p/DbOiEnrE-bV/?slide=1#media")
+        == "https://instagram.com/p/DbOiEnrE-bV/?slide=1#media"
+    )
+    assert (
+        normalize_download_url("https://www.kktiktok.com/@name/video/123")
+        == "https://www.tiktok.com/@name/video/123"
+    )
 
 
 def test_html_media_extraction_prefers_video_media() -> None:

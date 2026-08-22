@@ -369,6 +369,7 @@ def _save_frames(
     filename: str,
     jpeg_quality: int | None = None,
     per_frame_palette: bool = False,
+    preserve_transparency: bool = True,
 ) -> EffectResult:
     if not frames:
         raise ValueError("The effect did not produce any frames.")
@@ -383,7 +384,10 @@ def _save_frames(
             manifest = ["ffconcat version 1.0"]
             for index, (frame, frame_duration) in enumerate(zip(frames, durations)):
                 frame_name = f"{index:04d}.png"
-                frame.convert("RGBA").save(temp_path / frame_name, "PNG")
+                frame_to_save = frame.convert(
+                    "RGBA" if preserve_transparency else "RGB"
+                )
+                frame_to_save.save(temp_path / frame_name, "PNG")
                 manifest.extend(
                     (
                         f"file '{frame_name}'",
@@ -403,17 +407,47 @@ def _save_frames(
             manifest_path = temp_path / "frames.ffconcat"
             manifest_path.write_text("\n".join(manifest) + "\n")
             gif_path = temp_path / "output.gif"
-            palette_options = (
-                "reserve_transparent=1:"
-                "transparency_color=ffffff:"
-                "stats_mode=single"
-                if per_frame_palette
-                else "reserve_transparent=1:transparency_color=ffffff"
+            if preserve_transparency:
+                palette_options = (
+                    "reserve_transparent=1:"
+                    "transparency_color=ffffff:"
+                    "stats_mode=single"
+                    if per_frame_palette
+                    else "reserve_transparent=1:transparency_color=ffffff"
+                )
+                paletteuse_options = (
+                    "alpha_threshold=128:dither=sierra2_4a:new=1"
+                    if per_frame_palette
+                    else "alpha_threshold=128:dither=none"
+                )
+            else:
+                # A transparency slot on an otherwise opaque GIF can be
+                # interpreted inconsistently by Discord's animated renderer.
+                # Do not reserve one when the source never had transparency.
+                palette_options = "stats_mode=single" if per_frame_palette else ""
+                paletteuse_options = (
+                    "dither=sierra2_4a:new=1" if per_frame_palette else "dither=none"
+                )
+            palettegen = (
+                f"palettegen={palette_options}" if palette_options else "palettegen"
             )
-            paletteuse_options = (
-                "alpha_threshold=128:dither=sierra2_4a:new=1"
-                if per_frame_palette
-                else "alpha_threshold=128:dither=none"
+            paletteuse = f"paletteuse={paletteuse_options}"
+            input_filter = (
+                "[0:v]format=rgb24,split[palette_input][video_input];"
+                if not preserve_transparency
+                else "[0:v]split[palette_input][video_input];"
+            )
+            render_options = (
+                [
+                    "-filter_complex",
+                    (
+                        f"{input_filter}"
+                        f"[palette_input]{palettegen}[palette];"
+                        f"[video_input][palette]{paletteuse}"
+                    ),
+                ]
+                if preserve_transparency
+                else ["-vf", "format=rgb24"]
             )
             _run(
                 [
@@ -427,12 +461,7 @@ def _save_frames(
                     "0",
                     "-i",
                     str(manifest_path),
-                    "-filter_complex",
-                    (
-                        "[0:v]split[palette_input][video_input];"
-                        f"[palette_input]palettegen={palette_options}[palette];"
-                        f"[video_input][palette]paletteuse={paletteuse_options}"
-                    ),
+                    *render_options,
                     "-frames:v",
                     str(len(frames)),
                     "-gifflags",
@@ -466,6 +495,43 @@ def _save_frames(
 
     frame.save(output, "PNG", optimize=True)
     return EffectResult(output.getvalue(), f"{filename}.png")
+
+
+def repair_gif_sync(data: bytes) -> EffectResult:
+    """Re-encode an animated GIF with complete frames and a stable palette.
+
+    Some GIFs use an opaque global palette and optimized frame metadata that
+    desktop viewers handle correctly but Discord's animated renderer displays
+    with stale pixels or checkerboard-like artifacts.  Rendering each frame
+    onto the full canvas and omitting an unnecessary transparency slot makes
+    the result portable while preserving frame timing.
+    """
+
+    try:
+        opened = Image.open(BytesIO(data))
+    except UnidentifiedImageError as error:
+        raise ValueError("That file is not a valid GIF.") from error
+    if opened.format != "GIF":
+        raise ValueError("Embedfix only supports GIF files.")
+    if int(getattr(opened, "n_frames", 1)) < 2:
+        raise ValueError("Embedfix needs an animated GIF with at least two frames.")
+
+    preserve_transparency = "transparency" in opened.info
+    frames, durations, animated = _load_image_frames(
+        data,
+        preserve_transparency=preserve_transparency,
+    )
+    if not animated:
+        raise ValueError("Embedfix needs an animated GIF with at least two frames.")
+    return _save_frames(
+        frames,
+        durations,
+        filename="embedfix",
+        preserve_transparency=preserve_transparency,
+    )
+
+
+repair_gif = to_thread(repair_gif_sync)
 
 
 def _preserve_alpha(source: Image.Image, rgb: Image.Image) -> Image.Image:

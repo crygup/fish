@@ -19,7 +19,6 @@ import numpy as np
 import pycountry
 from discord import MediaGalleryItem, app_commands, ui
 from discord.ext import commands
-from discord.http import Route
 from PIL import (
     Image,
     ImageChops,
@@ -39,6 +38,7 @@ from utils import (
 from utils.converters import TwemojiConverter
 from utils.downloads import Downloader, is_downloadable_media_page
 from utils.errors import DownloadError
+from utils.network import refresh_discord_attachment_url
 from utils.rich_text import (
     draw_inline_tokens,
     inline_animation_duration,
@@ -760,31 +760,6 @@ async def _finalize_pipeline_result(
     converted = await convert_media(result.data, "gif", 1)
     filename = f"{result.filename.rsplit('.', 1)[0]}.gif"
     return EffectResult(converted.data, filename, converted.displayable)
-
-
-async def refresh_discord_attachment_url(bot: Fishie, url: str) -> str:
-    hostname = (urlsplit(url).hostname or "").casefold().rstrip(".")
-    if hostname not in {
-        "cdn.discordapp.com",
-        "media.discordapp.net",
-        "images-ext-1.discordapp.net",
-        "images-ext-2.discordapp.net",
-    }:
-        return url
-    original = url.split("?", 1)[0]
-    try:
-        response = await bot.http.request(
-            Route("POST", "/attachments/refresh-urls"),
-            json={"attachment_urls": [original]},
-        )
-        refreshed = response.get("refreshed_urls", [])
-        if refreshed and refreshed[0].get("refreshed"):
-            return str(refreshed[0]["refreshed"])
-    except (discord.HTTPException, KeyError, TypeError):
-        # Fresh signed links work without a refresh. If Discord rejects a
-        # non-attachment URL, the bounded fetch still validates the original.
-        pass
-    return url
 
 
 def _parse_spin3d_input(argument: str) -> tuple[str, float, float, float, bool]:
@@ -2362,7 +2337,7 @@ PIPELINE_EFFECTS: dict[str, PipelineEffectSpec] = {
         "special",
         {
             "flag": (("f",), str, "pride"),
-            "opacity": (("o",), float, 35.0),
+            "opacity": (("o", "op"), float, 35.0),
         },
         {},
     ),
@@ -2370,7 +2345,7 @@ PIPELINE_EFFECTS: dict[str, PipelineEffectSpec] = {
         "special",
         {
             "overlay": (("second", "o"), str, ""),
-            "opacity": (("alpha",), float, 70.0),
+            "opacity": (("alpha", "op"), float, 70.0),
             "scale": (("s",), float, 1.0),
             "size": (("dimensions", "dim"), str, ""),
             "position": (("pos", "p"), str, "center"),
@@ -3452,7 +3427,7 @@ def _parse_overlay_text_argument(
         argument,
         values={
             "overlay": (("second", "o"), str, ""),
-            "opacity": (("alpha",), float, 70.0),
+            "opacity": (("alpha", "op"), float, 70.0),
             "scale": (("s",), float, 1.0),
             "size": (("dimensions", "dim"), str, ""),
             "position": (("pos", "p"), str, "center"),
@@ -6321,6 +6296,7 @@ class Images(Cog):
     async def overlay_group(self, ctx: Context, *, argument: str = "") -> None:
         """Overlay a user, emoji, image, video, flag, or media URL.
 
+        -# -opacity/-op  Change overlay opacity from 0 to 100%. Defaults to 70.
         -# -fr           Randomize the overlay size and position within the background.
         """
         if not argument.strip():
@@ -6344,13 +6320,13 @@ class Images(Cog):
         """Overlay a pride, country, or pirate flag on a User/Emoji/Media URL.
 
         -# -flag       Choose a pride flag, pirate flag, country name, or code.
-        -# -opacity    Change the flag opacity from 0 to 100%. Defaults to 35.
+        -# -opacity/-op Change the flag opacity from 0 to 100%. Defaults to 35.
         """
         media, options = _parse_effect_flags(
             argument,
             values={
                 "flag": (("f",), str, "pride"),
-                "opacity": (("o",), float, 35.0),
+                "opacity": (("o", "op"), float, 35.0),
             },
         )
         flag = str(options.pop("flag"))

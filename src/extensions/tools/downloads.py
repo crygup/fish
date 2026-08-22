@@ -40,7 +40,9 @@ _DIRECT_MEDIA_SUFFIXES = (
     ".mov",
     ".m4v",
 )
-_DIRECT_MEDIA_HOSTS = frozenset({"media.tenor.com", "c.tenor.com", "static.klipy.com"})
+_DIRECT_MEDIA_HOSTS = frozenset(
+    {"media.tenor.com", "media1.tenor.com", "c.tenor.com", "static.klipy.com"}
+)
 _TENOR_DISCORD_PROXY_RE = re.compile(
     r"^images-ext-\d+\.discordapp\.(?:net|com)$", re.IGNORECASE
 )
@@ -60,7 +62,7 @@ class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
         default=False,
     )
     hidden: bool = commands.flag(
-        description="Hides the download (only for app commands)", default=True
+        description="Hides the download (only for app commands)", default=False
     )
 
 

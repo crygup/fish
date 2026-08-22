@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import re
+from collections.abc import Mapping
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
 from urllib.parse import quote, unquote, urljoin, urlsplit
@@ -197,10 +199,53 @@ class TwemojiConverter(commands.Converter):
 
 
 class TenorUrlConverter(commands.Converter):
-    _MEDIA_HOSTS = {"media.tenor.com", "c.tenor.com"}
+    # Tenor serves the original GIF from ``media1.tenor.com`` on many newer
+    # pages, while older pages use ``media.tenor.com`` or ``c.tenor.com``.
+    # These are all Tenor-owned media hosts, not arbitrary subdomains.
+    _MEDIA_HOSTS = {"media.tenor.com", "media1.tenor.com", "c.tenor.com"}
     _DISCORD_PROXY_HOST = re.compile(
         r"^images-ext-\d+\.discordapp\.(?:net|com)$", re.IGNORECASE
     )
+
+    @classmethod
+    def media_url_variants(cls, url: str) -> tuple[str, ...]:
+        """Return current and legacy URL shapes for a Tenor GIF.
+
+        Tenor has changed the shape of its CDN paths.  Older saved links use
+        ``media1.tenor.com/m/<hash>AAAAC/<name>.gif`` while the same media is
+        now commonly served as ``media.tenor.com/<hash>AAAAM/<name>.gif``.
+        The old URL can remain visible in a browser cache while returning 404
+        to a fresh server request, so callers that download media should try
+        the known equivalent shapes.
+        """
+
+        parsed = urlsplit(url)
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        if hostname not in cls._MEDIA_HOSTS:
+            return (url,)
+        path = unquote(parsed.path).strip("/")
+        parts = path.split("/")
+        if not parts or not parts[-1].casefold().endswith(".gif"):
+            return (url,)
+
+        variants: list[str] = [url]
+        if parts[0] == "m" and len(parts) >= 3:
+            token = parts[1]
+            tail = "/".join(parts[2:])
+        elif len(parts) >= 2:
+            token = parts[0]
+            tail = "/".join(parts[1:])
+        else:
+            return (url,)
+
+        suffixes = ("AAAAM", "AAAAC", "AAAAD")
+        base = token[:-5] if token[-5:] in {"AAAAM", "AAAAC", "AAAAD"} else token
+        for host in ("media.tenor.com", "media1.tenor.com"):
+            for suffix in suffixes:
+                candidate = f"https://{host}/{base}{suffix}/{tail}"
+                if candidate not in variants:
+                    variants.append(candidate)
+        return tuple(variants)
 
     @classmethod
     def _unwrap_discord_proxy(cls, url: str) -> str:
@@ -265,19 +310,53 @@ class TenorUrlConverter(commands.Converter):
     def get_url(self, text: str) -> str:
         scraper = BeautifulSoup(text, "html.parser")
         container = scraper.find(id="single-gif-container")
+        if container is not None:
+            try:
+                element = container.find("div").find("div").find("img")  # type: ignore
+            except (AttributeError, TypeError):
+                element = None
+            if element is not None:
+                source = element.get("src")
+                if isinstance(source, str) and source:
+                    return source
 
-        if not container:
-            raise commands.BadArgument("Couldn't find anything.")
-
-        try:
-            element = container.find("div").find("div").find("img")  # type: ignore
-        except Exception as e:
-            raise commands.BadArgument(f"Something went wrong. \n{e}")
-
-        if element is None:
-            raise commands.BadArgument("Something went wrong.")
-
-        return element["src"]  # type: ignore
+        # Tenor periodically removes the legacy ``single-gif-container`` from
+        # its server-rendered page.  The same original media URL is still
+        # exposed through Open Graph, Twitter card, or source metadata, so use
+        # those fields as a stable fallback instead of rejecting a valid page.
+        candidates: list[str] = []
+        for tag in scraper.find_all(["meta", "img", "source", "video"]):
+            if tag.name == "meta" and not (
+                tag.get("property") in {"og:image", "og:video", "og:video:url"}
+                or tag.get("name") in {"twitter:image", "twitter:player:stream"}
+                or tag.get("itemprop") in {"contentUrl", "thumbnailUrl"}
+            ):
+                continue
+            source = tag.get("content") or tag.get("src")
+            if not isinstance(source, str):
+                continue
+            source = html_lib.unescape(source).replace("\\/", "/")
+            if source.startswith("//"):
+                source = f"https:{source}"
+            if source.startswith(("https://", "http://")):
+                candidates.append(source)
+        # Prefer Tenor's original media host over page URLs or thumbnails.
+        # Some pages expose both an MP4 preview and a GIF, so prefer the GIF
+        # when both are present.
+        media_candidates = [
+            candidate
+            for candidate in candidates
+            if (urlsplit(candidate).hostname or "").lower().rstrip(".")
+            in self._MEDIA_HOSTS
+        ]
+        media_candidates.sort(
+            key=lambda candidate: 0
+            if urlsplit(candidate).path.casefold().endswith(".gif")
+            else 1
+        )
+        if media_candidates:
+            return media_candidates[0]
+        raise commands.BadArgument("Couldn't find anything.")
 
     async def convert(self, ctx: Context, url: str) -> str:
         url = self._unwrap_discord_proxy(url.strip())
@@ -293,9 +372,14 @@ class TenorUrlConverter(commands.Converter):
         async with ctx.session.get(TUrl.group(0), headers=base_header) as r:
             text = await r.text()
 
-        url = await self.get_url(text)
-
-        return re.sub("AAAAd", "AAAAC", url)
+        url = re.sub("AAAAd", "AAAAC", await self.get_url(text))
+        media_host = (urlsplit(url).hostname or "").lower().rstrip(".")
+        if media_host in self._MEDIA_HOSTS:
+            # Tenor pages often expose an MP4 preview. Convert its stable
+            # media path back to the original GIF rather than submitting the
+            # preview as a video to the post library.
+            return await self._direct_gif(ctx, url)
+        raise commands.BadArgument("Tenor did not expose a usable GIF URL.")
 
 
 class KlipyUrlConverter(commands.Converter):
@@ -415,10 +499,54 @@ class MediaConverter(commands.Converter[str]):
     def _is_media_url(url: object) -> bool:
         return isinstance(url, str) and url.startswith(("http://", "https://"))
 
+    @staticmethod
+    def _message_value(message: object, name: str, default: object = None) -> object:
+        """Read a message/snapshot field from Discord objects or raw payloads."""
+
+        if isinstance(message, Mapping):
+            return message.get(name, default)
+        return getattr(message, name, default)
+
+    @staticmethod
+    def _message_sequence(value: object) -> tuple[object, ...]:
+        if isinstance(value, (list, tuple)):
+            return tuple(value)
+        return ()
+
+    @classmethod
+    def _message_snapshots(cls, message: object) -> tuple[object, ...]:
+        """Return forwarded-message snapshots, including raw API payloads.
+
+        discord.py exposes snapshots as ``MessageSnapshot`` instances, while
+        test fixtures and webhook payloads may still contain the API wrapper
+        ``{"message": {...}}``.  Normalize both forms here so every media
+        consumer handles forwarded messages consistently.
+        """
+
+        raw_snapshots = cls._message_value(message, "message_snapshots", ())
+        if isinstance(raw_snapshots, Mapping):
+            raw_snapshots = (raw_snapshots,)
+        if not isinstance(raw_snapshots, (list, tuple)):
+            return ()
+
+        snapshots: list[object] = []
+        for snapshot in raw_snapshots:
+            if isinstance(snapshot, Mapping):
+                snapshot = snapshot.get("message", snapshot)
+            if snapshot is not None:
+                snapshots.append(snapshot)
+        return tuple(snapshots)
+
     @classmethod
     def _attachment_url(cls, attachment: object) -> str | None:
-        url = getattr(attachment, "url", None)
-        content_type = getattr(attachment, "content_type", None)
+        if isinstance(attachment, Mapping):
+            url = attachment.get("url")
+            content_type = attachment.get("content_type")
+            filename = attachment.get("filename", "")
+        else:
+            url = getattr(attachment, "url", None)
+            content_type = getattr(attachment, "content_type", None)
+            filename = getattr(attachment, "filename", "")
         if (
             cls._is_media_url(url)
             and isinstance(content_type, str)
@@ -426,10 +554,39 @@ class MediaConverter(commands.Converter[str]):
         ):
             return url
 
-        filename = str(getattr(attachment, "filename", "")).lower().split("?")[0]
+        filename = str(filename).lower().split("?")[0]
         if cls._is_media_url(url) and filename.endswith(MEDIA_EXTENSIONS):
             return url
         return None
+
+    @classmethod
+    def _message_attachments(cls, message: object) -> tuple[object, ...]:
+        """Return direct and forwarded-snapshot attachments without duplicates."""
+
+        attachments: list[object] = []
+        seen: set[object] = set()
+
+        def add(values: object) -> None:
+            if not isinstance(values, (list, tuple)):
+                return
+            for attachment in values:
+                if isinstance(attachment, Mapping):
+                    key = attachment.get("id") or attachment.get("url")
+                else:
+                    key = getattr(attachment, "id", None) or getattr(
+                        attachment, "url", None
+                    )
+                if key is None:
+                    key = id(attachment)
+                if key in seen:
+                    continue
+                seen.add(key)
+                attachments.append(attachment)
+
+        add(cls._message_value(message, "attachments", ()))
+        for snapshot in cls._message_snapshots(message):
+            add(cls._message_value(snapshot, "attachments", ()))
+        return tuple(attachments)
 
     @classmethod
     def _component_media_url(cls, component: object) -> str | None:
@@ -468,22 +625,44 @@ class MediaConverter(commands.Converter[str]):
         return None
 
     @classmethod
-    def _message_media_url(cls, message: discord.Message) -> str | None:
-        for attachment in message.attachments:
+    def _message_media_urls(
+        cls, message: object, *, include_snapshots: bool = True
+    ) -> tuple[str, ...]:
+        urls: list[str] = []
+        seen: set[str] = set()
+
+        def add(url: object) -> None:
+            if isinstance(url, str) and cls._is_media_url(url) and url not in seen:
+                seen.add(url)
+                urls.append(url)
+
+        for attachment in cls._message_attachments(message):
             url = cls._attachment_url(attachment)
             if url:
-                return url
+                add(url)
 
-        for embed in message.embeds:
-            if embed.image and cls._is_media_url(embed.image.url):
-                return embed.image.url
-            if embed.thumbnail and cls._is_media_url(embed.thumbnail.url):
-                return embed.thumbnail.url
+        for embed in cls._message_sequence(cls._message_value(message, "embeds", ())):
+            if isinstance(embed, Mapping):
+                image = embed.get("image")
+                thumbnail = embed.get("thumbnail")
+                add(image.get("url") if isinstance(image, Mapping) else None)
+                add(
+                    thumbnail.get("url")
+                    if isinstance(thumbnail, Mapping)
+                    else None
+                )
+            else:
+                image = getattr(embed, "image", None)
+                thumbnail = getattr(embed, "thumbnail", None)
+                add(getattr(image, "url", None))
+                add(getattr(thumbnail, "url", None))
 
-        for component in getattr(message, "components", ()):
+        for component in cls._message_sequence(
+            cls._message_value(message, "components", ())
+        ):
             url = cls._component_media_url(component)
             if url:
-                return url
+                add(url)
             to_dict = getattr(component, "to_dict", None)
             if callable(to_dict):
                 try:
@@ -491,12 +670,29 @@ class MediaConverter(commands.Converter[str]):
                 except (TypeError, ValueError):
                     url = None
                 if url:
-                    return url
-        for sticker in getattr(message, "stickers", ()):
-            url = getattr(sticker, "url", None)
-            if cls._is_media_url(url):
-                return url
-        return None
+                    add(url)
+        for sticker in cls._message_sequence(
+            cls._message_value(message, "stickers", ())
+        ):
+            url = (
+                sticker.get("url")
+                if isinstance(sticker, Mapping)
+                else getattr(sticker, "url", None)
+            )
+            add(url)
+
+        if include_snapshots:
+            for snapshot in cls._message_snapshots(message):
+                for url in cls._message_media_urls(
+                    snapshot, include_snapshots=False
+                ):
+                    add(url)
+        return tuple(urls)
+
+    @classmethod
+    def _message_media_url(cls, message: object) -> str | None:
+        urls = cls._message_media_urls(message)
+        return urls[0] if urls else None
 
     @staticmethod
     def _direct_media_url(argument: str) -> str | None:
@@ -513,21 +709,30 @@ class MediaConverter(commands.Converter[str]):
     async def _message_content_media_url(
         self,
         ctx: Context,
-        message: discord.Message,
+        message: object,
     ) -> str | None:
-        for candidate in self._message_urls(message.content):
-            direct = self._direct_media_url(candidate)
-            if direct:
-                return direct
+        sources = (message, *self._message_snapshots(message))
+        seen_content: set[str] = set()
+        for source in sources:
+            content = self._message_value(source, "content", "")
+            if not isinstance(content, str) or content in seen_content:
+                continue
+            seen_content.add(content)
+            for candidate in self._message_urls(content):
+                direct = self._direct_media_url(candidate)
+                if direct:
+                    return direct
 
-            for converter in (TenorUrlConverter(), KlipyUrlConverter()):
-                try:
-                    return await converter.convert(ctx, candidate)
-                except commands.BadArgument:
-                    pass
+                for converter in (TenorUrlConverter(), KlipyUrlConverter()):
+                    try:
+                        return await converter.convert(ctx, candidate)
+                    except commands.BadArgument:
+                        pass
 
-            if is_discord_media_url(candidate) or is_downloadable_media_page(candidate):
-                return candidate
+                if is_discord_media_url(candidate) or is_downloadable_media_page(
+                    candidate
+                ):
+                    return candidate
         return None
 
     async def convert(

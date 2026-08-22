@@ -6,8 +6,8 @@ VIDEOS_RE: Pattern[str] = comp(
     r"""
     # Keep the complete TikTok path, including video IDs.  The final slash is
     # optional because Discord links commonly omit it.
-    (https://(?:vt|www|vm|m|vk)?\.?tiktok\.com/[^\s<>()]+)?
-    (https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,})?
+    (https://(?:(?:(?:www|vt|vm|m|vk)\.)?tiktok\.com|(?:www\.)?kktiktok\.com)/[^\s<>()]+)?
+    (https://(?:(?:www\.)?instagram\.com|(?:www\.)?kkinstagram\.com)/(p|tv|reel)/[a-zA-Z0-9-_]{5,})?
     (https?://clips.twitch.tv/[a-zA-Z0-9_-])?
     (https?://(?:www\.)?(twitter|x|fxtwitter|vxtwitter|fixupx|girlcockx)\.com/[a-zA-Z0-9_]{1,}/status/[0-9]{19,})?
     (https?://(?:(?:www|old|new|np|sh|nm)\.)?reddit.com/(?:r|user|comments)/[^\s<>()]+)?
@@ -28,8 +28,14 @@ VIDEOS_RE: Pattern[str] = comp(
 )
 
 # sites
-TIKTOK_RE: Pattern[str] = comp(r"https://(vt|www|vm|m|vk)?.?tiktok.com/(@?[a-zA-z0-9_.]{1,})?/?(@?[a-zA-z0-9_.]{1,})?/?(@?[a-zA-z0-9_.]{1,})?/")
-INSTAGRAM_RE: Pattern[str] = comp(r"https://(www.)?instagram.com/(p|tv|reel)/[a-zA-Z0-9-_]{5,}")
+TIKTOK_RE: Pattern[str] = comp(
+    r"https://(?:(?:(?:www|vt|vm|m|vk)\.)?tiktok\.com|(?:www\.)?kktiktok\.com)/"
+    r"(@?[a-zA-Z0-9_.]{1,})?/?(@?[a-zA-Z0-9_.]{1,})?/?(@?[a-zA-Z0-9_.]{1,})?/"
+)
+INSTAGRAM_RE: Pattern[str] = comp(
+    r"https://(?:(?:www\.)?instagram\.com|(?:www\.)?kkinstagram\.com)/"
+    r"(p|tv|reel)/[a-zA-Z0-9-_]{5,}"
+)
 TWITCH_RE: Pattern[str] = comp(
     r"https?://(?:clips\.twitch\.tv/[a-zA-Z0-9_-]+|(?:www\.)?twitch\.tv/[A-Za-z0-9_]{2,25}/clip/[A-Za-z0-9_-]+)"
 )

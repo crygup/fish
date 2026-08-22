@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 class MediaEffects(Images, name="Media Effects"):
-    """Image, GIF, video, and audio manipulation commands."""
+    """Image, GIF, video, and audio manipulation commands"""
 
     emoji = discord.PartialEmoji(name="\U0001f5bc\ufe0f")
     aliases = ["media", "effects"]

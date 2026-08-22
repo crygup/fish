@@ -63,8 +63,12 @@ DOWNLOAD_HOSTS = frozenset(
         "youtu.be",
         "instagram.com",
         "www.instagram.com",
+        "kkinstagram.com",
+        "www.kkinstagram.com",
         "tiktok.com",
         "www.tiktok.com",
+        "kktiktok.com",
+        "www.kktiktok.com",
         "m.tiktok.com",
         "vm.tiktok.com",
         "vt.tiktok.com",
@@ -113,14 +117,26 @@ DOWNLOAD_HOSTS = frozenset(
         "pinterest.com",
         "www.pinterest.com",
         "static.klipy.com",
+        "media.tenor.com",
+        "media1.tenor.com",
+        "c.tenor.com",
     }
 )
 _DOWNLOAD_SITE_HOSTS: dict[str, frozenset[str]] = {
-    "instagram": frozenset({"instagram.com", "www.instagram.com"}),
+    "instagram": frozenset(
+        {
+            "instagram.com",
+            "www.instagram.com",
+            "kkinstagram.com",
+            "www.kkinstagram.com",
+        }
+    ),
     "tiktok": frozenset(
         {
             "tiktok.com",
             "www.tiktok.com",
+            "kktiktok.com",
+            "www.kktiktok.com",
             "m.tiktok.com",
             "vm.tiktok.com",
             "vt.tiktok.com",
@@ -182,9 +198,26 @@ _DOWNLOAD_SITE_HOSTS: dict[str, frozenset[str]] = {
     "pinterest": frozenset({"pin.it", "pinterest.com", "www.pinterest.com"}),
     "soundcloud": frozenset({"soundcloud.com", "on.soundcloud.com"}),
     "klipy": frozenset({"klipy.com", "www.klipy.com", "static.klipy.com"}),
-    "tenor": frozenset({"tenor.com", "www.tenor.com", "tenor.co", "media.tenor.com"}),
+    "tenor": frozenset(
+        {
+            "tenor.com",
+            "www.tenor.com",
+            "tenor.co",
+            "media.tenor.com",
+            "media1.tenor.com",
+            "c.tenor.com",
+        }
+    ),
 }
 DISCORD_MEDIA_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})
+DIRECT_MEDIA_HOSTS = frozenset(
+    {
+        "static.klipy.com",
+        "media.tenor.com",
+        "media1.tenor.com",
+        "c.tenor.com",
+    }
+)
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 _VIDEO_SUFFIXES = frozenset({".mp4", ".webm", ".mov", ".mkv", ".avi"})
 _MEDIA_SUFFIXES = _IMAGE_SUFFIXES | _VIDEO_SUFFIXES | frozenset({".gif"})
@@ -220,6 +253,12 @@ _TIKTOK_EXTRACTOR_PROFILES: tuple[str, ...] = (
     ),
 )
 
+# YouTube's default authenticated client can intermittently return SABR-only
+# formats and the misleading "page needs to be reloaded" error.  The
+# embedded client continues to expose normal downloadable formats when the
+# same authenticated cookies are available.
+_YOUTUBE_AUTHENTICATED_CLIENT = "youtube:player_client=web_embedded"
+
 _COOKIE_MAP: list[tuple[Any, str]] = [
     (YOUTUBE_RE, str(FILES_ROOT / "cookies" / "youtube-cookies.txt")),
     (YT_SHORT_RE, str(FILES_ROOT / "cookies" / "youtube-cookies.txt")),
@@ -228,8 +267,44 @@ _COOKIE_MAP: list[tuple[Any, str]] = [
     (INSTAGRAM_RE, str(FILES_ROOT / "cookies" / "instagram-cookies.txt")),
 ]
 
+# Some clients use these mirrors to share Instagram and TikTok links.  They
+# expose the same post paths, so canonicalize them before regex matching,
+# host allow-list validation, yt-dlp invocation, and download statistics.
+_DOWNLOAD_HOST_ALIASES: dict[str, str] = {
+    "kkinstagram.com": "instagram.com",
+    "www.kkinstagram.com": "www.instagram.com",
+    "kktiktok.com": "tiktok.com",
+    "www.kktiktok.com": "www.tiktok.com",
+}
+
+
+def normalize_download_url(url: str) -> str:
+    """Return the canonical source URL for supported mirror domains.
+
+    The path, query string, and fragment are preserved exactly.  Invalid or
+    non-HTTP values are returned untouched so callers can perform their normal
+    validation and report the appropriate error.
+    """
+    if not isinstance(url, str):
+        return url
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return url
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    replacement = _DOWNLOAD_HOST_ALIASES.get(hostname)
+    if replacement is None:
+        return url
+    return parsed._replace(netloc=replacement).geturl()
+
+
+def _canonical_download_hostname(hostname: str) -> str:
+    hostname = hostname.lower().rstrip(".")
+    return _DOWNLOAD_HOST_ALIASES.get(hostname, hostname)
+
 
 def _get_cookies(url: str) -> Optional[str]:
+    url = normalize_download_url(url)
     for pattern, path in _COOKIE_MAP:
         if pattern.search(url) and os.path.isfile(path):
             return path
@@ -249,7 +324,7 @@ def _is_allowed_download_host(hostname: str) -> bool:
     exact host set cannot cover them without allowing unrelated domains.
     Restrict that exception to one label directly below tumblr.com.
     """
-    hostname = hostname.lower().rstrip(".")
+    hostname = _canonical_download_hostname(hostname)
     return hostname in DOWNLOAD_HOSTS or (
         hostname.endswith(".tumblr.com") and hostname.count(".") == 2
     )
@@ -257,7 +332,7 @@ def _is_allowed_download_host(hostname: str) -> bool:
 
 def _page_allowed_hosts(hostname: str) -> frozenset[str]:
     """Build the redirect allowlist for a supported source page."""
-    hostname = hostname.lower().rstrip(".")
+    hostname = _canonical_download_hostname(hostname)
     if hostname.endswith(".tumblr.com") and hostname.count(".") == 2:
         return frozenset({hostname, "tumblr.com", "www.tumblr.com"})
     site = normalize_download_site(f"https://{hostname}/")
@@ -268,6 +343,7 @@ def _page_allowed_hosts(hostname: str) -> frozenset[str]:
 
 def normalize_download_site(url: str) -> str | None:
     """Return a stable site label without retaining the source URL."""
+    url = normalize_download_url(url)
     hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
     if hostname.endswith(".tumblr.com") and hostname.count(".") == 2:
         return "tumblr"
@@ -322,6 +398,7 @@ async def record_download(
 
 def is_downloadable_media_page(url: str) -> bool:
     """Return whether a URL should use the guarded yt-dlp workflow."""
+    url = normalize_download_url(url)
     parsed = urlsplit(url)
     hostname = (parsed.hostname or "").lower().rstrip(".")
     if parsed.scheme.lower() not in {"http", "https"} or not _is_allowed_download_host(
@@ -351,6 +428,7 @@ def download_format_selector(
     res_target: int,
 ) -> str:
     """Choose a yt-dlp format without rejecting X GIFs with unknown dimensions."""
+    url = normalize_download_url(url)
     if SOUNDCLOUD_RE.search(url) or output_format == "mp3":
         return "bestaudio/best"
     if INSTAGRAM_RE.search(url):
@@ -384,12 +462,39 @@ def _summarize_yt_dlp_error(stderr: str) -> str:
     return detail[:1000]
 
 
+def _youtube_unavailable_message(stderr: str) -> str | None:
+    """Return a useful message for YouTube videos blocked by a rights claim.
+
+    yt-dlp reports a copyright block on stderr, but the downloader used to
+    discard that detail and return the same generic error used for transient
+    extractor failures.  A rights claim is not recoverable by retrying or by
+    changing the requested format, so tell the user why this particular URL
+    cannot be downloaded.
+    """
+    if re.search(r"blocked due to (?:the )?claimed content", stderr, re.I):
+        return (
+            "YouTube blocked this video because of a copyright claim, so it "
+            "is not available for download."
+        )
+    return None
+
+
 def _is_video_file(path: str) -> bool:
     return os.path.splitext(path)[1].casefold() in _VIDEO_SUFFIXES
 
 
+def _needs_discord_mp4(path: str) -> bool:
+    """Return whether a downloaded video needs container normalization."""
+    return _is_video_file(path) and os.path.splitext(path)[1].casefold() != ".mp4"
+
+
 def _is_gallery_file(path: str) -> bool:
-    return os.path.splitext(path)[1].casefold() in _MEDIA_SUFFIXES
+    extension = os.path.splitext(path)[1].casefold()
+    # Keep formats that Discord reliably renders in a media gallery.  Other
+    # video containers are still valid downloads, but should be sent as a
+    # normal attachment or URL instead of being placed in an embed-like
+    # gallery component.
+    return extension in _IMAGE_SUFFIXES or extension in {".gif", ".mp4"}
 
 
 def _normalise_extracted_url(value: object, base_url: str) -> str | None:
@@ -572,13 +677,13 @@ class Downloader:
         url: str,
         format: str = "mp4",
         filename: Optional[str] = None,
-        hidden: Optional[bool] = False,
+        hidden: bool = False,
         auto_download: bool = False,
         allow_temporary_hosting: bool = False,
         ignore_checks: bool = False,
     ) -> None:
         self.ctx = ctx
-        self.url = url
+        self.url = normalize_download_url(url)
         self.format = format
         self.auto_download = auto_download
         self.allow_temporary_hosting = allow_temporary_hosting
@@ -742,7 +847,7 @@ class Downloader:
         args = [
             sys.executable,
             "-m",
-            "yt_dlp",
+            "utils.ytdlp_safe",
             "-f",
             format_selector,
             "-o",
@@ -767,6 +872,9 @@ class Downloader:
         if cookies := _get_cookies(video):
             cookie_arg_index = len(args)
             args += ["--cookies", self._prepare_cookie_file(cookies)]
+
+        if is_youtube and cookie_arg_index is not None:
+            args += ["--extractor-args", _YOUTUBE_AUTHENTICATED_CLIENT]
 
         # Instagram returns different DASH manifests over this host's IPv6
         # route for some Reels.  The IPv4 response includes the matching audio
@@ -929,6 +1037,15 @@ class Downloader:
             if thumbnail_paths is not None:
                 return thumbnail_paths
 
+        if is_youtube and (blocked_message := _youtube_unavailable_message(last_stderr)):
+            self._cleanup_output()
+            self.ctx.bot.logger.warning(
+                "YouTube rejected the video because of a claimed-content block "
+                "host=%s",
+                urlsplit(video).hostname,
+            )
+            raise DownloadError(blocked_message)
+
         self.ctx.bot.logger.error(
             "yt-dlp failed exit=%s host=%s attempts=%s detail=%s",
             last_returncode,
@@ -951,7 +1068,7 @@ class Downloader:
         args = [
             sys.executable,
             "-m",
-            "yt_dlp",
+            "utils.ytdlp_safe",
             "--yes-playlist",
             "--force-ipv4",
             "--ignore-no-formats-error",
@@ -1371,7 +1488,15 @@ class Downloader:
                         headers=request_headers,
                         allow_redirects=False,
                     ) as response:
-                        validate_connected_peer(response)
+                        validate_connected_peer(
+                            response,
+                            allow_missing_peer=(
+                                (urlsplit(current).hostname or "")
+                                .casefold()
+                                .rstrip(".")
+                                in DIRECT_MEDIA_HOSTS
+                            ),
+                        )
                         if response.status in {301, 302, 303, 307, 308}:
                             location = response.headers.get("Location")
                             if not location:
@@ -1511,7 +1636,14 @@ class Downloader:
         return output_path
 
     async def _convert_to_mobile_mp4(self, input_path: str) -> str:
-        """Transcode Instagram media to a broadly supported MP4 format."""
+        """Transcode a video to a broadly supported H.264/AAC MP4 format.
+
+        The name is kept for the Instagram compatibility path, but the
+        conversion is also used for other containers such as MKV and WebM
+        when a default-format file must be sent through temporary hosting.
+        Local files keep their requested container, while hosted files use an
+        MP4 extension and codec that Discord can render reliably.
+        """
         output_path = input_path.rsplit(".", 1)[0] + ".compatible.mp4"
         final_path = input_path.rsplit(".", 1)[0] + ".mp4"
         proc = await asyncio.create_subprocess_exec(
@@ -1545,11 +1677,17 @@ class Downloader:
         try:
             _, stderr_raw = await self._communicate_with_timeout(proc)
         except DownloadError:
-            self._cleanup_output()
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
             raise
 
         if proc.returncode != 0:
-            self._cleanup_output()
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
             stderr = stderr_raw.decode(errors="replace").strip() if stderr_raw else ""
             tail = stderr.rsplit("\n", 1)[-1] if stderr else "unknown error"
             raise DownloadError(f"Video compatibility conversion failed: {tail}")
@@ -1559,7 +1697,10 @@ class Downloader:
             if input_path != final_path:
                 os.remove(input_path)
         except OSError as exc:
-            self._cleanup_output()
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
             raise DownloadError("Video compatibility conversion failed.") from exc
         return final_path
 
@@ -1634,15 +1775,19 @@ class Downloader:
         # Klipy's resolver returns a direct static media URL.  Keep track of
         # that host because the original klipy.com page URL is no longer
         # available here after resolution.
-        is_klipy_media = (
+        direct_media_host = (
             urlsplit(self.url).scheme == "https"
-            and urlsplit(self.url).hostname == "static.klipy.com"
+            and (urlsplit(self.url).hostname or "").casefold().rstrip(".")
+            in DIRECT_MEDIA_HOSTS
         )
+        is_klipy_media = direct_media_host and (
+            urlsplit(self.url).hostname or ""
+        ).casefold().rstrip(".") == "static.klipy.com"
         is_site_media = bool(PIXIV_RE.search(self.url) or THREADS_RE.search(self.url))
 
         if is_site_media:
             output_paths = await self._download_site_media() or []
-        elif is_klipy_media:
+        elif direct_media_host:
             output_paths = [await self._download_direct_media(self.url)]
         else:
             output_paths = await self._yt_dlp_download(self.url, res_target=1080)
@@ -1696,7 +1841,10 @@ class Downloader:
         # Instagram may return VP9 video in an MP4 container. Desktop players
         # can decode it, but Discord mobile can display only the first frame.
         # Normalize Instagram downloads to H.264/AAC with fast-start metadata.
-        if INSTAGRAM_RE.search(self.url):
+        # Preserve an explicitly requested container.  The compatibility
+        # transcode is only the default MP4 behavior, so ``-format webm`` (or
+        # another caller-selected format) is not silently changed.
+        if self.format == "mp4" and INSTAGRAM_RE.search(self.url):
             for index, output_path in enumerate(output_paths):
                 if _is_video_file(output_path):
                     output_paths[index] = await self._convert_to_mobile_mp4(output_path)
@@ -1760,6 +1908,42 @@ class Downloader:
             for index, path in enumerate(output_paths, start=1)
         ]
 
+    async def _prepare_file_for_temporary_hosting(
+        self, file: discord.File
+    ) -> discord.File:
+        """Normalize a default-format video before sending it to file hosting.
+
+        A caller-supplied format must be preserved.  When the default MP4
+        download happens to produce a container Discord does not render well,
+        only the copy that is about to be hosted is transcoded.  Local
+        attachments therefore retain their requested format and can be sent
+        normally when they fit Discord's limit.
+        """
+        if self.format != "mp4" or not _needs_discord_mp4(file.filename):
+            return file
+
+        source_path = getattr(file.fp, "name", None)
+        if not isinstance(source_path, str) or not os.path.isfile(source_path):
+            return file
+
+        original_filename = file.filename
+        file.close()
+        try:
+            converted_path = await self._convert_to_mobile_mp4(source_path)
+        except (DownloadError, OSError) as error:
+            # Hosting the original is still preferable to losing the
+            # download.  It will be presented as a normal link rather than an
+            # attempted media-gallery embed.
+            self.ctx.bot.logger.warning(
+                "Could not normalize %s for temporary hosting: %s",
+                original_filename,
+                error,
+            )
+            return discord.File(source_path, filename=original_filename)
+
+        converted_filename = os.path.splitext(original_filename)[0] + ".mp4"
+        return discord.File(converted_path, filename=converted_filename)
+
     async def _download(self) -> discord.File:
         """Return the first item for commands that process one media file."""
         files = await self._download_all()
@@ -1792,6 +1976,11 @@ class Downloader:
                     if self._file_size(file) <= self.max_filesize:
                         local_files.append(file)
                         continue
+                    hosted_file = await self._prepare_file_for_temporary_hosting(file)
+                    if hosted_file is not file:
+                        batch[index] = hosted_file
+                        files[batch_index * 10 + index] = hosted_file
+                        file = hosted_file
                     hosted[index] = await upload_temporary_media(
                         self.ctx.bot,
                         file.fp,  # type: ignore[arg-type]
@@ -1823,8 +2012,10 @@ class Downloader:
                                     f"[Open {file.filename}]({hosted[index]})"
                                 )
                             )
-                        else:
-                            other_items.append(ui.File(f"attachment://{file.filename}"))
+                        # Non-embeddable local files remain regular Discord
+                        # attachments below the component view.  Do not turn
+                        # them into file components inside the embed-like
+                        # container.
                     if gallery_items:
                         container_items.append(ui.MediaGallery(*gallery_items))
                     container_items.extend(other_items)
@@ -1873,6 +2064,11 @@ class Downloader:
                 for index, file in enumerate(batch):
                     if index in hosted:
                         continue
+                    hosted_file = await self._prepare_file_for_temporary_hosting(file)
+                    if hosted_file is not file:
+                        batch[index] = hosted_file
+                        files[batch_index * 10 + index] = hosted_file
+                        file = hosted_file
                     try:
                         links.append(
                             await upload_temporary_media(
