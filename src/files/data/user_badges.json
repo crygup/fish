@@ -1,0 +1,337 @@
+{
+  "flags": {
+    "staff": {
+      "emoji_name": "staff",
+      "emoji_id": 949147468124262420,
+      "is_custom": true,
+      "text": "Discord Staff"
+    },
+    "partner": {
+      "emoji_name": "partner",
+      "emoji_id": 949147457839829043,
+      "is_custom": true,
+      "text": "Discord Partner"
+    },
+    "hypesquad": {
+      "emoji_name": "hypesquad",
+      "emoji_id": 949147451942649916,
+      "is_custom": true,
+      "text": "HypeSquad"
+    },
+    "bug_hunter": {
+      "emoji_name": "bughunterlv1",
+      "emoji_id": 949147440219553873,
+      "is_custom": true,
+      "text": "Bug Hunter"
+    },
+    "bug_hunter_level_2": {
+      "emoji_name": "bughunterlv2",
+      "emoji_id": 949147441935024178,
+      "is_custom": true,
+      "text": "Bug Hunter 2"
+    },
+    "hypesquad_bravery": {
+      "emoji_name": "bravery",
+      "emoji_id": 949147435333218305,
+      "is_custom": true,
+      "text": "HypeSquad Bravery"
+    },
+    "hypesquad_brilliance": {
+      "emoji_name": "brillance",
+      "emoji_id": 949147436880912405,
+      "is_custom": true,
+      "text": "HypeSquad Brilliance"
+    },
+    "hypesquad_balance": {
+      "emoji_name": "balance",
+      "emoji_id": 949147429733793832,
+      "is_custom": true,
+      "text": "HypeSquad Balance"
+    },
+    "early_supporter": {
+      "emoji_name": "earlysupporter",
+      "emoji_id": 949147447756726342,
+      "is_custom": true,
+      "text": "Early Supporter"
+    },
+    "verified_bot_developer": {
+      "emoji_name": "bot_dev",
+      "emoji_id": 949147434204946472,
+      "is_custom": true,
+      "text": "Bot Developer"
+    },
+    "verified_bot": {
+      "emoji_name": "bot",
+      "emoji_id": 949147432598515723,
+      "is_custom": true,
+      "text": "Verified Bot"
+    },
+    "discord_certified_moderator": {
+      "emoji_name": "certified_moderator",
+      "emoji_id": 949147443264622643,
+      "is_custom": true,
+      "text": "Moderator"
+    },
+    "system": {
+      "emoji_name": "system",
+      "emoji_id": 949147469357387817,
+      "is_custom": true,
+      "text": "System"
+    },
+    "active_developer": {
+      "emoji_name": "active_developer",
+      "emoji_id": 1095204617752686605,
+      "is_custom": true,
+      "text": "Active Developer"
+    },
+    "owner": {
+      "emoji_name": "fish_owner",
+      "emoji_id": 1095204124045365278,
+      "is_custom": true,
+      "text": "Bot Owner"
+    },
+    "server_owner": {
+      "emoji_name": "owner",
+      "emoji_id": 949147456376033340,
+      "is_custom": true,
+      "text": "Server Owner"
+    },
+    "booster": {
+      "emoji_name": "booster",
+      "emoji_id": 949147430786596896,
+      "is_custom": true,
+      "text": "Server Booster"
+    },
+    "nitro": {
+      "emoji_name": "nitro",
+      "emoji_id": 949147454991896616,
+      "is_custom": true,
+      "text": "Nitro"
+    }
+  },
+  "users": {
+    "1247673648626667642": {
+      "emoji_name": "💫",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "ori"
+    },
+    "536939325380755487": {
+      "emoji_name": "sac",
+      "emoji_id": 1526723466760421406,
+      "is_custom": true,
+      "text": "Sac"
+    },
+    "1471310794648977491": {
+      "emoji_name": "🦃 🦷 👶",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Smuckers"
+    },
+    "517007731400507414": {
+      "emoji_name": "😹",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Aikuri"
+    },
+    "301104022830710786": {
+      "emoji_name": "✨",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Jane"
+    },
+    "766953372309127168": {
+      "emoji_name": "drpepper",
+      "emoji_id": 1526723524587421778,
+      "is_custom": true,
+      "animated": true,
+      "text": "z"
+    },
+    "639539828400062485": {
+      "emoji_name": "jpj",
+      "emoji_id": 1132056944308400220,
+      "is_custom": true,
+      "animated": true,
+      "text": "jpjordon"
+    },
+    "117666744021024771": {
+      "emoji_name": "bfr",
+      "emoji_id": 1132056779279302716,
+      "is_custom": true,
+      "animated": true,
+      "text": "bfr"
+    },
+    "592310159133376512": {
+      "emoji_name": "razy",
+      "emoji_id": 1132056914365264036,
+      "is_custom": true,
+      "animated": true,
+      "text": "Razy"
+    },
+    "671777334906454026": {
+      "emoji_name": "kaylynn",
+      "emoji_id": 1132059155272831076,
+      "is_custom": true,
+      "animated": true,
+      "text": "kay"
+    },
+    "809275012980539453": {
+      "emoji_name": "regor",
+      "emoji_id": 1132163863262019715,
+      "is_custom": true,
+      "animated": true,
+      "text": "Regor"
+    },
+    "780272096688996363": {
+      "emoji_name": "kami",
+      "emoji_id": 1132058497849237665,
+      "is_custom": true,
+      "animated": true,
+      "text": "Kami"
+    },
+    "466325650710724619": {
+      "emoji_name": "lunachup",
+      "emoji_id": 1132059704210751579,
+      "is_custom": true,
+      "animated": true,
+      "text": "Lunachup!"
+    },
+    "121738169900204034": {
+      "emoji_name": "🀄",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "tsugoth"
+    },
+    "1384427573492187279": {
+      "emoji_name": "🍃",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Skeezr"
+    },
+    "117603839858835460": {
+      "emoji_name": "spike",
+      "emoji_id": 1132060600751624193,
+      "is_custom": true,
+      "animated": true,
+      "text": "Spike"
+    },
+    "364105382261424128": {
+      "emoji_name": "🐢",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Eli"
+    },
+    "309409635327148033": {
+      "emoji_name": "🇱🇹",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "2co"
+    },
+    "725443744060538912": {
+      "emoji_name": "🏳️‍⚧️",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "cola"
+    },
+    "396923243803574282": {
+      "emoji_name": "yaz",
+      "emoji_id": 1132066955399020564,
+      "is_custom": true,
+      "animated": true,
+      "text": "Yaz"
+    },
+    "349373972103561218": {
+      "emoji_name": "leo",
+      "emoji_id": 1132065439409770606,
+      "is_custom": true,
+      "text": "Leonardo"
+    },
+    "1034697215991619584": {
+      "emoji_name": "🤓",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Leo"
+    },
+    "1323759367371231263": {
+      "emoji_name": "monark",
+      "emoji_id": 1132067164053049475,
+      "is_custom": true,
+      "text": "Monark"
+    },
+    "659385299809599500": {
+      "emoji_name": "samir",
+      "emoji_id": 1132064265524752414,
+      "is_custom": true,
+      "text": "Samir"
+    },
+    "198145509242699777": {
+      "emoji_name": "🌭 🍔 🇺🇸",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Jawn"
+    },
+    "829421985846263839": {
+      "emoji_name": "sybel",
+      "emoji_id": 1210053787385856040,
+      "is_custom": true,
+      "text": "Sybel"
+    },
+    "739641420645924986": {
+      "emoji_name": "🐝",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Drew"
+    },
+    "805695326392287232": {
+      "emoji_name": "🥺",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "fart"
+    },
+    "299775141041274890": {
+      "emoji_name": "mariSparkle",
+      "emoji_id": 1390265426008604703,
+      "is_custom": true,
+      "text": "Tony"
+    },
+    "483778672747216916": {
+      "emoji_name": "🦧",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Dochi"
+    },
+    "137329268907573249": {
+      "emoji_name": "🦊",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Starla"
+    },
+    "410920877857832961": {
+      "emoji_name": "🫗 💝 🔮",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "cm"
+    },
+    "1116395117071306903": {
+      "emoji_name": "drpepper",
+      "emoji_id": 1526723524587421778,
+      "is_custom": true,
+      "animated": true,
+      "text": "egg"
+    },
+    "662378595192274974": {
+      "emoji_name": "💩",
+      "emoji_id": null,
+      "is_custom": false,
+      "animated": false,
+      "text": "crab"
+    },
+    "1312685725325721651": {
+      "emoji_name": "elmanchip",
+      "emoji_id": 1242603349468254300,
+      "is_custom": true,
+      "animated": false,
+      "text": "elmanchip"
+    }
+  }
+}

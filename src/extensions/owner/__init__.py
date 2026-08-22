@@ -7,7 +7,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, cast
 
 import discord
 from discord.abc import Messageable
@@ -16,9 +16,13 @@ from discord.ext import commands
 from core import Cog
 from utils import (
     AllMsgbleChannels,
+    TwemojiConverter,
     fish_owner,
     fish_x,
     greenTick,
+    remove_user_badge,
+    render_user_badge,
+    set_user_badge,
 )
 
 if TYPE_CHECKING:
@@ -290,10 +294,534 @@ class Owner(Cog):
     emoji = fish_owner
     hidden: bool = True
 
+    # Userinfo renders badges directly into a Components V2 text block. Keep
+    # the owner-editable label deliberately small and single-line so a custom
+    # badge cannot take over the whole profile view or alter its layout.
+    _BADGE_NAME_LIMIT = 100
+    _BADGE_EMOJI_LIMIT = 100
+    _CUSTOM_EMOJI_RE = re.compile(
+        r"^<(?P<animated>a?):(?P<name>[A-Za-z0-9_~]{1,32}):(?P<id>[0-9]{1,20})>$"
+    )
+
     def __init__(self, bot: Fishie):
         super().__init__()
         self.bot = bot
         self._last_reload: float = time.time()
+
+    @classmethod
+    def _badge_emoji(cls, value: str) -> tuple[str, int | None, bool, str, bool]:
+        """Validate and normalize a badge emoji.
+
+        The database and JSON catalog retain the parsed emoji fields so
+        animated custom emojis can be rendered correctly after a restart.
+        """
+
+        value = str(value).strip()
+        if not value:
+            raise commands.BadArgument("Provide one Unicode or Discord emoji.")
+        if len(value) > cls._BADGE_EMOJI_LIMIT:
+            raise commands.BadArgument(
+                f"Badge emojis cannot be longer than {cls._BADGE_EMOJI_LIMIT} characters."
+            )
+
+        match = cls._CUSTOM_EMOJI_RE.fullmatch(value)
+        if match:
+            name = match.group("name")
+            emoji_id = int(match.group("id"))
+            if not 0 < emoji_id <= 9_223_372_036_854_775_807:
+                raise commands.BadArgument("That Discord emoji ID is out of range.")
+            animated = bool(match.group("animated"))
+            prefix = "a" if animated else ""
+            rendered = f"<{prefix}:{name}:{emoji_id}>"
+            return name, emoji_id, True, rendered, animated
+
+        # PartialEmoji.from_str accepts arbitrary text as a name, so use the
+        # project converter's strict one-Unicode-emoji check as well.
+        if not TwemojiConverter.is_unicode_emoji(value):
+            raise commands.BadArgument(
+                "That is not a valid single Unicode or Discord custom emoji."
+            )
+        return value, None, False, value, False
+
+    @classmethod
+    def _badge_name(cls, value: str) -> str:
+        value = str(value).strip()
+        if not value:
+            raise commands.BadArgument("Badge names cannot be empty.")
+        if "\n" in value or "\r" in value:
+            raise commands.BadArgument("Badge names must fit on one line.")
+        if len(value) > cls._BADGE_NAME_LIMIT:
+            raise commands.BadArgument(
+                f"Badge names cannot be longer than {cls._BADGE_NAME_LIMIT} characters."
+            )
+        if "\x00" in value:
+            raise commands.BadArgument("Badge names cannot contain null characters.")
+        return value
+
+    @staticmethod
+    def _badge_row_value(
+        row: object,
+    ) -> tuple[int, str, int | None, bool, bool, str, object]:
+        """Read a badge row from either asyncpg.Record or a test mapping."""
+
+        def get(name: str, default: object = None) -> object:
+            if isinstance(row, dict):
+                return row.get(name, default)
+            try:
+                return row[name]  # type: ignore[index]
+            except (KeyError, IndexError, TypeError):
+                return getattr(row, name, default)
+
+        user_id = int(cast(Any, get("user_id", 0)))
+        emoji_name = str(get("emoji_name", ""))
+        emoji_id_value = get("emoji_id")
+        emoji_id = (
+            int(cast(Any, emoji_id_value))
+            if emoji_id_value is not None
+            else None
+        )
+        is_custom = bool(get("is_custom", emoji_id is not None))
+        animated = bool(get("animated", False)) if is_custom else False
+        text = str(get("text", ""))
+        rendered = render_user_badge(
+            {
+                "emoji_name": emoji_name,
+                "emoji_id": emoji_id,
+                "is_custom": is_custom,
+                "animated": animated,
+                "text": "",
+            }
+        )
+        return user_id, rendered, emoji_id, is_custom, animated, text, get("created_at")
+
+    def _cache_badge(self, row: object) -> None:
+        """Update the runtime cache and editable JSON badge catalog."""
+
+        user_id, rendered, emoji_id, is_custom, animated, text, created_at = (
+            self._badge_row_value(row)
+        )
+        emoji_name = ""
+        if is_custom and emoji_id is not None:
+            match = self._CUSTOM_EMOJI_RE.fullmatch(rendered)
+            if match:
+                emoji_name = match.group("name")
+        else:
+            emoji_name = rendered
+        set_user_badge(
+            user_id,
+            emoji_name=emoji_name,
+            emoji_id=emoji_id,
+            is_custom=is_custom,
+            animated=animated,
+            text=text,
+        )
+        cache = getattr(self.bot, "db_cache", None)
+        user_badges = getattr(cache, "user_badges", None)
+        if isinstance(user_badges, dict):
+            user_badges[user_id] = {
+                "emoji_name": emoji_name,
+                "emoji_id": emoji_id,
+                "is_custom": is_custom,
+                "animated": animated,
+                "text": text,
+                "created_at": created_at,
+                "badge_key": "custom",
+            }
+
+    def _uncache_badge(self, user_id: int) -> None:
+        remove_user_badge(int(user_id))
+        cache = getattr(self.bot, "db_cache", None)
+        user_badges = getattr(cache, "user_badges", None)
+        if isinstance(user_badges, dict):
+            user_badges.pop(int(user_id), None)
+
+    @staticmethod
+    def _badge_user_text(user: discord.User) -> str:
+        return f"{user} (`{user.id}`)"
+
+    async def _badge_for_user(self, user_id: int) -> object | None:
+        return await self.bot.pool.fetchrow(
+            """
+            SELECT user_id, emoji_name, emoji_id, is_custom, animated, badge_key,
+                   text, created_at
+            FROM user_badges
+            WHERE user_id = $1 AND badge_key = 'custom'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            int(user_id),
+        )
+
+    @commands.group(name="badge", aliases=("badges",), invoke_without_command=True)
+    async def badge(self, ctx: Context) -> None:
+        """Give, edit, or clear a user's custom userinfo badge."""
+        await ctx.send_help(ctx.command)
+
+    @badge.command(name="give")
+    async def badge_give(
+        self,
+        ctx: Context,
+        user: discord.User,
+        emoji: str,
+        *,
+        name: str,
+    ) -> None:
+        """Give a user a custom badge with one emoji and a display name."""
+
+        emoji_name, emoji_id, is_custom, rendered, animated = self._badge_emoji(emoji)
+        badge_name = self._badge_name(name)
+        row = await self.bot.pool.fetchrow(
+            """
+            INSERT INTO user_badges (
+                user_id, emoji_name, emoji_id, is_custom, unicode, animated,
+                badge_key, text
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, 'custom', $7)
+            ON CONFLICT (user_id, badge_key) DO NOTHING
+            RETURNING user_id, emoji_name, emoji_id, is_custom, animated,
+                      badge_key, text, created_at
+            """,
+            user.id,
+            emoji_name,
+            emoji_id,
+            is_custom,
+            not is_custom,
+            animated,
+            badge_name,
+        )
+        if row is None:
+            raise commands.BadArgument(
+                f"{self._badge_user_text(user)} already has a custom badge. "
+                "Use `badge edit emoji` or `badge edit name`."
+            )
+        self._cache_badge(row)
+        display_name = discord.utils.escape_markdown(badge_name)
+        await ctx.send(
+            f"Gave {self._badge_user_text(user)} the {rendered} {display_name} badge.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @badge.group(name="edit", invoke_without_command=True)
+    async def badge_edit(self, ctx: Context) -> None:
+        """Edit the emoji or name of an existing custom badge."""
+        await ctx.send_help(ctx.command)
+
+    @badge_edit.command(name="emoji")
+    async def badge_edit_emoji(
+        self,
+        ctx: Context,
+        user: discord.User,
+        emoji: str,
+    ) -> None:
+        """Change the emoji on a user's custom badge."""
+
+        emoji_name, emoji_id, is_custom, rendered, animated = self._badge_emoji(emoji)
+        row = await self.bot.pool.fetchrow(
+            """
+            UPDATE user_badges
+            SET emoji_name = $2, emoji_id = $3, is_custom = $4,
+                unicode = $5, animated = $6
+            WHERE user_id = $1 AND badge_key = 'custom'
+            RETURNING user_id, emoji_name, emoji_id, is_custom, animated,
+                      badge_key, text, created_at
+            """,
+            user.id,
+            emoji_name,
+            emoji_id,
+            is_custom,
+            not is_custom,
+            animated,
+        )
+        if row is None:
+            raise commands.BadArgument(
+                f"{self._badge_user_text(user)} does not have a custom badge yet."
+            )
+        self._cache_badge(row)
+        _, _, _, _, _, badge_name, _ = self._badge_row_value(row)
+        display_name = discord.utils.escape_markdown(badge_name)
+        await ctx.send(
+            f"Updated {self._badge_user_text(user)}'s badge emoji to "
+            f"{rendered} {display_name}.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @badge_edit.command(name="name")
+    async def badge_edit_name(
+        self,
+        ctx: Context,
+        user: discord.User,
+        *,
+        name: str,
+    ) -> None:
+        """Change the display name on a user's custom badge."""
+
+        badge_name = self._badge_name(name)
+        row = await self.bot.pool.fetchrow(
+            """
+            UPDATE user_badges
+            SET text = $2
+            WHERE user_id = $1 AND badge_key = 'custom'
+            RETURNING user_id, emoji_name, emoji_id, is_custom, animated,
+                      badge_key, text, created_at
+            """,
+            user.id,
+            badge_name,
+        )
+        if row is None:
+            raise commands.BadArgument(
+                f"{self._badge_user_text(user)} does not have a custom badge yet."
+            )
+        self._cache_badge(row)
+        _, rendered, _, _, _, _, _ = self._badge_row_value(row)
+        display_name = discord.utils.escape_markdown(badge_name)
+        await ctx.send(
+            f"Updated {self._badge_user_text(user)}'s badge name to "
+            f"{rendered} {display_name}.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @badge.command(name="clear")
+    async def badge_clear(self, ctx: Context, user: discord.User) -> None:
+        """Clear a user's custom userinfo badge."""
+
+        row = await self.bot.pool.fetchrow(
+            """
+            DELETE FROM user_badges
+            WHERE user_id = $1 AND badge_key = 'custom'
+            RETURNING user_id
+            """,
+            user.id,
+        )
+        if row is None:
+            raise commands.BadArgument(
+                f"{self._badge_user_text(user)} does not have a custom badge."
+            )
+        self._uncache_badge(user.id)
+        await ctx.send(
+            f"Cleared the custom badge for {self._badge_user_text(user)}.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @commands.group(name="dev", invoke_without_command=True)
+    async def dev(self, ctx: Context) -> None:
+        """Owner-only development and maintenance commands."""
+        await ctx.send_help(ctx.command)
+
+    @dev.group(name="video", invoke_without_command=True)
+    async def dev_video(self, ctx: Context) -> None:
+        """Manage the users allowed to submit videos for review."""
+        await ctx.send_help(ctx.command)
+
+    @dev_video.command(name="block")
+    async def dev_video_block(self, ctx: Context, user: discord.User) -> None:
+        """Block a user from submitting videos through `fish video upload`."""
+        await self.bot.pool.execute(
+            "INSERT INTO video_upload_blocks (user_id, blocked_by) VALUES ($1, $2) "
+            "ON CONFLICT (user_id) DO UPDATE SET blocked_by = EXCLUDED.blocked_by, "
+            "blocked_at = now()",
+            user.id,
+            ctx.author.id,
+        )
+        await ctx.send(
+            f"{user} is now blocked from submitting videos.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @dev_video.command(name="unblock")
+    async def dev_video_unblock(self, ctx: Context, user: discord.User) -> None:
+        """Allow a blocked user to submit videos again."""
+        result = await self.bot.pool.execute(
+            "DELETE FROM video_upload_blocks WHERE user_id = $1", user.id
+        )
+        await ctx.send(
+            (
+                f"{user} can submit videos again."
+                if result.endswith(" 1")
+                else f"{user} was not blocked."
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @dev.group(name="post", invoke_without_command=True)
+    async def dev_post(self, ctx: Context) -> None:
+        """Manage the users allowed to submit images and GIFs for review."""
+        await ctx.send_help(ctx.command)
+
+    @dev_post.command(name="block")
+    async def dev_post_block(self, ctx: Context, user: discord.User) -> None:
+        """Block a user from submitting images or GIFs through `fish post upload`."""
+        await self.bot.pool.execute(
+            "INSERT INTO post_upload_blocks (user_id, blocked_by) VALUES ($1, $2) "
+            "ON CONFLICT (user_id) DO UPDATE SET blocked_by = EXCLUDED.blocked_by, "
+            "blocked_at = now()",
+            user.id,
+            ctx.author.id,
+        )
+        await ctx.send(
+            f"{user} is now blocked from submitting posts.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @dev_post.command(name="unblock")
+    async def dev_post_unblock(self, ctx: Context, user: discord.User) -> None:
+        """Allow a blocked user to submit images and GIFs again."""
+        result = await self.bot.pool.execute(
+            "DELETE FROM post_upload_blocks WHERE user_id = $1", user.id
+        )
+        await ctx.send(
+            (
+                f"{user} can submit posts again."
+                if result.endswith(" 1")
+                else f"{user} was not blocked."
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @staticmethod
+    def _normalise_dev_target(value: str) -> str:
+        value = value.strip().strip("`").casefold()
+        # Accept a copied invocation such as ``fish effect blur`` as a small
+        # convenience while keeping the stored target canonical.
+        value = re.sub(r"^(?:fish|/)[\s]+", "", value)
+        return re.sub(r"[\s_.:/-]+", " ", value).strip()
+
+    def _resolve_dev_target(self, value: str) -> tuple[str, str] | None:
+        """Resolve a command alias or cog name to its canonical target."""
+
+        normalised = self._normalise_dev_target(value)
+        if not normalised:
+            return None
+
+        command = self.bot.get_command(value.strip().strip("`"))
+        if command is None:
+            command = next(
+                (
+                    candidate
+                    for candidate in self.bot.commands
+                    if self._normalise_dev_target(candidate.qualified_name)
+                    == normalised
+                ),
+                None,
+            )
+        if command is not None:
+            canonical = command.qualified_name.casefold()
+            if self.bot._global_disable_excluded(command):
+                return None
+            return "command", canonical
+
+        for cog_name, cog in self.bot.cogs.items():
+            candidates = {
+                self._normalise_dev_target(cog_name),
+                self._normalise_dev_target(cog.__class__.__name__),
+                self._normalise_dev_target(
+                    getattr(cog.__class__, "__module__", "").rsplit(".", 1)[-1]
+                ),
+            }
+            if normalised in candidates:
+                if cog.__class__.__module__.startswith("extensions.owner"):
+                    return None
+                return "cog", cog_name.casefold()
+        return None
+
+    @dev.command(name="disable")
+    async def dev_disable(self, ctx: Context, *, target: str) -> None:
+        """Disable a command or cog globally until an owner enables it."""
+
+        resolved = self._resolve_dev_target(target)
+        if resolved is None:
+            raise commands.BadArgument(
+                "Provide the name of a loaded command or cog. Owner commands "
+                "cannot be disabled."
+            )
+        target_type, canonical = resolved
+        await self.bot.pool.execute(
+            """
+            INSERT INTO global_command_disables (target, target_type, disabled_by)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (target) DO UPDATE
+            SET target_type = EXCLUDED.target_type,
+                disabled_by = EXCLUDED.disabled_by,
+                disabled_at = now()
+            """,
+            canonical,
+            target_type,
+            ctx.author.id,
+        )
+        if target_type == "cog":
+            self.bot.db_cache.globally_disabled_cogs.add(canonical)
+            label = f"{canonical} cog"
+        else:
+            self.bot.db_cache.globally_disabled_commands.add(canonical)
+            label = canonical
+        await ctx.send(
+            f"Globally disabled `{label}`.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @dev.command(name="enable")
+    async def dev_enable(self, ctx: Context, *, target: str) -> None:
+        """Re-enable a command or cog that was disabled globally."""
+
+        resolved = self._resolve_dev_target(target)
+        if resolved is None:
+            raise commands.BadArgument("Provide the name of a loaded command or cog.")
+        target_type, canonical = resolved
+        result = await self.bot.pool.execute(
+            "DELETE FROM global_command_disables WHERE target = $1", canonical
+        )
+        if target_type == "cog":
+            self.bot.db_cache.globally_disabled_cogs.discard(canonical)
+            label = f"{canonical} cog"
+        else:
+            self.bot.db_cache.globally_disabled_commands.discard(canonical)
+            label = canonical
+        await ctx.send(
+            (
+                f"Globally enabled `{label}`."
+                if result.endswith(" 1")
+                else f"`{label}` was not globally disabled."
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @dev.command(name="block")
+    async def dev_block(self, ctx: Context, user: discord.User) -> None:
+        """Block a user from invoking any Fishie command."""
+
+        if await self.bot.is_owner(user):
+            raise commands.BadArgument("Bot owners cannot be blocked.")
+        await self.bot.pool.execute(
+            """
+            INSERT INTO global_user_blocks (user_id, blocked_by)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id) DO UPDATE
+            SET blocked_by = EXCLUDED.blocked_by, blocked_at = now()
+            """,
+            user.id,
+            ctx.author.id,
+        )
+        self.bot.db_cache.globally_blocked_users.add(user.id)
+        await ctx.send(
+            f"{user} is now blocked from using Fishie commands.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @dev.command(name="unblock")
+    async def dev_unblock(self, ctx: Context, user: discord.User) -> None:
+        """Allow a blocked user to invoke Fishie commands again."""
+
+        result = await self.bot.pool.execute(
+            "DELETE FROM global_user_blocks WHERE user_id = $1", user.id
+        )
+        self.bot.db_cache.globally_blocked_users.discard(user.id)
+        await ctx.send(
+            (
+                f"{user} can use Fishie commands again."
+                if result.endswith(" 1")
+                else f"{user} was not globally blocked."
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def _guild_snapshots(self) -> list[GuildSnapshot]:
         guilds = list(self.bot.guilds)

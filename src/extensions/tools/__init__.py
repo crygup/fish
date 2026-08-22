@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import re
+import time
 from importlib import import_module
 from io import BytesIO
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional, cast
@@ -13,9 +14,12 @@ from discord.ext import commands
 from discord.utils import escape_markdown
 
 from extensions.context import Context
+from extensions.media_effects.delivery import send_effect_result
+from extensions.media_effects.processing import repair_gif
 from utils import (
     AuthorView,
     FieldPageSource,
+    MediaConverter,
     Pager,
     SimplePages,
     TenorUrlConverter,
@@ -27,12 +31,14 @@ from utils import (
     translate,
     update_pokemon,
 )
+from utils.network import refresh_discord_attachment_url
 
 from .calculator import Calculator
 from .command_stats import CommandStats
 from .downloads import Downloads
 from .purge import PurgeCog
 from .reminders import Reminder
+from .reputation import Reputation
 from .tags import Tags
 
 if TYPE_CHECKING:
@@ -151,6 +157,7 @@ class GameView(discord.ui.View):
 
 
 class Tools(
+    Reputation,
     Tags,
     Downloads,
     Reminder,
@@ -782,6 +789,38 @@ class Tools(
         """Gets the actual gif URL from a tenor link"""
 
         await ctx.send(f"Here is the real URL: {url}")
+
+    @commands.hybrid_command(name="embedfix", aliases=("embed-fix",))
+    @app_commands.describe(
+        media="An animated GIF URL or attachment to make Discord-friendly."
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def embedfix(self, ctx: Context, *, media: str | None = None) -> None:
+        """Re-encode an animated GIF that renders incorrectly in Discord."""
+
+        started = time.monotonic()
+        async with ctx.typing():
+            source = await MediaConverter().convert(ctx, media or "")
+            source = await refresh_discord_attachment_url(self.bot, source)
+            fetched = await fetch_public_bytes(
+                ctx.session,
+                source,
+                max_bytes=50 * 1024 * 1024,
+                allowed_content_prefixes=("image/",),
+            )
+            try:
+                result = await repair_gif(fetched.data)
+            except ValueError as error:
+                raise commands.BadArgument(str(error)) from error
+
+        await send_effect_result(
+            self.bot,
+            ctx,
+            result,
+            started=started,
+            note="Re-encoded for Discord's GIF renderer",
+        )
 
     @commands.command(name="urban")
     async def urban(self, ctx: Context, *, word: str):

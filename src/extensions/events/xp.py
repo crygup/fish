@@ -7,6 +7,7 @@ import discord
 from discord.ext import commands
 
 from core import Cog
+from core.cache import REPUTATION_BONUS_GUILD_ID, REPUTATION_BONUS_USER_ID
 
 if TYPE_CHECKING:
     pass
@@ -15,9 +16,21 @@ if TYPE_CHECKING:
 class XPCog(Cog):
     xp_cd: commands.CooldownMapping[discord.Message]
 
+    # These bonuses are intentionally kept in the XP path instead of the rep
+    # command.  That means Fishie and imported Tatsu reputation events grant
+    # the same bonus, including when the event happened earlier in the period.
+    REPUTATION_USER_ID = REPUTATION_BONUS_USER_ID
+    REPUTATION_GUILD_ID = REPUTATION_BONUS_GUILD_ID
+
     async def add_xp(self, message: discord.Message, amount: int | None = None):
         if amount is None:
             amount = random.randint(10, 20)
+
+        # Reputation events are populated once at startup and updated by the
+        # reputation command/listener.  This keeps the message XP hot path
+        # free of a database query while allowing user and guild bonuses to
+        # stack independently.
+        amount += 5 * self.bot.db_cache.reputation_bonus_count(message.author.id)
 
         sql = """
         INSERT INTO message_xp (user_id, messages, xp) 
