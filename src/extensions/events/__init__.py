@@ -8,6 +8,7 @@ from discord.ext import commands
 
 from .auto_download import AutoDownload
 from .auto_reactions import Reactions
+from .auto_upload import AutoUpload
 from .command_error import CommandErrors
 from .command_logs import CommandLogs
 from .corn import CornReacts
@@ -29,6 +30,7 @@ class Events(
     Tasks,
     YouTubeNotifications,
     AutoDownload,
+    AutoUpload,
     Pokemon,
     Reactions,
     Guilds,

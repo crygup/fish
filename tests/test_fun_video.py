@@ -24,6 +24,17 @@ def _video_cog(pool: object) -> VideoCommands:
     return cog
 
 
+def test_video_upload_rejects_gif_media() -> None:
+    assert not VideoCommands._is_video(  # type: ignore[arg-type]
+        SimpleNamespace(filename="animation.gif", content_type="video/mp4")
+    )
+    assert not VideoCommands._is_video(  # type: ignore[arg-type]
+        SimpleNamespace(filename="animation.mp4", content_type="image/gif")
+    )
+    assert not VideoCommands._is_video_response("video/mp4", "animation.gif")
+    assert VideoCommands._is_gif_data(b"GIF89a\x01\x00")
+
+
 @pytest.mark.asyncio
 async def test_current_video_url_refreshes_discord_attachment() -> None:
     pool = SimpleNamespace(execute=AsyncMock())
@@ -93,8 +104,8 @@ async def test_delete_all_keeps_rows_whose_messages_cannot_be_removed() -> None:
 
         async def fetch(self, _query: str, *_args: object) -> list[dict[str, int]]:
             return [
-                {"id": 1, "review_message_id": 10},
-                {"id": 2, "review_message_id": 20},
+                {"id": 1, "library_id": 1, "review_message_id": 10},
+                {"id": 2, "library_id": 2, "review_message_id": 20},
             ]
 
     pool = Pool()
@@ -109,12 +120,12 @@ async def test_delete_all_keeps_rows_whose_messages_cannot_be_removed() -> None:
         author=SimpleNamespace(id=1),
     )
 
-    await VideoCommands.video_delete.callback(cog, cast(Any, ctx), "all")
+    await VideoCommands.video_delete.callback(cog, cast(Any, ctx), identifier="all")
 
-    pool.execute.assert_awaited_once()
-    execute_call = pool.execute.await_args
-    assert execute_call is not None
-    assert execute_call.args[-1] == [1]
+    assert pool.execute.await_count == 2
+    tombstone_call, delete_call = pool.execute.await_args_list
+    assert tombstone_call.args[-1] == [1]
+    assert delete_call.args[-1] == [1]
     ctx.send.assert_awaited_once()
     response = ctx.send.await_args.args[0]
     assert "Deleted 1 approved video" in response
@@ -128,7 +139,12 @@ async def test_delete_one_removes_review_message_before_database_row() -> None:
     class Pool:
         async def fetchrow(self, _query: str, upload_id: int) -> dict[str, int]:
             assert upload_id == 7
-            return {"id": 7, "uploader_id": 22, "review_message_id": 70}
+            return {
+                "id": 7,
+                "library_id": 7,
+                "uploader_id": 22,
+                "review_message_id": 70,
+            }
 
         async def execute(self, _query: str, upload_id: int) -> str:
             assert upload_id == 7
@@ -149,9 +165,9 @@ async def test_delete_one_removes_review_message_before_database_row() -> None:
         author=SimpleNamespace(id=1),
     )
 
-    await VideoCommands.video_delete.callback(cog, cast(Any, ctx), "7")
+    await VideoCommands.video_delete.callback(cog, cast(Any, ctx), identifier="7")
 
-    assert events == ["message", "database"]
+    assert events == ["message", "database", "database"]
     assert ctx.send.await_args.args[0] == "Deleted that approved video."
 
 
@@ -160,7 +176,12 @@ async def test_delete_one_rejects_video_owned_by_another_user() -> None:
     class Pool:
         async def fetchrow(self, _query: str, upload_id: int) -> dict[str, int]:
             assert upload_id == 7
-            return {"id": 7, "uploader_id": 22, "review_message_id": 70}
+            return {
+                "id": 7,
+                "library_id": 7,
+                "uploader_id": 22,
+                "review_message_id": 70,
+            }
 
     cog = _video_cog(Pool())
     cog._delete_review_message = AsyncMock()  # type: ignore[method-assign]
@@ -168,7 +189,7 @@ async def test_delete_one_rejects_video_owned_by_another_user() -> None:
         send=AsyncMock(), prompt=AsyncMock(), author=SimpleNamespace(id=33)
     )
 
-    await VideoCommands.video_delete.callback(cog, cast(Any, ctx), "7")
+    await VideoCommands.video_delete.callback(cog, cast(Any, ctx), identifier="7")
 
     cog._delete_review_message.assert_not_awaited()
     ctx.prompt.assert_not_awaited()

@@ -25,6 +25,13 @@ from .connectfour import (
 from .corn import Corn
 from .game_2048 import Game2048, Game2048View, highest_tile
 from .helpers import RPSView, WTPView, dagpi
+from .library_uploads import (
+    LibraryUploadsPageSource,
+    post_media_condition,
+    resolve_library_filters,
+    start_library_pager,
+    video_media_condition,
+)
 from .lightsout import LightsOutGame, LightsOutView
 from .memory import MemoryGame, MemoryView
 from .minigames import (
@@ -38,6 +45,7 @@ from .minigames import (
     scramble_word,
     unscramble_content,
 )
+from .post import PostCommands
 from .reactions import ReactionStats
 from .streak_games import (
     HeadsOrTailsGame,
@@ -47,6 +55,7 @@ from .streak_games import (
     StreakGame,
 )
 from .tictactoe import TicTacToeController
+from .upload import UploadCommands
 from .video import VideoCommands
 from .wordle import (
     WORDLE_WORDS,
@@ -285,7 +294,7 @@ PHONE_LOG_MAX_ENTRIES = 500
 PHONE_LOG_MAX_BYTES = 200_000
 
 
-class Fun(VideoCommands, About, Corn, ReactionStats):
+class Fun(UploadCommands, PostCommands, VideoCommands, About, Corn, ReactionStats):
     """Fun miscellaneous commands"""
 
     emoji = discord.PartialEmoji(name="\U0001f604")
@@ -317,6 +326,70 @@ class Fun(VideoCommands, About, Corn, ReactionStats):
         )
         self._tictactoe_controller = TicTacToeController(self)
         self._connectfour_controller = ConnectFourController(self)
+
+    async def _send_uploads(self, ctx: Context, value: str | None = None) -> None:
+        """Browse the combined approved video, image, and GIF libraries."""
+
+        filters = await resolve_library_filters(ctx, value)
+        rows: list[dict[str, Any]] = []
+
+        async def fetch_rows(
+            query: str, media_kind: str, *, condition: str
+        ) -> None:
+            if filters.all_users:
+                result = await self.bot.pool.fetch(query + condition + " ORDER BY library_id")
+            else:
+                result = await self.bot.pool.fetch(
+                    query + condition + " AND uploader_id = $1 ORDER BY library_id",
+                    filters.user_id,
+                )
+            for row in result:
+                item = dict(row)
+                item["media_kind"] = media_kind
+                rows.append(item)
+
+        if filters.media != "video":
+            await fetch_rows(
+                "SELECT id, library_id, source_url, filename, review_message_id, "
+                "uploader_id FROM post_uploads WHERE status = 'approved' "
+                "AND library_id IS NOT NULL",
+                "post",
+                condition=post_media_condition(filters.media, alias="post_uploads"),
+            )
+        if filters.media != "image" and filters.media != "gif":
+            await fetch_rows(
+                "SELECT id, library_id, source_url, filename, review_message_id, "
+                "uploader_id FROM video_uploads WHERE status = 'approved' "
+                "AND library_id IS NOT NULL",
+                "video",
+                condition=video_media_condition(filters.media, alias="video_uploads"),
+            )
+
+        rows.sort(
+            key=lambda row: (
+                int(row.get("library_id") or row["id"]),
+                str(row.get("media_kind") or ""),
+            )
+        )
+        if filters.all_users:
+            title = "All Fishie uploads"
+        elif filters.user_id == ctx.author.id:
+            title = "Your Fishie uploads"
+        else:
+            title = "Fishie uploads"
+        source = LibraryUploadsPageSource(self, ctx, rows, title=title)
+        await start_library_pager(
+            source,
+            ctx=ctx,
+            accent_color=self.bot.embedcolor,
+        )
+
+    @cast(Any, commands.command)(name="uploads")
+    async def uploads(self, ctx: Context, *, filters: str | None = None) -> None:
+        """Browse approved Fishie uploads with optional media and user filters."""
+
+        async with ctx.typing():
+            await self._send_uploads(ctx, filters)
 
     async def _click_total(self) -> int:
         value = await self.bot.pool.fetchval(
@@ -1142,6 +1215,7 @@ class Fun(VideoCommands, About, Corn, ReactionStats):
             accent_color=self.bot.embedcolor,
             on_finish=self._finish_heads_or_tails,
             on_progress=self._record_heads_or_tails_progress,
+            on_restart=self._restart_heads_or_tails,
         )
         self._heads_or_tails_games[ctx.author.id] = game
         try:
@@ -1159,6 +1233,15 @@ class Fun(VideoCommands, About, Corn, ReactionStats):
             return
         self._heads_or_tails_games.pop(game.user_id, None)
         await self._record_heads_or_tails_progress(game)
+
+    async def _restart_heads_or_tails(self, game: HeadsOrTailsGame) -> bool:
+        """Re-register a finished coin-flip game before its view is restarted."""
+
+        active = self._heads_or_tails_games.get(game.user_id)
+        if active is not None and active is not game:
+            return False
+        self._heads_or_tails_games[game.user_id] = game
+        return True
 
     async def _send_streak_game_stats(
         self,
@@ -2150,6 +2233,7 @@ class Fun(VideoCommands, About, Corn, ReactionStats):
 
     def cog_unload(self) -> None:
         """Stop background minigame timers when the fun extension reloads."""
+        self.unregister_post_views()
         self.unregister_video_views()
         self._connectfour_controller.close()
         for game in self._color_memorize_games.values():
@@ -2193,3 +2277,4 @@ async def setup(bot: Fishie):
     fun = Fun(bot)
     await bot.add_cog(fun)
     await fun.register_video_views()
+    await fun.register_post_views()
