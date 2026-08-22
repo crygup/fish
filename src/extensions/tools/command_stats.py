@@ -167,16 +167,28 @@ class CommandStats(Cog):
         embed.set_thumbnail(url=user.display_avatar.url)
         await ctx.send(embed=embed)
 
-    @cast(Any, stats.group)(name="emoji", invoke_without_command=True)
+    @cast(Any, stats.group)(
+        name="emoji",
+        invoke_without_command=True,
+        extras={"usage": "[global] [user] [server] [emoji]"},
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    async def stats_emoji(self, ctx: Context, target: Optional[str] = None) -> None:
-        """Show the existing server or user emoji statistics."""
-        emoji_cog: Any = ctx.bot.get_cog("Emojis")
+    @app_commands.describe(
+        arguments=(
+            "Optional global, user, server, and emoji filters in any order. "
+            "Global overrides a server filter."
+        )
+    )
+    async def stats_emoji(self, ctx: Context, *, arguments: str | None = None) -> None:
+        """Show emoji statistics with dynamic filters."""
+        # Emoji commands are mixed into the Discord cog, not registered as a
+        # standalone ``Emojis`` cog.
+        emoji_cog: Any = ctx.bot.get_cog("Discord")
         if emoji_cog is None:
             await ctx.send("Emoji statistics are not available right now.")
             return
-        await emoji_cog.send_emoji_stats(ctx, target)
+        await emoji_cog.send_emoji_stats(ctx, arguments)
 
     @stats_emoji.command(name="global")
     @app_commands.allowed_installs(guilds=True, users=True)
@@ -185,7 +197,7 @@ class CommandStats(Cog):
         self, ctx: Context, target: Optional[str] = None
     ) -> None:
         """Show a user's existing emoji statistics across all servers."""
-        emoji_cog: Any = ctx.bot.get_cog("Emojis")
+        emoji_cog: Any = ctx.bot.get_cog("Discord")
         if emoji_cog is None:
             await ctx.send("Emoji statistics are not available right now.")
             return
@@ -214,6 +226,26 @@ class CommandStats(Cog):
             await ctx.send("Connect Four statistics are not available right now.")
             return
         await controller.send_stats(ctx)
+
+    @stats.command(name="video", aliases=("videos",))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_video(self, ctx: Context) -> None:
+        """Show the users with the most approved Fishie video uploads."""
+
+        fun_cog: Any = ctx.bot.get_cog("Fun")
+        send_stats = cast(
+            Callable[..., Awaitable[Any]] | None,
+            getattr(fun_cog, "_send_video_stats", None),
+        )
+        if send_stats is None:
+            await ctx.send(
+                "Video statistics are not available right now.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        async with ctx.typing():
+            await send_stats(ctx)
 
     @stats.command(name="click", aliases=("clicks", "clickstats"))
     @app_commands.describe(user="The user whose click total you want to see.")
@@ -379,14 +411,27 @@ class CommandStats(Cog):
         )
 
     async def _join_user_name(
-        self, ctx: Context, user_id: int, guild: discord.Guild | None = None
+        self,
+        ctx: Context,
+        user_id: int,
+        guild: discord.Guild | None = None,
+        user: discord.User | discord.Member | None = None,
     ) -> str:
-        user = guild.get_member(user_id) if guild is not None else None
+        if user is None and guild is not None:
+            user = guild.get_member(user_id)
         if user is None:
             user = await get_or_fetch_user(ctx.bot, user_id)
         return self._safe_join_name(getattr(user, "name", None) or user_id)
 
-    def _join_visible(self, ctx: Context, user_id: int) -> bool:
+    def _join_visible(
+        self,
+        ctx: Context,
+        user_id: int,
+        user: discord.User | discord.Member | None = None,
+    ) -> bool:
+        if user is not None and user.bot:
+            ctx.bot.db_cache.remember_user(user.id, is_bot=True)
+            return True
         return user_id == ctx.author.id or (
             ctx.bot.db_cache.user_history_is_public(user_id)
             and not ctx.bot.db_cache.user_tracking_opted_out(user_id, "joins")
@@ -395,15 +440,18 @@ class CommandStats(Cog):
     async def _server_join_stats(self, ctx: Context, guild: discord.Guild) -> None:
         rows = await ctx.bot.pool.fetch(
             "SELECT member_id, COUNT(*) AS total FROM member_join_logs "
-            "WHERE guild_id = $1 GROUP BY member_id ORDER BY total DESC LIMIT 50",
+            "WHERE guild_id = $1 GROUP BY member_id ORDER BY total DESC",
             guild.id,
         )
         lines: list[str] = []
         for row in rows:
             member_id = int(row["member_id"])
-            if not self._join_visible(ctx, member_id):
+            user = guild.get_member(member_id) or await get_or_fetch_user(
+                ctx.bot, member_id
+            )
+            if not self._join_visible(ctx, member_id, user):
                 continue
-            name = await self._join_user_name(ctx, member_id, guild)
+            name = await self._join_user_name(ctx, member_id, guild, user)
             lines.append(f"**{name}** · {int(row['total']):,}")
             if len(lines) == 5:
                 break
@@ -425,7 +473,7 @@ class CommandStats(Cog):
     async def _user_join_stats(
         self, ctx: Context, user: discord.User | discord.Member
     ) -> None:
-        if not self._join_visible(ctx, user.id):
+        if not self._join_visible(ctx, user.id, user):
             await ctx.send(
                 "That user's join history is private.",
                 allowed_mentions=discord.AllowedMentions.none(),
@@ -459,14 +507,15 @@ class CommandStats(Cog):
     async def _global_join_stats(self, ctx: Context) -> None:
         rows = await ctx.bot.pool.fetch(
             "SELECT member_id, COUNT(*) AS total FROM member_join_logs "
-            "GROUP BY member_id ORDER BY total DESC LIMIT 50"
+            "GROUP BY member_id ORDER BY total DESC"
         )
         lines: list[str] = []
         for row in rows:
             member_id = int(row["member_id"])
-            if not self._join_visible(ctx, member_id):
+            user = await get_or_fetch_user(ctx.bot, member_id)
+            if not self._join_visible(ctx, member_id, user):
                 continue
-            name = await self._join_user_name(ctx, member_id)
+            name = await self._join_user_name(ctx, member_id, user=user)
             lines.append(f"**{name}** · {int(row['total']):,}")
             if len(lines) == 5:
                 break

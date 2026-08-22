@@ -2652,7 +2652,7 @@ def _profile_view(
 
 
 class Anime(Cog):
-    """Anime and AniList profile commands."""
+    """Anime related commands"""
 
     emoji = discord.PartialEmoji(name="\U0001f3ac")
 

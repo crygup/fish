@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import shlex
 import zipfile
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, List, Optional, Union
@@ -14,11 +16,14 @@ from utils import (
     EMOJI_RE,
     SimplePages,
     TwemojiConverter,
+    get_or_fetch_user,
     human_join,
     plural,
     to_image,
     to_thread,
 )
+
+CUSTOM_EMOJI_STATS_RE = re.compile(r"^<a?:[A-Za-z0-9_~]+:(\d+)>$")
 
 
 def _emoji_occurrences(content: str) -> list[tuple[str, bool]]:
@@ -57,7 +62,6 @@ def _create_emoji_zip(emoji_data: list[tuple[str, bytes]]) -> bytes:
 
 
 class Emojis(Cog):
-
     @commands.Cog.listener("on_message")
     async def _record_emoji_stats(self, message: discord.Message) -> None:
         """Record emoji identifiers without retaining message content."""
@@ -126,7 +130,7 @@ class Emojis(Cog):
                 pass
 
             await message.edit(
-                content=f'Successfully stole {human_join(completed_emojis, final="and")} *({len(completed_emojis)}/{len(emoji_results)})*.'
+                content=f"Successfully stole {human_join(completed_emojis, final='and')} *({len(completed_emojis)}/{len(emoji_results)})*."
             )
 
     @commands.group(name="emoji", invoke_without_command=True)
@@ -204,6 +208,186 @@ class Emojis(Cog):
         except commands.CommandError as exc:
             raise commands.BadArgument("I could not find that Discord user.") from exc
 
+    async def _resolve_stats_emoji(
+        self, ctx: Context, value: str
+    ) -> tuple[str, bool] | None:
+        """Resolve a custom or Unicode emoji to the values stored in ``emoji_stats``."""
+        match = CUSTOM_EMOJI_STATS_RE.fullmatch(value)
+        if match:
+            return match.group(1), False
+
+        if emoji_lib.is_emoji(value):
+            return value, True
+
+        # Accept a custom emoji name as a convenience.  Prefer the current
+        # guild, then fall back to any emoji the bot can currently see.
+        name = value.strip(":")
+        candidates = (
+            list(getattr(ctx.guild, "emojis", ())) if ctx.guild is not None else []
+        )
+        candidates.extend(getattr(self.bot, "emojis", ()))
+        for candidate in candidates:
+            if candidate.name and candidate.name.casefold() == name.casefold():
+                return str(candidate.id), False
+        return None
+
+    async def _parse_emoji_stats_arguments(
+        self, ctx: Context, arguments: str | None
+    ) -> tuple[
+        bool,
+        discord.User | discord.Member | None,
+        discord.Guild | None,
+        tuple[str, bool] | None,
+    ]:
+        """Parse global, user, server, and emoji filters in any order."""
+        try:
+            tokens = shlex.split(arguments or "")
+        except ValueError as exc:
+            raise commands.BadArgument(
+                "I could not parse those emoji-stat arguments."
+            ) from exc
+
+        global_scope = False
+        user: discord.User | discord.Member | None = None
+        guild: discord.Guild | None = None
+        emoji_filter: tuple[str, bool] | None = None
+        unknown: list[str] = []
+        pending_user = False
+        pending_guild = False
+        pending_emoji = False
+
+        for token in tokens:
+            lowered = token.casefold()
+            if pending_emoji:
+                parsed_emoji = await self._resolve_stats_emoji(ctx, token)
+                if parsed_emoji is None:
+                    raise commands.BadArgument(
+                        f"I could not find an emoji for `{token}`."
+                    )
+                emoji_filter = parsed_emoji
+                pending_emoji = False
+                continue
+            if pending_user:
+                if user is not None:
+                    raise commands.BadArgument("Please provide only one user.")
+                user = await self._resolve_stats_user(ctx, token)
+                pending_user = False
+                continue
+            if pending_guild:
+                if guild is not None:
+                    raise commands.BadArgument("Please provide only one server.")
+                try:
+                    guild = await commands.GuildConverter().convert(ctx, token)
+                except commands.CommandError as exc:
+                    raise commands.BadArgument(
+                        f"I could not find a server for `{token}`."
+                    ) from exc
+                pending_guild = False
+                continue
+            if lowered == "global":
+                global_scope = True
+                continue
+            if lowered in {"user", "me", "self"}:
+                if user is not None:
+                    raise commands.BadArgument("Please provide only one user.")
+                pending_user = True
+                continue
+            if lowered in {"server", "guild", "here"}:
+                if guild is not None:
+                    raise commands.BadArgument("Please provide only one server.")
+                pending_guild = True
+                continue
+            # Accept an explicit ``emoji`` marker so the dynamic syntax can
+            # be written as ``emoji stats global emoji :name:`` without
+            # changing how a bare emoji is resolved.
+            if lowered == "emoji":
+                pending_emoji = True
+                continue
+
+            parsed_emoji = await self._resolve_stats_emoji(ctx, token)
+            if parsed_emoji is not None:
+                if emoji_filter is not None:
+                    raise commands.BadArgument("Please provide only one emoji.")
+                emoji_filter = parsed_emoji
+                continue
+
+            mention_or_id = bool(re.fullmatch(r"<@!?\d+>", token)) or token.isdigit()
+            if mention_or_id and user is None:
+                # Numeric IDs can identify either a server or a user.  As with
+                # reaction stats, prefer a guild that Fishie is currently in.
+                if not token.startswith("<@"):
+                    try:
+                        guild_candidate = await commands.GuildConverter().convert(
+                            ctx, token
+                        )
+                    except commands.CommandError:
+                        guild_candidate = None
+                    if guild_candidate is not None:
+                        guild = guild_candidate
+                        continue
+                user = await self._resolve_stats_user(ctx, token)
+                continue
+
+            try:
+                guild_candidate = await commands.GuildConverter().convert(ctx, token)
+            except commands.CommandError:
+                guild_candidate = None
+            if guild_candidate is not None:
+                if guild is not None:
+                    raise commands.BadArgument("Please provide only one server.")
+                guild = guild_candidate
+                continue
+
+            if user is None:
+                user = await self._resolve_stats_user(ctx, token)
+                continue
+            unknown.append(token)
+
+        if unknown:
+            raise commands.BadArgument(f"I did not understand `{unknown[0]}`.")
+        if pending_user:
+            user = ctx.author
+        if pending_guild:
+            guild = ctx.guild
+        if pending_emoji:
+            raise commands.BadArgument("Please provide an emoji to filter by.")
+        # A global query always wins over a supplied server. Keep the scope
+        # unambiguous when users provide both filters in either order.
+        if global_scope:
+            guild = None
+        elif guild is None:
+            guild = ctx.guild
+        if not global_scope and guild is None:
+            raise commands.BadArgument("Choose a server or use `global` in DMs.")
+        return global_scope, user, guild, emoji_filter
+
+    @staticmethod
+    def _emoji_stats_scope_label(
+        global_scope: bool, guild: discord.Guild | None
+    ) -> str:
+        return "Global" if global_scope else (guild.name if guild else "Server")
+
+    def _emoji_stats_title(
+        self,
+        *,
+        global_scope: bool,
+        guild: discord.Guild | None,
+        user: discord.User | discord.Member | None,
+        emoji_filter: tuple[str, bool] | None,
+    ) -> str:
+        scope = self._emoji_stats_scope_label(global_scope, guild)
+        if user is not None:
+            return f"Emoji stats for {user.name} · {scope}"
+        if emoji_filter is not None:
+            emoji_id, is_unicode = emoji_filter
+            display = emoji_id if is_unicode else f"<:emoji:{emoji_id}>"
+            if not is_unicode:
+                custom = self.bot.get_emoji(int(emoji_id))
+                if custom is not None:
+                    display = str(custom)
+            return f"{display} Emoji stats · {scope}"
+        return f"Emoji stats · {scope}"
+
     async def _send_emoji_stats(
         self,
         ctx: Context,
@@ -211,37 +395,66 @@ class Emojis(Cog):
         title: str,
         guild_id: int | None = None,
         author_id: int | None = None,
+        emoji_filter: tuple[str, bool] | None = None,
     ) -> None:
         clauses: list[str] = []
-        arguments: list[int] = []
+        arguments: list[object] = []
         if guild_id is not None:
             arguments.append(guild_id)
             clauses.append(f"guild_id = ${len(arguments)}")
         if author_id is not None:
             arguments.append(author_id)
             clauses.append(f"author_id = ${len(arguments)}")
+        if emoji_filter is not None:
+            emoji_id, is_unicode = emoji_filter
+            arguments.append(emoji_id)
+            emoji_index = len(arguments)
+            arguments.append(is_unicode)
+            unicode_index = len(arguments)
+            clauses.append(f"emoji_id = ${emoji_index} AND unicode = ${unicode_index}")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        rows = await self.bot.pool.fetch(
-            "SELECT emoji_id, unicode, COUNT(*) AS uses FROM emoji_stats "
-            f"{where} GROUP BY emoji_id, unicode ORDER BY uses DESC, emoji_id LIMIT 50",
-            *arguments,
-        )
-        if not rows:
+
+        if emoji_filter is not None and author_id is None:
+            rows = await self.bot.pool.fetch(
+                "SELECT author_id, COUNT(*) AS uses FROM emoji_stats "
+                f"{where} GROUP BY author_id ORDER BY uses DESC, author_id LIMIT 50",
+                *arguments,
+            )
+            entries: list[str] = []
+            for row in rows:
+                user = await get_or_fetch_user(self.bot, int(row["author_id"]))
+                name = getattr(user, "name", None) or str(row["author_id"])
+                entries.append(
+                    f"**{discord.utils.escape_markdown(name)}** ({int(row['uses']):,} uses)"
+                )
+        else:
+            rows = await self.bot.pool.fetch(
+                "SELECT emoji_id, unicode, COUNT(*) AS uses FROM emoji_stats "
+                f"{where} GROUP BY emoji_id, unicode ORDER BY uses DESC, emoji_id LIMIT 50",
+                *arguments,
+            )
+            entries = []
+            for row in rows:
+                emoji_id = str(row["emoji_id"])
+                if row["unicode"]:
+                    display = emoji_id
+                else:
+                    try:
+                        custom = self.bot.get_emoji(int(emoji_id))
+                    except (TypeError, ValueError):
+                        custom = None
+                    display = (
+                        str(custom)
+                        if custom is not None
+                        else f"Custom emoji `{emoji_id}`"
+                    )
+                entries.append(f"{display} ({int(row['uses']):,} uses)")
+
+        if not entries:
             await ctx.send(f"{title}\nNo emoji usage has been recorded yet.")
             return
 
-        lines: list[str] = []
-        for row in rows:
-            emoji_id = str(row["emoji_id"])
-            if row["unicode"]:
-                display = emoji_id
-            else:
-                custom = self.bot.get_emoji(int(emoji_id))
-                display = (
-                    str(custom) if custom is not None else f"Custom emoji `{emoji_id}`"
-                )
-            lines.append(f"{display} ({int(row['uses']):,} uses)")
-        pages = SimplePages(entries=lines, per_page=10, ctx=ctx)
+        pages = SimplePages(entries=entries, per_page=10, ctx=ctx)
         pages.embed.title = title
         pages.embed.colour = self.bot.embedcolor
         pages.embed.set_footer(
@@ -252,46 +465,44 @@ class Emojis(Cog):
     async def send_emoji_stats(
         self, ctx: Context, target: Optional[str] = None
     ) -> None:
-        """Send emoji usage for a server or a member."""
-        if target is not None:
-            try:
-                guild = await commands.GuildConverter().convert(ctx, target)
-            except commands.CommandError:
-                guild = None
-            if guild is not None:
-                await self._send_emoji_stats(
-                    ctx, title=f"Emoji stats for {guild.name}", guild_id=guild.id
-                )
-                return
-        elif ctx.guild is not None:
-            await self._send_emoji_stats(
-                ctx,
-                title=f"Emoji stats for {ctx.guild.name}",
-                guild_id=ctx.guild.id,
-            )
-            return
-
-        user = await self._resolve_stats_user(ctx, target)
+        """Send emoji usage with dynamic global/user/server/emoji filters."""
+        (
+            global_scope,
+            user,
+            guild,
+            emoji_filter,
+        ) = await self._parse_emoji_stats_arguments(ctx, target)
         await self._send_emoji_stats(
             ctx,
-            title=f"Emoji stats for {user.name}",
-            author_id=user.id,
-            guild_id=ctx.guild.id if ctx.guild is not None else None,
+            title=self._emoji_stats_title(
+                global_scope=global_scope,
+                guild=guild,
+                user=user,
+                emoji_filter=emoji_filter,
+            ),
+            guild_id=guild.id if guild is not None else None,
+            author_id=user.id if user is not None else None,
+            emoji_filter=emoji_filter,
         )
 
     async def send_global_emoji_stats(
         self, ctx: Context, target: Optional[str] = None
     ) -> None:
         """Send a user's emoji usage across all servers."""
-        user = await self._resolve_stats_user(ctx, target)
-        await self._send_emoji_stats(
-            ctx, title=f"Global emoji stats for {user.name}", author_id=user.id
-        )
+        # Preserve the legacy ``emoji stats global`` subcommand behavior,
+        # which defaults to the invoking user's global history. The dynamic
+        # parent command still uses bare ``global`` for an all-user view.
+        arguments = "global user" if target is None else f"global {target}"
+        await self.send_emoji_stats(ctx, arguments)
 
-    @emoji_group.group(name="stats", invoke_without_command=True)
-    async def emoji_stats(self, ctx: Context, target: Optional[str] = None) -> None:
-        """Show emoji usage for a server or a member."""
-        await self.send_emoji_stats(ctx, target)
+    @emoji_group.group(
+        name="stats",
+        invoke_without_command=True,
+        extras={"usage": "[global] [user] [server] [emoji]"},
+    )
+    async def emoji_stats(self, ctx: Context, *, arguments: str | None = None) -> None:
+        """Show emoji usage with global, user, server, or emoji filters."""
+        await self.send_emoji_stats(ctx, arguments)
 
     @emoji_stats.command(name="global")
     async def emoji_stats_global(
@@ -376,7 +587,7 @@ class Emojis(Cog):
 
         await self.steal_emojis(ctx, emoji_results)
 
-    @commands.hybrid_group(name="emojis", fallback="get")
+    @commands.group(name="emojis", invoke_without_command=True)
     @app_commands.describe(
         guild="Server whose emojis should be listed.",
         name="Show emoji names instead of the emoji itself.",
@@ -400,7 +611,7 @@ class Emojis(Cog):
         order = sorted(guild.emojis, key=lambda e: e.created_at)
 
         data = [
-            f"{f"`{e.name}`" if name else str(e)} {f"`{e.id}`" if ids else ""} *{discord.utils.format_dt(e.created_at, 'd')}*"
+            f"{f'`{e.name}`' if name else str(e)} {f'`{e.id}`' if ids else ''} *{discord.utils.format_dt(e.created_at, 'd')}*"
             for e in order
         ]
         pages = SimplePages(entries=data, per_page=10, ctx=ctx)

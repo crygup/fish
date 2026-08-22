@@ -89,6 +89,9 @@ class Commands(Cog):
         ctx: Context,
         user: discord.User | discord.Member,
     ) -> None:
+        if user.bot:
+            self.bot.db_cache.remember_user(user.id, is_bot=True)
+            return
         if user.id != ctx.author.id and not self.bot.db_cache.user_history_is_public(
             user.id
         ):
@@ -222,7 +225,8 @@ class Commands(Cog):
             records: List[asyncpg.Record] = await self.bot.pool.fetch(*args)  # type: ignore # i think this is a typing bug, not stubbed properly
 
             if not bool(records):
-                raise commands.BadArgument(f"I have no avatars on record for {user}")
+                scope = "server avatars" if guild_id else "avatars"
+                raise commands.BadArgument(f"{user} has no {scope} on record.")
 
             entries: List[Tuple[str, datetime.datetime, int]] = [
                 (
@@ -275,7 +279,8 @@ class Commands(Cog):
             records: List[asyncpg.Record] = await self.bot.pool.fetch(*args)  # type: ignore # same as above
 
             if not bool(records):
-                raise commands.BadArgument(f"{user} has no avatars on record.")
+                scope = "server avatars" if guild_id else "avatars"
+                raise commands.BadArgument(f"{user} has no {scope} on record.")
 
             urls = [record["avatar"] for record in records]
             refreshed = [
@@ -321,12 +326,22 @@ class Commands(Cog):
     async def _avatar_history_arguments(
         ctx: Context,
         arguments: tuple[str, ...],
-    ) -> tuple[discord.User, tuple[int, int] | None]:
-        """Parse an optional WxH grid and user in either order."""
+    ) -> tuple[discord.User, tuple[int, int] | None, bool]:
+        """Parse an optional WxH grid, user, and server scope.
+
+        ``server``/``guild`` is accepted here as well as by the explicit
+        ``avatarhistory server`` subcommand.  This keeps the text command
+        order-independent and prevents ``server`` from being passed to the
+        user converter as a username.
+        """
         grid_size: tuple[int, int] | None = None
         user_arguments: list[str] = []
+        server = False
 
         for argument in arguments:
+            if argument.strip().casefold() in {"server", "guild"}:
+                server = True
+                continue
             match = AVATAR_GRID_RE.fullmatch(argument.strip())
             if match:
                 if grid_size is not None:
@@ -342,7 +357,7 @@ class Commands(Cog):
                 user_arguments.append(argument)
 
         if not user_arguments:
-            return ctx.author, grid_size  # type: ignore[return-value]
+            return ctx.author, grid_size, server  # type: ignore[return-value]
 
         raw_user = " ".join(user_arguments).strip()
         try:
@@ -351,7 +366,7 @@ class Commands(Cog):
             raise commands.BadArgument(
                 f"Could not find a user matching {raw_user}."
             ) from error
-        return user, grid_size
+        return user, grid_size, server
 
     @commands.group(name="avatars", aliases=("pfps", "avis", "avs"))
     async def avatars(self, ctx: Context, *, user: discord.User = commands.Author):
@@ -372,15 +387,20 @@ class Commands(Cog):
         name="avatarhistory",
         aliases=("avyh", "avatar-history", "avatar_history", "pfph", "avh"),
         extras={"usage": "[grid_size] [user]"},
+        invoke_without_command=True,
     )
     async def avatar_history(self, ctx: Context, *arguments: str):
-        """Shows a user's previous avatars in a grid view.
+        """Shows a user's previous avatars in a grid view."""
+        user, grid_size, use_server = await self._avatar_history_arguments(
+            ctx, arguments
+        )
 
-        The optional WxH grid size and user can be supplied in either order.
-        """
-        user, grid_size = await self._avatar_history_arguments(ctx, arguments)
-
-        await self.avatars_grid(ctx, user, grid_size=grid_size)
+        guild_id = ctx.guild.id if use_server and ctx.guild else None
+        if use_server and ctx.guild is None:
+            raise commands.NoPrivateMessage(
+                "Server avatar history can only be viewed in a server."
+            )
+        await self.avatars_grid(ctx, user, guild_id, grid_size=grid_size)
 
     @avatar_history.command(
         name="server",
@@ -389,13 +409,10 @@ class Commands(Cog):
     )
     @commands.guild_only()
     async def server_avatar_history(self, ctx: Context, *arguments: str):
-        """Shows a user's previous server avatars in a grid view.
-
-        The optional WxH grid size and user can be supplied in either order.
-        """
+        """Shows a user's previous server avatars in a grid view."""
         assert ctx.guild
 
-        user, grid_size = await self._avatar_history_arguments(ctx, arguments)
+        user, grid_size, _ = await self._avatar_history_arguments(ctx, arguments)
         await self.avatars_grid(ctx, user, ctx.guild.id, grid_size=grid_size)
 
     async def _usernames(self, ctx: Context, user: discord.User) -> None:
@@ -428,9 +445,7 @@ class Commands(Cog):
         """Shows a user's previous usernames"""
         await self._usernames(ctx, user)
 
-    @commands.hybrid_command(name="servertags", aliases=("stags",))
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="servertags", aliases=("stags", "servertag"))
     async def server_tags(
         self, ctx: Context, *, user: discord.User = commands.Author
     ) -> None:
@@ -597,11 +612,16 @@ class Commands(Cog):
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
-    @commands.hybrid_command(name="icons")
+    @commands.command(name="icons")
     async def icons(
         self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
     ):
         """Shows a server's previous icons"""
+
+        await self.icons_func(ctx, guild)
+
+    async def icons_func(self, ctx: Context, guild: discord.Guild) -> None:
+        """Show a server's saved icons as a paginated list."""
 
         sql = """
         SELECT * FROM guild_icons WHERE guild_id = $1
@@ -629,6 +649,48 @@ class Commands(Cog):
             source.embed.description = f"-# View all icons [here](https://crygup.com/discord?tab=guild&subtab=icons&q={guild.id})"
             pager = Pager(source, ctx=ctx)
             await pager.start(ctx)
+
+    async def icons_grid(
+        self,
+        ctx: Context,
+        guild: discord.Guild,
+        grid_size: tuple[int, int] | None = None,
+    ) -> None:
+        """Show saved server icons in a grid."""
+        xbound, ybound = grid_size or (0, 0)
+        record_limit = xbound * ybound if grid_size else 100
+        records: List[asyncpg.Record] = await self.bot.pool.fetch(
+            "SELECT * FROM guild_icons WHERE guild_id = $1 "
+            "ORDER BY created_at DESC LIMIT $2",
+            guild.id,
+            record_limit,
+        )
+        if not records:
+            raise commands.BadArgument(f"{guild} has no icons on record.")
+
+        urls = [record["icon"] for record in records]
+        refreshed = [
+            url
+            for chunk in utils.as_chunks(urls, max_size=50)
+            for url in await self.refresh_urls(chunk)
+        ]
+        images = await asyncio.gather(
+            *[to_image(ctx.session, url, bytes=True) for url in refreshed]
+        )
+        file = discord.File(
+            await format_bytes(
+                ctx.guild.filesize_limit if ctx.guild else 8_388_608,
+                images,  # type: ignore[arg-type]
+                xbound=xbound,
+                ybound=ybound,
+            ),
+            f"{guild.id}_icon_history.png",
+        )
+        embed = discord.Embed(color=self.bot.embedcolor)
+        embed.set_author(name=f"{guild}'s icons in a grid view.")
+        embed.set_image(url=f"attachment://{file.filename}")
+        embed.set_footer(text="First icon saved")
+        await ctx.send(file=file, embed=embed)
 
     @commands.command(name="uptime")
     async def uptime(self, ctx: GuildContext, *, user: Optional[discord.User] = None):
@@ -786,7 +848,7 @@ class Commands(Cog):
         """Global join leaderboard across all servers."""
         rows = await ctx.bot.pool.fetch(
             "SELECT member_id, COUNT(*) AS total FROM member_join_logs "
-            "GROUP BY member_id ORDER BY total DESC LIMIT 10"
+            "GROUP BY member_id ORDER BY total DESC"
         )
         if not rows:
             await ctx.send("No join data yet!")
@@ -795,15 +857,22 @@ class Commands(Cog):
         embed.set_author(name="Join Leaderboard  •  Global")
         lines = []
         for r in rows:
-            if r[
-                "member_id"
-            ] != ctx.author.id and not self.bot.db_cache.user_history_is_public(
-                r["member_id"]
+            member_id = int(r["member_id"])
+            user = await get_or_fetch_user(ctx.bot, member_id)
+            if user.bot:
+                self.bot.db_cache.remember_user(user.id, is_bot=True)
+            if member_id != ctx.author.id and (
+                not user.bot
+                and (
+                    not self.bot.db_cache.user_history_is_public(member_id)
+                    or self.bot.db_cache.user_tracking_opted_out(member_id, "joins")
+                )
             ):
                 continue
-            user = await get_or_fetch_user(ctx.bot, r["member_id"])
-            name = user.name if user else str(r["member_id"])
+            name = user.name if user else str(member_id)
             lines.append(f"**{r['total']:,}** {name}")
+            if len(lines) == 10:
+                break
         if not lines:
             await ctx.send("No public join data yet!")
             return
@@ -815,7 +884,7 @@ class Commands(Cog):
     ) -> None:
         rows = await ctx.bot.pool.fetch(
             "SELECT member_id, COUNT(*) AS total FROM member_join_logs "
-            "WHERE guild_id = $1 GROUP BY member_id ORDER BY total DESC LIMIT 10",
+            "WHERE guild_id = $1 GROUP BY member_id ORDER BY total DESC",
             guild.id,
         )
         if not rows:
@@ -828,17 +897,24 @@ class Commands(Cog):
         )
         lines = []
         for r in rows:
-            if r[
-                "member_id"
-            ] != ctx.author.id and not self.bot.db_cache.user_history_is_public(
-                r["member_id"]
+            member_id = int(r["member_id"])
+            user = guild.get_member(member_id) or await get_or_fetch_user(
+                ctx.bot, member_id
+            )
+            if user.bot:
+                self.bot.db_cache.remember_user(user.id, is_bot=True)
+            if member_id != ctx.author.id and (
+                not user.bot
+                and (
+                    not self.bot.db_cache.user_history_is_public(member_id)
+                    or self.bot.db_cache.user_tracking_opted_out(member_id, "joins")
+                )
             ):
                 continue
-            user = guild.get_member(r["member_id"]) or await get_or_fetch_user(
-                ctx.bot, r["member_id"]
-            )
-            name = user.name if user else str(r["member_id"])
+            name = user.name if user else str(member_id)
             lines.append(f"**{r['total']:,}** {name}")
+            if len(lines) == 10:
+                break
         if not lines:
             await ctx.send(f"No public join data for **{guild.name}** yet!")
             return

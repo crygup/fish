@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class Search(Google, Letterboxd, Roblox, Screenshot, Steam, Spotify, Twitch):
-    """Web, media, and account lookup commands."""
+    """Search Google, Steam, Letterboxd & more"""
 
     emoji = discord.PartialEmoji(name="🌐")
 

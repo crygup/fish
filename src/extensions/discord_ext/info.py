@@ -24,7 +24,6 @@ from discord.interactions import Interaction
 
 from core import Cog
 from utils import (
-    USER_FLAGS,
     AllChannels,
     AuthorView,
     LayoutPageModal,
@@ -36,7 +35,10 @@ from utils import (
     fish_download,
     fish_edit,
     fish_go_back,
+    get_user_badge,
     human_join,
+    refresh_user_badges,
+    render_user_badge,
 )
 
 if TYPE_CHECKING:
@@ -1014,7 +1016,7 @@ class Info(Cog):
     ) -> List[str]:
         public_flags: Dict[Any, Any] = dict(member.public_flags)
         new_values = {
-            member.id: True,
+            "owner": await self.bot.is_owner(member),
             "server_owner": isinstance(member, discord.Member)
             and member.guild.owner == member,
             "booster": isinstance(member, discord.Member) and member.premium_since,
@@ -1027,13 +1029,18 @@ class Info(Cog):
         public_flags.update(new_values)
 
         user_flags: List[str] = []
+        document = refresh_user_badges()
+        for flag, entry in document.get("flags", {}).items():
+            if public_flags.get(flag) and (rendered := render_user_badge(entry)):
+                user_flags.append(rendered)
 
-        for flag, text in USER_FLAGS.items():
-            try:
-                if public_flags[flag]:
-                    user_flags.append(text)
-            except (KeyError, IndexError):
-                continue
+        # JSON is the editable source of the custom badge.  Owner commands
+        # keep the database row and this catalog synchronized, so removing or
+        # changing an entry in the file takes effect without a restart.
+        badge = get_user_badge(member.id)
+        rendered = render_user_badge(badge)
+        if rendered and rendered not in user_flags:
+            user_flags.append(rendered)
 
         return user_flags
 
@@ -1054,14 +1061,13 @@ class Info(Cog):
         primary_guild = getattr(fuser, "primary_guild", None)
         server_tag = getattr(primary_guild, "tag", None)
 
-        footer_lines = [
-            f"Created at: <t:{int(user.created_at.timestamp())}:D>",
-        ]
+        created_at = f"<t:{int(user.created_at.timestamp())}:D>"
+        footer_details = [f"Created At: {created_at}"]
         if isinstance(user, discord.Member):
             if user.joined_at:
-                footer_lines.append(
+                footer_details.append(
                     f"Joined: <t:{int(user.joined_at.timestamp())}:D> "
-                    f"(position #{self.join_pos(user)})"
+                    f"(#{self.join_pos(user)})"
                 )
 
         guild_id = (
@@ -1085,14 +1091,12 @@ class Info(Cog):
             )
 
         if row:
-            footer_lines.append(
-                f"Last seen: {row['status'].title()} "
+            footer_details.append(
+                f"{str(row['status']).title()} "
                 f"{discord.utils.format_dt(row['last_seen'], 'R')}"
             )
 
-        footer_lines.append(
-            f"-# ID: {user.id}",
-        )
+        footer_lines = [f"-# {' · '.join(footer_details)}", f"-# ID: {user.id}"]
 
         avatar_asset = user.display_avatar
         avatar_filename = (
@@ -1289,45 +1293,15 @@ class Info(Cog):
 
         await types[type(channel)](ctx, channel)
 
-    @commands.hybrid_command(
-        name="avatar",
-        aliases=("pfp", "av", "avy", "avi"),
-        extras={"usage": "[user] [history|grid|list] [server|guild] [WxH]"},
-    )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.describe(
-        user="Discord user, mention, ID, or name.",
-        mode="history/grid for a grid, or list for a paginated list.",
-        server="Use server/guild to show this server's avatar history.",
-        grid_size="Grid size such as 6x7, used with history/grid.",
-    )
-    async def avatar(
-        self,
-        ctx: Context,
-        *,
-        user: str | None = None,
-        mode: str | None = None,
-        server: str | None = None,
-        grid_size: str | None = None,
-    ):
-        """Show a user's avatar, history grid, or paginated avatar list."""
+    async def _avatar_dispatch(
+        self, ctx: Context, supplied_arguments: list[str]
+    ) -> None:
+        """Dispatch the shared text and slash avatar argument syntax."""
         logging = self.bot.logging
         if not logging:
             raise commands.BadArgument("Could not find logging cog.")
 
-        supplied_arguments = [
-            value for value in (user, mode, server, grid_size) if value
-        ]
-        # Text commands expose keyword-only arguments as one remaining string.
-        # Split that string so ``avatar history 6x7 @user`` remains order
-        # independent. Slash commands provide each option separately, so keep
-        # a user name containing spaces intact there.
-        raw_arguments = (
-            [part for value in supplied_arguments for part in value.split()]
-            if ctx.interaction is None
-            else supplied_arguments
-        )
+        raw_arguments = supplied_arguments
         selected_mode: Literal["grid", "list"] | None = None
         use_server = False
         selected_grid_size: tuple[int, int] | None = None
@@ -1429,6 +1403,61 @@ class Info(Cog):
             )
         else:
             await logging.avatars_func(ctx, history_user, guild_id)
+
+    @commands.command(
+        name="avatar",
+        aliases=("pfp", "av", "avy", "avi"),
+        extras={"usage": "[user] [history|grid|list] [server|guild] [WxH]"},
+    )
+    async def avatar(self, ctx: Context, *, arguments: str = "") -> None:
+        """Show a user's avatar, history grid, or paginated avatar list."""
+        await self._avatar_dispatch(ctx, arguments.split())
+
+    @app_commands.command(name="avatar")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.describe(
+        user="Discord user, mention, ID, or name.",
+        history="Show saved avatars in a grid instead of the current avatar.",
+        list_mode="Show saved avatars as a paginated list.",
+        server="Use this server's avatars instead of global avatars.",
+        size="Grid size such as 6x7, used with history.",
+    )
+    @app_commands.rename(list_mode="list", size="size")
+    async def avatar_app(
+        self,
+        interaction: discord.Interaction,
+        user: discord.User | None = None,
+        history: bool = False,
+        list_mode: bool = False,
+        server: bool = False,
+        size: str | None = None,
+    ) -> None:
+        """Show a user's current avatar, history grid, or avatar list."""
+        if history and list_mode:
+            await interaction.response.send_message(
+                "Choose either history or list, not both.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        # ``get_context`` is parameterized with the concrete Fishie client,
+        # while discord.py exposes an unparameterized client on interactions.
+        # The runtime object is still the same bot instance.
+        ctx = cast(Context, await self.bot.get_context(cast(Any, interaction)))
+        arguments: list[str] = []
+        if user is not None:
+            arguments.append(str(user.id))
+        if history:
+            arguments.append("history")
+        if list_mode:
+            arguments.append("list")
+        if server:
+            arguments.append("server")
+        if size:
+            arguments.append(size)
+        await self._avatar_dispatch(ctx, arguments)
 
     async def _ensure_avatar_history_consent(self, ctx: Context) -> bool:
         """Ask for saved-avatar consent only when ``avatar`` opens history."""
@@ -1533,6 +1562,19 @@ class Info(Cog):
         """Get a user's banner."""
         await self._send_user_banner(ctx, user)
 
+    @userinfo.command(name="reviews")
+    @app_commands.describe(
+        user="User whose reviews should be shown.",
+        hidden="Include reviews marked hidden by the user.",
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def user_reviews(
+        self, ctx: Context, user: discord.User = commands.Author, hidden: bool = False
+    ) -> None:
+        """Get reviews for a user from ReviewDB."""
+        await self.review_func(ctx, user, hidden)
+
     @userinfo.command(name="nicknames", aliases=("nicks",))
     @commands.guild_only()
     @app_commands.allowed_installs(guilds=True)
@@ -1588,7 +1630,7 @@ class Info(Cog):
             raise commands.BadArgument("Could not find logging cog.")
         await logging._discrims(ctx, user)
 
-    @userinfo.command(name="servertags", aliases=("stags",))
+    @userinfo.command(name="servertags", aliases=("stags", "servertag"))
     @app_commands.describe(user="User whose server tag history should be shown.")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -1718,13 +1760,65 @@ class Info(Cog):
         embed.set_footer(text=f"ID: {guild.id} \nCreated at")
         await ctx.send(embed=embed)
 
-    @commands.group(name="serverinfo", aliases=("server", "si"))
+    @commands.hybrid_group(name="server", aliases=("serverinfo", "si"), fallback="info")
     @commands.guild_only()
     async def serverinfo(
         self, ctx: GuildContext, *, guild: discord.Guild = commands.CurrentGuild
     ):
         """Show information and statistics for a server."""
         await self.server_info(ctx, guild)
+
+    async def _server_settings_cog(self):
+        settings = self.bot.settings
+        if settings is None:
+            raise commands.BadArgument("Could not find the server settings cog.")
+        return settings
+
+    @serverinfo.command(name="settings")
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def serverinfo_settings(self, ctx: GuildContext) -> None:
+        """Open the server's tracking and automation settings panel."""
+        settings = await self._server_settings_cog()
+        await settings._send_server_settings_panel(ctx)
+
+    @serverinfo.group(name="edit")
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def serverinfo_edit(self, ctx: GuildContext) -> None:
+        """Edit a server automation destination or its filters."""
+        settings = await self._server_settings_cog()
+        await settings._send_server_settings_panel(ctx)
+
+    async def _server_edit_destination(
+        self, ctx: GuildContext, kind: str
+    ) -> None:
+        settings = await self._server_settings_cog()
+        await settings._edit_server_destination(ctx, kind)
+
+    @serverinfo_edit.command(
+        name="hourly-posts", aliases=("hourly", "hourlyposts", "autoposts")
+    )
+    @commands.has_guild_permissions(manage_guild=True)
+    async def serverinfo_edit_hourly_posts(self, ctx: GuildContext) -> None:
+        """Set, move, or edit the hourly-post interval and media filters."""
+        await self._server_edit_destination(ctx, "hourly_posts")
+
+    @serverinfo_edit.command(name="honeypot", aliases=("honey-pot",))
+    @commands.has_guild_permissions(manage_guild=True)
+    async def serverinfo_edit_honeypot(self, ctx: GuildContext) -> None:
+        """Set, move, or disable the honeypot channel."""
+        await self._server_edit_destination(ctx, "honeypot")
+
+    @serverinfo_edit.command(
+        name="auto-reactions", aliases=("auto-reaction", "reactions")
+    )
+    @commands.has_guild_permissions(manage_guild=True)
+    async def serverinfo_edit_auto_reactions(self, ctx: GuildContext) -> None:
+        """Set, move, or disable the automatic reaction channel."""
+        await self._server_edit_destination(ctx, "auto_reactions")
 
     async def server_icon(self, ctx: Context, guild: discord.Guild):
         if guild.icon is None:
@@ -1782,10 +1876,140 @@ class Info(Cog):
         """Show a server's invite background."""
         await self.server_splash(ctx, guild)
 
-    @commands.command(name="icon")
-    async def icon(self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild):
-        """Show a server's icon."""
-        await self.server_icon(ctx, guild)
+    @serverinfo.group(name="emojis", fallback="get")
+    @app_commands.describe(
+        guild="Server whose emojis should be listed.",
+        name="Show emoji names instead of the emoji itself.",
+        ids="Include each emoji ID in the results.",
+    )
+    async def server_emojis(
+        self,
+        ctx: GuildContext,
+        guild: discord.Guild = commands.CurrentGuild,
+        name: bool = False,
+        ids: bool = False,
+    ):
+        """List the custom emojis in a server."""
+        # The emoji cog owns the implementation and this Discord cog exposes
+        # it under the ``server`` command group for a consistent UX.
+        # ``Emojis`` is mixed into the ``Discord`` cog, rather than loaded as
+        # its own cog. Reuse the existing callback directly so both commands
+        # share the same paginator and formatting.
+        emoji_command = getattr(self, "emojis", None)
+        if emoji_command is None:
+            raise commands.BadArgument("Emoji commands are unavailable right now.")
+        await cast(Any, emoji_command).callback(
+            self, ctx, guild=guild, name=name, ids=ids
+        )
+
+    @server_emojis.command(name="download")
+    @app_commands.describe(disabled="Include emojis that are currently disabled.")
+    @commands.has_permissions(manage_emojis=True)
+    @commands.bot_has_permissions(manage_emojis=True)
+    async def server_emojis_download(
+        self,
+        ctx: GuildContext,
+        disabled: bool = commands.param(
+            default=True, description="Download includes disabled emojis"
+        ),
+    ):
+        """Download a server's custom emojis as a zip file."""
+        emoji_download = getattr(self, "emoji_download", None)
+        if emoji_download is None:
+            raise commands.BadArgument("Emoji commands are unavailable right now.")
+        await cast(Any, emoji_download).callback(self, ctx, disabled=disabled)
+
+    async def _icon_dispatch(self, ctx: Context, arguments: list[str]) -> None:
+        """Dispatch current-server icon and saved icon history views."""
+        selected_mode: Literal["grid", "list"] | None = None
+        grid_size: tuple[int, int] | None = None
+        for argument in arguments:
+            value = argument.casefold()
+            if value in {"history", "grid"}:
+                if selected_mode == "list":
+                    raise commands.BadArgument("Choose either history/grid or list.")
+                selected_mode = "grid"
+                continue
+            if value == "list":
+                if selected_mode == "grid":
+                    raise commands.BadArgument("Choose either history/grid or list.")
+                selected_mode = "list"
+                continue
+            match = AVATAR_GRID_RE.fullmatch(argument)
+            if match:
+                if grid_size is not None:
+                    raise commands.BadArgument("Only one icon grid size is allowed.")
+                width = int(match.group("width"))
+                height = int(match.group("height"))
+                if not 1 <= width <= 10 or not 1 <= height <= 10:
+                    raise commands.BadArgument(
+                        "Icon grid sizes must be between 1x1 and 10x10."
+                    )
+                grid_size = (width, height)
+                continue
+            raise commands.BadArgument(f"Unknown icon option: {argument}")
+
+        if grid_size is not None:
+            selected_mode = "grid"
+        if selected_mode is None:
+            if ctx.guild is None:
+                raise commands.NoPrivateMessage(
+                    "This command can only be used in a server."
+                )
+            await self.server_icon(ctx, ctx.guild)
+            return
+
+        logging = self.bot.logging
+        if logging is None or ctx.guild is None:
+            raise commands.NoPrivateMessage(
+                "Icon history can only be viewed in a server."
+            )
+        if selected_mode == "grid":
+            await logging.icons_grid(ctx, ctx.guild, grid_size)
+        else:
+            await logging.icons_func(ctx, ctx.guild)
+
+    @commands.command(
+        name="icon",
+        extras={"usage": "[history|grid|list] [WxH]"},
+    )
+    async def icon(self, ctx: Context, *, arguments: str = ""):
+        """Show a server icon or its saved icon history."""
+        await self._icon_dispatch(ctx, arguments.split())
+
+    @app_commands.command(name="icon")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.describe(
+        history="Show saved server icons in a grid.",
+        list_mode="Show saved server icons as a paginated list.",
+        size="Grid size such as 6x7, used with history.",
+    )
+    @app_commands.rename(list_mode="list", size="size")
+    async def icon_app(
+        self,
+        interaction: discord.Interaction,
+        history: bool = False,
+        list_mode: bool = False,
+        size: str | None = None,
+    ) -> None:
+        """Show a server icon or its saved icon history."""
+        if history and list_mode:
+            await interaction.response.send_message(
+                "Choose either history or list, not both.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        ctx = cast(Context, await self.bot.get_context(cast(Any, interaction)))
+        arguments: list[str] = []
+        if history:
+            arguments.append("history")
+        if list_mode:
+            arguments.append("list")
+        if size:
+            arguments.append(size)
+        await self._icon_dispatch(ctx, arguments)
 
     @commands.command(name="serverbanner", aliases=("sbanner",))
     async def server_banner_command(
@@ -1801,13 +2025,7 @@ class Info(Cog):
         """Show a server's invite background."""
         await self.server_splash(ctx, guild)
 
-    @commands.hybrid_command(name="reviews")
-    @app_commands.describe(
-        user="User whose reviews should be shown.",
-        hidden="Include reviews marked hidden by the user.",
-    )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="reviews")
     async def reviews(
         self, ctx: Context, user: discord.User = commands.Author, hidden: bool = False
     ):

@@ -116,6 +116,8 @@ class Google(Cog):
 
     @commands.hybrid_command(name="google")
     @app_commands.describe(query="Search terms to look up on the web.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def google(self, ctx: Context, *, query: str):
         """Search the web with Google."""
 
@@ -172,6 +174,8 @@ class Google(Cog):
         extras={"google-command": True},
     )
     @app_commands.describe(query="Search terms to look up in Google Images.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def google_image(self, ctx: Context, *, query: str):
         """Search Google Images."""
         url = "https://customsearch.googleapis.com/customsearch/v1"
