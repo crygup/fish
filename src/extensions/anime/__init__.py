@@ -16,6 +16,12 @@ from PIL import Image
 
 from core import Cog
 from utils import to_thread
+from utils.anilist import (
+    anilist_media_titles,
+    anilist_search_variants,
+    normalize_anilist_title,
+    select_anilist_media,
+)
 from utils.credentials import decrypt_credential
 
 if TYPE_CHECKING:
@@ -122,7 +128,7 @@ query ($name: String) {
 """
 ANILIST_MEDIA_QUERY = """
 query ($search: String!, $type: MediaType!) {
-  Page(perPage: 1) {
+  Page(perPage: 10) {
     media(search: $search, type: $type, sort: SEARCH_MATCH) {
       id
       type
@@ -150,7 +156,10 @@ query ($search: String!, $type: MediaType!) {
           node {
             id
             type
+            siteUrl
             title { romaji english native userPreferred }
+            startDate { year month day }
+            nextAiringEpisode { airingAt episode }
           }
         }
       }
@@ -187,7 +196,10 @@ query ($id: Int!) {
         node {
           id
           type
+          siteUrl
           title { romaji english native userPreferred }
+          startDate { year month day }
+          nextAiringEpisode { airingAt episode }
         }
       }
     }
@@ -2720,7 +2732,7 @@ class Anime(Cog):
             ) from error
 
     async def _lookup_media(self, ctx: Context, search: str, media_type: str):
-        search = search.strip()
+        search = " ".join(search.strip().split())
         if not search:
             raise commands.BadArgument(
                 f"Provide a {media_type.lower()} title to search for."
@@ -2732,38 +2744,52 @@ class Anime(Cog):
         access_token = (
             decrypt_credential(account["anilist_access_token"]) if account else None
         )
-        response_status, payload = await self._anilist_request(
-            ANILIST_MEDIA_QUERY,
-            {"search": search, "type": media_type},
-            access_token,
-        )
-        error_message = _graphql_error(payload)
-        if response_status == 429:
-            raise commands.BadArgument(
-                "AniList is currently rate limited. Please try again in a minute."
+        media: dict[str, Any] | None = None
+        fallback_media: dict[str, Any] | None = None
+        wanted_title = normalize_anilist_title(search)
+        error_message: str | None = None
+        for candidate in anilist_search_variants(search):
+            response_status, payload = await self._anilist_request(
+                ANILIST_MEDIA_QUERY,
+                {"search": candidate, "type": media_type},
+                access_token,
             )
-        if response_status == 401:
-            raise commands.BadArgument(
-                "The AniList connection has expired. Please reconnect AniList "
-                "with `fish link anilist`."
+            error_message = _graphql_error(payload)
+            if response_status == 429:
+                raise commands.BadArgument(
+                    "AniList is currently rate limited. Please try again in a minute."
+                )
+            if response_status == 401:
+                raise commands.BadArgument(
+                    "The AniList connection has expired. Please reconnect AniList "
+                    "with `fish link anilist`."
+                )
+            if response_status >= 500:
+                raise commands.BadArgument(
+                    "AniList is temporarily unavailable. Please try again shortly."
+                )
+            if response_status != 200:
+                detail = (
+                    f" ({discord.utils.escape_markdown(error_message)})"
+                    if error_message
+                    else ""
+                )
+                raise commands.BadArgument(
+                    f"AniList rejected the {media_type.lower()} search{detail}."
+                )
+            data = payload.get("data") if isinstance(payload, dict) else None
+            page = data.get("Page") if isinstance(data, dict) else None
+            results = page.get("media") if isinstance(page, dict) else None
+            selected = select_anilist_media(
+                results if isinstance(results, list) else (), search
             )
-        if response_status >= 500:
-            raise commands.BadArgument(
-                "AniList is temporarily unavailable. Please try again shortly."
-            )
-        if response_status != 200:
-            detail = (
-                f" ({discord.utils.escape_markdown(error_message)})"
-                if error_message
-                else ""
-            )
-            raise commands.BadArgument(
-                f"AniList rejected the {media_type.lower()} search{detail}."
-            )
-        data = payload.get("data") if isinstance(payload, dict) else None
-        page = data.get("Page") if isinstance(data, dict) else None
-        results = page.get("media") if isinstance(page, dict) else None
-        media = results[0] if isinstance(results, list) and results else None
+            if selected is not None:
+                fallback_media = fallback_media or selected
+                if wanted_title and wanted_title in anilist_media_titles(selected):
+                    media = selected
+                    break
+        if media is None:
+            media = fallback_media
         if not isinstance(media, dict):
             detail = (
                 f" ({discord.utils.escape_markdown(error_message)})"

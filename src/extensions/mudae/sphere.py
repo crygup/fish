@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from collections.abc import Mapping
 from itertools import combinations
 from typing import TYPE_CHECKING, Optional, Set, Tuple
 
@@ -10,7 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
-from utils.emojis import sp, spB, spG, spO, spP, spT, spU, spY
+from utils.emojis import sp, spB, spG, spO, spP, spR2, spT, spU, spY
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -20,6 +21,7 @@ MudaeID = 432610292342587392
 
 SPHERE_MAP: dict[int, str] = {
     sp.id: "red",  # type: ignore
+    spR2.id: "red",  # type: ignore
     spB.id: "blue",  # type: ignore
     spT.id: "teal",  # type: ignore
     spG.id: "green",  # type: ignore
@@ -29,6 +31,7 @@ SPHERE_MAP: dict[int, str] = {
 
 OQ_SPHERE_MAP: dict[int, str] = {
     sp.id: "red",  # type: ignore
+    spR2.id: "red",  # type: ignore
     spP.id: "purple",  # type: ignore
     spB.id: "blue",  # type: ignore
     spT.id: "teal",  # type: ignore
@@ -36,6 +39,99 @@ OQ_SPHERE_MAP: dict[int, str] = {
     spY.id: "yellow",  # type: ignore
     spO.id: "orange",  # type: ignore
 }
+
+# Mudae can install alternate sphere emoji packs.  The alternate custom
+# emojis keep the same semantic names but append ``2`` (for example,
+# ``spB2`` is still the blue clue).  IDs are guild-specific, so name aliases
+# are required in addition to the IDs above.  Keep these maps separate from
+# the display emoji objects: the solver only needs to classify the emoji it
+# receives and must not try to render a guild's private custom emoji.
+_SPHERE_NAME_MAP: dict[str, str] = {
+    "sp": "red",
+    "spr": "red",
+    "spb": "blue",
+    "spt": "teal",
+    "spg": "green",
+    "spy": "yellow",
+    "spo": "orange",
+    "spp": "purple",
+}
+_SPHERE_HIDDEN_NAMES = {"spu"}
+_SPHERE_NAME_MAP.update(
+    {f"{name}2": color for name, color in tuple(_SPHERE_NAME_MAP.items())}
+)
+_SPHERE_HIDDEN_NAMES.add("spu2")
+
+
+class UnsupportedSphereEmoji(ValueError):
+    """Raised when a Mudae board uses an emoji Fishie cannot classify."""
+
+    def __init__(self, emoji: object):
+        self.emoji = _display_sphere_emoji(emoji)
+        super().__init__(
+            "We don't have this emoji saved: "
+            f"{self.emoji}. Please contact the developers in the support "
+            "server to have them add it if it's not a custom emoji."
+        )
+
+
+def _sphere_emoji_parts(emoji: object) -> tuple[int | None, str | None, bool]:
+    """Return ``(id, name, animated)`` for a raw or discord emoji object."""
+
+    if isinstance(emoji, Mapping):
+        raw_id = emoji.get("id")
+        raw_name = emoji.get("name")
+        animated = bool(emoji.get("animated", False))
+    else:
+        raw_id = getattr(emoji, "id", None)
+        raw_name = getattr(emoji, "name", None)
+        animated = bool(getattr(emoji, "animated", False))
+
+    try:
+        emoji_id = int(raw_id) if raw_id is not None else None
+    except (TypeError, ValueError):
+        emoji_id = None
+    name = str(raw_name) if raw_name is not None else None
+    return emoji_id, name, animated
+
+
+def _display_sphere_emoji(emoji: object) -> str:
+    """Render an unknown emoji for an actionable user-facing error."""
+
+    emoji_id, name, animated = _sphere_emoji_parts(emoji)
+    if emoji_id is not None and name:
+        prefix = "a" if animated else ""
+        return f"<{prefix}:{name}:{emoji_id}>"
+    if name:
+        return name
+    return "(unknown emoji)"
+
+
+def _sphere_color(emoji: object, mapping: Mapping[int, str]) -> tuple[bool, str | None]:
+    """Classify a sphere emoji by ID or semantic name.
+
+    The first return value tells callers whether the emoji is known.  A known
+    hidden sphere returns ``(True, None)`` and therefore does not become a
+    revealed clue.  Unknown emoji are deliberately surfaced instead of
+    silently dropping a grid cell, which would make the solver's advice
+    unreliable.
+    """
+
+    emoji_id, name, _ = _sphere_emoji_parts(emoji)
+    if emoji_id is not None:
+        color = mapping.get(emoji_id)
+        if color is not None:
+            return True, color
+
+    normalized_name = name.casefold() if name else None
+    if normalized_name in _SPHERE_HIDDEN_NAMES:
+        return True, None
+    if normalized_name is not None:
+        color = _SPHERE_NAME_MAP.get(normalized_name)
+        if color is not None and color in mapping.values():
+            return True, color
+    return False, None
+
 
 GRID_SIZE = 5
 CENTER = 12
@@ -338,12 +434,20 @@ class SphereView(discord.ui.View):
     message: Optional[discord.Message]
 
     def __init__(
-        self, ctx: Context, revealed: dict[int, str], recommendation: Optional[int]
+        self,
+        ctx: Context,
+        revealed: dict[int, str],
+        recommendation: Optional[int],
+        *,
+        unknown_positions: set[int] | None = None,
+        disabled: bool = False,
     ):
         super().__init__(timeout=120)
         self.ctx = ctx
         self.revealed = revealed
         self.recommendation = recommendation
+        self.unknown_positions = set(unknown_positions or ())
+        self.disabled = disabled
         self.message = None
         self._build()
 
@@ -370,14 +474,25 @@ class SphereView(discord.ui.View):
         hidden = spU
         for idx in range(GRID_SIZE * GRID_SIZE):
             row = idx // GRID_SIZE
-            if idx in self.revealed:
+            if idx in self.unknown_positions:
+                # Leave an unsupported Mudae emoji blank instead of replacing
+                # it with a potentially misleading clue.  Once an unknown is
+                # seen the entire recommendation grid is disabled by the
+                # caller until the missing emoji is added to our catalogue.
+                btn = discord.ui.Button(
+                    style=discord.ButtonStyle.grey,
+                    emoji=None,
+                    disabled=True,
+                    row=row,
+                )
+            elif idx in self.revealed:
                 btn = discord.ui.Button(
                     style=discord.ButtonStyle.blurple,
                     emoji=emoji_map[self.revealed[idx]],
                     disabled=True,
                     row=row,
                 )
-            elif idx == self.recommendation:
+            elif idx == self.recommendation and not self.disabled:
                 btn = discord.ui.Button(
                     style=discord.ButtonStyle.green,
                     emoji=hidden,
@@ -404,12 +519,20 @@ class SphereQView(discord.ui.View):
     message: Optional[discord.Message]
 
     def __init__(
-        self, ctx: Context, revealed: dict[int, str], recommendations: list[int]
+        self,
+        ctx: Context,
+        revealed: dict[int, str],
+        recommendations: list[int],
+        *,
+        unknown_positions: set[int] | None = None,
+        disabled: bool = False,
     ):
         super().__init__(timeout=120)
         self.ctx = ctx
         self.revealed = revealed
         self.recommendations = recommendations
+        self.unknown_positions = set(unknown_positions or ())
+        self.disabled = disabled
         self.message = None
         self._build()
 
@@ -443,14 +566,24 @@ class SphereQView(discord.ui.View):
         recommended = set(self.recommendations)
         for position in range(GRID_SIZE * GRID_SIZE):
             row = position // GRID_SIZE
-            if position in self.revealed:
+            if position in self.unknown_positions:
+                # Do not render an emoji we cannot classify.  The disabled
+                # blank button keeps the 5x5 board aligned while the error is
+                # shown on the solver message.
+                button = discord.ui.Button(
+                    style=discord.ButtonStyle.grey,
+                    emoji=None,
+                    disabled=True,
+                    row=row,
+                )
+            elif position in self.revealed:
                 button = discord.ui.Button(
                     style=discord.ButtonStyle.blurple,
                     emoji=emoji_map[self.revealed[position]],
                     disabled=True,
                     row=row,
                 )
-            elif position in recommended:
+            elif position in recommended and not self.disabled:
                 button = discord.ui.Button(
                     style=discord.ButtonStyle.green,
                     emoji=spU,
@@ -475,27 +608,40 @@ OQ_TEXT = "You can click **7** times on the buttons below"
 class SphereCog(Cog):
     """Mudae sphere chest solver."""
 
-    def _parse_sphere_components(self, components: list) -> Optional[dict[int, str]]:
-        """Parse revealed spheres from raw component data (gateway event)."""
+    def _parse_sphere_components_tolerant(
+        self, components: list
+    ) -> tuple[Optional[dict[int, str]], dict[int, object]]:
+        """Parse an OC gateway update while retaining unknown cell positions."""
         revealed: dict[int, str] = {}
+        unknown: dict[int, object] = {}
         idx = 0
         found_any = False
         for action_row in components:
             for child in action_row.get("components", []):
                 found_any = True
-                if child.get("emoji"):
-                    emoji_id = int(child["emoji"]["id"])
-                    color = SPHERE_MAP.get(emoji_id)
-                    if color:
+                emoji = child.get("emoji")
+                if emoji:
+                    known, color = _sphere_color(emoji, SPHERE_MAP)
+                    if not known:
+                        unknown[idx] = emoji
+                    elif color:
                         revealed[idx] = color
                 idx += 1
-        return revealed if found_any else None
+        return (revealed if found_any else None), unknown
 
-    def _parse_sphere_message(
+    def _parse_sphere_components(self, components: list) -> Optional[dict[int, str]]:
+        """Parse revealed spheres from raw component data (gateway event)."""
+        revealed, unknown = self._parse_sphere_components_tolerant(components)
+        if unknown:
+            raise UnsupportedSphereEmoji(next(iter(unknown.values())))
+        return revealed
+
+    def _parse_sphere_message_tolerant(
         self, message: discord.Message
-    ) -> Optional[dict[int, str]]:
-        """Parse a Mudae sphere chest message from its discord.Message components."""
+    ) -> tuple[Optional[dict[int, str]], dict[int, object]]:
+        """Parse an OC message while retaining unknown cell positions."""
         revealed: dict[int, str] = {}
+        unknown: dict[int, object] = {}
         idx = 0
         found_any = False
         for action_row in message.components:
@@ -505,32 +651,58 @@ class SphereCog(Cog):
                 if not isinstance(child, discord.Button):
                     continue
                 found_any = True
-                if child.emoji and child.emoji.id:
-                    color = SPHERE_MAP.get(child.emoji.id)
-                    if color:
+                if child.emoji:
+                    known, color = _sphere_color(child.emoji, SPHERE_MAP)
+                    if not known:
+                        unknown[idx] = child.emoji
+                    elif color:
                         revealed[idx] = color
                 idx += 1
-        return revealed if found_any else None
+        return (revealed if found_any else None), unknown
 
-    def _parse_oq_components(self, components: list) -> Optional[dict[int, str]]:
-        """Parse an OQ board from raw gateway component data."""
+    def _parse_sphere_message(
+        self, message: discord.Message
+    ) -> Optional[dict[int, str]]:
+        """Parse a Mudae sphere chest message from its discord.Message components."""
+        revealed, unknown = self._parse_sphere_message_tolerant(message)
+        if unknown:
+            raise UnsupportedSphereEmoji(next(iter(unknown.values())))
+        return revealed
+
+    def _parse_oq_components_tolerant(
+        self, components: list
+    ) -> tuple[Optional[dict[int, str]], dict[int, object]]:
+        """Parse an OQ gateway update while retaining unknown cell positions."""
         revealed: dict[int, str] = {}
+        unknown: dict[int, object] = {}
         position = 0
         found_any = False
         for action_row in components:
             for child in action_row.get("components", []):
                 found_any = True
                 emoji = child.get("emoji")
-                if emoji and emoji.get("id"):
-                    color = OQ_SPHERE_MAP.get(int(emoji["id"]))
-                    if color:
+                if emoji:
+                    known, color = _sphere_color(emoji, OQ_SPHERE_MAP)
+                    if not known:
+                        unknown[position] = emoji
+                    elif color:
                         revealed[position] = color
                 position += 1
-        return revealed if found_any else None
+        return (revealed if found_any else None), unknown
 
-    def _parse_oq_message(self, message: discord.Message) -> Optional[dict[int, str]]:
-        """Parse an OQ board from a cached Discord message."""
+    def _parse_oq_components(self, components: list) -> Optional[dict[int, str]]:
+        """Parse an OQ board from raw gateway component data."""
+        revealed, unknown = self._parse_oq_components_tolerant(components)
+        if unknown:
+            raise UnsupportedSphereEmoji(next(iter(unknown.values())))
+        return revealed
+
+    def _parse_oq_message_tolerant(
+        self, message: discord.Message
+    ) -> tuple[Optional[dict[int, str]], dict[int, object]]:
+        """Parse an OQ message while retaining unknown cell positions."""
         revealed: dict[int, str] = {}
+        unknown: dict[int, object] = {}
         position = 0
         found_any = False
         for action_row in message.components:
@@ -540,12 +712,21 @@ class SphereCog(Cog):
                 if not isinstance(child, discord.Button):
                     continue
                 found_any = True
-                if child.emoji and child.emoji.id:
-                    color = OQ_SPHERE_MAP.get(child.emoji.id)
-                    if color:
+                if child.emoji:
+                    known, color = _sphere_color(child.emoji, OQ_SPHERE_MAP)
+                    if not known:
+                        unknown[position] = child.emoji
+                    elif color:
                         revealed[position] = color
                 position += 1
-        return revealed if found_any else None
+        return (revealed if found_any else None), unknown
+
+    def _parse_oq_message(self, message: discord.Message) -> Optional[dict[int, str]]:
+        """Parse an OQ board from a cached Discord message."""
+        revealed, unknown = self._parse_oq_message_tolerant(message)
+        if unknown:
+            raise UnsupportedSphereEmoji(next(iter(unknown.values())))
+        return revealed
 
     @commands.command(name="oc", aliases=("sphere",))
     @commands.guild_only()
@@ -558,8 +739,13 @@ class SphereCog(Cog):
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
     async def mudae(self, ctx: Context):
-        """Use the Mudae sphere solvers."""
-        await ctx.send("Choose the `oc` or `oq` solver.")
+        """Use Mudae wish tracking, series tools, and sphere solvers."""
+        await ctx.send(
+            "Choose `oc`, `oq`, `wish`, `wishseries`, `wishkakera`, `wishlist`, "
+            "`wishserieslist`, `unwish`, `clearwish`, `unwishseries`, "
+            "`clearwishseries`, `unwishkakera`, `wishserieska`, `scrapeseries`, "
+            "`serieslist`, `wishbundle`, `toggle`, or `copy`."
+        )
 
     @mudae.command(
         name="oc",
@@ -592,21 +778,50 @@ class SphereCog(Cog):
                 "No sphere chest found. Run `$oc` or `fish simsphere` first, then try again."
             )
 
-        revealed = self._parse_sphere_message(mudae_msg)
+        revealed, unknown = self._parse_sphere_message_tolerant(mudae_msg)
         if revealed is None:
             raise commands.BadArgument(
                 "Could not parse the sphere chest grid from the message."
             )
 
-        await self._show_sphere(ctx, revealed, mudae_msg)
+        unknown_error = (
+            str(UnsupportedSphereEmoji(next(iter(unknown.values()))))
+            if unknown
+            else None
+        )
+        await self._show_sphere(
+            ctx,
+            revealed,
+            mudae_msg,
+            unknown_positions=set(unknown),
+            unknown_error=unknown_error,
+        )
 
     async def _show_sphere(
-        self, ctx: Context, revealed: dict[int, str], mudae_msg: discord.Message
+        self,
+        ctx: Context,
+        revealed: dict[int, str],
+        mudae_msg: discord.Message,
+        *,
+        unknown_positions: set[int] | None = None,
+        unknown_error: str | None = None,
     ):
 
         recommendation = _best_next_click(revealed)
-        view = SphereView(ctx, revealed, recommendation)
-        view.message = await ctx.send(view=view)
+        has_unknown = bool(unknown_positions)
+        view = SphereView(
+            ctx,
+            revealed,
+            None if has_unknown else recommendation,
+            unknown_positions=unknown_positions,
+            disabled=has_unknown,
+        )
+        if unknown_error:
+            view.message = await ctx.send(content=unknown_error, view=view)
+        else:
+            view.message = await ctx.send(view=view)
+        if has_unknown:
+            return
 
         while True:
             try:
@@ -621,7 +836,20 @@ class SphereCog(Cog):
             components = event.data.get("components", [])
             if not components:
                 continue
-            new_revealed = self._parse_sphere_components(components)  # type: ignore[arg-type]
+            new_revealed, unknown = self._parse_sphere_components_tolerant(components)
+            if unknown:
+                if new_revealed is not None:
+                    view.revealed = new_revealed
+                view.unknown_positions = set(unknown)
+                view.recommendation = None
+                view.disabled = True
+                view._build()
+                error = str(UnsupportedSphereEmoji(next(iter(unknown.values()))))
+                try:
+                    await view.message.edit(content=error, view=view)
+                except discord.HTTPException:
+                    pass
+                break
             if new_revealed is None or new_revealed == view.revealed:
                 continue
 
@@ -680,18 +908,47 @@ class SphereCog(Cog):
                 "No OQ sphere game found. Run `$oq` first, then try again."
             )
 
-        revealed = self._parse_oq_message(mudae_msg)
+        revealed, unknown = self._parse_oq_message_tolerant(mudae_msg)
         if revealed is None:
             raise commands.BadArgument("Could not parse the OQ sphere grid.")
 
-        await self._show_sphereq(ctx, revealed, mudae_msg)
+        unknown_error = (
+            str(UnsupportedSphereEmoji(next(iter(unknown.values()))))
+            if unknown
+            else None
+        )
+        await self._show_sphereq(
+            ctx,
+            revealed,
+            mudae_msg,
+            unknown_positions=set(unknown),
+            unknown_error=unknown_error,
+        )
 
     async def _show_sphereq(
-        self, ctx: Context, revealed: dict[int, str], mudae_msg: discord.Message
+        self,
+        ctx: Context,
+        revealed: dict[int, str],
+        mudae_msg: discord.Message,
+        *,
+        unknown_positions: set[int] | None = None,
+        unknown_error: str | None = None,
     ) -> None:
         recommendations = _oq_best_clicks(revealed)
-        view = SphereQView(ctx, revealed, recommendations)
-        view.message = await ctx.send(view=view)
+        has_unknown = bool(unknown_positions)
+        view = SphereQView(
+            ctx,
+            revealed,
+            [] if has_unknown else recommendations,
+            unknown_positions=unknown_positions,
+            disabled=has_unknown,
+        )
+        if unknown_error:
+            view.message = await ctx.send(content=unknown_error, view=view)
+        else:
+            view.message = await ctx.send(view=view)
+        if has_unknown:
+            return
 
         while True:
             try:
@@ -706,9 +963,21 @@ class SphereCog(Cog):
             components = event.data.get("components", [])
             if not components:
                 continue
-            new_revealed = self._parse_oq_components(
-                components  # type: ignore[arg-type]
-            )
+            new_revealed, unknown = self._parse_oq_components_tolerant(components)
+            if unknown:
+                if new_revealed is not None:
+                    view.revealed = new_revealed
+                view.unknown_positions = set(unknown)
+                view.recommendations = []
+                view.disabled = True
+                view._build()
+                error = str(UnsupportedSphereEmoji(next(iter(unknown.values()))))
+                if view.message is not None:
+                    try:
+                        await view.message.edit(content=error, view=view)
+                    except discord.HTTPException:
+                        pass
+                break
             if new_revealed is None or new_revealed == view.revealed:
                 continue
 
