@@ -1,0 +1,1084 @@
+{
+  "badges": [
+    {
+      "key": "custom",
+      "emoji": "✨",
+      "price": 10000000000,
+      "description": "Custom Discord emoji",
+      "kind": "custom_emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "fish",
+      "emoji": "🐟",
+      "price": 1000000,
+      "description": "Fishie",
+      "kind": "emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "amulet",
+      "emoji": "🪬",
+      "price": 500000,
+      "description": "Hamsa",
+      "kind": "emoji",
+      "selector": "hamsa",
+      "enabled": true
+    },
+    {
+      "key": "alien",
+      "emoji": "👽",
+      "price": 100000,
+      "description": "Alien",
+      "kind": "emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "smiling_imp",
+      "emoji": "😈",
+      "price": 20000,
+      "description": "Smiling Imp",
+      "kind": "emoji",
+      "selector": "smiling-imp",
+      "enabled": true
+    },
+    {
+      "key": "imp",
+      "emoji": "👿",
+      "price": 20000,
+      "description": "Imp",
+      "kind": "emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "seal",
+      "emoji": "🦭",
+      "price": 15000,
+      "description": "Seal",
+      "kind": "emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "cat",
+      "emoji": "🐱",
+      "price": 15000,
+      "description": "Cat",
+      "kind": "emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "dog",
+      "emoji": "🐶",
+      "price": 15000,
+      "description": "Dog",
+      "kind": "emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "mouse",
+      "emoji": "🐭",
+      "price": 15000,
+      "description": "Mouse",
+      "kind": "emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "hamster",
+      "emoji": "🐹",
+      "price": 15000,
+      "description": "Hamster",
+      "kind": "emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "rabbit",
+      "emoji": "🐰",
+      "price": 15000,
+      "description": "Rabbit",
+      "kind": "emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "fox",
+      "emoji": "🦊",
+      "price": 15000,
+      "description": "Fox",
+      "kind": "emoji",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "flag",
+      "emoji": "🇺🇳",
+      "price": 10000,
+      "description": "Any Unicode flag",
+      "kind": "flag",
+      "selector": null,
+      "enabled": true
+    }
+  ],
+  "titles": [
+    {
+      "key": "custom_title",
+      "price": 1000000000,
+      "description": "Custom Title",
+      "selector": "custom-title",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "fishie",
+      "price": 500000000,
+      "description": "Fishie",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "dr_pepper",
+      "price": 670000,
+      "description": "Dr Pepper Connoisseur",
+      "selector": "dr-pepper",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "monarch",
+      "price": 500000,
+      "description": "Monarch",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "mudae_enjoyer",
+      "price": 200000,
+      "description": "Mudae Enjoyer",
+      "selector": "mudae",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "epic",
+      "price": 100000,
+      "description": "Epic",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "six_seven",
+      "price": 67000,
+      "description": "Six Seven",
+      "selector": "six-seven",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "cool",
+      "price": 50000,
+      "description": "Cool",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "bot",
+      "price": 15000,
+      "description": "Bot",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "fan",
+      "price": 10000,
+      "description": "Fan",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "player",
+      "price": 5000,
+      "description": "Player",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "king_of_nothing",
+      "price": 10000000,
+      "description": "King Of Nothing",
+      "selector": "king-of-nothing",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "corrupted_amnesiac",
+      "price": 200000,
+      "description": "Corrupted Amnesiac",
+      "selector": "corrupted-amnesiac",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "gunslinger",
+      "price": 150000,
+      "description": "Gunslinger",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "diviner_of_the_deep",
+      "price": 100000,
+      "description": "Diviner of the Deep",
+      "selector": "diviner-of-the-deep",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "eye_of_the_storm",
+      "price": 500000,
+      "description": "Eye of the Storm",
+      "selector": "eye-of-the-storm",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "judge_jury_executioner",
+      "price": 100000,
+      "description": "Judge, Jury, Executioner",
+      "selector": "judge-jury-executioner",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "outlaw",
+      "price": 250000,
+      "description": "Outlaw",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "test_subject",
+      "price": 100000,
+      "description": "Test Subject",
+      "selector": "test-subject",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "veteran",
+      "price": 50000,
+      "description": "Veteran",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "nomad",
+      "price": 50000,
+      "description": "Nomad",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "the_shattered_heir",
+      "price": 50000,
+      "description": "The Shattered Heir",
+      "selector": "the-shattered-heir",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "chef",
+      "price": 100000,
+      "description": "Chef",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "hoarder",
+      "price": 50000,
+      "description": "Hoarder",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "salami",
+      "price": 100000,
+      "description": "Salami",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "harmless",
+      "price": 50000,
+      "description": "Harmless",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "sweetie",
+      "price": 50000,
+      "description": "Sweetie",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "immortal",
+      "price": 500000,
+      "description": "Immortal",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "undying",
+      "price": 500000,
+      "description": "Undying",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "kitten",
+      "price": 1000000,
+      "description": "Kitten",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "puppy",
+      "price": 1000000,
+      "description": "Puppy",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "cat",
+      "price": 1000000,
+      "description": "Cat",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "dog",
+      "price": 1000000,
+      "description": "Dog",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "kitty",
+      "price": 1000000,
+      "description": "Kitty",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "feline",
+      "price": 1000000,
+      "description": "Feline",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "mischievous",
+      "price": 500000,
+      "description": "Mischievous",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "toxic",
+      "price": 1000000,
+      "description": "Toxic",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "the_strongest",
+      "price": 10000000,
+      "description": "The Strongest",
+      "selector": "the-strongest",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "the_false_messiah",
+      "price": 5000000,
+      "description": "The False Messiah",
+      "selector": "the-false-messiah",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "the_king_of_curses",
+      "price": 5000000,
+      "description": "The King of Curses",
+      "selector": "the-king-of-curses",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "god",
+      "price": 100000000,
+      "description": "God",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "mob",
+      "price": 5000000,
+      "description": "Mob",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "white_t_poison",
+      "price": 3000000,
+      "description": "White-T Poison",
+      "selector": "white-t-poison",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "reigen_arataka",
+      "price": 25000000,
+      "description": "Reigen Arataka",
+      "selector": "reigen-arataka",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "awakened",
+      "price": 550000,
+      "description": "Awakened",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "22",
+      "price": 22000000,
+      "description": "22",
+      "selector": "22",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "wingstop_enjoyer",
+      "price": 500000,
+      "description": "Wingstop Enjoyer",
+      "selector": "wingstop-enjoyer",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "oaf",
+      "price": 6700000,
+      "description": "Oaf",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "shingeki_no_kyojin",
+      "price": 10000000,
+      "description": "Shingeki no Kyojin",
+      "selector": "shingeki-no-kyojin",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "goat",
+      "price": 5000000,
+      "description": "Goat",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "lol",
+      "price": 1500000,
+      "description": "LOL",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "lmao",
+      "price": 1500000,
+      "description": "LMAO",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "lmfao",
+      "price": 1500000,
+      "description": "LMFAO",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "the_dark_knight",
+      "price": 2000000,
+      "description": "The Dark Knight",
+      "selector": "the-dark-knight",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "cutie",
+      "price": 50000,
+      "description": "Cutie",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "handsome",
+      "price": 50000,
+      "description": "Handsome",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "poor",
+      "price": 1,
+      "description": "Poor",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "the_symbol_of_fear",
+      "price": 5000000,
+      "description": "The Symbol of Fear",
+      "selector": "the-symbol-of-fear",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "the_symbol_of_evil",
+      "price": 5000000,
+      "description": "The Symbol of Evil",
+      "selector": "the-symbol-of-evil",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "the_symbol_of_peace",
+      "price": 5000000,
+      "description": "The Symbol of Peace",
+      "selector": "the-symbol-of-peace",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "muad_dib",
+      "price": 10000000,
+      "description": "Muad'Dib",
+      "selector": "muad-dib",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "quirkless",
+      "price": 100000,
+      "description": "Quirkless",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "bad_apple",
+      "price": 700000,
+      "description": "Bad Apple",
+      "selector": "bad-apple",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "ancient_one",
+      "price": 500000,
+      "description": "Ancient One",
+      "selector": "ancient-one",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "eldritch_nightmare",
+      "price": 500000,
+      "description": "Eldritch Nightmare",
+      "selector": "eldritch-nightmare",
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "knight",
+      "price": 50000,
+      "description": "Knight",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "bard",
+      "price": 50000,
+      "description": "Bard",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "titan",
+      "price": 100000,
+      "description": "Titan",
+      "selector": null,
+      "category": "Misc titles",
+      "enabled": true
+    },
+    {
+      "key": "star_platinum",
+      "price": 5000000,
+      "description": "Star Platinum",
+      "selector": "star-platinum",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "magicians_red",
+      "price": 5000000,
+      "description": "Magician's Red",
+      "selector": "magicians-red",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "hermit_purple",
+      "price": 5000000,
+      "description": "Hermit Purple",
+      "selector": "hermit-purple",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "hierophant_green",
+      "price": 5000000,
+      "description": "Hierophant Green",
+      "selector": "hierophant-green",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "silver_chariot",
+      "price": 5000000,
+      "description": "Silver Chariot",
+      "selector": "silver-chariot",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "the_fool",
+      "price": 500000,
+      "description": "The Fool",
+      "selector": "the-fool",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "the_world",
+      "price": 5000000,
+      "description": "The World",
+      "selector": "the-world",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "tower_of_gray",
+      "price": 500000,
+      "description": "Tower of Gray",
+      "selector": "tower-of-gray",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "dark_blue_moon",
+      "price": 500000,
+      "description": "Dark Blue Moon",
+      "selector": "dark-blue-moon",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "strength",
+      "price": 500000,
+      "description": "Strength",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "ebony_devil",
+      "price": 500000,
+      "description": "Ebony Devil",
+      "selector": "ebony-devil",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "yellow_temperance",
+      "price": 500000,
+      "description": "Yellow Temperance",
+      "selector": "yellow-temperance",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "hanged_man",
+      "price": 500000,
+      "description": "Hanged Man",
+      "selector": "hanged-man",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "emperor",
+      "price": 500000,
+      "description": "Emperor",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "empress",
+      "price": 500000,
+      "description": "Empress",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "wheel_of_fortune",
+      "price": 500000,
+      "description": "Wheel of Fortune",
+      "selector": "wheel-of-fortune",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "justice",
+      "price": 500000,
+      "description": "Justice",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "lovers",
+      "price": 500000,
+      "description": "Lovers",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "sun",
+      "price": 500000,
+      "description": "Sun",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "death_thirteen",
+      "price": 500000,
+      "description": "Death Thirteen",
+      "selector": "death-thirteen",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "judgement",
+      "price": 500000,
+      "description": "Judgement",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "high_priestess",
+      "price": 500000,
+      "description": "High Priestess",
+      "selector": "high-priestess",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "khnum",
+      "price": 500000,
+      "description": "Khnum",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "tohth",
+      "price": 500000,
+      "description": "Tohth",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "anubis",
+      "price": 500000,
+      "description": "Anubis",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "soft_wet",
+      "price": 5000000,
+      "description": "Soft & Wet",
+      "selector": "soft-wet",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "wonder_of_u",
+      "price": 5000000,
+      "description": "Wonder of U",
+      "selector": "wonder-of-u",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "sticky_fingers",
+      "price": 5000000,
+      "description": "Sticky Fingers",
+      "selector": "sticky-fingers",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "cheap_trick",
+      "price": 500000,
+      "description": "Cheap Trick",
+      "selector": "cheap-trick",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "crazy_diamond",
+      "price": 5000000,
+      "description": "Crazy Diamond",
+      "selector": "crazy-diamond",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "the_hand",
+      "price": 5000000,
+      "description": "The Hand",
+      "selector": "the-hand",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "harvest",
+      "price": 500000,
+      "description": "Harvest",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "echoes",
+      "price": 5000000,
+      "description": "Echoes",
+      "selector": null,
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "light_rod",
+      "price": 25000000,
+      "description": "Light Rod",
+      "selector": "light-rod",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "made_in_heaven",
+      "price": 5000000,
+      "description": "Made in Heaven",
+      "selector": "made-in-heaven",
+      "category": "JoJo Stands",
+      "enabled": true
+    },
+    {
+      "key": "pride",
+      "price": 1000000,
+      "description": "Pride",
+      "selector": null,
+      "category": "Sins",
+      "enabled": true
+    },
+    {
+      "key": "wrath",
+      "price": 1000000,
+      "description": "Wrath",
+      "selector": null,
+      "category": "Sins",
+      "enabled": true
+    },
+    {
+      "key": "sloth",
+      "price": 1000000,
+      "description": "Sloth",
+      "selector": null,
+      "category": "Sins",
+      "enabled": true
+    },
+    {
+      "key": "greed",
+      "price": 1000000,
+      "description": "Greed",
+      "selector": null,
+      "category": "Sins",
+      "enabled": true
+    },
+    {
+      "key": "gluttony",
+      "price": 1000000,
+      "description": "Gluttony",
+      "selector": null,
+      "category": "Sins",
+      "enabled": true
+    },
+    {
+      "key": "lust",
+      "price": 1000000,
+      "description": "Lust",
+      "selector": null,
+      "category": "Sins",
+      "enabled": true
+    },
+    {
+      "key": "envy",
+      "price": 1000000,
+      "description": "Envy",
+      "selector": null,
+      "category": "Sins",
+      "enabled": true
+    },
+    {
+      "key": "0_0",
+      "price": 1500000,
+      "description": "0_0",
+      "selector": "0_0",
+      "category": "Emoticons",
+      "enabled": true
+    },
+    {
+      "key": "x_x",
+      "price": 1500000,
+      "description": "x_x",
+      "selector": "x_x",
+      "category": "Emoticons",
+      "enabled": true
+    },
+    {
+      "key": "at_at",
+      "price": 1500000,
+      "description": "@_@",
+      "selector": "@_@",
+      "category": "Emoticons",
+      "enabled": true
+    },
+    {
+      "key": "owo",
+      "price": 1500000,
+      "description": "owo",
+      "selector": null,
+      "category": "Emoticons",
+      "enabled": true
+    },
+    {
+      "key": "uwu",
+      "price": 1500000,
+      "description": "uwu",
+      "selector": null,
+      "category": "Emoticons",
+      "enabled": true
+    },
+    {
+      "key": "greater_less",
+      "price": 1500000,
+      "description": ">_<",
+      "selector": ">_<",
+      "category": "Emoticons",
+      "enabled": true
+    },
+    {
+      "key": "underscore_greater",
+      "price": 1500000,
+      "description": ">_>",
+      "selector": ">_>",
+      "category": "Emoticons",
+      "enabled": true
+    },
+    {
+      "key": "colon_three",
+      "price": 1500000,
+      "description": ":3",
+      "selector": ":3",
+      "category": "Emoticons",
+      "enabled": true
+    },
+    {
+      "key": "less_three",
+      "price": 1500000,
+      "description": "<3",
+      "selector": "<3",
+      "category": "Emoticons",
+      "enabled": true
+    }
+  ]
+}

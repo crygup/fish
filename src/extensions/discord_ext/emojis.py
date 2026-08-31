@@ -11,7 +11,8 @@ import emoji as emoji_lib
 from discord import app_commands
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 from utils import (
     EMOJI_RE,
     SimplePages,
@@ -65,6 +66,10 @@ class Emojis(Cog):
     @commands.Cog.listener("on_message")
     async def _record_emoji_stats(self, message: discord.Message) -> None:
         """Record emoji identifiers without retaining message content."""
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(message):
+            return
         if message.guild is None or message.author.bot or not message.content:
             return
         if self.bot.db_cache.user_tracking_opted_out(message.author.id, "emoji"):

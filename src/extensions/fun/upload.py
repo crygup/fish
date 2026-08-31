@@ -203,9 +203,7 @@ class UploadCommands:
             direct_media_type = (
                 "gifs"
                 if direct_suffix == ".gif"
-                else "images"
-                if direct_suffix in POST_EXTENSIONS
-                else None
+                else "images" if direct_suffix in POST_EXTENSIONS else None
             )
             if allowed_media is not None and not ({"images", "gifs"} & allowed_media):
                 return
@@ -276,9 +274,7 @@ class UploadCommands:
         content_type = mimetypes.guess_type(safe_filename)[0] or (
             "image/gif"
             if kind == "post" and data.startswith(_GIF_SIGNATURES)
-            else "image/png"
-            if kind == "post"
-            else "video/mp4"
+            else "image/png" if kind == "post" else "video/mp4"
         )
         temporary: Path | None = None
         try:
@@ -364,9 +360,7 @@ class UploadCommands:
             content_type = mimetypes.guess_type(filename)[0] or (
                 "image/gif"
                 if kind == "post" and suffix == ".gif"
-                else "image/png"
-                if kind == "post"
-                else "video/mp4"
+                else "image/png" if kind == "post" else "video/mp4"
             )
             attachment = LocalMediaAttachment(
                 temporary,

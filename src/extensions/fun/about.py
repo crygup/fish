@@ -48,43 +48,43 @@ class About(Cog):
                 last_24_hours=int(counts["last_24_hours"]),
             )
         )
-        memory_usage = self.process.memory_full_info().uss / 1024**2
-        cpu_usage = self.process.cpu_percent() / psutil.cpu_count()  # type: ignore
         liz = await get_or_fetch_user(
             bot=self.bot, user_id=self.bot.config["ids"]["owner_id"]
         )
-
-        e = discord.Embed(
-            description="cool discord bot",
-            timestamp=ctx.bot.user.created_at,
-            color=ctx.bot.embedcolor,
+        uptime = human_timedelta(
+            ctx.bot.start_time, accuracy=None, brief=True, suffix=False
+        )
+        owner_name = discord.utils.escape_markdown(liz.name)
+        details = (
+            f"Uptime: {uptime}\n"
+            f"Servers: {len(ctx.bot.guilds):,}\n"
+            f"Commands ran: {command_counts.total:,} "
+            f"({command_counts.last_24_hours:,} past 24h)\n"
+            "Invite: [Server](https://discord.gg/rM9u4MRFBE) · "
+            f"[Bot]({self.invite_url})\n"
+            "Donate: [ko-fi](https://ko-fi.com/crygup)"
+        )
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    f"### {discord.utils.escape_markdown(ctx.bot.user.name)}\n"
+                    "tracking, anime, image tools, mudae help, pokétwo help, "
+                    "& more."
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(details),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"-# Created {discord.utils.format_dt(ctx.bot.user.created_at, 't')} "
+                    f"· Created by {owner_name} · "
+                    "[Source](https://github.com/crygup/fish)"
+                ),
+                accent_color=ctx.bot.embedcolor,
+            )
         )
 
-        e.set_footer(text="Created at")
-        e.set_author(name=f"{liz}", icon_url=liz.display_avatar.url)
-
-        e.add_field(
-            name="Commands ran",
-            value=(
-                f"{command_counts.total:,} total\n" f"{command_counts.last_24_hours:,}"
-            ),
-        )
-        e.add_field(
-            name="Process", value=f"{memory_usage:.2f} MiB\n{cpu_usage:.2f}% CPU"
-        )
-        e.add_field(name="Invite", value=f"[Click here]({self.invite_url})")
-        e.add_field(name="Guilds", value=f"{len(ctx.bot.guilds):,}")
-
-        e.add_field(name="Users", value=f"{len(ctx.bot.users):,}")
-        e.add_field(
-            name="Uptime",
-            value=human_timedelta(
-                ctx.bot.start_time, accuracy=None, brief=True, suffix=False
-            ),
-        )
-        e.add_field(name="Donate", value="[ko-fi :D](https://ko-fi.com/crygup)")
-
-        await ctx.send(embed=e)
+        await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
 
     @commands.command(name="hello", hidden=True)
     async def hello(self, ctx: Context):

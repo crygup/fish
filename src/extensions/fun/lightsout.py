@@ -16,8 +16,34 @@ from .tictactoe import EMPTY_CELL_LABEL
 BOARD_SIZE = 5
 CELL_COUNT = BOARD_SIZE * BOARD_SIZE
 MOVE_TIMEOUT = 10 * 60
+STARTING_PAYOUT = 1_000
+MIN_PAYOUT = 10
+DAILY_PAYOUT_CAP = 5_000
+PAYOUT_DURATION = 10 * 60
 OFF_BOARD = (False,) * CELL_COUNT
 Board = tuple[bool, ...]
+
+
+def completion_payout(duration_seconds: float) -> int:
+    """Return the Coins awarded for a completed Lights Out puzzle.
+
+    The reward falls linearly from 1,000 Coins at the instant the puzzle is
+    started to 10 Coins at the ten-minute mark.  Taking longer than ten
+    minutes always awards the floor amount.  Keeping this calculation pure
+    makes the game UI and persistence paths use exactly the same policy.
+    """
+
+    duration = max(0.0, float(duration_seconds))
+    if duration >= PAYOUT_DURATION:
+        return MIN_PAYOUT
+    span = STARTING_PAYOUT - MIN_PAYOUT
+    return max(
+        MIN_PAYOUT,
+        min(
+            STARTING_PAYOUT,
+            int(round(STARTING_PAYOUT - span * duration / PAYOUT_DURATION)),
+        ),
+    )
 
 
 def affected_indices(index: int) -> tuple[int, ...]:
@@ -92,6 +118,7 @@ class LightsOutGame:
     timed_out: bool = False
     gave_up: bool = False
     completed_duration: float | None = None
+    reward_coins: int | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     view: LightsOutView | None = field(default=None, repr=False)
 
@@ -198,7 +225,10 @@ class LightsOutView(discord.ui.LayoutView):
         if self.game.timed_out:
             return "## Lights Out\nThe puzzle timed out."
         if self.game.finished:
-            return "## Lights Out\nPuzzle complete! Every light is off."
+            reward = ""
+            if self.game.reward_coins is not None:
+                reward = f"\n-# Reward: **{self.game.reward_coins:,} Coins**"
+            return f"## Lights Out\nPuzzle complete! Every light is off.{reward}"
         return (
             "## Lights Out\n"
             "Turn every light off. Pressing one toggles it and its direct neighbors."
@@ -303,8 +333,13 @@ __all__ = (
     "CELL_COUNT",
     "LightsOutGame",
     "LightsOutView",
+    "MIN_PAYOUT",
     "OFF_BOARD",
+    "PAYOUT_DURATION",
+    "STARTING_PAYOUT",
+    "DAILY_PAYOUT_CAP",
     "affected_indices",
+    "completion_payout",
     "is_solved",
     "press_board",
     "scramble_board",

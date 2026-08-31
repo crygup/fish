@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING, Any
 
 import discord
 
+from core.currency import award_daily_capped_coins
+
+from .pvp import DuelBidView
+
 if TYPE_CHECKING:
     from extensions.context import Context
 
@@ -17,6 +21,11 @@ MARKS = ("X", "O")
 EMPTY_CELL_LABEL = "\U00002800"
 MARK_LABELS = {"X": "\U0000274c", "O": "\U00002b55"}
 MOVE_TIMEOUT = 60.0
+BOT_WIN_COIN_REWARDS = {
+    "easy": (50, 10_000),
+    "normal": (200, 10_000),
+    "hard": (1_000, 10_000),
+}
 WINNING_LINES = (
     (0, 1, 2),
     (3, 4, 5),
@@ -124,8 +133,17 @@ class TicTacToeGame:
     # The current view can be the board or one of the rematch/setup views.
     # Keeping this pointer lets stale view timeouts avoid editing a newer
     # game board after a rematch starts.
-    view: discord.ui.View | None = None
+    view: discord.ui.View | discord.ui.LayoutView | None = None
     recorded: bool = False
+    coin_reward: int = 0
+    # Player-vs-player games reserve one wager per human.  The controller
+    # settles these together when the board ends; bot games leave this empty.
+    wager_ids: dict[int, int] = field(default_factory=dict)
+    wager_stakes: dict[int, int] = field(default_factory=dict)
+    wager_stake: int = 0
+    # The winner's total PvP wager pool is retained for the completed-board
+    # summary after each reservation has been settled and cleared.
+    pvp_payout: int = 0
     move_timeout_task: asyncio.Task[None] | None = field(default=None, repr=False)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
@@ -170,21 +188,33 @@ class TicTacToeGame:
         self.forfeited_mark = None
         self.difficulty = difficulty if self.against_bot else None
         self.recorded = False
+        self.coin_reward = 0
+        self.wager_ids.clear()
+        self.wager_stakes.clear()
+        self.wager_stake = 0
+        self.pvp_payout = 0
         self.started_at = discord.utils.utcnow()
         self.view = None
         self.move_timeout_task = None
 
 
-class TicTacToeView(discord.ui.View):
+class TicTacToeView(discord.ui.LayoutView):
+    """Components V2 Tic-Tac-Toe board.
+
+    The board and its controls live in one container so Discord renders the
+    game as a single CV2 card.  The rematch action intentionally remains in a
+    separate row below that card, matching the other minigame views.
+    """
+
     def __init__(self, game: TicTacToeGame):
         super().__init__(timeout=900)
         self.game = game
         self.cells: list[discord.ui.Button] = []
+        rows: list[discord.ui.ActionRow] = []
         for index in range(9):
             button = discord.ui.Button(
                 label=EMPTY_CELL_LABEL,
                 style=discord.ButtonStyle.secondary,
-                row=index // 3,
             )
 
             async def callback(
@@ -194,16 +224,68 @@ class TicTacToeView(discord.ui.View):
 
             button.callback = callback
             self.cells.append(button)
-            self.add_item(button)
+            if index % 3 == 0:
+                rows.append(discord.ui.ActionRow())
+            rows[-1].add_item(button)
 
         self.rematch = discord.ui.Button(
             label="Play again",
-            style=discord.ButtonStyle.primary,
-            row=3,
+            style=discord.ButtonStyle.secondary,
             disabled=True,
         )
         self.rematch.callback = self._play_again
-        self.add_item(self.rematch)
+        self.display = discord.ui.TextDisplay(self.content())
+        self.footer = discord.ui.TextDisplay(self.footer_content())
+        self.container = discord.ui.Container(
+            self.display,
+            *rows,
+            discord.ui.Separator(),
+            self.footer,
+            accent_color=game.controller.bot.embedcolor,
+        )
+        self.add_item(self.container)
+        self.add_item(discord.ui.ActionRow(self.rematch))
+        self.refresh()
+
+    def content(self) -> str:
+        title = "## Tic-Tac-Toe"
+        if self.game.against_bot and self.game.difficulty:
+            title += f" · {self.game.difficulty.title()}"
+        return title
+
+    def footer_content(self) -> str:
+        player_x = discord.utils.escape_markdown(
+            self.game.names[self.game.players["X"]]
+        )
+        player_o = discord.utils.escape_markdown(
+            self.game.names[self.game.players["O"]]
+        )
+        if self.game.result == "draw":
+            status = "Draw game."
+        elif self.game.result in MARKS:
+            winner = discord.utils.escape_markdown(
+                self.game.names[self.game.players[self.game.result]]
+            )
+            if self.game.forfeited_mark is not None:
+                forfeited = discord.utils.escape_markdown(
+                    self.game.names[self.game.players[self.game.forfeited_mark]]
+                )
+                status = f"{forfeited} forfeited after 60 seconds. {winner} wins!"
+            else:
+                status = f"{winner} wins!"
+            if self.game.pvp_payout:
+                status = f"{winner} wins {self.game.pvp_payout:,} Coins!"
+            if self.game.coin_reward:
+                status += f" · Earned {self.game.coin_reward:,} Coins"
+        else:
+            current = discord.utils.escape_markdown(
+                self.game.names[self.game.players[self.game.current_mark]]
+            )
+            status = f"{current}'s turn"
+        return (
+            f"{MARK_LABELS['X']} {player_x} · "
+            f"{MARK_LABELS['O']} {player_o} · {status}"
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.game.view is self and interaction.user.id in self.game.player_ids:
@@ -214,18 +296,15 @@ class TicTacToeView(discord.ui.View):
         return False
 
     def refresh(self) -> None:
+        self.display.content = self.content()
+        self.footer.content = self.footer_content()
         for index, button in enumerate(self.cells):
             mark = self.game.board[index]
             button.label = EMPTY_CELL_LABEL if mark is None else MARK_LABELS[mark]
-            # Keep selected squares enabled during play so their X/O colors
-            # remain visible. The callback rejects an already occupied square.
             button.disabled = self.game.result is not None
-            if mark == "X":
-                button.style = discord.ButtonStyle.green
-            elif mark == "O":
-                button.style = discord.ButtonStyle.blurple
-            else:
-                button.style = discord.ButtonStyle.secondary
+            # The mark emoji communicates X/O; keep every button the default
+            # grey so the board matches the other CV2 minigame controls.
+            button.style = discord.ButtonStyle.secondary
         self.rematch.disabled = self.game.result is None
 
     async def _select_cell(self, interaction: discord.Interaction, index: int) -> None:
@@ -279,14 +358,16 @@ class TicTacToeView(discord.ui.View):
                 await self.game.controller.record_game(self.game)
             else:
                 self.game.controller.schedule_move_timeout(self.game)
-            embed = self.game.controller.game_embed(self.game)
+            self.refresh()
             if interaction.message is not None:
                 self.game.message = await interaction.message.edit(
-                    embed=embed, view=self
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             else:
                 self.game.message = await interaction.edit_original_response(
-                    embed=embed, view=self
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
 
     async def _play_again(self, interaction: discord.Interaction) -> None:
@@ -304,7 +385,8 @@ class TicTacToeView(discord.ui.View):
             self.game.view = view
             try:
                 await interaction.response.edit_message(
-                    embed=self.game.controller.rematch_embed(self.game), view=view
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             except Exception:
                 self.game.view = previous_view
@@ -319,26 +401,33 @@ class TicTacToeView(discord.ui.View):
             self.game.controller.cancel_move_timeout(self.game)
             self.game.controller.remove_game(self.game)
             self.game.view = None
-            for button in self.children:
-                if isinstance(button, discord.ui.Button):
-                    button.disabled = True
+            for button in self.cells:
+                button.disabled = True
+            self.rematch.disabled = True
             if self.game.message is not None:
                 try:
-                    await self.game.message.edit(view=self)
+                    await self.game.message.edit(
+                        view=self,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
                 except discord.HTTPException:
                     pass
 
 
-class TicTacToeDifficultyView(discord.ui.View):
+class TicTacToeDifficultyView(discord.ui.LayoutView):
     def __init__(self, controller: TicTacToeController, game: TicTacToeGame):
         super().__init__(timeout=60)
         self.controller = controller
         self.game = game
         self.message: discord.Message | None = None
+        self.display = discord.ui.TextDisplay(
+            "## Tic-Tac-Toe\nChoose a difficulty to play Fishie again."
+        )
+        self.buttons: list[discord.ui.Button] = []
 
         for difficulty in ("easy", "normal", "hard"):
             button = discord.ui.Button(
-                label=difficulty.title(), style=discord.ButtonStyle.primary
+                label=difficulty.title(), style=discord.ButtonStyle.secondary
             )
 
             async def callback(
@@ -347,7 +436,14 @@ class TicTacToeDifficultyView(discord.ui.View):
                 await self._select_difficulty(interaction, selected)
 
             button.callback = callback
-            self.add_item(button)
+            self.buttons.append(button)
+
+        self.container = discord.ui.Container(
+            self.display,
+            discord.ui.ActionRow(*self.buttons),
+            accent_color=controller.bot.embedcolor,
+        )
+        self.add_item(self.container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         human_id = self.game.players["X"]
@@ -387,23 +483,44 @@ class TicTacToeDifficultyView(discord.ui.View):
                 return
             self.controller.remove_game(self.game)
             self.game.view = None
-            for item in self.children:
-                if isinstance(item, discord.ui.Button):
-                    item.disabled = True
+            for item in self.buttons:
+                item.disabled = True
+            self.display.content = "## Tic-Tac-Toe\nThis game setup expired."
             if self.message is not None:
                 try:
-                    await self.message.edit(view=self)
+                    await self.message.edit(
+                        view=self,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
                 except discord.HTTPException:
                     pass
 
 
-class TicTacToeRematchView(discord.ui.View):
+class TicTacToeRematchView(discord.ui.LayoutView):
     def __init__(self, controller: TicTacToeController, game: TicTacToeGame):
         super().__init__(timeout=60)
         self.controller = controller
         self.game = game
         self.confirmed: set[int] = set()
         self.message: discord.Message | None = None
+        self.display = discord.ui.TextDisplay(
+            "## Tic-Tac-Toe rematch\n"
+            "Both players must confirm before the rematch starts."
+        )
+        self.confirm_button = discord.ui.Button(
+            label="Confirm rematch", style=discord.ButtonStyle.secondary
+        )
+        self.decline_button = discord.ui.Button(
+            label="Decline", style=discord.ButtonStyle.secondary
+        )
+        self.confirm_button.callback = self.confirm
+        self.decline_button.callback = self.decline
+        self.container = discord.ui.Container(
+            self.display,
+            discord.ui.ActionRow(self.confirm_button, self.decline_button),
+            accent_color=controller.bot.embedcolor,
+        )
+        self.add_item(self.container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.game.view is self and interaction.user.id in self.game.player_ids:
@@ -414,10 +531,7 @@ class TicTacToeRematchView(discord.ui.View):
         )
         return False
 
-    @discord.ui.button(label="Confirm rematch", style=discord.ButtonStyle.green)
-    async def confirm(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ) -> None:
+    async def confirm(self, interaction: discord.Interaction) -> None:
         async with self.game.lock:
             if self.game.view is not self:
                 await interaction.response.send_message(
@@ -427,23 +541,21 @@ class TicTacToeRematchView(discord.ui.View):
             self.confirmed.add(interaction.user.id)
             confirmed = self.confirmed == set(self.game.player_ids)
             if not confirmed:
+                self.display.content = (
+                    "## Tic-Tac-Toe rematch\n"
+                    f"{self.controller.player_name(interaction.user.id)} confirmed. "
+                    "Waiting for the other player."
+                )
                 await interaction.response.edit_message(
-                    embed=self.controller.rematch_embed(
-                        self.game,
-                        f"{self.controller.player_name(interaction.user.id)} confirmed. "
-                        "Waiting for the other player.",
-                    ),
                     view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
 
         if confirmed:
             await self.controller.restart_game(self.game, None, interaction)
             self.stop()
 
-    @discord.ui.button(label="Decline", style=discord.ButtonStyle.red)
-    async def decline(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ) -> None:
+    async def decline(self, interaction: discord.Interaction) -> None:
         async with self.game.lock:
             if self.game.view is not self:
                 await interaction.response.send_message(
@@ -452,13 +564,13 @@ class TicTacToeRematchView(discord.ui.View):
                 return
             self.controller.remove_game(self.game)
             self.game.view = None
-            for item in self.children:
-                if isinstance(item, discord.ui.Button):
-                    item.disabled = True
+            self.confirm_button.disabled = True
+            self.decline_button.disabled = True
+            self.display.content = "## Tic-Tac-Toe rematch\nRematch declined."
             self.stop()
             await interaction.response.edit_message(
-                embed=self.controller.rematch_embed(self.game, "Rematch declined."),
                 view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
 
     async def on_timeout(self) -> None:
@@ -467,17 +579,20 @@ class TicTacToeRematchView(discord.ui.View):
                 return
             self.controller.remove_game(self.game)
             self.game.view = None
-            for item in self.children:
-                if isinstance(item, discord.ui.Button):
-                    item.disabled = True
+            self.confirm_button.disabled = True
+            self.decline_button.disabled = True
+            self.display.content = "## Tic-Tac-Toe rematch\nRematch expired."
             if self.message is not None:
                 try:
-                    await self.message.edit(view=self)
+                    await self.message.edit(
+                        view=self,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
                 except discord.HTTPException:
                     pass
 
 
-class TicTacToeChallengeView(discord.ui.View):
+class TicTacToeChallengeView(discord.ui.LayoutView):
     """Ask the challenged user to accept a player-versus-player game."""
 
     def __init__(
@@ -485,12 +600,34 @@ class TicTacToeChallengeView(discord.ui.View):
         controller: TicTacToeController,
         ctx: Context,
         opponent: discord.abc.User,
+        *,
+        challenger_bid: int | None = None,
     ):
         super().__init__(timeout=60)
         self.controller = controller
         self.ctx = ctx
         self.opponent = opponent
+        self.challenger_bid = challenger_bid
         self.message: discord.Message | None = None
+        self.display = discord.ui.TextDisplay(
+            f"## Tic-Tac-Toe\n{opponent.mention}, you were challenged to a "
+            f"Tic-Tac-Toe duel against **{discord.utils.escape_markdown(ctx.author.display_name)}**. "
+            "Do you want to play?"
+        )
+        self.accept_button = discord.ui.Button(
+            label="Accept", style=discord.ButtonStyle.secondary
+        )
+        self.decline_button = discord.ui.Button(
+            label="Decline", style=discord.ButtonStyle.secondary
+        )
+        self.accept_button.callback = self.accept
+        self.decline_button.callback = self.decline
+        self.container = discord.ui.Container(
+            self.display,
+            discord.ui.ActionRow(self.accept_button, self.decline_button),
+            accent_color=controller.bot.embedcolor,
+        )
+        self.add_item(self.container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.opponent.id:
@@ -501,14 +638,54 @@ class TicTacToeChallengeView(discord.ui.View):
         return False
 
     def disable_all(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        self.accept_button.disabled = True
+        self.decline_button.disabled = True
 
-    @discord.ui.button(label="Accept", style=discord.ButtonStyle.green)
-    async def accept(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ) -> None:
+    async def accept(self, interaction: discord.Interaction) -> None:
+        if self.challenger_bid is not None:
+
+            async def on_ready(
+                ready_interaction: discord.Interaction,
+                stakes: tuple[int, int],
+            ) -> None:
+                try:
+                    await self.controller.start_user_game(
+                        self.ctx,
+                        self.opponent,
+                        interaction=ready_interaction,
+                        stakes=stakes,
+                    )
+                except Exception as exc:
+                    self.controller.bot.logger.exception(
+                        "Failed to start wagered Tic-Tac-Toe duel"
+                    )
+                    if ready_interaction.response.is_done():
+                        await ready_interaction.followup.send(
+                            f"I couldn't start that wagered game: {exc}",
+                            ephemeral=True,
+                        )
+                    else:
+                        await ready_interaction.response.send_message(
+                            f"I couldn't start that wagered game: {exc}",
+                            ephemeral=True,
+                        )
+
+            bid_view = DuelBidView(
+                self.ctx,
+                self.ctx.author,
+                self.opponent,
+                game_name="Tic-Tac-Toe",
+                challenger_bid=self.challenger_bid,
+                on_ready=on_ready,
+            )
+            bid_view.message = self.message
+            await interaction.response.edit_message(
+                # The challenge and bid prompt are both Components V2 views.
+                view=bid_view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            self.stop()
+            return
         try:
             game = await self.controller.start_user_game(
                 self.ctx, self.opponent, interaction=interaction
@@ -530,38 +707,49 @@ class TicTacToeChallengeView(discord.ui.View):
         if game is not None:
             self.stop()
 
-    @discord.ui.button(label="Decline", style=discord.ButtonStyle.red)
-    async def decline(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ) -> None:
+    async def decline(self, interaction: discord.Interaction) -> None:
         self.disable_all()
         self.stop()
+        self.display.content = "## Tic-Tac-Toe\nChallenge declined."
         await interaction.response.edit_message(
-            content="Tic-Tac-Toe challenge declined.", view=self
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     async def on_timeout(self) -> None:
         self.disable_all()
+        self.display.content = "## Tic-Tac-Toe\nChallenge expired."
         if self.message is not None:
             try:
                 await self.message.edit(
-                    content="Tic-Tac-Toe challenge expired.", view=self
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             except discord.HTTPException:
                 pass
 
 
-class TicTacToeModeView(discord.ui.View):
-    def __init__(self, controller: TicTacToeController, ctx: Context):
+class TicTacToeModeView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        controller: TicTacToeController,
+        ctx: Context,
+        prompt: str | None = None,
+    ):
         super().__init__(timeout=60)
         self.controller = controller
         self.ctx = ctx
         self.message: discord.Message | None = None
         self.selecting = False
+        self.display = discord.ui.TextDisplay(
+            "## Tic-Tac-Toe\n"
+            + (prompt or "Choose a difficulty below to play against Fishie.")
+        )
+        self.buttons: list[discord.ui.Button] = []
 
         for difficulty in ("easy", "normal", "hard"):
             button = discord.ui.Button(
-                label=difficulty.title(), style=discord.ButtonStyle.primary
+                label=difficulty.title(), style=discord.ButtonStyle.secondary
             )
 
             async def callback(
@@ -581,7 +769,14 @@ class TicTacToeModeView(discord.ui.View):
                     self.selecting = False
 
             button.callback = callback
-            self.add_item(button)
+            self.buttons.append(button)
+
+        self.container = discord.ui.Container(
+            self.display,
+            discord.ui.ActionRow(*self.buttons),
+            accent_color=controller.bot.embedcolor,
+        )
+        self.add_item(self.container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.ctx.author.id:
@@ -594,12 +789,15 @@ class TicTacToeModeView(discord.ui.View):
     async def on_timeout(self) -> None:
         if self.selecting:
             return
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        for item in self.buttons:
+            item.disabled = True
+        self.display.content = "## Tic-Tac-Toe\nThis game setup expired."
         if self.message is not None:
             try:
-                await self.message.edit(view=self)
+                await self.message.edit(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             except discord.HTTPException:
                 pass
 
@@ -756,6 +954,27 @@ class TicTacToeController:
                 self._forfeit_after_timeout(game)
             )
 
+    async def award_bot_win(self, game: TicTacToeGame) -> int:
+        """Award a capped daily Coin reward for a human win against Fishie."""
+
+        if not game.against_bot or game.result not in MARKS:
+            return 0
+        winner_id = game.players[game.result]
+        if winner_id == game.bot_id:
+            return 0
+        difficulty = (game.difficulty or "").casefold()
+        reward = BOT_WIN_COIN_REWARDS.get(difficulty)
+        if reward is None:
+            return 0
+        amount, daily_cap = reward
+        return await award_daily_capped_coins(
+            self.bot.pool,
+            winner_id,
+            amount,
+            daily_cap,
+            f"game_tictactoe_{difficulty}",
+        )
+
     async def _forfeit_after_timeout(self, game: TicTacToeGame) -> None:
         try:
             await asyncio.sleep(MOVE_TIMEOUT)
@@ -768,11 +987,14 @@ class TicTacToeController:
                 if isinstance(game.view, TicTacToeView):
                     game.view.refresh()
                 await self.record_game(game)
-                embed = self.game_embed(game)
                 view = game.view
 
             if game.message is not None and isinstance(view, TicTacToeView):
-                await game.message.edit(embed=embed, view=view)
+                view.refresh()
+                await game.message.edit(
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -829,11 +1051,9 @@ class TicTacToeController:
             game.apply_move("O", ai_index)
             view.refresh()
 
-        embed = self.game_embed(game)
         if interaction is None:
             try:
                 game.message = await ctx.send(
-                    embed=embed,
                     view=view,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -843,16 +1063,20 @@ class TicTacToeController:
         else:
             try:
                 if not interaction.response.is_done():
-                    await interaction.response.defer()
-                if interaction.message is not None:
-                    game.message = await interaction.message.edit(
-                        content=None,
-                        embed=embed,
+                    await interaction.response.edit_message(
                         view=view,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    game.message = interaction.message
+                elif interaction.message is not None:
+                    game.message = await interaction.message.edit(
+                        view=view,
+                        allowed_mentions=discord.AllowedMentions.none(),
                     )
                 else:
                     game.message = await interaction.edit_original_response(
-                        content=None, embed=embed, view=view
+                        view=view,
+                        allowed_mentions=discord.AllowedMentions.none(),
                     )
             except Exception:
                 self.remove_game(game)
@@ -866,6 +1090,7 @@ class TicTacToeController:
         opponent: discord.abc.User,
         *,
         interaction: discord.Interaction | None = None,
+        stakes: tuple[int, int] | None = None,
     ) -> TicTacToeGame | None:
         player_ids = (ctx.author.id, opponent.id)
         active = self._active_game(player_ids)
@@ -881,6 +1106,55 @@ class TicTacToeController:
             ctx.author.id: getattr(ctx.author, "display_name", ctx.author.name),
             opponent.id: getattr(opponent, "display_name", opponent.name),
         }
+        wager_ids: dict[int, int] = {}
+        wager_stakes: dict[int, int] = {}
+        wager_stake = 0
+        if stakes is not None:
+            if len(stakes) != 2 or any(int(stake) <= 0 for stake in stakes):
+                raise ValueError("Player wagers must be positive.")
+            wager_stakes = {
+                int(player_ids[0]): int(stakes[0]),
+                int(player_ids[1]): int(stakes[1]),
+            }
+            # Retain the original field for compatibility with older callers;
+            # all new settlement paths use the per-player mapping.
+            wager_stake = int(stakes[0])
+            checker = getattr(
+                getattr(self.bot, "db_cache", None),
+                "user_currency_tracking_enabled",
+                None,
+            )
+            if callable(checker) and any(
+                not checker(player_id) for player_id in player_ids
+            ):
+                raise ValueError(
+                    "Both players must have currency tracking enabled to place a bid."
+                )
+            # Escrow both players before exposing the board.  If the second
+            # wallet cannot cover its stake, return the first reservation and
+            # leave no partial duel behind.
+            try:
+                for player_id, player_stake in wager_stakes.items():
+                    wager = await self.bot.currency.open_wager(
+                        player_id,
+                        player_stake,
+                        source="pvp_tictactoe",
+                    )
+                    wager_ids[player_id] = wager.id
+            except Exception:
+                for player_id, wager_id in wager_ids.items():
+                    try:
+                        await self.bot.currency.settle_wager(
+                            wager_id,
+                            wager_stakes[player_id],
+                            track_stats=False,
+                        )
+                    except Exception:
+                        self.bot.logger.exception(
+                            "Failed to refund a Tic-Tac-Toe duel wager"
+                        )
+                raise
+
         game = TicTacToeGame(
             controller=self,
             ctx=ctx,
@@ -892,35 +1166,49 @@ class TicTacToeController:
             channel_id=ctx.channel.id,
             started_by_id=ctx.author.id,
             current_mark=random.choice(MARKS),
+            wager_ids=wager_ids,
+            wager_stakes=wager_stakes,
+            wager_stake=wager_stake,
         )
         self._register_game(game)
         view = TicTacToeView(game)
         game.view = view
-        embed = self.game_embed(game)
         try:
             if interaction is None:
                 game.message = await ctx.send(
-                    embed=embed,
                     view=view,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             else:
                 if not interaction.response.is_done():
-                    await interaction.response.defer()
-                if interaction.message is not None:
-                    game.message = await interaction.message.edit(
-                        content=None,
-                        embed=embed,
+                    await interaction.response.edit_message(
                         view=view,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    game.message = interaction.message
+                elif interaction.message is not None:
+                    game.message = await interaction.message.edit(
+                        view=view,
+                        allowed_mentions=discord.AllowedMentions.none(),
                     )
                 else:
                     game.message = await interaction.edit_original_response(
-                        content=None,
-                        embed=embed,
                         view=view,
+                        allowed_mentions=discord.AllowedMentions.none(),
                     )
         except Exception:
             self.remove_game(game)
+            for player_id, wager_id in wager_ids.items():
+                try:
+                    await self.bot.currency.settle_wager(
+                        wager_id,
+                        wager_stakes.get(player_id, wager_stake),
+                        track_stats=False,
+                    )
+                except Exception:
+                    self.bot.logger.exception(
+                        "Failed to refund Tic-Tac-Toe wagers after startup failed"
+                    )
             raise
         self.schedule_move_timeout(game)
         return game
@@ -932,22 +1220,21 @@ class TicTacToeController:
         interaction: discord.Interaction,
     ) -> None:
         async with game.lock:
-            if game.view is None or isinstance(game.view, TicTacToeView):
-                if not interaction.response.is_done():
-                    await interaction.response.edit_message(
-                        embed=self.rematch_embed(game, "This game setup expired."),
-                        view=None,
-                    )
+            if game.view is None:
+                message = "This Tic-Tac-Toe game setup has expired."
+                if interaction.response.is_done():
+                    await interaction.followup.send(message, ephemeral=True)
+                else:
+                    await interaction.response.send_message(message, ephemeral=True)
                 return
 
             active = self._active_game(game.player_ids, against_bot=game.against_bot)
             if active is not None and active is not game:
-                await interaction.response.edit_message(
-                    embed=self.rematch_embed(
-                        game, "You already have another active Tic-Tac-Toe game."
-                    ),
-                    view=None,
-                )
+                message = "You already have another active Tic-Tac-Toe game."
+                if interaction.response.is_done():
+                    await interaction.followup.send(message, ephemeral=True)
+                else:
+                    await interaction.response.send_message(message, ephemeral=True)
                 return
 
             self.cancel_move_timeout(game)
@@ -960,18 +1247,21 @@ class TicTacToeController:
                 game.apply_move("O", ai_index)
                 view.refresh()
 
-            embed = self.game_embed(game)
             if interaction.response.is_done():
                 try:
                     game.message = await interaction.edit_original_response(
-                        embed=embed, view=view
+                        view=view,
+                        allowed_mentions=discord.AllowedMentions.none(),
                     )
                 except Exception:
                     self.remove_game(game)
                     raise
             else:
                 try:
-                    await interaction.response.edit_message(embed=embed, view=view)
+                    await interaction.response.edit_message(
+                        view=view,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
                     game.message = interaction.message
                 except Exception:
                     self.remove_game(game)
@@ -982,6 +1272,39 @@ class TicTacToeController:
         if game.recorded:
             return
         game.recorded = True
+        try:
+            game.coin_reward = await self.award_bot_win(game)
+        except Exception:
+            self.bot.logger.exception("Failed to award Tic-Tac-Toe Coins")
+        if game.wager_ids:
+            # The losing stake is already debited.  A winner receives the
+            # complete two-player pool; a draw refunds both reservations.
+            stakes = game.wager_stakes or {
+                player_id: game.wager_stake for player_id in game.wager_ids
+            }
+            pool = sum(
+                stakes.get(player_id, game.wager_stake) for player_id in game.wager_ids
+            )
+            try:
+                if game.result == "draw":
+                    for player_id, wager_id in game.wager_ids.items():
+                        await self.bot.currency.settle_wager(
+                            wager_id,
+                            stakes.get(player_id, game.wager_stake),
+                            track_stats=False,
+                        )
+                elif game.result in MARKS:
+                    winner_id = game.players[game.result]
+                    game.pvp_payout = pool
+                    for player_id, wager_id in game.wager_ids.items():
+                        payout = pool if player_id == winner_id else 0
+                        await self.bot.currency.settle_wager(wager_id, payout)
+            except Exception:
+                self.bot.logger.exception("Failed to settle Tic-Tac-Toe player wagers")
+            finally:
+                game.wager_ids.clear()
+                game.wager_stakes.clear()
+                game.wager_stake = 0
         # Game tracking can be disabled independently for either human
         # participant.  Do not persist a row containing someone who has opted
         # out, while still cleaning up the in-memory game below.
@@ -1250,12 +1573,26 @@ class TicTacToeController:
         title = "Tic-Tac-Toe"
         if game.against_bot and game.difficulty:
             title += f" • {game.difficulty.title()}"
+        description = (
+            f"{MARK_LABELS['X']} {player_x}\n"
+            f"{MARK_LABELS['O']} {player_o}\n\n{status}"
+        )
+        if game.coin_reward and game.result in MARKS:
+            winner = discord.utils.escape_markdown(
+                game.names[game.players[game.result]]
+            )
+            # Keep the compatibility embed's result summary in the same
+            # single-line footer style as the Components V2 board.  The board
+            # itself uses a native ``discord.ui.Separator``; never render a
+            # hand-written line of dashes here.
+            description += (
+                "\n\n"
+                f"-# {winner} won {game.coin_reward:,} coins · "
+                f"{winner} earned **{game.coin_reward:,} Coins**."
+            )
         return discord.Embed(
             title=title,
-            description=(
-                f"{MARK_LABELS['X']} {player_x}\n"
-                f"{MARK_LABELS['O']} {player_o}\n\n{status}"
-            ),
+            description=description,
             color=getattr(self.bot, "embedcolor", discord.Color.blurple()),
         )
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import random
 import re
+import shlex
 from collections import Counter
+from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -35,7 +38,7 @@ from utils import (
     fish_download,
     fish_edit,
     fish_go_back,
-    get_user_badge,
+    get_user_badges,
     human_join,
     refresh_user_badges,
     render_user_badge,
@@ -53,9 +56,17 @@ AVATAR_GRID_RE = re.compile(
     r"^(?P<width>\d{1,2})\s*x\s*(?P<height>\d{1,2})$", re.IGNORECASE
 )
 
+# Saved avatar/name/icon history is intentionally text-only for now. Keep
+# this switch next to the command declarations so re-enabling app-command
+# exposure later is a one-line change (without rewriting the text handlers).
+HISTORY_APP_COMMANDS_ENABLED = False
+
 
 BURPLE = discord.ButtonStyle.blurple
 GREEN = discord.ButtonStyle.green
+
+UPLOADER_GUILD_ID = 939497177821110272
+UPLOADER_ROLE_ID = 1538971877563703427
 
 _PERM_LABELS = {
     "create_instant_invite": "Create Invite",
@@ -428,6 +439,7 @@ class UserView(discord.ui.LayoutView):
         server_tag: str | None = None,
         avatar_media_url: str = "",
         accent_color: discord.Colour | None = None,
+        profile_title: str | None = None,
     ) -> None:
         super().__init__(timeout=120)
         self.ctx = ctx
@@ -437,7 +449,9 @@ class UserView(discord.ui.LayoutView):
         self.footer_text = footer_text
         self.server_tag = server_tag
         self.avatar_media_url = avatar_media_url or user.display_avatar.url
-        self.accent_color = accent_color or ctx.bot.embedcolor
+        default_accent = getattr(ctx, "embedcolor", ctx.bot.embedcolor)
+        self.accent_color = default_accent if accent_color is None else accent_color
+        self.profile_title = profile_title
         self._guild_id = (
             user.guild.id
             if isinstance(user, discord.Member)
@@ -481,9 +495,12 @@ class UserView(discord.ui.LayoutView):
             title = str(self.user)
             if self.server_tag:
                 title += f" ({self.server_tag})"
-            children = [
-                self._profile_section(title, f"{self.user.mention}\n{self.index_body}")
-            ]
+            profile_lines = [self.user.mention]
+            if self.profile_title:
+                profile_lines.insert(0, f"-# {self.profile_title}")
+            if self.index_body:
+                profile_lines.append(self.index_body)
+            children = [self._profile_section(title, "\n".join(profile_lines))]
             children.extend([discord.ui.Separator(), *self._footer()])
         elif self._page == "avatar":
             avatars = [f"[Default]({self.user.default_avatar.url})"]
@@ -781,6 +798,71 @@ class UserView(discord.ui.LayoutView):
             self.ctx.bot.logger.exception("Could not send userinfo view error")
 
 
+class BadgeView(discord.ui.LayoutView):
+    """Components V2 profile view for a user's active badges."""
+
+    def __init__(
+        self,
+        ctx: Context,
+        user: Union[discord.User, discord.Member],
+        entries: list[dict[str, Any]],
+        *,
+        notice: str | None = None,
+    ) -> None:
+        super().__init__(timeout=120)
+        self.ctx = ctx
+        self.user = user
+        self.entries = entries
+        self.notice = notice
+        self._render()
+
+    def _render(self) -> None:
+        lines = [str(entry.get("_rendered") or "") for entry in self.entries]
+        lines = [line for line in lines if line]
+        body = "\n".join(lines) if lines else "No badges."
+        # A user can own many custom badges. Keep each TextDisplay under
+        # Discord's 4,000-character limit while still showing every badge.
+        if len(body) > 3_900:
+            body = body[:3_850].rsplit("\n", 1)[0]
+            body += "\n…"
+        if self.notice:
+            body += f"\n\n-# {self.notice}"
+        section = discord.ui.Section(
+            discord.ui.TextDisplay(f"## {self.user}'s badges"),
+            discord.ui.TextDisplay(body),
+            accessory=discord.ui.Thumbnail(self.user.display_avatar.url),
+        )
+        self.add_item(
+            discord.ui.Container(section, accent_color=self.ctx.bot.embedcolor)
+        )
+
+    async def interaction_check(self, interaction: Interaction) -> bool:
+        if interaction.user.id == self.ctx.author.id:
+            return True
+        await interaction.response.send_message(
+            "Only the person who ran this command can use these controls.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return False
+
+
+def _badge_order_selectors(value: str) -> list[str]:
+    """Split order selectors while allowing quoted display names."""
+
+    value = str(value).strip()
+    if not value:
+        return []
+    # Commas and pipes are convenient for custom display names containing
+    # spaces. Otherwise shell-like quoting lets users use ``"Badge name"``.
+    if "," in value or "|" in value:
+        return [part.strip() for part in re.split(r"\s*[,|]\s*", value) if part.strip()]
+    try:
+        return [part for part in shlex.split(value) if part]
+    except ValueError as error:
+        raise commands.BadArgument("Could not parse the badge order.") from error
+
+
 class QualityDropdown(discord.ui.Select):
     view: EditDropdownView
 
@@ -991,9 +1073,63 @@ class AvatarView(AuthorView):
 
 
 class Info(Cog):
+    async def _active_profile_titles(self, user_id: int) -> list[str]:
+        """Return the user's active purchased titles for the profile header."""
+
+        try:
+            rows = await self.bot.pool.fetch(
+                """
+                SELECT text
+                FROM user_titles
+                WHERE user_id = $1 AND active AND equipped
+                ORDER BY purchased_at DESC, title_key ASC
+                """,
+                int(user_id),
+            )
+        except asyncpg.PostgresError:
+            # Keep userinfo usable while a deployment is applying the titles
+            # migration or on an older database that has no title table yet.
+            self.bot.logger.debug(
+                "Could not load profile titles for user %s", user_id, exc_info=True
+            )
+            return []
+
+        titles: list[str] = []
+        for row in rows:
+            value = row.get("text") if isinstance(row, Mapping) else row["text"]
+            if value is None:
+                continue
+            text = str(value).replace("\r", " ").replace("\n", " ").strip()
+            if text:
+                titles.append(
+                    discord.utils.escape_markdown(discord.utils.escape_mentions(text))
+                )
+        return titles
+
+    async def has_uploader_badge(self, user_id: int) -> bool:
+        """Return whether a user currently holds Fishie's uploader role."""
+
+        guild = self.bot.get_guild(UPLOADER_GUILD_ID)
+        if guild is None:
+            return False
+        member = guild.get_member(user_id)
+        if member is None and not guild.chunked:
+            try:
+                member = await guild.fetch_member(user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return False
+        return member is not None and any(
+            role.id == UPLOADER_ROLE_ID for role in member.roles
+        )
+
     async def has_nitro(
         self, member: discord.Member, fetched_user: Optional[discord.User] = None
     ) -> bool:
+        # Bot accounts cannot have Nitro.  Apart from avoiding unnecessary
+        # API requests, this prevents activity/avatar heuristics from adding
+        # the Nitro badge to bot profiles.
+        if member.bot:
+            return False
         fetched_user = fetched_user or await self.bot.fetch_user(member.id)
         custom_activity: discord.CustomActivity | None = discord.utils.find(  # type: ignore
             lambda a: isinstance(a, discord.CustomActivity), member.activities
@@ -1008,12 +1144,73 @@ class Info(Cog):
             ]
         )
 
-    async def get_badges(
+    @staticmethod
+    def _badge_entry_key(entry: Mapping[str, Any], fallback: str) -> str:
+        """Return the stable key used by the per-user badge order table."""
+
+        key = str(entry.get("badge_key") or "").strip()
+        if key:
+            return key
+        return fallback
+
+    @staticmethod
+    def _legacy_badge_key(user_id: int, index: int, entry: Mapping[str, Any]) -> str:
+        """Give a legacy ``user_flags`` entry a key that survives restarts.
+
+        Older JSON entries did not carry a badge key.  Hashing their parsed
+        contents keeps ordering stable while avoiding user-controlled text in
+        SQL values.
+        """
+
+        payload = "\x1f".join(
+            str(entry.get(name) or "")
+            for name in ("emoji_name", "emoji_id", "is_custom", "animated", "text")
+        )
+        digest = hashlib.sha1(
+            payload.encode("utf-8"), usedforsecurity=False
+        ).hexdigest()[:16]
+        return f"json:{user_id}:{index}:{digest}"
+
+    async def _badge_order(self, user_id: int) -> list[str]:
+        """Read a saved order, tolerating installations before migration 64."""
+
+        try:
+            row = await self.bot.pool.fetchrow(
+                "SELECT badge_keys FROM user_badge_orders WHERE user_id = $1",
+                int(user_id),
+            )
+        except asyncpg.PostgresError:
+            # The command remains usable while an operator is rolling out the
+            # migration; the first successful order save will persist it.
+            return []
+        if row is None:
+            return []
+        values = row["badge_keys"]
+        if not isinstance(values, (list, tuple)):
+            return []
+        return [str(value) for value in values if str(value).strip()]
+
+    async def _save_badge_order(self, user_id: int, keys: list[str]) -> None:
+        await self.bot.pool.execute(
+            """
+            INSERT INTO user_badge_orders (user_id, badge_keys, updated_at)
+            VALUES ($1, $2::text[], now())
+            ON CONFLICT (user_id) DO UPDATE
+            SET badge_keys = EXCLUDED.badge_keys,
+                updated_at = now()
+            """,
+            int(user_id),
+            keys,
+        )
+
+    async def get_badge_entries(
         self,
         member: Union[discord.Member, discord.User],
         ctx: Context,
         fetched_user: Optional[discord.User] = None,
-    ) -> List[str]:
+    ) -> list[dict[str, Any]]:
+        """Collect active badges and apply the user's saved display order."""
+
         public_flags: Dict[Any, Any] = dict(member.public_flags)
         new_values = {
             "owner": await self.bot.is_owner(member),
@@ -1025,24 +1222,129 @@ class Info(Cog):
                 if isinstance(member, discord.Member)
                 else False
             ),
+            "uploader": await self.has_uploader_badge(member.id),
         }
         public_flags.update(new_values)
 
-        user_flags: List[str] = []
+        entries: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        seen_rendered: set[str] = set()
+
+        def add_entry(entry: object, key: str) -> None:
+            if not isinstance(entry, dict):
+                return
+            normalized = dict(entry)
+            normalized["_badge_key"] = key
+            source = str(normalized.get("badge_source") or "").casefold()
+            catalog_key = str(
+                normalized.get("catalog_key") or normalized.get("badge_key") or ""
+            ).casefold()
+            # Stat badges and the built-in purchasable badges use a
+            # consistent title-cased display label. Owner-given badges,
+            # purchased custom emojis, and JSON user flags are authored text
+            # and must remain exactly as supplied.
+            bought_custom = source == "purchase" and (
+                catalog_key == "purchase:custom"
+                or catalog_key.startswith("purchase:custom:")
+            )
+            if source == "stat" or (source == "purchase" and not bought_custom):
+                normalized["text"] = str(normalized.get("text") or "").title()
+            rendered = render_user_badge(normalized)
+            if not rendered or key in seen_keys or rendered in seen_rendered:
+                return
+            seen_keys.add(key)
+            seen_rendered.add(rendered)
+            normalized["_rendered"] = rendered
+            entries.append(normalized)
+
         document = refresh_user_badges()
         for flag, entry in document.get("flags", {}).items():
-            if public_flags.get(flag) and (rendered := render_user_badge(entry)):
-                user_flags.append(rendered)
+            if public_flags.get(flag):
+                add_entry(entry, f"flag:{flag}")
 
         # JSON is the editable source of the custom badge.  Owner commands
         # keep the database row and this catalog synchronized, so removing or
         # changing an entry in the file takes effect without a restart.
-        badge = get_user_badge(member.id)
-        rendered = render_user_badge(badge)
-        if rendered and rendered not in user_flags:
-            user_flags.append(rendered)
+        for index, badge in enumerate(get_user_badges(member.id)):
+            add_entry(
+                badge,
+                self._badge_entry_key(
+                    badge, self._legacy_badge_key(member.id, index, badge)
+                ),
+            )
 
-        return user_flags
+        # Purchased and stat-derived badges are persisted in PostgreSQL and
+        # cached during bot startup. They are intentionally not copied into
+        # the editable JSON catalog, so include the active runtime rows here.
+        runtime_badges = getattr(self.bot.db_cache, "user_badges", {}).get(
+            member.id, []
+        )
+        # Purchases and achievement rows can be created after startup. Read
+        # active rows when the profile is rendered so a newly earned or
+        # purchased badge appears immediately instead of waiting for a cache
+        # refresh.
+        database_badges: list[object] = []
+        database_badges_loaded = False
+        badge_service = getattr(self.bot, "badges", None)
+        if badge_service is not None:
+            try:
+                database_badges = await badge_service.owned(member.id)
+                # An empty result is authoritative: ``owned`` only returns
+                # active rows.  Do not merge the startup cache in that case,
+                # because it may still contain a badge sold/revoked after the
+                # bot started.
+                database_badges_loaded = True
+            except Exception:
+                self.bot.logger.debug(
+                    "Could not load runtime badges for user %s",
+                    member.id,
+                    exc_info=True,
+                )
+        # Prefer rows read from the database because they retain
+        # ``badge_source``/``catalog_key`` metadata. The startup cache is a
+        # fallback for rows created before the profile query is available.
+        cached_badges = () if database_badges_loaded else tuple(runtime_badges)
+        for index, raw_badge in enumerate((*database_badges, *cached_badges)):
+            if isinstance(raw_badge, dict):
+                badge = raw_badge
+            else:
+                try:
+                    badge = dict(cast(Any, raw_badge))
+                except (TypeError, ValueError):
+                    continue
+            badge_id = badge.get("id", index)
+            add_entry(
+                badge,
+                self._badge_entry_key(badge, f"db:{member.id}:{badge_id}"),
+            )
+
+        saved_order = await self._badge_order(member.id)
+        if saved_order:
+            by_key = {str(entry["_badge_key"]): entry for entry in entries}
+            ordered: list[dict[str, Any]] = []
+            added: set[str] = set()
+            for key in saved_order:
+                entry = by_key.get(key)
+                if entry is not None:
+                    ordered.append(entry)
+                    added.add(key)
+            ordered.extend(
+                entry for entry in entries if str(entry["_badge_key"]) not in added
+            )
+            entries = ordered
+
+        return entries
+
+    async def get_badges(
+        self,
+        member: Union[discord.Member, discord.User],
+        ctx: Context,
+        fetched_user: Optional[discord.User] = None,
+    ) -> List[str]:
+        """Return rendered badges for compatibility with existing callers."""
+
+        entries = await self.get_badge_entries(member, ctx, fetched_user)
+        return [str(entry["_rendered"]) for entry in entries]
 
     def join_pos(self, member: discord.Member) -> int:
         members = sorted(
@@ -1053,10 +1355,13 @@ class Info(Cog):
     async def user_info(self, ctx: Context, user: Union[discord.Member, discord.User]):
         fuser = await self.bot.fetch_user(user.id)
 
-        badges = await self.get_badges(user, ctx, fuser)
-        body_parts: list[str] = []
-        if badges:
-            body_parts.append("**Badges:**\n" + "\n".join(badges))
+        badge_entries = await self.get_badge_entries(user, ctx, fuser)
+        badge_lines = [
+            str(entry["_rendered"]) for entry in badge_entries if entry.get("_rendered")
+        ]
+        index_body = "**Badges:**\n" + "\n".join(badge_lines) if badge_lines else ""
+        profile_titles = await self._active_profile_titles(user.id)
+        profile_title = " · ".join(profile_titles) if profile_titles else None
 
         primary_guild = getattr(fuser, "primary_guild", None)
         server_tag = getattr(primary_guild, "tag", None)
@@ -1109,11 +1414,14 @@ class Info(Cog):
             ctx,
             user,
             fuser,
-            "\n\n".join(body_parts) or "No additional information.",
+            index_body,
             "\n".join(footer_lines),
             server_tag,
             f"attachment://{avatar_file.filename}",
-            fuser.accent_color or discord.Colour(self.bot.embedcolor),
+            # The command author's equipped colour takes precedence over the
+            # profile accent colour of the user being inspected.
+            ctx.embed_color,
+            profile_title,
         )
         view.message = await ctx.send(
             view=view,
@@ -1129,7 +1437,7 @@ class Info(Cog):
         pager = LayoutPager(
             source,
             ctx=ctx,
-            accent_color=self.bot.embedcolor,
+            accent_color=ctx.embedcolor,
         )
         await pager.start(ctx, e=hidden)
 
@@ -1149,13 +1457,117 @@ class Info(Cog):
         async with ctx.typing():
             await self.user_info(ctx, user)
 
+    @commands.group(name="badges", invoke_without_command=True)
+    async def badges(
+        self,
+        ctx: Context,
+        *,
+        user: Union[discord.Member, discord.User] = commands.Author,
+    ) -> None:
+        """Show a user's active profile badges."""
+
+        await self._send_badges(ctx, user)
+
+    async def _send_badges(
+        self,
+        ctx: Context,
+        user: Union[discord.Member, discord.User],
+    ) -> None:
+        """Render the badge list used by both ``badges`` and ``profile``."""
+
+        async with ctx.typing():
+            fetched = await self.bot.fetch_user(user.id)
+            entries = await self.get_badge_entries(user, ctx, fetched)
+            view = BadgeView(ctx, user, entries)
+            await ctx.send(
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+    @badges.command(name="order")
+    async def badges_order(self, ctx: Context, *, badge_order: str = "") -> None:
+        """Set the order of your badges without removing unspecified badges."""
+
+        await self._set_badge_order(ctx, badge_order)
+
+    async def _set_badge_order(self, ctx: Context, badge_order: str = "") -> None:
+        """Apply a badge order and render the resulting list."""
+
+        async with ctx.typing():
+            user = cast(Union[discord.Member, discord.User], ctx.author)
+            fetched = await self.bot.fetch_user(user.id)
+            entries = await self.get_badge_entries(user, ctx, fetched)
+            if not entries:
+                await ctx.send(
+                    view=BadgeView(ctx, user, entries, notice="You have no badges."),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+
+            selectors = _badge_order_selectors(badge_order)
+            if not selectors:
+                await ctx.send(
+                    view=BadgeView(ctx, user, entries),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+
+            def find_matches(selector: str) -> list[dict[str, Any]]:
+                folded = selector.strip().casefold()
+                exact: list[dict[str, Any]] = []
+                for entry in entries:
+                    aliases = {
+                        str(entry.get("_badge_key") or ""),
+                        str(entry.get("badge_key") or ""),
+                        str(entry.get("emoji_name") or ""),
+                        str(entry.get("text") or ""),
+                        str(entry.get("_rendered") or ""),
+                    }
+                    if any(alias.casefold() == folded for alias in aliases if alias):
+                        exact.append(entry)
+                return exact
+
+            selected: list[dict[str, Any]] = []
+            selected_keys: set[str] = set()
+            for selector in selectors:
+                matches = find_matches(selector)
+                if not matches:
+                    raise commands.BadArgument(
+                        f"Could not find an active badge matching `{selector}`."
+                    )
+                if len(matches) > 1:
+                    raise commands.BadArgument(
+                        f"`{selector}` matches multiple badges; use its badge ID or name."
+                    )
+                entry = matches[0]
+                key = str(entry["_badge_key"])
+                if key in selected_keys:
+                    continue
+                selected.append(entry)
+                selected_keys.add(key)
+
+            # Any currently active badges omitted by the user stay visible at
+            # the end, rather than being accidentally hidden by an old order.
+            selected.extend(
+                entry
+                for entry in entries
+                if str(entry["_badge_key"]) not in selected_keys
+            )
+            await self._save_badge_order(
+                user.id, [str(entry["_badge_key"]) for entry in selected]
+            )
+            await ctx.send(
+                view=BadgeView(ctx, user, selected, notice="Badge order updated."),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
     async def _send_user_avatar(
         self,
         ctx: Context,
         user: Union[discord.Member, discord.User] = commands.Author,
     ) -> None:
         fuser = await self.bot.fetch_user(user.id)
-        embed = discord.Embed(color=fuser.accent_color or self.bot.embedcolor)
+        embed = discord.Embed(color=ctx.embed_color)
         embed.set_author(name=f"{user}'s avatar", icon_url=user.display_avatar.url)
         embed.set_image(url=user.display_avatar.url)
 
@@ -1304,6 +1716,7 @@ class Info(Cog):
         raw_arguments = supplied_arguments
         selected_mode: Literal["grid", "list"] | None = None
         use_server = False
+        edit_mode = False
         selected_grid_size: tuple[int, int] | None = None
         user_arguments: list[str] = []
 
@@ -1329,6 +1742,9 @@ class Info(Cog):
                 continue
             if lowered in {"server", "guild"}:
                 use_server = True
+                continue
+            if lowered == "edit":
+                edit_mode = True
                 continue
 
             match = AVATAR_GRID_RE.fullmatch(value)
@@ -1371,6 +1787,11 @@ class Info(Cog):
         if use_server and selected_mode is None:
             selected_mode = "list"
 
+        if edit_mode and selected_mode != "list":
+            raise commands.BadArgument(
+                "Edit mode can only be used with the avatar list."
+            )
+
         if selected_mode is None:
             await self._send_user_avatar(ctx, target_user)
             return
@@ -1402,12 +1823,17 @@ class Info(Cog):
                 ctx, history_user, guild_id, grid_size=selected_grid_size
             )
         else:
-            await logging.avatars_func(ctx, history_user, guild_id)
+            await logging.avatars_func(
+                ctx,
+                history_user,
+                guild_id,
+                edit=edit_mode,
+            )
 
     @commands.command(
         name="avatar",
         aliases=("pfp", "av", "avy", "avi"),
-        extras={"usage": "[user] [history|grid|list] [server|guild] [WxH]"},
+        extras={"usage": "[user] [history|grid|list] [server|guild] [WxH] [edit]"},
     )
     async def avatar(self, ctx: Context, *, arguments: str = "") -> None:
         """Show a user's avatar, history grid, or paginated avatar list."""
@@ -1418,46 +1844,24 @@ class Info(Cog):
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.describe(
         user="Discord user, mention, ID, or name.",
-        history="Show saved avatars in a grid instead of the current avatar.",
-        list_mode="Show saved avatars as a paginated list.",
-        server="Use this server's avatars instead of global avatars.",
-        size="Grid size such as 6x7, used with history.",
     )
-    @app_commands.rename(list_mode="list", size="size")
     async def avatar_app(
         self,
         interaction: discord.Interaction,
         user: discord.User | None = None,
-        history: bool = False,
-        list_mode: bool = False,
-        server: bool = False,
-        size: str | None = None,
     ) -> None:
-        """Show a user's current avatar, history grid, or avatar list."""
-        if history and list_mode:
-            await interaction.response.send_message(
-                "Choose either history or list, not both.",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
+        """Show a user's current avatar.
 
+        Saved avatar history remains available through the text-only
+        ``avatar``/``avatarhistory`` commands.  It is deliberately omitted
+        from this app command until ``HISTORY_APP_COMMANDS_ENABLED`` is
+        enabled again.
+        """
         # ``get_context`` is parameterized with the concrete Fishie client,
         # while discord.py exposes an unparameterized client on interactions.
         # The runtime object is still the same bot instance.
         ctx = cast(Context, await self.bot.get_context(cast(Any, interaction)))
-        arguments: list[str] = []
-        if user is not None:
-            arguments.append(str(user.id))
-        if history:
-            arguments.append("history")
-        if list_mode:
-            arguments.append("list")
-        if server:
-            arguments.append("server")
-        if size:
-            arguments.append(size)
-        await self._avatar_dispatch(ctx, arguments)
+        await self._send_user_avatar(ctx, user or ctx.author)
 
     async def _ensure_avatar_history_consent(self, ctx: Context) -> bool:
         """Ask for saved-avatar consent only when ``avatar`` opens history."""
@@ -1501,7 +1905,7 @@ class Info(Cog):
         if not user.banner:
             raise commands.BadArgument("User has no banner.")
 
-        embed = discord.Embed(color=user.accent_color or self.bot.embedcolor)
+        embed = discord.Embed(color=ctx.embed_color)
         embed.set_author(name=f"{user}'s banner", icon_url=user.display_avatar.url)
 
         file = await user.banner.to_file()
@@ -1523,7 +1927,9 @@ class Info(Cog):
         """Get a user's current avatar."""
         await self._send_user_avatar(ctx, user)
 
-    @user_avatar_group.command(name="history")
+    @user_avatar_group.command(
+        name="history", with_app_command=HISTORY_APP_COMMANDS_ENABLED
+    )
     @app_commands.describe(user="User whose avatar history should be shown.")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -1536,18 +1942,26 @@ class Info(Cog):
             raise commands.BadArgument("Could not find logging cog.")
         await logging.avatars_grid(ctx, user)
 
-    @user_avatar_group.command(name="list")
-    @app_commands.describe(user="User whose saved avatars should be listed.")
+    @user_avatar_group.command(
+        name="list", with_app_command=HISTORY_APP_COMMANDS_ENABLED
+    )
+    @app_commands.describe(
+        user="User whose saved avatars should be listed.",
+        edit="Allow deleting entries from your own avatar list.",
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def user_avatar_list(
-        self, ctx: Context, *, user: discord.User = commands.Author
+        self,
+        ctx: Context,
+        user: discord.User = commands.Author,
+        edit: bool = False,
     ) -> None:
         """List a user's saved avatars."""
         logging = self.bot.logging
         if logging is None:
             raise commands.BadArgument("Could not find logging cog.")
-        await logging.avatars_func(ctx, user)
+        await logging.avatars_func(ctx, user, edit=edit)
 
     @userinfo.command(name="banner")
     @app_commands.describe(user="User whose banner should be shown.")
@@ -1591,7 +2005,7 @@ class Info(Cog):
             raise commands.BadArgument("Could not find logging cog.")
         await logging._nicknames(ctx, member)
 
-    @userinfo.command(name="usernames")
+    @userinfo.command(name="usernames", with_app_command=HISTORY_APP_COMMANDS_ENABLED)
     @app_commands.describe(user="User whose username history should be shown.")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -1604,7 +2018,11 @@ class Info(Cog):
             raise commands.BadArgument("Could not find logging cog.")
         await logging._usernames(ctx, user)
 
-    @userinfo.command(name="names", aliases=("display_names", "displaynames"))
+    @userinfo.command(
+        name="names",
+        aliases=("display_names", "displaynames"),
+        with_app_command=HISTORY_APP_COMMANDS_ENABLED,
+    )
     @app_commands.describe(user="User whose display-name history should be shown.")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -1668,6 +2086,24 @@ class Info(Cog):
         if tools is None:
             raise commands.BadArgument("Could not find tools cog.")
         await tools._user_top(ctx, user)
+
+    @userinfo.command(name="activity", aliases=("playing",))
+    @commands.guild_only()
+    @app_commands.describe(query="Activity name or server member to look up")
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def user_activity(
+        self, ctx: GuildContext, *, query: str | None = None
+    ) -> None:
+        """Show activity details and members sharing that activity."""
+        logging = self.bot.logging
+        if logging is None:
+            raise commands.BadArgument("Could not find logging cog.")
+        activity_command = getattr(logging, "activity", None)
+        callback = getattr(activity_command, "callback", None)
+        if callback is None:
+            raise commands.BadArgument("Activity commands are unavailable right now.")
+        await cast(Any, callback)(logging, ctx, query=query)
 
     @userinfo.command(
         name="status-calendar",
@@ -1783,6 +2219,23 @@ class Info(Cog):
         settings = await self._server_settings_cog()
         await settings._send_server_settings_panel(ctx)
 
+    @serverinfo.command(
+        name="firstmessage",
+        aliases=("firstmsg", "fmsg"),
+    )
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def serverinfo_firstmessage(self, ctx: GuildContext) -> None:
+        """Link to the first message sent in this channel and reply to it."""
+        fun = self.bot.get_cog("Fun")
+        firstmessage_command = getattr(fun, "firstmessage", None)
+        callback = getattr(firstmessage_command, "callback", None)
+        if callback is None:
+            raise commands.BadArgument(
+                "First-message commands are unavailable right now."
+            )
+        await cast(Any, callback)(fun, ctx)
+
     @serverinfo.group(name="edit")
     @commands.has_guild_permissions(manage_guild=True)
     @app_commands.allowed_installs(guilds=True)
@@ -1792,9 +2245,7 @@ class Info(Cog):
         settings = await self._server_settings_cog()
         await settings._send_server_settings_panel(ctx)
 
-    async def _server_edit_destination(
-        self, ctx: GuildContext, kind: str
-    ) -> None:
+    async def _server_edit_destination(self, ctx: GuildContext, kind: str) -> None:
         settings = await self._server_settings_cog()
         await settings._edit_server_destination(ctx, kind)
 
@@ -1922,6 +2373,7 @@ class Info(Cog):
     async def _icon_dispatch(self, ctx: Context, arguments: list[str]) -> None:
         """Dispatch current-server icon and saved icon history views."""
         selected_mode: Literal["grid", "list"] | None = None
+        edit_mode = False
         grid_size: tuple[int, int] | None = None
         for argument in arguments:
             value = argument.casefold()
@@ -1934,6 +2386,9 @@ class Info(Cog):
                 if selected_mode == "grid":
                     raise commands.BadArgument("Choose either history/grid or list.")
                 selected_mode = "list"
+                continue
+            if value == "edit":
+                edit_mode = True
                 continue
             match = AVATAR_GRID_RE.fullmatch(argument)
             if match:
@@ -1951,6 +2406,10 @@ class Info(Cog):
 
         if grid_size is not None:
             selected_mode = "grid"
+        if edit_mode and selected_mode != "list":
+            raise commands.BadArgument(
+                "Edit mode can only be used with the server icon list."
+            )
         if selected_mode is None:
             if ctx.guild is None:
                 raise commands.NoPrivateMessage(
@@ -1967,11 +2426,11 @@ class Info(Cog):
         if selected_mode == "grid":
             await logging.icons_grid(ctx, ctx.guild, grid_size)
         else:
-            await logging.icons_func(ctx, ctx.guild)
+            await logging.icons_func(ctx, ctx.guild, edit=edit_mode)
 
     @commands.command(
         name="icon",
-        extras={"usage": "[history|grid|list] [WxH]"},
+        extras={"usage": "[history|grid|list] [WxH] [edit]"},
     )
     async def icon(self, ctx: Context, *, arguments: str = ""):
         """Show a server icon or its saved icon history."""
@@ -1980,36 +2439,22 @@ class Info(Cog):
     @app_commands.command(name="icon")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.describe(
-        history="Show saved server icons in a grid.",
-        list_mode="Show saved server icons as a paginated list.",
-        size="Grid size such as 6x7, used with history.",
-    )
-    @app_commands.rename(list_mode="list", size="size")
     async def icon_app(
         self,
         interaction: discord.Interaction,
-        history: bool = False,
-        list_mode: bool = False,
-        size: str | None = None,
     ) -> None:
-        """Show a server icon or its saved icon history."""
-        if history and list_mode:
-            await interaction.response.send_message(
-                "Choose either history or list, not both.",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
+        """Show the current server icon.
+
+        Saved icon history remains available through the text-only ``icon``
+        command; history/list/edit options are intentionally not exposed to
+        the app-command tree for now.
+        """
         ctx = cast(Context, await self.bot.get_context(cast(Any, interaction)))
-        arguments: list[str] = []
-        if history:
-            arguments.append("history")
-        if list_mode:
-            arguments.append("list")
-        if size:
-            arguments.append(size)
-        await self._icon_dispatch(ctx, arguments)
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage(
+                "This command can only be used in a server."
+            )
+        await self.server_icon(ctx, ctx.guild)
 
     @commands.command(name="serverbanner", aliases=("sbanner",))
     async def server_banner_command(

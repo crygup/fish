@@ -282,6 +282,7 @@ def wordle_status_text(game: WordleGame) -> str:
 
 
 GuessCallback = Callable[[discord.Interaction, WordleGame, str], Awaitable[None]]
+GiveUpCallback = Callable[[discord.Interaction, WordleGame], Awaitable[None]]
 
 
 class WordleGuessModal(discord.ui.Modal, title="Enter a Wordle guess"):
@@ -316,23 +317,29 @@ class WordleBoardView(discord.ui.LayoutView):
         *,
         timeout: float = WORDLE_TIMEOUT,
         on_timeout: Callable[[WordleGame], Awaitable[None]] | None = None,
+        on_give_up: GiveUpCallback | None = None,
     ) -> None:
         super().__init__(timeout=timeout)
         self.game = game
         self.on_guess = on_guess
         self.on_timeout_callback = on_timeout
+        self.on_give_up_callback = on_give_up
         self.board_file = discord.File(render_wordle_board(game), filename="wordle.png")
         self.display = discord.ui.TextDisplay(self._text())
         self.guess_button = discord.ui.Button(
             label="Enter guess", style=discord.ButtonStyle.secondary
         )
         self.guess_button.callback = self._open_modal
+        self.give_up_button = discord.ui.Button(
+            label="Give up", style=discord.ButtonStyle.danger
+        )
+        self.give_up_button.callback = self._give_up
         self.container = discord.ui.Container(
             self.display,
             discord.ui.MediaGallery(
                 discord.MediaGalleryItem("attachment://wordle.png")
             ),
-            discord.ui.ActionRow(self.guess_button),
+            discord.ui.ActionRow(self.guess_button, self.give_up_button),
             accent_color=None,
         )
         self.add_item(self.container)
@@ -350,6 +357,7 @@ class WordleBoardView(discord.ui.LayoutView):
     def refresh(self) -> None:
         self.display.content = self._text()
         self.guess_button.disabled = self.game.completed
+        self.give_up_button.disabled = self.game.completed
         self.board_file = discord.File(
             render_wordle_board(self.game), filename="wordle.png"
         )
@@ -369,9 +377,37 @@ class WordleBoardView(discord.ui.LayoutView):
             WordleGuessModal(self.game, self.on_guess)
         )
 
+    async def _give_up(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.game.user_id:
+            await interaction.response.send_message(
+                "This Wordle game belongs to another user.", ephemeral=True
+            )
+            return
+        if self.game.completed:
+            await interaction.response.send_message(
+                "This Wordle game is already over.", ephemeral=True
+            )
+            return
+        if self.on_give_up_callback is not None:
+            await self.on_give_up_callback(interaction, self.game)
+            return
+
+        # A standalone view may be used by callers outside the Fun cog.  Keep
+        # the button useful there too, while the cog callback handles result
+        # persistence for normal and work games.
+        self.game.result = "lost"
+        self.stop()
+        self.refresh()
+        await interaction.response.edit_message(
+            view=self,
+            attachments=[self.board_file],
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     async def on_timeout(self) -> None:
         self.game.result = self.game.result or "lost"
         self.guess_button.disabled = True
+        self.give_up_button.disabled = True
         if self.on_timeout_callback is not None:
             await self.on_timeout_callback(self.game)
 
@@ -551,6 +587,7 @@ __all__ = [
     "WORDLE_TIMEOUT",
     "WORDLE_WORDS",
     "GuessState",
+    "GiveUpCallback",
     "WordleBoardView",
     "WordleGame",
     "WordleSettingsView",

@@ -8,12 +8,22 @@ import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, cast
+from uuid import uuid4
 
 import discord
 from discord.abc import Messageable
 from discord.ext import commands
 
 from core import Cog
+from core.currency import (
+    EVERYTHING_AMOUNT,
+    BalanceOverflow,
+    CoinAmountError,
+    InsufficientFunds,
+    InvalidAmount,
+    parse_coin_amount,
+)
+from extensions.fun.minigames import add_word_bomb_words, normalize_word_bomb_words
 from utils import (
     AllMsgbleChannels,
     TwemojiConverter,
@@ -21,6 +31,7 @@ from utils import (
     fish_x,
     greenTick,
     remove_user_badge,
+    remove_user_badge_entry,
     render_user_badge,
     set_user_badge,
 )
@@ -376,9 +387,7 @@ class Owner(Cog):
         emoji_name = str(get("emoji_name", ""))
         emoji_id_value = get("emoji_id")
         emoji_id = (
-            int(cast(Any, emoji_id_value))
-            if emoji_id_value is not None
-            else None
+            int(cast(Any, emoji_id_value)) if emoji_id_value is not None else None
         )
         is_custom = bool(get("is_custom", emoji_id is not None))
         animated = bool(get("animated", False)) if is_custom else False
@@ -407,6 +416,13 @@ class Owner(Cog):
                 emoji_name = match.group("name")
         else:
             emoji_name = rendered
+        if isinstance(row, dict):
+            badge_key = str(row.get("badge_key") or "custom")
+        else:
+            try:
+                badge_key = str(row["badge_key"])  # type: ignore[index]
+            except (KeyError, IndexError, TypeError):
+                badge_key = "custom"
         set_user_badge(
             user_id,
             emoji_name=emoji_name,
@@ -414,19 +430,28 @@ class Owner(Cog):
             is_custom=is_custom,
             animated=animated,
             text=text,
+            badge_key=badge_key,
         )
         cache = getattr(self.bot, "db_cache", None)
         user_badges = getattr(cache, "user_badges", None)
         if isinstance(user_badges, dict):
-            user_badges[user_id] = {
+            entry = {
                 "emoji_name": emoji_name,
                 "emoji_id": emoji_id,
                 "is_custom": is_custom,
                 "animated": animated,
                 "text": text,
                 "created_at": created_at,
-                "badge_key": "custom",
+                "badge_key": badge_key,
             }
+            current = user_badges.get(user_id)
+            if isinstance(current, list):
+                current[:] = [
+                    item for item in current if item.get("badge_key") != badge_key
+                ]
+                current.append(entry)
+            else:
+                user_badges[user_id] = [entry]
 
     def _uncache_badge(self, user_id: int) -> None:
         remove_user_badge(int(user_id))
@@ -445,14 +470,67 @@ class Owner(Cog):
             SELECT user_id, emoji_name, emoji_id, is_custom, animated, badge_key,
                    text, created_at
             FROM user_badges
-            WHERE user_id = $1 AND badge_key = 'custom'
+            WHERE user_id = $1 AND badge_key LIKE 'custom:%'
             ORDER BY id DESC
             LIMIT 1
             """,
             int(user_id),
         )
 
-    @commands.group(name="badge", aliases=("badges",), invoke_without_command=True)
+    async def _badges_for_user(self, user_id: int) -> list[object]:
+        return list(
+            await self.bot.pool.fetch(
+                """
+                SELECT id, user_id, emoji_name, emoji_id, is_custom, animated,
+                       badge_key, text, created_at
+                FROM user_badges
+                WHERE user_id = $1 AND badge_key LIKE 'custom:%'
+                ORDER BY id
+                """,
+                int(user_id),
+            )
+        )
+
+    async def _select_badge(self, user_id: int, selector: str) -> object:
+        rows = await self._badges_for_user(user_id)
+        if not rows:
+            raise commands.BadArgument(
+                f"{self._badge_user_text(await self.bot.fetch_user(user_id))} "
+                "does not have any custom badges."
+            )
+        value = str(selector).strip()
+        matches: list[object] = []
+        if value.isdigit():
+            number = int(value)
+            matches = [
+                row for row in rows if int(row["id"]) == number  # type: ignore[index]
+            ]
+            if not matches and 1 <= number <= len(rows):
+                matches = [rows[number - 1]]
+        else:
+            folded = value.casefold()
+            matches = [
+                row
+                for row in rows
+                if str(row["text"]).casefold() == folded  # type: ignore[index]
+                or str(row["emoji_name"]).casefold() == folded  # type: ignore[index]
+                or str(row["badge_key"]).casefold() == folded  # type: ignore[index]
+            ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise commands.BadArgument(
+                "That selector matches multiple badges; use the badge ID."
+            )
+        descriptions = [
+            f"{index}. {row['text']} (ID: {row['id']})"  # type: ignore[index]
+            for index, row in enumerate(rows, 1)
+        ]
+        raise commands.BadArgument(
+            "Could not find that badge. Available badges: " + "; ".join(descriptions)
+        )
+
+    @commands.group(name="badge", invoke_without_command=True)
     async def badge(self, ctx: Context) -> None:
         """Give, edit, or clear a user's custom userinfo badge."""
         await ctx.send_help(ctx.command)
@@ -470,15 +548,15 @@ class Owner(Cog):
 
         emoji_name, emoji_id, is_custom, rendered, animated = self._badge_emoji(emoji)
         badge_name = self._badge_name(name)
+        badge_key = f"custom:{uuid4().hex}"
         row = await self.bot.pool.fetchrow(
             """
             INSERT INTO user_badges (
                 user_id, emoji_name, emoji_id, is_custom, unicode, animated,
                 badge_key, text
             )
-            VALUES ($1, $2, $3, $4, $5, $6, 'custom', $7)
-            ON CONFLICT (user_id, badge_key) DO NOTHING
-            RETURNING user_id, emoji_name, emoji_id, is_custom, animated,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, user_id, emoji_name, emoji_id, is_custom, animated,
                       badge_key, text, created_at
             """,
             user.id,
@@ -487,17 +565,16 @@ class Owner(Cog):
             is_custom,
             not is_custom,
             animated,
+            badge_key,
             badge_name,
         )
         if row is None:
-            raise commands.BadArgument(
-                f"{self._badge_user_text(user)} already has a custom badge. "
-                "Use `badge edit emoji` or `badge edit name`."
-            )
+            raise commands.BadArgument("Could not save that badge.")
         self._cache_badge(row)
         display_name = discord.utils.escape_markdown(badge_name)
         await ctx.send(
-            f"Gave {self._badge_user_text(user)} the {rendered} {display_name} badge.",
+            f"Gave {self._badge_user_text(user)} the {rendered} {display_name} "
+            f"badge (ID: `{row['id']}`).",
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -516,16 +593,19 @@ class Owner(Cog):
         """Change the emoji on a user's custom badge."""
 
         emoji_name, emoji_id, is_custom, rendered, animated = self._badge_emoji(emoji)
+        selected = await self._select_badge(user.id, "1")
+        selected_key = str(selected["badge_key"])  # type: ignore[index]
         row = await self.bot.pool.fetchrow(
             """
             UPDATE user_badges
-            SET emoji_name = $2, emoji_id = $3, is_custom = $4,
-                unicode = $5, animated = $6
-            WHERE user_id = $1 AND badge_key = 'custom'
+            SET emoji_name = $3, emoji_id = $4, is_custom = $5,
+                unicode = $6, animated = $7
+            WHERE user_id = $1 AND badge_key = $2
             RETURNING user_id, emoji_name, emoji_id, is_custom, animated,
                       badge_key, text, created_at
             """,
             user.id,
+            selected_key,
             emoji_name,
             emoji_id,
             is_custom,
@@ -556,15 +636,18 @@ class Owner(Cog):
         """Change the display name on a user's custom badge."""
 
         badge_name = self._badge_name(name)
+        selected = await self._select_badge(user.id, "1")
+        selected_key = str(selected["badge_key"])  # type: ignore[index]
         row = await self.bot.pool.fetchrow(
             """
             UPDATE user_badges
-            SET text = $2
-            WHERE user_id = $1 AND badge_key = 'custom'
+            SET text = $3
+            WHERE user_id = $1 AND badge_key = $2
             RETURNING user_id, emoji_name, emoji_id, is_custom, animated,
                       badge_key, text, created_at
             """,
             user.id,
+            selected_key,
             badge_name,
         )
         if row is None:
@@ -587,7 +670,7 @@ class Owner(Cog):
         row = await self.bot.pool.fetchrow(
             """
             DELETE FROM user_badges
-            WHERE user_id = $1 AND badge_key = 'custom'
+            WHERE user_id = $1 AND badge_key LIKE 'custom:%'
             RETURNING user_id
             """,
             user.id,
@@ -602,10 +685,190 @@ class Owner(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    @badge.command(name="remove")
+    async def badge_remove(
+        self,
+        ctx: Context,
+        user: discord.User,
+        *,
+        badge: str,
+    ) -> None:
+        """Remove one custom badge by its ID, number, name, or emoji."""
+
+        selected = await self._select_badge(user.id, badge)
+        badge_id = int(selected["id"])  # type: ignore[index]
+        row = await self.bot.pool.fetchrow(
+            """
+            DELETE FROM user_badges
+            WHERE id = $1 AND user_id = $2 AND badge_key LIKE 'custom:%'
+            RETURNING id, badge_key, text
+            """,
+            badge_id,
+            user.id,
+        )
+        if row is None:
+            raise commands.BadArgument("That badge no longer exists.")
+        remove_user_badge_entry(user.id, str(row["badge_key"]))
+        cache = getattr(self.bot, "db_cache", None)
+        user_badges = getattr(cache, "user_badges", None)
+        if isinstance(user_badges, dict):
+            entries = user_badges.get(user.id)
+            if isinstance(entries, list):
+                entries[:] = [
+                    entry
+                    for entry in entries
+                    if entry.get("badge_key") != str(row["badge_key"])
+                ]
+                if not entries:
+                    user_badges.pop(user.id, None)
+        await ctx.send(
+            f"Removed badge `{badge_id}` from {self._badge_user_text(user)}.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     @commands.group(name="dev", invoke_without_command=True)
     async def dev(self, ctx: Context) -> None:
         """Owner-only development and maintenance commands."""
         await ctx.send_help(ctx.command)
+
+    @dev.group(
+        name="wordbomb",
+        aliases=("wb", "word-bomb"),
+        invoke_without_command=True,
+    )
+    async def dev_wordbomb(self, ctx: Context) -> None:
+        """Manage custom valid words for Word Bomb."""
+        await ctx.send_help(ctx.command)
+
+    @dev_wordbomb.command(name="add", aliases=("allow", "word"))
+    async def dev_wordbomb_add(self, ctx: Context, *, words: str) -> None:
+        """Add one or more alphabetic words to the Word Bomb dictionary."""
+
+        values = re.split(r"[\s,;]+", words)
+        normalized = normalize_word_bomb_words(values)
+        if not normalized:
+            raise commands.BadArgument(
+                "Provide one or more alphabetic words at least two letters long."
+            )
+        if len(normalized) > 100:
+            raise commands.BadArgument("You can add at most 100 words at a time.")
+
+        added: list[str] = []
+        for word in normalized:
+            row = await self.bot.pool.fetchrow(
+                """
+                INSERT INTO wordbomb_custom_words (word, added_by)
+                VALUES ($1, $2)
+                ON CONFLICT (word) DO NOTHING
+                RETURNING word
+                """,
+                word,
+                ctx.author.id,
+            )
+            if row is not None:
+                added.append(str(row["word"]))
+        add_word_bomb_words(added)
+
+        if added:
+            result = ", ".join(f"`{word}`" for word in added)
+            await ctx.send(
+                f"Added {len(added)} custom Word Bomb word(s): {result}.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        else:
+            await ctx.send(
+                "Those words are already in the Word Bomb dictionary.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+    @dev.group(name="currency", aliases=("coins",), invoke_without_command=True)
+    async def dev_currency(self, ctx: Context) -> None:
+        """Add or remove Coins from a user's wallet."""
+        await ctx.send_help(ctx.command)
+
+    @dev_currency.command(name="add", aliases=("give",))
+    async def dev_currency_add(
+        self,
+        ctx: Context,
+        user: discord.User,
+        amount: object,
+        *extra_amount: str,
+    ) -> None:
+        """Add Coins to a user's wallet."""
+        amount_expression = " ".join((str(amount), *extra_amount))
+        try:
+            parsed_amount = parse_coin_amount(amount_expression)
+        except CoinAmountError as error:
+            raise commands.BadArgument(str(error)) from error
+        if parsed_amount == EVERYTHING_AMOUNT:
+            raise commands.BadArgument(
+                "Use a numeric amount for developer Coin grants."
+            )
+        amount = int(parsed_amount)
+        try:
+            wallet = await self.bot.currency.credit(
+                user.id,
+                amount,
+                f"dev_add:{ctx.author.id}",
+            )
+        except InvalidAmount as error:
+            raise commands.BadArgument(str(error)) from error
+        except BalanceOverflow as error:
+            raise commands.BadArgument(str(error)) from error
+        await ctx.send(
+            f"Added **{amount:,} Coins** to {user}.\n"
+            f"-# Wallet balance: {wallet.balance:,} Coins",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @dev_currency.command(name="remove", aliases=("take", "subtract"))
+    async def dev_currency_remove(
+        self,
+        ctx: Context,
+        user: discord.User,
+        amount: object,
+        *extra_amount: str,
+    ) -> None:
+        """Remove Coins from a user's wallet."""
+        amount_expression = " ".join((str(amount), *extra_amount))
+        try:
+            parsed_amount = parse_coin_amount(amount_expression)
+        except CoinAmountError as error:
+            raise commands.BadArgument(str(error)) from error
+        if parsed_amount == EVERYTHING_AMOUNT:
+            wallet = await self.bot.currency.get_wallet(user.id)
+            amount = int(wallet.balance)
+            if amount <= 0:
+                raise commands.BadArgument(f"{user} has no Coins to remove.")
+            if (
+                await ctx.prompt(
+                    f"Are you sure you want to remove everything from {user.mention}?",
+                    confirm_label="Yes",
+                    cancel_label="No",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                is None
+            ):
+                return
+        else:
+            amount = int(parsed_amount)
+        try:
+            wallet = await self.bot.currency.debit(
+                user.id,
+                amount,
+                f"dev_remove:{ctx.author.id}",
+            )
+        except InvalidAmount as error:
+            raise commands.BadArgument(str(error)) from error
+        except InsufficientFunds as error:
+            raise commands.BadArgument(
+                f"{user} only has **{error.balance:,} Coins**."
+            ) from error
+        await ctx.send(
+            f"Removed **{amount:,} Coins** from {user}.\n"
+            f"-# Wallet balance: {wallet.balance:,} Coins",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @dev.group(name="video", invoke_without_command=True)
     async def dev_video(self, ctx: Context) -> None:
@@ -982,8 +1245,13 @@ class Owner(Cog):
             except discord.HTTPException:
                 return False
 
+        application_id = getattr(self.bot, "active_application_id", None)
+        if callable(application_id):
+            application_id = application_id()
+        if application_id is None:
+            application_id = self.bot.config["ids"]["bot_id"]
         invite_url = discord.utils.oauth_url(
-            self.bot.config["ids"]["bot_id"], permissions=self.bot.bot_permissions
+            int(application_id), permissions=self.bot.bot_permissions
         )
         view = GuildRemovalNoticeView(
             guild,
@@ -1091,7 +1359,7 @@ class Owner(Cog):
         await self.bot.change_presence(activity=activity)
         await ctx.send(f"Custom status updated to: {text}")
 
-    @commands.command(name="shutdown", aliases=("restart",))
+    @commands.command(name="shutdown")
     async def shutdown(self, ctx: Context) -> None:
         """Gracefully stop Fishie so Docker can restart it."""
         message = await ctx.send("Restarting Fishie...")

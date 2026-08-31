@@ -60,12 +60,6 @@
       "is_custom": true,
       "text": "Bot Developer"
     },
-    "verified_bot": {
-      "emoji_name": "bot",
-      "emoji_id": 949147432598515723,
-      "is_custom": true,
-      "text": "Verified Bot"
-    },
     "discord_certified_moderator": {
       "emoji_name": "certified_moderator",
       "emoji_id": 949147443264622643,
@@ -107,6 +101,12 @@
       "emoji_id": 949147454991896616,
       "is_custom": true,
       "text": "Nitro"
+    },
+    "uploader": {
+      "emoji_name": "📤",
+      "emoji_id": null,
+      "is_custom": false,
+      "text": "Uploader"
     }
   },
   "users": {
@@ -140,13 +140,23 @@
       "is_custom": false,
       "text": "Jane"
     },
-    "766953372309127168": {
-      "emoji_name": "drpepper",
-      "emoji_id": 1526723524587421778,
-      "is_custom": true,
-      "animated": true,
-      "text": "z"
-    },
+    "766953372309127168": [
+      {
+        "emoji_name": "drpepper",
+        "emoji_id": 1526723524587421778,
+        "is_custom": true,
+        "animated": true,
+        "text": "z"
+      },
+      {
+        "emoji_name": "gup",
+        "emoji_id": 1004422894056656916,
+        "is_custom": true,
+        "animated": true,
+        "text": "gup",
+        "badge_key": "custom:b48706a4876f4e6eaea42f5e477632d9"
+      }
+    ],
     "639539828400062485": {
       "emoji_name": "jpj",
       "emoji_id": 1132056944308400220,
@@ -168,13 +178,23 @@
       "animated": true,
       "text": "Razy"
     },
-    "671777334906454026": {
-      "emoji_name": "kaylynn",
-      "emoji_id": 1132059155272831076,
-      "is_custom": true,
-      "animated": true,
-      "text": "kay"
-    },
+    "671777334906454026": [
+      {
+        "emoji_name": "kaylynn",
+        "emoji_id": 1132059155272831076,
+        "is_custom": true,
+        "animated": true,
+        "text": "kay"
+      },
+      {
+        "emoji_name": "🖥️",
+        "emoji_id": null,
+        "is_custom": false,
+        "animated": false,
+        "text": "Contributor",
+        "badge_key": "custom:62ae1384aab64c77bb6df0a551a7d8e2"
+      }
+    ],
     "809275012980539453": {
       "emoji_name": "regor",
       "emoji_id": 1132163863262019715,
@@ -240,12 +260,22 @@
       "animated": true,
       "text": "Yaz"
     },
-    "349373972103561218": {
-      "emoji_name": "leo",
-      "emoji_id": 1132065439409770606,
-      "is_custom": true,
-      "text": "Leonardo"
-    },
+    "349373972103561218": [
+      {
+        "emoji_name": "leo",
+        "emoji_id": 1132065439409770606,
+        "is_custom": true,
+        "text": "Leonardo"
+      },
+      {
+        "emoji_name": "🖥️",
+        "emoji_id": null,
+        "is_custom": false,
+        "animated": false,
+        "text": "Contributor",
+        "badge_key": "custom:9db678db329146f2a408f47c9dc6fffe"
+      }
+    ],
     "1034697215991619584": {
       "emoji_name": "🤓",
       "emoji_id": null,
@@ -332,6 +362,53 @@
       "is_custom": true,
       "animated": false,
       "text": "elmanchip"
-    }
+    },
+    "1374443296637718721": {
+      "emoji_name": "♥️",
+      "emoji_id": null,
+      "is_custom": false,
+      "animated": false,
+      "text": "zo"
+    },
+    "891372917978452028": [
+      {
+        "emoji_name": "👑",
+        "emoji_id": null,
+        "is_custom": false,
+        "animated": false,
+        "text": "Legend of Table",
+        "badge_key": "custom:888d31475c834a53bad1c8651f21afd9"
+      }
+    ],
+    "651454696208465941": [
+      {
+        "emoji_name": "🖥️",
+        "emoji_id": null,
+        "is_custom": false,
+        "animated": false,
+        "text": "Contributor",
+        "badge_key": "custom:2e4c1f63d6ff4392b5e0a7daa40709c4"
+      }
+    ],
+    "876391494485950504": [
+      {
+        "emoji_name": "🐟",
+        "emoji_id": null,
+        "is_custom": false,
+        "animated": false,
+        "text": "fishie",
+        "badge_key": "custom:a2a491c47a494e629f3a1aecdb895fd5"
+      }
+    ],
+    "739807659980750891": [
+      {
+        "emoji_name": "🩷",
+        "emoji_id": null,
+        "is_custom": false,
+        "animated": false,
+        "text": "goat",
+        "badge_key": "custom:c7abdf40d59f4289a0270fbdcc3ac6e7"
+      }
+    ]
   }
 }

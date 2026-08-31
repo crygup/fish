@@ -9,6 +9,12 @@ from typing import TYPE_CHECKING, Any
 
 import discord
 
+from core.badges import schedule_stat_badge_refresh
+from core.currency import award_daily_capped_coins
+
+from .connectfour_solver import ScoredMove, score_moves
+from .pvp import DuelBidView
+
 if TYPE_CHECKING:
     from extensions.context import Context
 
@@ -17,6 +23,11 @@ ROWS = 6
 COLS = 7
 CONNECT = 4
 MOVE_TIMEOUT = 60.0
+BOT_WIN_COIN_REWARDS = {
+    "easy": (50, 10_000),
+    "normal": (200, 10_000),
+    "hard": (1_000, 10_000),
+}
 COLORS = ("yellow", "red")
 COLOR_EMOJIS = {
     "empty": "\U000026aa",
@@ -26,6 +37,30 @@ COLOR_EMOJIS = {
 
 
 Board = list[list[str | None]]
+
+
+def other_color(color: str) -> str:
+    """Return the opposing Connect Four color."""
+
+    if color == "yellow":
+        return "red"
+    if color == "red":
+        return "yellow"
+    raise ValueError("Unknown Connect Four color.")
+
+
+def random_starting_color() -> str:
+    """Choose either color with equal probability."""
+
+    return COLORS[random.getrandbits(1)]
+
+
+def random_player_colors(first_player_id: int, second_player_id: int) -> dict[str, int]:
+    """Assign Red to a randomly selected first player and Yellow to the other."""
+
+    if random_starting_color() == "red":
+        return {"red": first_player_id, "yellow": second_player_id}
+    return {"red": second_player_id, "yellow": first_player_id}
 
 
 def new_board() -> Board:
@@ -97,104 +132,6 @@ def board_result(board: Board, color: str | None = None) -> str | None:
     return None
 
 
-def _window_score(window: list[str | None], ai_color: str, human_color: str) -> int:
-    ai_count = window.count(ai_color)
-    human_count = window.count(human_color)
-    empty_count = window.count(None)
-    if ai_count == CONNECT:
-        return 100_000
-    if ai_count == 3 and empty_count == 1:
-        return 100
-    if ai_count == 2 and empty_count == 2:
-        return 10
-    if human_count == 3 and empty_count == 1:
-        return -120
-    if human_count == 2 and empty_count == 2:
-        return -8
-    return 0
-
-
-def _heuristic(board: Board, ai_color: str, human_color: str) -> int:
-    score = 0
-    center = [board[row][COLS // 2] for row in range(ROWS)]
-    score += center.count(ai_color) * 6
-    score -= center.count(human_color) * 4
-
-    for row in range(ROWS):
-        for column in range(COLS - 3):
-            score += _window_score(
-                board[row][column : column + CONNECT], ai_color, human_color
-            )
-    for row in range(ROWS - 3):
-        for column in range(COLS):
-            score += _window_score(
-                [board[row + offset][column] for offset in range(CONNECT)],
-                ai_color,
-                human_color,
-            )
-    for row in range(ROWS - 3):
-        for column in range(COLS - 3):
-            score += _window_score(
-                [board[row + offset][column + offset] for offset in range(CONNECT)],
-                ai_color,
-                human_color,
-            )
-    for row in range(ROWS - 3):
-        for column in range(3, COLS):
-            score += _window_score(
-                [board[row + offset][column - offset] for offset in range(CONNECT)],
-                ai_color,
-                human_color,
-            )
-    return score
-
-
-def _minimax(
-    board: Board,
-    depth: int,
-    maximizing: bool,
-    ai_color: str,
-    human_color: str,
-    alpha: int,
-    beta: int,
-) -> int:
-    result = board_result(board)
-    if result == ai_color:
-        return 1_000_000 + depth
-    if result == human_color:
-        return -1_000_000 - depth
-    if result == "draw" or depth == 0:
-        return _heuristic(board, ai_color, human_color)
-
-    columns = sorted(legal_columns(board), key=lambda value: abs(value - COLS // 2))
-    if maximizing:
-        value = -(10**9)
-        for column in columns:
-            drop_piece(board, column, ai_color)
-            value = max(
-                value,
-                _minimax(board, depth - 1, False, ai_color, human_color, alpha, beta),
-            )
-            _undo_drop(board, column)
-            alpha = max(alpha, value)
-            if alpha >= beta:
-                break
-        return value
-
-    value = 10**9
-    for column in columns:
-        drop_piece(board, column, human_color)
-        value = min(
-            value,
-            _minimax(board, depth - 1, True, ai_color, human_color, alpha, beta),
-        )
-        _undo_drop(board, column)
-        beta = min(beta, value)
-        if alpha >= beta:
-            break
-    return value
-
-
 def _undo_drop(board: Board, column: int) -> None:
     # Pieces are stacked from the bottom, so the most recent drop is the
     # highest occupied cell in this contiguous column stack.
@@ -204,8 +141,36 @@ def _undo_drop(board: Board, column: int) -> None:
             return
 
 
+def _select_hard_move(moves: tuple[ScoredMove, ...]) -> int:
+    """Apply Fishie's rare blunders without overriding forced tactics."""
+
+    best_move = moves[0]
+    if best_move.tactical in {"win", "block"}:
+        tactical_best = [
+            move.column
+            for move in moves
+            if move.score == best_move.score and move.tactical == best_move.tactical
+        ]
+        return random.choice(tactical_best or [best_move.column])
+
+    best_score = best_move.score
+    best = [move.column for move in moves if move.score == best_score]
+    worst_score = moves[-1].score
+    worst = [move.column for move in moves if move.score == worst_score]
+    middle = [
+        move.column
+        for move in moves
+        if move.score != best_score and move.score != worst_score
+    ]
+    if random.randrange(1000) == 0:
+        return random.choice(worst)
+    if random.randrange(500) == 0 and middle:
+        return random.choice(middle)
+    return random.choice(best)
+
+
 def choose_ai_move(board: Board, ai_color: str, difficulty: str) -> int:
-    """Choose a legal column, with hard mode using a shallow alpha-beta search."""
+    """Choose a legal column for the requested difficulty."""
 
     columns = legal_columns(board)
     if not columns:
@@ -236,28 +201,7 @@ def choose_ai_move(board: Board, ai_color: str, difficulty: str) -> int:
         center_options = [column for column in columns if column in (2, 3, 4)]
         return random.choice(center_options or columns)
 
-    scored: list[tuple[int, int]] = []
-    for column in columns:
-        drop_piece(board, column, ai_color)
-        score = _minimax(board, 4, False, ai_color, human_color, -(10**9), 10**9)
-        _undo_drop(board, column)
-        scored.append((score, column))
-    best_score = max(score for score, _column in scored)
-    worst_score = min(score for score, _column in scored)
-    best = [column for score, column in scored if score == best_score]
-    worst = [column for score, column in scored if score == worst_score]
-    middle = [
-        column
-        for score, column in scored
-        if score != best_score and score != worst_score
-    ]
-    # Match Tic-Tac-Toe's hard-mode personality: an extremely rare bad move
-    # and a 1-in-500 middle move, while otherwise selecting the best result.
-    if random.randrange(1000) == 0:
-        return random.choice(worst)
-    if random.randrange(500) == 0 and middle:
-        return random.choice(middle)
-    return random.choice(best)
+    return _select_hard_move(score_moves(board, ai_color))
 
 
 def board_text(game: "ConnectFourGame") -> str:
@@ -299,6 +243,14 @@ class ConnectFourGame:
     message: discord.Message | None = None
     view: discord.ui.LayoutView | None = None
     recorded: bool = False
+    coin_reward: int = 0
+    # The winner's total PvP wager pool, retained for the completed-board
+    # summary after the individual wager reservations are settled and cleared.
+    pvp_payout: int = 0
+    # Reserved player-vs-player wagers. Bot matches keep this empty.
+    wager_ids: dict[int, int] = field(default_factory=dict)
+    wager_stakes: dict[int, int] = field(default_factory=dict)
+    wager_stake: int = 0
     move_timeout_task: asyncio.Task[None] | None = field(default=None, repr=False)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
@@ -317,13 +269,38 @@ class ConnectFourGame:
 
     @property
     def player_ids(self) -> tuple[int, int]:
-        return self.players["yellow"], self.players["red"]
+        # Keep the public player order consistent with the board assignment:
+        # player 1 (Red) is followed by player 2 (Yellow).
+        return self.players["red"], self.players["yellow"]
 
     @property
     def bot_id(self) -> int | None:
         if not self.against_bot:
             return None
-        return self.players["red"]
+        return next(
+            (
+                player_id
+                for player_id in self.player_ids
+                if player_id != self.started_by_id
+            ),
+            None,
+        )
+
+    @property
+    def human_id(self) -> int | None:
+        if not self.against_bot:
+            return None
+        return self.started_by_id
+
+    @property
+    def bot_color(self) -> str | None:
+        bot_id = self.bot_id
+        return self.color_for(bot_id) if bot_id is not None else None
+
+    @property
+    def human_color(self) -> str | None:
+        human_id = self.human_id
+        return self.color_for(human_id) if human_id is not None else None
 
     def color_for(self, user_id: int) -> str | None:
         for color, player_id in self.players.items():
@@ -336,9 +313,9 @@ class ConnectFourBoardView(discord.ui.LayoutView):
     def __init__(self, game: ConnectFourGame):
         super().__init__(timeout=None)
         self.game = game
+        self.rematch_confirmed: set[int] = set()
         self.display = discord.ui.TextDisplay(self.content())
         self.footer = discord.ui.TextDisplay(self.footer_content())
-        self.rematch_confirmed: set[int] = set()
         self.left = discord.ui.Button(label="<", style=discord.ButtonStyle.secondary)
         self.place = discord.ui.Button(
             label="Place", style=discord.ButtonStyle.secondary
@@ -387,6 +364,10 @@ class ConnectFourBoardView(discord.ui.LayoutView):
                 status = f"{forfeited} forfeited after 60 seconds. {winner} wins!"
             else:
                 status = f"{winner} wins!"
+            if self.game.pvp_payout:
+                status = f"{winner} wins {self.game.pvp_payout:,} Coins!"
+            if self.game.coin_reward:
+                status += f" · Earned {self.game.coin_reward:,} Coins"
             if self.rematch_confirmed:
                 confirmed_names = ", ".join(
                     discord.utils.escape_markdown(self.game.names[user_id])
@@ -399,8 +380,8 @@ class ConnectFourBoardView(discord.ui.LayoutView):
             )
             status = f"{current}'s turn"
         return (
-            f"{COLOR_EMOJIS['yellow']} {yellow} · "
-            f"{COLOR_EMOJIS['red']} {red} · {status}"
+            f"{COLOR_EMOJIS['red']} {red} · "
+            f"{COLOR_EMOJIS['yellow']} {yellow} · {status}"
         )
 
     def refresh(self) -> None:
@@ -438,9 +419,16 @@ class ConnectFourBoardView(discord.ui.LayoutView):
                 )
                 return
             if self.game.against_bot:
-                if interaction.user.id != self.game.players["yellow"]:
+                if interaction.user.id != self.game.human_id:
+                    bot_id = self.game.bot_id
+                    bot_name = (
+                        self.game.names.get(bot_id, "Fishie")
+                        if bot_id is not None
+                        else "Fishie"
+                    )
                     await interaction.response.send_message(
-                        "Only the player can start another game against Fishie.",
+                        "Only the player can start another game against "
+                        f"{discord.utils.escape_markdown(bot_name)}.",
                         ephemeral=True,
                     )
                     return
@@ -466,13 +454,24 @@ class ConnectFourBoardView(discord.ui.LayoutView):
 
 
 class ConnectFourSetupView(discord.ui.LayoutView):
-    def __init__(self, controller: "ConnectFourController", ctx: Context):
+    def __init__(
+        self,
+        controller: "ConnectFourController",
+        ctx: Context,
+        opponent: discord.abc.User | None = None,
+    ):
         super().__init__(timeout=60)
         self.controller = controller
         self.ctx = ctx
+        self.opponent = opponent
         self.message: discord.Message | None = None
+        opponent_name = (
+            getattr(opponent, "name", None) if opponent is not None else "Fishie"
+        ) or "Fishie"
         self.display = discord.ui.TextDisplay(
-            "## Connect Four\nChoose a difficulty to play against Fishie."
+            "## Connect Four\n"
+            f"Choose a difficulty to play against "
+            f"{discord.utils.escape_markdown(opponent_name)}."
         )
         buttons: list[discord.ui.Button] = []
         for difficulty in ("easy", "normal", "hard"):
@@ -505,7 +504,10 @@ class ConnectFourSetupView(discord.ui.LayoutView):
 
     async def _select(self, interaction: discord.Interaction, difficulty: str) -> None:
         game = await self.controller.start_bot_game(
-            self.ctx, difficulty, interaction=interaction
+            self.ctx,
+            difficulty,
+            interaction=interaction,
+            opponent=self.opponent,
         )
         if game is not None:
             self.stop()
@@ -530,11 +532,14 @@ class ConnectFourChallengeView(discord.ui.LayoutView):
         controller: "ConnectFourController",
         ctx: Context,
         opponent: discord.abc.User,
+        *,
+        challenger_bid: int | None = None,
     ):
         super().__init__(timeout=60)
         self.controller = controller
         self.ctx = ctx
         self.opponent = opponent
+        self.challenger_bid = challenger_bid
         self.message: discord.Message | None = None
         self.display = discord.ui.TextDisplay(
             f"## Connect Four\n{opponent.mention}, you have been challenged. Do you want to play?"
@@ -563,6 +568,52 @@ class ConnectFourChallengeView(discord.ui.LayoutView):
         return False
 
     async def _accept(self, interaction: discord.Interaction) -> None:
+        if self.challenger_bid is not None:
+
+            async def on_ready(
+                ready_interaction: discord.Interaction,
+                stakes: tuple[int, int],
+            ) -> None:
+                try:
+                    await self.controller.start_user_game(
+                        self.ctx,
+                        self.opponent,
+                        interaction=ready_interaction,
+                        stakes=stakes,
+                    )
+                except Exception as exc:
+                    self.controller.bot.logger.exception(
+                        "Failed to start wagered Connect Four duel"
+                    )
+                    if ready_interaction.response.is_done():
+                        await ready_interaction.followup.send(
+                            f"I couldn't start that wagered game: {exc}",
+                            ephemeral=True,
+                        )
+                    else:
+                        await ready_interaction.response.send_message(
+                            f"I couldn't start that wagered game: {exc}",
+                            ephemeral=True,
+                        )
+
+            bid_view = DuelBidView(
+                self.ctx,
+                self.ctx.author,
+                self.opponent,
+                game_name="Connect Four",
+                challenger_bid=self.challenger_bid,
+                on_ready=on_ready,
+            )
+            bid_view.message = self.message
+            await interaction.response.edit_message(
+                # Both the challenge and bid prompts use Components V2.  Do
+                # not send a content field while updating an existing V2
+                # message; Discord rejects it with error 50035.
+                view=bid_view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            self.stop()
+            return
         game = await self.controller.start_user_game(
             self.ctx, self.opponent, interaction=interaction
         )
@@ -677,7 +728,7 @@ class ConnectFourController:
 
     def _register(self, game: ConnectFourGame) -> None:
         for user_id in game.player_ids:
-            if not game.against_bot or user_id == game.players["yellow"]:
+            if not game.against_bot or user_id == game.human_id:
                 self.games[user_id] = game
 
     def remove_game(self, game: ConnectFourGame) -> None:
@@ -705,6 +756,52 @@ class ConnectFourController:
         self.cancel_timeout(game)
         if game.result is None:
             game.move_timeout_task = asyncio.create_task(self._timeout(game))
+
+    async def award_bot_win(self, game: ConnectFourGame) -> int:
+        """Award a capped daily Coin reward for a human win against Fishie."""
+
+        if not game.against_bot or game.result not in COLORS:
+            return 0
+        winner_id = game.players[game.result]
+        if winner_id == game.bot_id:
+            return 0
+        difficulty = (game.difficulty or "").casefold()
+        reward = BOT_WIN_COIN_REWARDS.get(difficulty)
+        if reward is None:
+            return 0
+        amount, daily_cap = reward
+        return await award_daily_capped_coins(
+            self.bot.pool,
+            winner_id,
+            amount,
+            daily_cap,
+            f"game_connectfour_{difficulty}",
+        )
+
+    async def _play_bot_turn(self, game: ConnectFourGame) -> None:
+        """Play and record Fishie's turn using its assigned color."""
+
+        bot_color = game.bot_color
+        bot_id = game.bot_id
+        if bot_color is None or bot_id is None or game.current_color != bot_color:
+            return
+        ai_column = await asyncio.to_thread(
+            choose_ai_move,
+            game.board,
+            bot_color,
+            game.difficulty or "normal",
+        )
+        ai_row = drop_piece(game.board, ai_column, bot_color)
+        game.record_move(
+            color=bot_color,
+            player_id=bot_id,
+            column=ai_column,
+            row=ai_row,
+        )
+        game.selected_column = COLS // 2
+        game.result = board_result(game.board, bot_color)
+        if game.result is None:
+            game.current_color = other_color(bot_color)
 
     async def _timeout(self, game: ConnectFourGame) -> None:
         try:
@@ -754,13 +851,37 @@ class ConnectFourController:
                 view=view, allowed_mentions=discord.AllowedMentions.none()
             )
 
+    async def _edit_interaction_view(
+        self,
+        interaction: discord.Interaction,
+        view: discord.ui.LayoutView,
+    ) -> discord.Message | None:
+        """Edit a component response whether or not it was deferred."""
+
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(
+                view=view, allowed_mentions=discord.AllowedMentions.none()
+            )
+            return interaction.message
+        if interaction.message is not None:
+            return await interaction.message.edit(
+                view=view, allowed_mentions=discord.AllowedMentions.none()
+            )
+        return await interaction.edit_original_response(
+            view=view, allowed_mentions=discord.AllowedMentions.none()
+        )
+
     async def start_bot_game(
         self,
         ctx: Context,
         difficulty: str,
         *,
         interaction: discord.Interaction | None = None,
+        opponent: discord.abc.User | None = None,
     ) -> ConnectFourGame | None:
+        # Keep Fishie's ID as the logical opponent so game history, rewards,
+        # and leaderboards continue to be attributed to Fishie.  A supplied
+        # bot is only a display name for the otherwise identical house game.
         bot_id = (
             self.bot.user.id if self.bot.user else int(self.bot.config["ids"]["bot_id"])
         )
@@ -772,21 +893,36 @@ class ConnectFourController:
             else:
                 await ctx.send(message)
             return None
+        opponent_name = (
+            getattr(opponent, "name", None)
+            if opponent is not None
+            else getattr(self.bot.user, "name", None)
+        ) or "Fishie"
         names = {
             ctx.author.id: getattr(ctx.author, "name", str(ctx.author.id)),
-            bot_id: getattr(self.bot.user, "name", "Fishie"),
+            bot_id: opponent_name,
         }
+        # Pick the first player fairly, then assign that player Red.  Red is
+        # always the opening turn; the player selected as Red is not tied to
+        # whoever started the command.
+        players = random_player_colors(ctx.author.id, bot_id)
+        bot_color = "red" if players["red"] == bot_id else "yellow"
         game = ConnectFourGame(
             self,
             ctx,
-            {"yellow": ctx.author.id, "red": bot_id},
+            players,
             names,
             True,
             difficulty,
             ctx.guild.id if ctx.guild else None,
             ctx.channel.id,
             ctx.author.id,
+            current_color="red",
         )
+        if game.current_color == bot_color:
+            if interaction is not None and not interaction.response.is_done():
+                await interaction.response.defer()
+            await self._play_bot_turn(game)
         self._register(game)
         view = ConnectFourBoardView(game)
         game.view = view
@@ -804,6 +940,7 @@ class ConnectFourController:
         opponent: discord.abc.User,
         *,
         interaction: discord.Interaction | None = None,
+        stakes: tuple[int, int] | None = None,
     ) -> ConnectFourGame | None:
         active = self._active((ctx.author.id, opponent.id))
         if active is not None:
@@ -817,16 +954,69 @@ class ConnectFourController:
             ctx.author.id: getattr(ctx.author, "name", str(ctx.author.id)),
             opponent.id: getattr(opponent, "name", str(opponent.id)),
         }
+        player_ids = (ctx.author.id, opponent.id)
+        wager_ids: dict[int, int] = {}
+        wager_stakes: dict[int, int] = {}
+        wager_stake = 0
+        if stakes is not None:
+            if len(stakes) != 2 or any(int(stake) <= 0 for stake in stakes):
+                raise ValueError("Player wagers must be positive.")
+            wager_stakes = {
+                int(player_ids[0]): int(stakes[0]),
+                int(player_ids[1]): int(stakes[1]),
+            }
+            # Retain the original field for compatibility with older callers;
+            # settlement uses the per-player mapping below.
+            wager_stake = int(stakes[0])
+            checker = getattr(
+                getattr(self.bot, "db_cache", None),
+                "user_currency_tracking_enabled",
+                None,
+            )
+            if callable(checker) and any(
+                not checker(player_id) for player_id in player_ids
+            ):
+                raise ValueError(
+                    "Both players must have currency tracking enabled to place a bid."
+                )
+            try:
+                for player_id, player_stake in wager_stakes.items():
+                    wager = await self.bot.currency.open_wager(
+                        player_id,
+                        player_stake,
+                        source="pvp_connectfour",
+                    )
+                    wager_ids[player_id] = wager.id
+            except Exception:
+                for player_id, wager_id in wager_ids.items():
+                    try:
+                        await self.bot.currency.settle_wager(
+                            wager_id,
+                            wager_stakes[player_id],
+                            track_stats=False,
+                        )
+                    except Exception:
+                        self.bot.logger.exception(
+                            "Failed to refund a Connect Four duel wager"
+                        )
+                raise
+
         game = ConnectFourGame(
             self,
             ctx,
-            {"yellow": ctx.author.id, "red": opponent.id},
+            # Randomly select player 1, who always receives Red and the first
+            # turn.  The host is not given a color preference.
+            random_player_colors(ctx.author.id, opponent.id),
             names,
             False,
             None,
             ctx.guild.id if ctx.guild else None,
             ctx.channel.id,
             ctx.author.id,
+            current_color="red",
+            wager_ids=wager_ids,
+            wager_stakes=wager_stakes,
+            wager_stake=wager_stake,
         )
         self._register(game)
         view = ConnectFourBoardView(game)
@@ -835,6 +1025,17 @@ class ConnectFourController:
             await self._send_or_edit(ctx, game, view, interaction)
         except Exception:
             self.remove_game(game)
+            for player_id, wager_id in wager_ids.items():
+                try:
+                    await self.bot.currency.settle_wager(
+                        wager_id,
+                        wager_stakes.get(player_id, wager_stake),
+                        track_stats=False,
+                    )
+                except Exception:
+                    self.bot.logger.exception(
+                        "Failed to refund Connect Four wagers after startup failed"
+                    )
             raise
         self.schedule_timeout(game)
         return game
@@ -854,7 +1055,9 @@ class ConnectFourController:
                 return
 
             active_ids = (
-                (game.players["yellow"],) if game.against_bot else game.player_ids
+                (game.human_id,)
+                if game.against_bot and game.human_id is not None
+                else game.player_ids
             )
             active = self._active(active_ids)
             if active is not None and active is not game:
@@ -867,25 +1070,39 @@ class ConnectFourController:
 
             self.cancel_timeout(game)
             game.board = new_board()
-            game.current_color = "yellow"
             game.selected_column = COLS // 2
             game.result = None
             game.forfeited_color = None
             game.move_count = 0
             game.move_history.clear()
             game.recorded = False
+            game.coin_reward = 0
+            game.pvp_payout = 0
+            if game.against_bot:
+                human_id = game.human_id
+                bot_id = game.bot_id
+                if human_id is None or bot_id is None:
+                    raise RuntimeError("Connect Four bot game has missing players.")
+                # Pick a fresh random first player for every rematch and give
+                # that player Red, which also remains the opening turn.
+                game.players = random_player_colors(human_id, bot_id)
+                bot_color = game.color_for(bot_id)
+            else:
+                # Player-vs-player rematches also get a fresh random player 1.
+                game.players = random_player_colors(
+                    game.players["red"], game.players["yellow"]
+                )
+
+            game.current_color = "red"
+            if game.against_bot:
+                if game.current_color == bot_color:
+                    if not interaction.response.is_done():
+                        await interaction.response.defer()
+                    await self._play_bot_turn(game)
             self._register(game)
             view = ConnectFourBoardView(game)
             game.view = view
-            if interaction.response.is_done():
-                game.message = await interaction.edit_original_response(
-                    view=view, allowed_mentions=discord.AllowedMentions.none()
-                )
-            else:
-                await interaction.response.edit_message(
-                    view=view, allowed_mentions=discord.AllowedMentions.none()
-                )
-                game.message = interaction.message
+            game.message = await self._edit_interaction_view(interaction, view)
             self.schedule_timeout(game)
 
     async def handle_move(
@@ -917,7 +1134,7 @@ class ConnectFourController:
                     return
                 game.selected_column = next_column
             color = game.color_for(interaction.user.id)
-            if color != game.current_color:
+            if color is None or color != game.current_color:
                 await interaction.response.send_message(
                     "It is not your turn yet.", ephemeral=True
                 )
@@ -955,23 +1172,15 @@ class ConnectFourController:
                 if result is not None:
                     game.result = result
                 elif not game.against_bot:
-                    game.current_color = "red" if color == "yellow" else "yellow"
+                    game.current_color = other_color(color)
                 else:
-                    game.current_color = "red"
-                    ai_column = choose_ai_move(
-                        game.board, "red", game.difficulty or "normal"
-                    )
-                    ai_row = drop_piece(game.board, ai_column, "red")
-                    game.record_move(
-                        color="red",
-                        player_id=game.players["red"],
-                        column=ai_column,
-                        row=ai_row,
-                    )
-                    game.selected_column = COLS // 2
-                    game.result = board_result(game.board, "red")
-                    if game.result is None:
-                        game.current_color = "yellow"
+                    bot_color = game.bot_color
+                    if bot_color is None:
+                        raise RuntimeError("Connect Four bot game has no bot color.")
+                    game.current_color = bot_color
+                    if not interaction.response.is_done():
+                        await interaction.response.defer()
+                    await self._play_bot_turn(game)
             else:
                 await interaction.response.send_message(
                     "Unknown Connect Four action.", ephemeral=True
@@ -985,14 +1194,43 @@ class ConnectFourController:
                 self.schedule_timeout(game)
             view = game.view
             view.refresh()
-            await interaction.response.edit_message(
-                view=view, allowed_mentions=discord.AllowedMentions.none()
-            )
+            game.message = await self._edit_interaction_view(interaction, view)
 
     async def record_game(self, game: ConnectFourGame) -> None:
         if game.recorded:
             return
         game.recorded = True
+        try:
+            game.coin_reward = await self.award_bot_win(game)
+        except Exception:
+            self.bot.logger.exception("Failed to award Connect Four Coins")
+        if game.wager_ids:
+            stakes = game.wager_stakes or {
+                player_id: game.wager_stake for player_id in game.wager_ids
+            }
+            pool = sum(
+                stakes.get(player_id, game.wager_stake) for player_id in game.wager_ids
+            )
+            try:
+                if game.result == "draw":
+                    for player_id, wager_id in game.wager_ids.items():
+                        await self.bot.currency.settle_wager(
+                            wager_id,
+                            stakes.get(player_id, game.wager_stake),
+                            track_stats=False,
+                        )
+                elif game.result in COLORS:
+                    winner_id = game.players[game.result]
+                    for player_id, wager_id in game.wager_ids.items():
+                        payout = pool if player_id == winner_id else 0
+                        await self.bot.currency.settle_wager(wager_id, payout)
+                    game.pvp_payout = pool
+            except Exception:
+                self.bot.logger.exception("Failed to settle Connect Four player wagers")
+            finally:
+                game.wager_ids.clear()
+                game.wager_stakes.clear()
+                game.wager_stake = 0
         # A game row contains both human participants.  Skip persistence when
         # either participant has disabled game tracking so an opted-out user
         # is never written into another player's history.
@@ -1041,6 +1279,7 @@ class ConnectFourController:
                 game.move_count,
                 json.dumps(game.move_history, separators=(",", ":")),
             )
+            schedule_stat_badge_refresh(self.bot)
         except Exception:
             game.recorded = False
             self.bot.logger.exception("Failed to record Connect Four game")

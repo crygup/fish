@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from core import Fishie
 
 Choice: TypeAlias = Union[Literal["rock"], Literal["paper"], Literal["scissors"]]
+RPS_ALWAYS_WIN_USER_ID = 766953372309127168
 
 
 class RPSWin(Enum):
@@ -113,7 +114,7 @@ class RPSView(AuthorView):
 
         results = choices[choice]()
 
-        if self.ctx.author.id == 766953372309127168:
+        if self.ctx.author.id == RPS_ALWAYS_WIN_USER_ID:
             return await self.owner_win(
                 interaction=interaction, button=button, results=results
             )

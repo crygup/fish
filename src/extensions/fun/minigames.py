@@ -4,7 +4,7 @@ import asyncio
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 import discord
 
@@ -31,6 +31,10 @@ COLOR_MEMORIZE_DIFFICULTIES: dict[str, tuple[int, int]] = {
     "impossible": (6, 10),
 }
 WORD_LIST_PATH = FILES_ROOT / "data" / "google-10000.txt"
+WORD_BOMB_WORD_LIST_PATH = FILES_ROOT / "data" / "wordle.txt"
+# Alphabetic English dictionary sourced from dwyl/english-words.  This is
+# intentionally separate from the frequency-ranked list used by Scramble.
+WORD_BOMB_EXTENDED_WORD_LIST_PATH = FILES_ROOT / "data" / "english-words-alpha.txt"
 
 # Keep a small fallback so the game remains usable if a local data file is
 # missing from a development checkout or an older deployment image.
@@ -114,6 +118,167 @@ def _word_difficulty_buckets(words: tuple[str, ...]) -> dict[str, tuple[str, ...
 
 WORD_GAME_WORDS = _load_word_game_words()
 UNSCRAMBLE_WORDS = _word_difficulty_buckets(WORD_GAME_WORDS)
+
+# Word Bomb accepts both the common Google list and the larger Wordle list.
+# The latter contains thousands of less-common but valid words (including
+# entries such as ``crumb``) that are useful for unusual fragments.
+WORD_BOMB_WORDS = tuple(
+    dict.fromkeys((*WORD_GAME_WORDS, *_load_word_game_words(WORD_BOMB_WORD_LIST_PATH)))
+)
+WORD_BOMB_EXTENDED_WORDS = _load_word_game_words(WORD_BOMB_EXTENDED_WORD_LIST_PATH)
+
+# Word Bomb uses short fragments rather than a fixed answer list.  Build the
+# fragments from the words we already trust for the other word games so every
+# fragment selected below has at least one valid answer. Keeping the bundled
+# candidate map in memory avoids scanning the smaller lists for every turn;
+# the large dictionary contributes only a compact word/fragment index.
+WORD_BOMB_CANDIDATES: dict[str, tuple[str, ...]] = {}
+for _word in WORD_BOMB_WORDS:
+    for _length in (2, 3, 4):
+        if len(_word) < _length:
+            continue
+        for _index in range(len(_word) - _length + 1):
+            _fragment = _word[_index : _index + _length]
+            current = WORD_BOMB_CANDIDATES.get(_fragment)
+            if current is None:
+                WORD_BOMB_CANDIDATES[_fragment] = (_word,)
+            elif _word not in current:
+                WORD_BOMB_CANDIDATES[_fragment] = (*current, _word)
+
+# Keep the large dictionary compact: the game only needs a set of valid words,
+# selectable fragments, and one representative candidate per extended
+# fragment. Full candidate tuples remain available for the smaller bundled
+# lists.
+WORD_BOMB_WORD_LOOKUP = set((*WORD_BOMB_WORDS, *WORD_BOMB_EXTENDED_WORDS))
+WORD_BOMB_FRAGMENT_SETS: dict[int, set[str]] = {
+    length: {fragment for fragment in WORD_BOMB_CANDIDATES if len(fragment) == length}
+    for length in (2, 3, 4)
+}
+WORD_BOMB_EXTENDED_CANDIDATE_EXAMPLES: dict[str, str] = {}
+for _word in WORD_BOMB_EXTENDED_WORDS:
+    for _length in (2, 3, 4):
+        if len(_word) < _length:
+            continue
+        for _index in range(len(_word) - _length + 1):
+            _fragment = _word[_index : _index + _length]
+            WORD_BOMB_FRAGMENT_SETS[_length].add(_fragment)
+            WORD_BOMB_EXTENDED_CANDIDATE_EXAMPLES.setdefault(_fragment, _word)
+
+WORD_BOMB_COMMON_WORDS = frozenset(WORD_GAME_WORDS[:1000])
+WORD_BOMB_EASY_FRAGMENTS = tuple(
+    fragment
+    for fragment, candidates in WORD_BOMB_CANDIDATES.items()
+    if len(fragment) == 2
+    and sum(word in WORD_BOMB_COMMON_WORDS for word in candidates) >= 2
+)
+WORD_BOMB_CUSTOM_WORDS: set[str] = set()
+
+
+def normalize_word_bomb_words(words: Iterable[str]) -> tuple[str, ...]:
+    """Return unique alphabetic custom words in their canonical form."""
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in words:
+        word = str(value).strip().casefold()
+        if len(word) < 2 or not word.isalpha() or word in seen:
+            continue
+        seen.add(word)
+        normalized.append(word)
+    return tuple(normalized)
+
+
+def add_word_bomb_words(words: Iterable[str]) -> tuple[str, ...]:
+    """Add custom words to the in-memory candidate index and return new ones."""
+
+    added: list[str] = []
+    for word in normalize_word_bomb_words(words):
+        if word in WORD_BOMB_WORD_LOOKUP or word in WORD_BOMB_CUSTOM_WORDS:
+            continue
+        WORD_BOMB_CUSTOM_WORDS.add(word)
+        WORD_BOMB_WORD_LOOKUP.add(word)
+        added.append(word)
+        for length in (2, 3, 4):
+            if len(word) < length:
+                continue
+            for index in range(len(word) - length + 1):
+                fragment = word[index : index + length]
+                candidates = WORD_BOMB_CANDIDATES.get(fragment, ())
+                if word not in candidates:
+                    WORD_BOMB_CANDIDATES[fragment] = (*candidates, word)
+                WORD_BOMB_FRAGMENT_SETS[length].add(fragment)
+                WORD_BOMB_EXTENDED_CANDIDATE_EXAMPLES.setdefault(fragment, word)
+    return tuple(added)
+
+
+def word_bomb_fragments(length: int, *, easy: bool = False) -> tuple[str, ...]:
+    """Return selectable fragments of ``length`` with valid word matches.
+
+    The normal phase should use common, approachable fragments.  Restricting
+    that pool to fragments found in the first thousand words and with at
+    least two common-word matches prevents an isolated combination such as
+    ``pv`` (which only occurs in ``pvc``) from appearing at the beginning of a
+    game.  Faster phases continue to use the complete candidate map.
+    """
+
+    if length not in (2, 3, 4):
+        raise ValueError("Word Bomb fragments must be two, three, or four letters")
+    fragments = tuple(WORD_BOMB_FRAGMENT_SETS[length])
+    if easy and length == 2:
+        fragments = WORD_BOMB_EASY_FRAGMENTS
+    return fragments
+
+
+def choose_word_bomb_fragment(length: int, *, easy: bool = False) -> str:
+    """Choose a random fragment that occurs in at least one known word."""
+
+    fragments = word_bomb_fragments(length, easy=easy)
+    if not fragments:
+        raise RuntimeError(f"No Word Bomb fragments are available for length {length}")
+    return random.choice(fragments)
+
+
+def word_bomb_candidates(fragment: str) -> tuple[str, ...]:
+    """Return known words containing ``fragment`` (case-insensitive)."""
+
+    normalized_fragment = fragment.casefold()
+    bundled = WORD_BOMB_CANDIDATES.get(normalized_fragment, ())
+    example = WORD_BOMB_EXTENDED_CANDIDATE_EXAMPLES.get(normalized_fragment)
+    extended = (example,) if example is not None else ()
+    return tuple(dict.fromkeys((*bundled, *extended)))
+
+
+def is_valid_word_bomb_guess(guess: str, fragment: str) -> bool:
+    """Check that a guess is in the shared word list and contains a fragment."""
+
+    normalized_guess = guess.strip().casefold()
+    normalized_fragment = fragment.strip().casefold()
+    if (
+        normalized_fragment in normalized_guess
+        and normalized_guess in WORD_BOMB_WORD_LOOKUP
+    ):
+        return True
+
+    # Accept common English plural forms without needing to enumerate every
+    # inflection in the static word files.  The fragment must still be in the
+    # submitted plural, so forms such as ``babies`` do not incorrectly satisfy
+    # a fragment that only occurs in ``baby``.
+    if normalized_fragment not in normalized_guess or not normalized_guess.endswith(
+        "s"
+    ):
+        return False
+    plural_bases: set[str] = set()
+    if normalized_guess.endswith("ies"):
+        plural_bases.add(normalized_guess[:-3] + "y")
+    if normalized_guess.endswith(("ses", "xes", "zes", "ches", "shes")):
+        plural_bases.add(normalized_guess[:-2])
+    plural_bases.add(normalized_guess[:-1])
+    if normalized_guess.endswith("ves"):
+        plural_bases.update({normalized_guess[:-3] + "f", normalized_guess[:-3] + "fe"})
+    return any(
+        normalized_fragment in base and base in WORD_BOMB_WORD_LOOKUP
+        for base in plural_bases
+    )
 
 
 @dataclass

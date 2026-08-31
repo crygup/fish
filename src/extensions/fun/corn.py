@@ -30,7 +30,7 @@ class Corn(Cog):
 
     emoji = discord.PartialEmoji(name="\U0001f33d")
 
-    @commands.group(name="corn", invoke_without_command=True)
+    @commands.group(name="corn", aliases=("corns",), invoke_without_command=True)
     async def corn(
         self,
         ctx: Context,
@@ -222,6 +222,7 @@ class Corn(Cog):
             "3 things I need to do with my ggf\n\n-HEAD SHOULDERS KNEE\n\n-HUG HER\n\n-KILL HER",
             "The diary of a wimpy kid is the coolest thing I've ever read",
             "Can you guys not roast my English? Uwu",
+            'Does "There\'re" work?',
         ]
 
         choice = random.choice(things)
