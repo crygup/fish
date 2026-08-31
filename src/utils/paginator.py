@@ -7,6 +7,7 @@ import re
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
     Callable,
     Dict,
     Iterable,
@@ -44,6 +45,8 @@ class Pager(discord.ui.View):
         ctx: Context,
         check_embeds: bool = True,
         compact: bool = False,
+        delete_page: Callable[[int], Awaitable[bool]] | None = None,
+        delete_prompt: Callable[[int], str] | None = None,
     ):
         super().__init__()
         self.source: menus.PageSource = source
@@ -53,6 +56,10 @@ class Pager(discord.ui.View):
         self.current_page: int = 0
         self.compact: bool = compact
         self.input_lock = asyncio.Lock()
+        self.delete_page = delete_page
+        self.delete_prompt = delete_prompt
+        if self.delete_page is not None:
+            self.stop_pages.style = discord.ButtonStyle.danger
 
     def disable_all(self) -> None:
         for button in self.children:
@@ -232,6 +239,9 @@ class Pager(discord.ui.View):
     @discord.ui.button(emoji="\U0001f5d1\ufe0f", style=discord.ButtonStyle.secondary)
     async def stop_pages(self, interaction: discord.Interaction, __):
         """stops the pagination session."""
+        if self.delete_page is not None:
+            await self._confirm_page_delete(interaction)
+            return
         await interaction.response.defer()
         if self.message:
             await self.message.delete()
@@ -243,6 +253,97 @@ class Pager(discord.ui.View):
             except discord.HTTPException:
                 pass
         self.stop()
+
+    async def _confirm_page_delete(self, interaction: discord.Interaction) -> None:
+        """Ask before deleting the database row represented by this page."""
+        pager = self
+        page_number = self.current_page
+        prompt = (
+            self.delete_prompt(page_number)
+            if self.delete_prompt is not None
+            else "Delete this saved history entry from Fishie's database?"
+        )
+
+        class DeletePageConfirmation(discord.ui.View):
+            def __init__(self) -> None:
+                super().__init__(timeout=60)
+
+            async def interaction_check(
+                self, confirmation: discord.Interaction
+            ) -> bool:
+                if confirmation.user.id == pager.ctx.author.id:
+                    return True
+                await confirmation.response.send_message(
+                    "This confirmation dialog is not for you.",
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return False
+
+            @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger)
+            async def confirm_delete(
+                self,
+                confirmation: discord.Interaction,
+                _button: discord.ui.Button,
+            ) -> None:
+                await confirmation.response.defer()
+                delete_page = pager.delete_page
+                deleted = delete_page is not None and await delete_page(page_number)
+                if not deleted:
+                    await confirmation.edit_original_response(
+                        content="That history entry no longer exists.",
+                        view=None,
+                    )
+                    self.stop()
+                    return
+
+                entries = getattr(pager.source, "entries", None)
+                if isinstance(entries, list) and 0 <= page_number < len(entries):
+                    entries.pop(page_number)
+
+                if entries:
+                    new_page = min(page_number, len(entries) - 1)
+                    page = await pager.source.get_page(new_page)
+                    pager.current_page = new_page
+                    kwargs = await pager._get_kwargs_from_page(page)
+                    pager._update_labels(new_page)
+                    kwargs["allowed_mentions"] = discord.AllowedMentions.none()
+                    if pager.message is not None:
+                        await pager.message.edit(**kwargs, view=pager)
+                else:
+                    pager.stop()
+                    if pager.message is not None:
+                        await pager.message.edit(
+                            content="No saved history entries remain.",
+                            embed=None,
+                            view=None,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+
+                await confirmation.edit_original_response(
+                    content="Deleted that saved history entry.",
+                    view=None,
+                )
+                self.stop()
+
+            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+            async def cancel_delete(
+                self,
+                confirmation: discord.Interaction,
+                _button: discord.ui.Button,
+            ) -> None:
+                await confirmation.response.edit_message(
+                    content="Deletion cancelled.",
+                    view=None,
+                )
+                self.stop()
+
+        await interaction.response.send_message(
+            prompt,
+            view=DeletePageConfirmation(),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 class LayoutPageSource(Protocol):
@@ -367,7 +468,8 @@ class LayoutPager(discord.ui.LayoutView):
         super().__init__(timeout=timeout)
         self.source = source
         self.ctx = ctx
-        self.accent_color = accent_color or ctx.bot.embedcolor
+        default_accent = getattr(ctx, "embedcolor", ctx.bot.embedcolor)
+        self.accent_color = default_accent if accent_color is None else accent_color
         self.page = 0
         self.message: discord.Message | None = None
         self._navigation_buttons: tuple[discord.ui.Button, ...] = ()
@@ -610,7 +712,8 @@ class ReviewPageSource:
         text = (
             f"## Review by {author_name}\n"
             f"{comment}\n\n"
-            f"-# Page {page_number + 1}/{len(self.entries)} · Review ID: {review.id}"
+            f"-# Page {page_number + 1}/{len(self.entries)} · Review ID: {review.id}\n"
+            f"-# Reviewed <t:{review.timestamp}:D> · Data from ReviewDB"
         )
         if author.profilePhoto:
             return [
@@ -853,7 +956,10 @@ class ReviewsPageSource(menus.ListPageSource):
         author = review.sender
 
         self.embed.set_footer(
-            text=f"Page {menu.current_page + 1}/{maximum} (ID: {review.id}) \nReviewed"
+            text=(
+                f"Page {menu.current_page + 1}/{maximum} (ID: {review.id})\n"
+                f"Reviewed <t:{review.timestamp}:D> · Data from ReviewDB"
+            )
         )
         self.embed.description = review.comment
         self.embed.timestamp = datetime.datetime.fromtimestamp(review.timestamp)

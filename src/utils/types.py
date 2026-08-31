@@ -1,4 +1,13 @@
-from typing import List, Optional, ParamSpec, TypeAlias, TypedDict, TypeVar, Union
+from typing import (
+    List,
+    NotRequired,
+    Optional,
+    ParamSpec,
+    TypeAlias,
+    TypedDict,
+    TypeVar,
+    Union,
+)
 
 import discord
 
@@ -52,6 +61,11 @@ class Databases(TypedDict):
 class Ids(TypedDict):
     owner_id: int
     bot_id: int
+    # Optional IDs are used when more than one Fishie application shares the
+    # same database.  Existing config files can omit them; the runtime falls
+    # back to the known application IDs until they are added explicitly.
+    new_bot_id: NotRequired[int]
+    testing_bot_id: NotRequired[int]
     poketwo_id: int
     mudae_id: int
     join_logs_id: int
@@ -62,6 +76,9 @@ class Keys(TypedDict):
     media_api: str
     media_api_owner: str
     client_secret: str
+    # OAuth credentials for the replacement/new Fishie application.  This is
+    # optional so legacy/testing config files remain valid.
+    new_client_secret: NotRequired[str]
     lastfm: str
     lastfm_secret: str
     lastfm_cb: str
@@ -84,6 +101,9 @@ class Keys(TypedDict):
 class ConfigTokens(TypedDict):
     bot: str
     testing_bot: str
+    # Token for the replacement/new Fishie application.  Older deployments
+    # may omit it and will fail with a clear startup error only when selected.
+    new_bot: NotRequired[str]
 
 
 class Config(TypedDict):

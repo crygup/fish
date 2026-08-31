@@ -40,6 +40,34 @@ spotify = PartialEmoji(id=1526723506631479377, name="Spotify")
 apple_music = PartialEmoji(id=1535923469072474162, name="apple_music")
 youtube = PartialEmoji(id=1535923472385970206, name="youtube")
 
+# Word Bomb
+# Keep the custom variants as PartialEmoji objects so they can be passed
+# directly to Discord components while the regular bomb remains portable
+# Unicode on every server.
+bomb = PartialEmoji(name="\U0001f4a3")
+red_bomb = PartialEmoji(id=1541378662404857906, name="red_bomb")
+skull_bomb = PartialEmoji(id=1541378690154369124, name="skull_bomb")
+
+# Sea Animal Race.  These are Unicode so races work consistently in every
+# guild without requiring Fishie-specific custom emoji.
+race_blue_square = "\U0001f7e6"
+race_animals = (
+    "\U0001f419",  # octopus
+    "\U0001f991",  # squid
+    "\U0001fabc",  # jellyfish
+    "\U0001f990",  # shrimp
+    "\U0001f99e",  # lobster
+    "\U0001f980",  # crab
+    "\U0001f421",  # blowfish
+    "\U0001f420",  # tropical fish
+    "\U0001f41f",  # fish
+    "\U0001f42c",  # dolphin
+    "\U0001f40b",  # whale
+    "\U0001f988",  # shark
+    "\U0001f9ad",  # seal
+    "\U0001f40a",  # crocodile
+)
+
 # discord
 balance = PartialEmoji(id=949147429733793832, name="balance")
 booster = PartialEmoji(id=949147430786596896, name="booster")
@@ -106,6 +134,7 @@ spO = PartialEmoji(name="spO", id=1437140688608432185)
 sp = PartialEmoji(name="sp", id=1437140700604137554)
 spU = PartialEmoji(name="spU", id=1437140748423270441)
 spP = PartialEmoji(name="SpP", id=1437140625844867244)
+spR2 = PartialEmoji(name="spR2", id=1437149366174486568)
 # fmt: on
 
 
@@ -113,6 +142,11 @@ class Emojis:
     spotify = spotify
     apple_music = apple_music
     youtube = youtube
+    bomb = bomb
+    red_bomb = red_bomb
+    skull_bomb = skull_bomb
+    race_blue_square = race_blue_square
+    race_animals = race_animals
     starla = starla
     ori = ori
     sac = sac
@@ -152,6 +186,7 @@ class Emojis:
     sp = spO
     spU = spU
     spP = spP
+    spR2 = spR2
     mudae_circle = mudae_circle
     fish_check = fish_check
     fish_downvote = fish_downvote
@@ -205,6 +240,9 @@ emoji_list = [
     spotify,
     apple_music,
     youtube,
+    bomb,
+    red_bomb,
+    skull_bomb,
     starla,
     ori,
     sac,
@@ -244,6 +282,7 @@ emoji_list = [
     spO,
     spU,
     spP,
+    spR2,
     mudae_circle,
     fish_check,
     fish_downvote,

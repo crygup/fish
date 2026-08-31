@@ -295,6 +295,19 @@ def _unit_candidates(value: str | None) -> tuple[Unit, ...]:
     return UNIT_ALIASES.get(_normalize(value), ())
 
 
+def _default_temperature_target(value: str | None) -> str | None:
+    """Return the implicit Celsius/Fahrenheit counterpart for a bare value."""
+
+    if not value:
+        return None
+    normalized = _normalize(value)
+    if normalized in {"f", "fahrenheit"}:
+        return "celsius"
+    if normalized in {"c", "celsius"}:
+        return "fahrenheit"
+    return None
+
+
 def _split_expression(rest: str) -> tuple[str | None, str | None]:
     rest = rest.strip()
     if not rest:
@@ -362,6 +375,14 @@ def parse_conversion_expression(expression: str) -> ConversionRequest | None:
     if attached:
         rest = f"{attached} {rest}".strip()
     source_raw, target_raw = _split_expression(rest)
+    # A compact temperature such as ``100f`` (or ``100 f``) has no explicit
+    # destination.  Make the common Fahrenheit/Celsius pair a useful default;
+    # Kelvin and all other destinations still require an explicit target such
+    # as ``100f to kelvin``.
+    if source_raw is None and target_raw is not None:
+        implicit_target = _default_temperature_target(target_raw)
+        if implicit_target is not None:
+            source_raw, target_raw = target_raw, implicit_target
     devex = False
     if target_raw:
         target_parts = target_raw.split()

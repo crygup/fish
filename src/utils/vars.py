@@ -98,9 +98,12 @@ def _flatten_user_badges(document: dict[str, Any]) -> dict[object, str]:
             user_id = int(key)
         except (TypeError, ValueError):
             continue
-        rendered = render_user_badge(entry)
-        if rendered:
-            result[user_id] = rendered
+        entries = entry if isinstance(entry, list) else [entry]
+        rendered_entries = [
+            rendered for item in entries if (rendered := render_user_badge(item))
+        ]
+        if rendered_entries:
+            result[user_id] = " ".join(rendered_entries)
     return result
 
 
@@ -165,11 +168,19 @@ def save_user_badges_document(document: dict[str, Any]) -> None:
 
 
 def get_user_badge(user_id: int) -> dict[str, Any] | None:
-    """Return the editable badge for a user, reloading a changed JSON file."""
+    """Return the first editable badge for compatibility with older callers."""
+
+    badges = get_user_badges(user_id)
+    return badges[0] if badges else None
+
+
+def get_user_badges(user_id: int) -> list[dict[str, Any]]:
+    """Return all editable badges for a user."""
 
     document = refresh_user_badges()
     entry = document.get("users", {}).get(str(int(user_id)))
-    return dict(entry) if isinstance(entry, dict) else None
+    entries = entry if isinstance(entry, list) else [entry]
+    return [dict(item) for item in entries if isinstance(item, dict)]
 
 
 def set_user_badge(
@@ -180,27 +191,71 @@ def set_user_badge(
     is_custom: bool,
     text: str,
     animated: bool = False,
+    badge_key: str = "custom",
 ) -> None:
-    """Persist the current user badge in the editable catalog."""
+    """Persist one badge without replacing the user's other badges."""
 
     document = refresh_user_badges()
     users = dict(document.get("users", {}))
-    users[str(int(user_id))] = {
+    user_key = str(int(user_id))
+    existing = users.get(user_key, [])
+    entries = list(existing) if isinstance(existing, list) else [existing]
+    badge = {
         "emoji_name": emoji_name,
         "emoji_id": emoji_id,
         "is_custom": bool(is_custom),
         "animated": bool(animated) if is_custom else False,
         "text": text,
+        "badge_key": badge_key,
     }
+    for index, entry in enumerate(entries):
+        if isinstance(entry, dict) and entry.get("badge_key") == badge_key:
+            entries[index] = badge
+            break
+    else:
+        entries.append(badge)
+    users[user_key] = entries
     save_user_badges_document({"flags": document.get("flags", {}), "users": users})
 
 
 def remove_user_badge(user_id: int) -> None:
-    """Remove a user's custom badge from the editable catalog."""
+    """Remove all editable badges for a user."""
 
     document = refresh_user_badges()
     users = dict(document.get("users", {}))
     users.pop(str(int(user_id)), None)
+    save_user_badges_document({"flags": document.get("flags", {}), "users": users})
+
+
+def remove_user_badge_entry(user_id: int, badge_key: str) -> None:
+    """Remove one editable badge from a user's catalog."""
+
+    document = refresh_user_badges()
+    users = dict(document.get("users", {}))
+    user_id_key = str(int(user_id))
+    existing = users.get(user_id_key, [])
+    entries = list(existing) if isinstance(existing, list) else [existing]
+    filtered = [
+        entry
+        for entry in entries
+        if not isinstance(entry, dict) or entry.get("badge_key") != badge_key
+    ]
+    if len(filtered) == len(entries):
+        # Catalogs written before multi-badge support have one legacy entry
+        # without a key. It is safe to remove it when it is the only unkeyed
+        # entry for this user.
+        unkeyed = [
+            entry
+            for entry in entries
+            if isinstance(entry, dict) and not entry.get("badge_key")
+        ]
+        if len(unkeyed) == 1:
+            filtered.remove(unkeyed[0])
+    entries = filtered
+    if entries:
+        users[user_id_key] = entries
+    else:
+        users.pop(user_id_key, None)
     save_user_badges_document({"flags": document.get("flags", {}), "users": users})
 
 

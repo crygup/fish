@@ -72,83 +72,32 @@ def _twitch_duration(value: object) -> int:
     )
 
 
-class TwitchMessageModal(discord.ui.Modal, title="Twitch Live Message"):
-    message = discord.ui.TextInput(
-        label="Announcement text",
-        style=discord.TextStyle.paragraph,
-        required=False,
-        max_length=2_000,
-        placeholder="Leave blank to post only the embed.",
-    )
+def _resolve_twitch_mention(
+    ctx: GuildContext, value: str | None
+) -> tuple[int | None, bool]:
+    """Resolve the optional role/@everyone mention used by text follows."""
 
-    def __init__(self, bot: Fishie, guild_id: int, channel_name: str) -> None:
-        super().__init__()
-        self.bot = bot
-        self.guild_id = guild_id
-        self.channel_name = channel_name
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        message_template = (self.message.value or "").strip() or None
-        result = await self.bot.pool.execute(
-            "UPDATE twitch_follows SET message_template = $3 "
-            "WHERE guild_id = $1 AND channel_name = $2",
-            self.guild_id,
-            self.channel_name,
-            message_template,
+    if value is None or not value.strip():
+        return None, False
+    raw = value.strip()
+    if raw.casefold() in {"everyone", "@everyone"}:
+        return None, True
+    match = re.fullmatch(r"<@&(?P<id>\d{15,25})>", raw)
+    role = ctx.guild.get_role(int(match.group("id"))) if match else None
+    if role is None and raw.isdigit():
+        role = ctx.guild.get_role(int(raw))
+    if role is None and not match and not raw.isdigit():
+        role = next(
+            (
+                candidate
+                for candidate in ctx.guild.roles
+                if candidate.name.casefold() == raw.casefold()
+            ),
+            None,
         )
-        if result == "UPDATE 0":
-            await interaction.response.send_message(
-                "That Twitch channel is no longer being followed.", ephemeral=True
-            )
-            return
-        if message_template:
-            await interaction.response.send_message(
-                "The custom Twitch announcement text was saved. Mentions will be allowed when it posts.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(
-                "The custom Twitch announcement text was cleared; only the embed will post.",
-                ephemeral=True,
-            )
-
-
-class TwitchFollowView(discord.ui.View):
-    def __init__(self, ctx: Context, bot: Fishie, guild_id: int, channel_name: str):
-        super().__init__(timeout=300)
-        self.ctx = ctx
-        self.bot = bot
-        self.guild_id = guild_id
-        self.channel_name = channel_name
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.ctx.author.id:
-            return True
-        await interaction.response.send_message(
-            "This is not your command.", ephemeral=True
-        )
-        return False
-
-    @discord.ui.button(
-        label="Customize announcement", style=discord.ButtonStyle.blurple
-    )
-    async def customize(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ) -> None:
-        row = await self.bot.pool.fetchrow(
-            "SELECT message_template FROM twitch_follows "
-            "WHERE guild_id = $1 AND channel_name = $2",
-            self.guild_id,
-            self.channel_name,
-        )
-        if not row:
-            await interaction.response.send_message(
-                "That Twitch channel is no longer being followed.", ephemeral=True
-            )
-            return
-        modal = TwitchMessageModal(self.bot, self.guild_id, self.channel_name)
-        modal.message.default = row["message_template"] or ""
-        await interaction.response.send_modal(modal)
+    if role is None or role.is_default():
+        raise commands.BadArgument("I could not find that role in this server.")
+    return role.id, False
 
 
 class TwitchAccountView(discord.ui.LayoutView):
@@ -380,26 +329,37 @@ class Twitch(Cog):
             )
             await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
 
-    @twitch.command(name="follows", aliases=("followed", "list"))
+    @twitch.command(
+        name="follows", aliases=("followed", "list"), with_app_command=False
+    )
     @commands.has_guild_permissions(manage_guild=True)
     @commands.guild_only()
     async def twitch_follows(self, ctx: GuildContext):
         """Show the Twitch channels followed by this server."""
         rows = await self.bot.pool.fetch(
-            "SELECT channel_name, announce_channel_id, message_template "
-            "FROM twitch_follows WHERE guild_id = $1 ORDER BY channel_name",
+            """
+            SELECT DISTINCT ON (lower(btrim(channel_name)))
+                channel_name, announce_channel_id
+            FROM (
+                SELECT channel_name, announce_channel_id, 1 AS source
+                FROM notify_twitch_follows WHERE guild_id = $1
+                UNION ALL
+                SELECT channel_name, announce_channel_id, 2 AS source
+                FROM twitch_follows WHERE guild_id = $1
+            ) follows
+            ORDER BY lower(btrim(channel_name)), source, channel_name
+            """,
             ctx.guild.id,
         )
         if not rows:
             return await ctx.send("No Twitch channels are being followed.")
         lines = [
             f"**{row['channel_name']}** → <#{row['announce_channel_id']}>"
-            f" ({'custom text' if row['message_template'] else 'embed only'})"
             for row in rows
         ]
         await ctx.send("Twitch live announcements:\n" + "\n".join(lines))
 
-    @twitch.command(name="follow")
+    @twitch.command(name="follow", with_app_command=False)
     @app_commands.describe(
         channel_name="Twitch channel name or handle to follow.",
         announcement_channel="Text channel for live announcements. Defaults to this channel.",
@@ -447,12 +407,19 @@ class Twitch(Cog):
                 )
                 if not existing:
                     count = await connection.fetchval(
-                        "SELECT COUNT(*) FROM twitch_follows WHERE guild_id = $1",
+                        """
+                        SELECT COUNT(DISTINCT lower(channel_name))
+                        FROM (
+                            SELECT channel_name FROM twitch_follows WHERE guild_id = $1
+                            UNION ALL
+                            SELECT channel_name FROM notify_twitch_follows WHERE guild_id = $1
+                        ) follows
+                        """,
                         ctx.guild.id,
                     )
-                    if count >= 3:
+                    if count >= 10:
                         raise commands.BadArgument(
-                            "You can follow up to 3 Twitch channels per server."
+                            "You can follow up to 10 Twitch channels per server."
                         )
                 await connection.execute(
                     """INSERT INTO twitch_follows
@@ -467,6 +434,37 @@ class Twitch(Cog):
                     broadcaster_id,
                 )
 
+                # Keep the new notification store in sync with the legacy
+                # text command. There is one notify row per followed Twitch
+                # channel and guild, so moving the legacy follow updates that
+                # row's destination instead of creating another subscription.
+                mirrored = await connection.execute(
+                    """
+                    UPDATE notify_twitch_follows
+                    SET announce_channel_id = $3,
+                        broadcaster_id = $4,
+                        updated_at = now()
+                    WHERE guild_id = $1 AND lower(btrim(channel_name)) = lower(btrim($2))
+                    """,
+                    ctx.guild.id,
+                    channel_name,
+                    target.id,
+                    broadcaster_id,
+                )
+                if mirrored == "UPDATE 0":
+                    await connection.execute(
+                        """
+                        INSERT INTO notify_twitch_follows
+                            (guild_id, channel_name, broadcaster_id, announce_channel_id)
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        ctx.guild.id,
+                        channel_name,
+                        broadcaster_id,
+                        target.id,
+                    )
+
         try:
             await events.ensure_twitch_eventsub_subscription(broadcaster_id)
         except Exception as error:
@@ -474,27 +472,25 @@ class Twitch(Cog):
                 "Could not enable Twitch EventSub for %s: %s", channel_name, error
             )
 
-        # Slash interactions can show the message modal immediately. Text
-        # commands receive a follow-up with the same customization button.
-        if ctx.interaction and not ctx.interaction.response.is_done():
-            await ctx.interaction.response.send_modal(
-                TwitchMessageModal(self.bot, ctx.guild.id, channel_name)
-            )
-            return
         await ctx.send(
-            f"Now following **{channel_name}**; live announcements will be posted in {target.mention}.",
-            view=TwitchFollowView(ctx, self.bot, ctx.guild.id, channel_name),
+            f"Now following **{channel_name}**; live announcements will be posted in {target.mention}. "
+            "Use `twitch mention <channel> [role/@everyone]` to configure mentions.",
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @twitch.command(name="message", aliases=("customize", "text"))
+    @twitch.command(name="mention", with_app_command=False)
     @app_commands.describe(channel_name="Followed Twitch channel name or handle.")
     @commands.has_guild_permissions(manage_guild=True)
     @commands.guild_only()
-    async def twitch_message(self, ctx: GuildContext, channel_name: str):
-        """Customize the text sent above a Twitch live embed."""
+    async def twitch_message(
+        self, ctx: GuildContext, channel_name: str, mention: str | None = None
+    ):
+        """Set or clear the role/@everyone mention for Twitch alerts."""
         channel_name = self._normalise_channel(channel_name)
         exists = await self.bot.pool.fetchval(
-            "SELECT 1 FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
+            "SELECT 1 FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2 "
+            "UNION ALL SELECT 1 FROM notify_twitch_follows "
+            "WHERE guild_id = $1 AND lower(channel_name) = lower($2) LIMIT 1",
             ctx.guild.id,
             channel_name,
         )
@@ -502,12 +498,31 @@ class Twitch(Cog):
             raise commands.BadArgument(
                 f"This server is not following **{channel_name}**."
             )
+        role_id, everyone = _resolve_twitch_mention(ctx, mention)
+        await self.bot.pool.execute(
+            """
+            UPDATE notify_twitch_follows
+            SET mention_role_id = $3, mention_everyone = $4, updated_at = now()
+            WHERE guild_id = $1 AND lower(channel_name) = lower($2)
+            """,
+            ctx.guild.id,
+            channel_name,
+            role_id,
+            everyone,
+        )
         await ctx.send(
-            f"Customize the announcement text for **{channel_name}**:",
-            view=TwitchFollowView(ctx, self.bot, ctx.guild.id, channel_name),
+            f"Twitch mentions for **{channel_name}** were "
+            + (
+                "set to @everyone."
+                if everyone
+                else f"set to <@&{role_id}>." if role_id else "cleared."
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @twitch.command(name="unfollow", aliases=("remove", "delete"))
+    @twitch.command(
+        name="unfollow", aliases=("remove", "delete"), with_app_command=False
+    )
     @app_commands.describe(channel_name="Followed Twitch channel name or handle.")
     @commands.has_guild_permissions(manage_guild=True)
     @commands.guild_only()
@@ -516,7 +531,9 @@ class Twitch(Cog):
         channel_name = self._normalise_channel(channel_name)
         broadcaster_id = await self.bot.pool.fetchval(
             "SELECT broadcaster_id FROM twitch_follows "
-            "WHERE guild_id = $1 AND channel_name = $2",
+            "WHERE guild_id = $1 AND channel_name = $2 "
+            "UNION ALL SELECT broadcaster_id FROM notify_twitch_follows "
+            "WHERE guild_id = $1 AND lower(channel_name) = lower($2) LIMIT 1",
             ctx.guild.id,
             channel_name,
         )
@@ -525,7 +542,12 @@ class Twitch(Cog):
             ctx.guild.id,
             channel_name,
         )
-        if result == "DELETE 0":
+        notify_result = await self.bot.pool.execute(
+            "DELETE FROM notify_twitch_follows WHERE guild_id = $1 AND lower(channel_name) = lower($2)",
+            ctx.guild.id,
+            channel_name,
+        )
+        if result == "DELETE 0" and notify_result == "DELETE 0":
             raise commands.BadArgument(
                 f"This server is not following **{channel_name}**."
             )

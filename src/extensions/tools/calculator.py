@@ -256,6 +256,14 @@ def evaluate_math_expression(expression: str) -> int | float:
         .replace("π", "pi")
         .replace("^", "**")
     )
+    # Accept the common ``x`` multiplication notation (including compact
+    # forms such as ``10x4``) without treating the letter in a function or
+    # constant name as an operator.
+    expression = re.sub(
+        r"(?<=[0-9.)])\s*[xX]\s*(?=[+\-]?(?:[0-9.(A-Za-z_]))",
+        "*",
+        expression,
+    )
     try:
         tree = ast.parse(expression, mode="eval")
     except SyntaxError as error:

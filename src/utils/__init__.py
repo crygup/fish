@@ -1,4 +1,5 @@
 from .checks import *
+from .colors import *
 from .converters import *
 from .credentials import *
 from .downloads import *

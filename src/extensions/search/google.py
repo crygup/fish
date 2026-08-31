@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List
 from urllib.parse import urlsplit
 
 import discord
@@ -9,7 +9,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
-from extensions.events.youtube import normalize_youtube_events
 from utils import (
     AuthorView,
     GoogleImageData,
@@ -20,7 +19,7 @@ from utils import (
 
 if TYPE_CHECKING:
     from core import Fishie
-    from extensions.context import Context, GuildContext
+    from extensions.context import Context
 
 id_converter = {
     "video": "videoId",
@@ -86,6 +85,27 @@ def _looks_like_image_url(value: object) -> bool:
     return any(path.endswith(extension) for extension in IMAGE_EXTENSIONS)
 
 
+def _image_source_link(value: object) -> str:
+    """Return a compact Markdown link to an image result's source page."""
+    if not isinstance(value, str):
+        return ""
+    url = value.strip()
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return ""
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.hostname:
+        return ""
+    if parsed.username is not None or parsed.password is not None:
+        return ""
+    hostname = parsed.hostname.casefold().rstrip(".").removeprefix("www.")
+    if not hostname:
+        return ""
+    safe_hostname = discord.utils.escape_markdown(hostname)
+    safe_url = url.replace("(", "%28").replace(")", "%29")
+    return f"[{safe_hostname}]({safe_url})"
+
+
 class GoogleImageLayoutSource:
     """Components V2 page source for Google image result URLs."""
 
@@ -98,14 +118,17 @@ class GoogleImageLayoutSource:
     def format_page(self, page_number: int) -> list[discord.ui.Item[Any]]:
         entry = self.entries[page_number]
         title = _image_display_text(entry.snippet)
+        source_link = _image_source_link(entry.url)
+        source_suffix = f" · {source_link}" if source_link else ""
 
         return [
-            discord.ui.TextDisplay(f"## {title}"),
+            discord.ui.TextDisplay(f"### {title}"),
             discord.ui.MediaGallery(discord.MediaGalleryItem(entry.image_url)),
             discord.ui.Separator(),
             discord.ui.TextDisplay(
                 f"-# Page {page_number + 1}/{self.get_max_pages()} · "
                 f"Google Image search: {_image_display_text(entry.query, 300)}"
+                f"{source_suffix}"
             ),
         ]
 
@@ -283,7 +306,7 @@ class Google(Cog):
 
     @commands.hybrid_group(
         name="youtube",
-        aliases=("yt", "ytnotify", "youtube-notifications"),
+        aliases=("yt",),
         fallback="video",
         extras={"google-command": True},
     )
@@ -291,7 +314,7 @@ class Google(Cog):
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def youtube(self, ctx: Context, *, query: str):
-        """Search YouTube or manage this server's channel notifications."""
+        """Search YouTube videos."""
         await self.search_method(ctx, query, "video")
 
     @youtube.command(
@@ -311,207 +334,6 @@ class Google(Cog):
     @app_commands.describe(query="Playlist to search for")
     async def youtube_playlist(self, ctx: Context, *, query: str):
         await self.search_method(ctx, query, "playlist")
-
-    @youtube.command(
-        name="list",
-        description="List the YouTube channels followed by this server.",
-    )
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.guild_only()
-    @app_commands.allowed_installs(guilds=True)
-    @app_commands.allowed_contexts(guilds=True)
-    async def youtube_list(self, ctx: GuildContext):
-        """List YouTube channels followed by this server."""
-        rows = await self.bot.pool.fetch(
-            "SELECT channel_name, channel_handle, announce_channel_id, event_types "
-            "FROM youtube_follows WHERE guild_id = $1 ORDER BY channel_name",
-            ctx.guild.id,
-        )
-        if not rows:
-            return await ctx.send("No YouTube channels are being followed.")
-        lines = [
-            f"**{row['channel_name']}** → <#{row['announce_channel_id']}>"
-            f" ({', '.join(row['event_types'])})"
-            for row in rows
-        ]
-        await ctx.send("YouTube notifications:\n" + "\n".join(lines))
-
-    @youtube.command(
-        name="follow",
-        description="Follow a YouTube channel in this server.",
-    )
-    @app_commands.describe(
-        channel="YouTube channel handle, channel ID, or URL.",
-        announcement_channel="Text channel for notifications. Defaults to this channel.",
-    )
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.guild_only()
-    @app_commands.allowed_installs(guilds=True)
-    @app_commands.allowed_contexts(guilds=True)
-    async def youtube_follow(
-        self,
-        ctx: GuildContext,
-        channel: str,
-        announcement_channel: Optional[discord.TextChannel] = None,
-    ):
-        """Follow a YouTube channel for videos, live streams, Shorts, and posts."""
-        events: Any = self.bot.get_cog("Events")
-        if events is None or not hasattr(events, "resolve_youtube_channel"):
-            raise commands.BadArgument(
-                "YouTube notifications are unavailable right now."
-            )
-        youtube_channel = await events.resolve_youtube_channel(channel)
-        if youtube_channel is None:
-            raise commands.BadArgument(
-                "Could not find that YouTube channel. Use an @handle or channel URL."
-            )
-        target = announcement_channel or ctx.channel
-        if not hasattr(target, "send"):
-            raise commands.BadArgument(
-                "Choose a text channel for YouTube notifications."
-            )
-        channel_id = str(youtube_channel["id"])
-        async with self.bot.pool.acquire() as connection:
-            async with connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1))",
-                    f"fishie:youtube:{ctx.guild.id}",
-                )
-                existing = await connection.fetchval(
-                    "SELECT 1 FROM youtube_follows "
-                    "WHERE guild_id = $1 AND youtube_channel_id = $2",
-                    ctx.guild.id,
-                    channel_id,
-                )
-                if not existing:
-                    count = await connection.fetchval(
-                        "SELECT COUNT(*) FROM youtube_follows WHERE guild_id = $1",
-                        ctx.guild.id,
-                    )
-                    if count >= 3:
-                        raise commands.BadArgument(
-                            "You can follow up to 3 YouTube channels per server."
-                        )
-                await connection.execute(
-                    """
-                    INSERT INTO youtube_follows
-                        (guild_id, youtube_channel_id, channel_name, channel_handle,
-                         announce_channel_id)
-                    VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT (guild_id, youtube_channel_id) DO UPDATE SET
-                        channel_name = EXCLUDED.channel_name,
-                        channel_handle = EXCLUDED.channel_handle,
-                        announce_channel_id = EXCLUDED.announce_channel_id,
-                        updated_at = now()
-                    """,
-                    ctx.guild.id,
-                    channel_id,
-                    youtube_channel["name"],
-                    youtube_channel.get("handle"),
-                    target.id,
-                )
-        await events.ensure_youtube_subscription(channel_id)
-        await ctx.send(
-            f"Now following **{youtube_channel['name']}** in {target.mention}. "
-            "Videos, live streams, Shorts, and community posts are enabled."
-        )
-
-    @youtube.command(
-        name="events",
-        description="Choose which YouTube events this server receives.",
-    )
-    @app_commands.describe(
-        channel="Followed YouTube channel name, handle, ID, or URL.",
-        events="Event types: video, live, short, and community.",
-    )
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.guild_only()
-    @app_commands.allowed_installs(guilds=True)
-    @app_commands.allowed_contexts(guilds=True)
-    async def youtube_events(self, ctx: GuildContext, channel: str, *, events: str):
-        """Choose video, live, short, and community notification types."""
-        selected = normalize_youtube_events(events)
-        if not selected:
-            raise commands.BadArgument(
-                "Choose at least one of: video, live, short, community."
-            )
-        result = await self.bot.pool.execute(
-            "UPDATE youtube_follows SET event_types = $3, updated_at = now() "
-            "WHERE guild_id = $1 AND "
-            "(lower(channel_name) = lower($2) OR lower(channel_handle) = lower($2) "
-            "OR youtube_channel_id = $2)",
-            ctx.guild.id,
-            channel.strip(),
-            list(selected),
-        )
-        if result == "UPDATE 0":
-            raise commands.BadArgument("This server is not following that channel.")
-        await ctx.send(f"YouTube notifications set to: **{', '.join(selected)}**.")
-
-    @youtube.command(
-        name="message",
-        aliases=("customize", "text"),
-        description="Set optional text above a YouTube notification.",
-    )
-    @app_commands.describe(
-        channel="Followed YouTube channel name, handle, ID, or URL.",
-        message="Text to post above the notification. Use clear to remove it.",
-    )
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.guild_only()
-    @app_commands.allowed_installs(guilds=True)
-    @app_commands.allowed_contexts(guilds=True)
-    async def youtube_message(
-        self, ctx: GuildContext, channel: str, *, message: str = ""
-    ):
-        """Set optional text above a YouTube notification."""
-        value = message.strip()
-        if value.lower() in {"clear", "none", "off"}:
-            value = ""
-        if len(value) > 2000:
-            raise commands.BadArgument("The message cannot exceed 2000 characters.")
-        result = await self.bot.pool.execute(
-            "UPDATE youtube_follows SET message_template = $3, updated_at = now() "
-            "WHERE guild_id = $1 AND "
-            "(lower(channel_name) = lower($2) OR lower(channel_handle) = lower($2) "
-            "OR youtube_channel_id = $2)",
-            ctx.guild.id,
-            channel.strip(),
-            value or None,
-        )
-        if result == "UPDATE 0":
-            raise commands.BadArgument("This server is not following that channel.")
-        await ctx.send(
-            "The YouTube announcement text was saved."
-            if value
-            else "The YouTube announcement text was cleared."
-        )
-
-    @youtube.command(
-        name="unfollow",
-        aliases=("remove", "delete"),
-        description="Stop following a YouTube channel in this server.",
-    )
-    @app_commands.describe(channel="Followed YouTube channel name, handle, ID, or URL.")
-    @app_commands.allowed_installs(guilds=True)
-    @app_commands.allowed_contexts(guilds=True)
-    @commands.has_guild_permissions(manage_guild=True)
-    @commands.guild_only()
-    async def youtube_unfollow(self, ctx: GuildContext, *, channel: str):
-        """Stop following a YouTube channel."""
-        row = await self.bot.pool.fetchrow(
-            "DELETE FROM youtube_follows WHERE guild_id = $1 AND "
-            "(lower(channel_name) = lower($2) OR lower(channel_handle) = lower($2) "
-            "OR youtube_channel_id = $2) RETURNING youtube_channel_id, channel_name",
-            ctx.guild.id,
-            channel.strip(),
-        )
-        if row is None:
-            raise commands.BadArgument("This server is not following that channel.")
-        events: Any = self.bot.get_cog("Events")
-        if events is not None and hasattr(events, "remove_youtube_subscription"):
-            await events.remove_youtube_subscription(str(row["youtube_channel_id"]))
-        await ctx.send(f"Stopped following **{row['channel_name']}**.")
 
 
 class YoutubeDropdown(discord.ui.Select):

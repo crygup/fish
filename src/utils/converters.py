@@ -16,6 +16,7 @@ from discord.ext import commands
 
 from .downloads import is_discord_media_url, is_downloadable_media_page
 from .functions import response_checker, to_thread
+from .network import read_bounded_response
 from .regexes import TENOR_PAGE_RE
 from .vars import base_header
 
@@ -47,6 +48,11 @@ MEDIA_EXTENSIONS = (
     ".aac",
 )
 MESSAGE_URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
+# Twemoji SVGs are normally only a few kilobytes.  Keep a generous bound for
+# an upstream response so a compromised/changed CDN response cannot consume
+# unbounded memory before it is handed to the renderer.
+TWEMOJI_MAX_BYTES = 1 * 1024 * 1024
+RSVG_TIMEOUT_SECONDS = 15.0
 
 
 class LastfmTimeConverter(commands.Converter):
@@ -142,7 +148,23 @@ async def render_with_rsvg(blob):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate(blob)
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(blob), timeout=RSVG_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError as error:
+        # A malformed SVG should not leave a renderer process running forever.
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+        raise commands.BadArgument(
+            "The emoji image took too long to render."
+        ) from error
     if proc.returncode:
         raise commands.BadArgument("The emoji image could not be rendered.")
     return BytesIO(stdout), stderr
@@ -175,12 +197,13 @@ class TwemojiConverter(commands.Converter):
 
         VS_16 = "\N{VARIATION SELECTOR-16}"
 
-        resp = None
+        response_status: int | None = None
         blob = b""
-        while not resp or resp.status != 200:
+        while response_status != 200:
             chars = "-".join(f"{ord(c):x}" for c in argument)
-            async with ctx.bot.session.get(SVG_URL.format(chars=chars)) as resp:
-                if resp.status != 200:
+            async with ctx.bot.session.get(SVG_URL.format(chars=chars)) as response:
+                response_status = response.status
+                if response_status != 200:
                     if VS_16 in argument:
                         new_ipt = argument.removeprefix(VS_16)
                         if new_ipt == argument:
@@ -188,7 +211,7 @@ class TwemojiConverter(commands.Converter):
                         argument = new_ipt
                         continue
                     raise commands.BadArgument("Not a valid unicode emoji.")
-                blob = await resp.read()
+                blob = await read_bounded_response(response, TWEMOJI_MAX_BYTES)
 
         converted, stderr = await render_with_rsvg(blob)
 
@@ -350,9 +373,9 @@ class TenorUrlConverter(commands.Converter):
             in self._MEDIA_HOSTS
         ]
         media_candidates.sort(
-            key=lambda candidate: 0
-            if urlsplit(candidate).path.casefold().endswith(".gif")
-            else 1
+            key=lambda candidate: (
+                0 if urlsplit(candidate).path.casefold().endswith(".gif") else 1
+            )
         )
         if media_candidates:
             return media_candidates[0]
@@ -646,11 +669,7 @@ class MediaConverter(commands.Converter[str]):
                 image = embed.get("image")
                 thumbnail = embed.get("thumbnail")
                 add(image.get("url") if isinstance(image, Mapping) else None)
-                add(
-                    thumbnail.get("url")
-                    if isinstance(thumbnail, Mapping)
-                    else None
-                )
+                add(thumbnail.get("url") if isinstance(thumbnail, Mapping) else None)
             else:
                 image = getattr(embed, "image", None)
                 thumbnail = getattr(embed, "thumbnail", None)
@@ -683,9 +702,7 @@ class MediaConverter(commands.Converter[str]):
 
         if include_snapshots:
             for snapshot in cls._message_snapshots(message):
-                for url in cls._message_media_urls(
-                    snapshot, include_snapshots=False
-                ):
+                for url in cls._message_media_urls(snapshot, include_snapshots=False):
                     add(url)
         return tuple(urls)
 

@@ -29,7 +29,7 @@ from discord.ext import commands
 from PIL import Image, ImageSequence
 
 from .types import P, T
-from .vars import get_user_badge, render_user_badge
+from .vars import get_user_badges, render_user_badge
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -67,7 +67,11 @@ async def create_pool(connection_url: str) -> asyncpg.Pool:
 
 
 def format_name(user: Union[discord.User, discord.Member]) -> str:
-    emoji = render_user_badge(get_user_badge(user.id))
+    emoji = " ".join(
+        rendered
+        for badge in get_user_badges(user.id)
+        if (rendered := render_user_badge(badge))
+    )
     emoji = f"{emoji} " if emoji else ""
     return f"{emoji}{user}"
 

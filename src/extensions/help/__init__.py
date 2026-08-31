@@ -34,6 +34,46 @@ if TYPE_CHECKING:
 CogMapping: TypeAlias = Mapping[Optional[Cog], List[commands.Command[Any, ..., Any]]]
 
 
+class _GamesHelpCategory:
+    """Virtual help category for the games owned by the Fun cog.
+
+    The game commands intentionally remain bound to ``Fun`` because they
+    share controllers and persistent state with the other fun features.  A
+    small virtual category lets the help UI group them under ``Games``
+    without duplicating command registrations or changing their ownership.
+    """
+
+    qualified_name = "Games"
+    aliases: list[str] = []
+    description = "Play minigames against Fishie or players."
+    emoji = discord.PartialEmoji(name="🎮")
+    hidden = False
+    is_virtual = True
+
+    def __init__(self, bot: Any) -> None:
+        self.bot = bot
+
+    def get_commands(self) -> list[commands.Command[Any, ..., Any]]:
+        unique: dict[str, commands.Command[Any, ..., Any]] = {}
+        # Most games live on Fun, while currency-backed games such as the
+        # hourly lottery live on Currency so they can share its wallet and
+        # purchase services.  Both still belong in the Games help category.
+        for cog_name in ("Fun", "Currency"):
+            cog = self.bot.get_cog(cog_name)
+            if cog is None:
+                continue
+            for command in cog.get_commands():
+                if (
+                    str(
+                        getattr(command, "extras", {}).get("help_category", "")
+                    ).casefold()
+                    != "games"
+                ):
+                    continue
+                unique.setdefault(command.qualified_name.casefold(), command)
+        return list(unique.values())
+
+
 def command_usage(ctx: Context, command: commands.Command[Any, ..., Any]) -> str:
     """Build the prefix usage shown in command help."""
     custom_usage = command.extras.get("usage")
@@ -487,10 +527,37 @@ def _short_command_help(command: commands.Command[Any, ..., Any]) -> str:
     return _help_text(str(description).splitlines()[0] if description else "", 400)
 
 
+def _category_help_text(value: object, limit: int = 600) -> str:
+    """Normalize category descriptions for consistent help punctuation."""
+
+    text = _help_text(value, limit)
+    # A handful of older cogs use a sentence fragment as their docstring.
+    # Add a period only when the description ends in a word; preserve
+    # intentional punctuation such as ``!`` or ``?``.
+    if text and text[-1].isalnum():
+        text += "."
+    return text
+
+
 def _required_permissions(command: commands.Command[Any, ..., Any]) -> list[str]:
     """Extract user permissions declared by the command's permission checks."""
     permission_flags = set(discord.Permissions.VALID_FLAGS)
     permissions: list[str] = []
+
+    # Some commands intentionally allow DMs while requiring a guild
+    # permission when invoked in a server.  A normal ``has_guild_permissions``
+    # check would reject DMs, so those commands declare the requirement in
+    # their help metadata instead.  Keep this generic so future commands can
+    # expose the same conditional requirement without adding a runtime check.
+    metadata = getattr(command, "extras", {}).get("required_permissions", ())
+    if isinstance(metadata, str):
+        metadata = (metadata,)
+    if isinstance(metadata, (list, tuple, set, frozenset)):
+        for name in metadata:
+            name = str(name)
+            if name in permission_flags and name not in permissions:
+                permissions.append(name)
+
     checks = list(command.checks)
     app_command = getattr(command, "app_command", None)
     checks.extend(getattr(app_command, "checks", ()))
@@ -549,7 +616,9 @@ class HelpCategorySelect(discord.ui.Select):
                     value=_t(cog.qualified_name),
                     emoji=cog.emoji,
                     description=_t(
-                        _help_text(str(cog.description or "").splitlines()[0], 100)
+                        _category_help_text(
+                            str(cog.description or "").splitlines()[0], 100
+                        )
                     ),
                     default=cog is view.selected_cog,
                 )
@@ -643,9 +712,9 @@ class HelpLayoutView(discord.ui.LayoutView):
     def __init__(
         self,
         ctx: Context,
-        categories: list[Cog],
+        categories: list[Any],
         *,
-        selected_cog: Cog | None = None,
+        selected_cog: Any | None = None,
         commands_list: list[commands.Command[Any, ..., Any]] | None = None,
         detail: commands.Command[Any, ..., Any] | None = None,
         help_command: "ComponentsHelpCommand | None" = None,
@@ -664,6 +733,43 @@ class HelpLayoutView(discord.ui.LayoutView):
         self.message: discord.Message | None = None
         self._navigation_buttons: tuple[discord.ui.Button, ...] = ()
         self._render()
+
+    def _category_commands(
+        self, category: Any
+    ) -> list[commands.Command[Any, ..., Any]]:
+        """Return visible commands for a real or virtual help category."""
+
+        commands_list = [
+            command for command in category.get_commands() if not command.hidden
+        ]
+        # Commands remain attached to Fun at runtime, but the Games virtual
+        # category owns those tagged commands in the help navigation.
+        if not getattr(category, "is_virtual", False):
+            commands_list = [
+                command
+                for command in commands_list
+                if str(
+                    getattr(command, "extras", {}).get("help_category", "")
+                ).casefold()
+                != "games"
+            ]
+        unique: dict[str, commands.Command[Any, ..., Any]] = {}
+        for command in commands_list:
+            unique.setdefault(command.qualified_name.casefold(), command)
+        return list(unique.values())
+
+    def _find_category(self, value: str) -> Any | None:
+        normalized = value.casefold()
+        return next(
+            (
+                category
+                for category in self.categories
+                if category.qualified_name.casefold() == normalized
+                or normalized
+                in {alias.casefold() for alias in getattr(category, "aliases", ())}
+            ),
+            None,
+        )
 
     @property
     def page_count(self) -> int:
@@ -719,7 +825,7 @@ class HelpLayoutView(discord.ui.LayoutView):
             f"## {self.selected_cog.emoji} "
             f"{discord.utils.escape_markdown(self.selected_cog.qualified_name)}"
         )
-        description = _help_text(self.selected_cog.description, 600)
+        description = _category_help_text(self.selected_cog.description, 600)
         start = self.page * HELP_PAGE_SIZE
         page_commands = self.commands_list[start : start + HELP_PAGE_SIZE]
         items: list[discord.ui.Item[Any]] = [
@@ -898,19 +1004,17 @@ class HelpLayoutView(discord.ui.LayoutView):
             self.commands_list = []
             self.detail = None
         else:
-            cog = self.ctx.bot.get_cog(value)
+            cog = self._find_category(value)
             if cog is None or cog.hidden:
                 raise commands.BadArgument("That help category is not available.")
             self.selected_cog = cog
             self.detail = None
             if self.help_command is not None:
                 self.commands_list = await self.help_command.filter_commands(
-                    cog.get_commands(), sort=True
+                    self._category_commands(cog), sort=True
                 )
             else:
-                self.commands_list = [
-                    command for command in cog.get_commands() if not command.hidden
-                ]
+                self.commands_list = self._category_commands(cog)
         self.page = 0
         self._category_page = 0
         self._render()
@@ -1085,10 +1189,43 @@ class ComponentsHelpCommand(commands.HelpCommand):
     """Components V2 help command used by ``fish help``."""
 
     @staticmethod
-    def _categories(bot: Any) -> list[Cog]:
-        return [
+    def _categories(bot: Any) -> list[Any]:
+        categories: list[Any] = [
             cog for cog in bot.cogs.values() if isinstance(cog, Cog) and not cog.hidden
         ]
+        games = _GamesHelpCategory(bot)
+        if games.get_commands():
+            categories.append(games)
+        return categories
+
+    @staticmethod
+    def _category_commands(
+        category: Any,
+    ) -> list[commands.Command[Any, ..., Any]]:
+        commands_list = [
+            command for command in category.get_commands() if not command.hidden
+        ]
+        if not getattr(category, "is_virtual", False):
+            commands_list = [
+                command
+                for command in commands_list
+                if str(
+                    getattr(command, "extras", {}).get("help_category", "")
+                ).casefold()
+                != "games"
+            ]
+        unique: dict[str, commands.Command[Any, ..., Any]] = {}
+        for command in commands_list:
+            unique.setdefault(command.qualified_name.casefold(), command)
+        return list(unique.values())
+
+    @classmethod
+    def _category_for_command(cls, bot: Any, command: Any) -> Any | None:
+        if str(getattr(command, "extras", {}).get("help_category", "")) == "Games":
+            games = _GamesHelpCategory(bot)
+            if games.get_commands():
+                return games
+        return getattr(command, "cog", None)
 
     async def send_bot_help(self, mapping: CogMapping) -> None:
         del mapping
@@ -1102,7 +1239,9 @@ class ComponentsHelpCommand(commands.HelpCommand):
 
     async def send_cog_help(self, cog: Cog) -> None:
         ctx = cast(Context, self.context)
-        commands_list = await self.filter_commands(cog.get_commands(), sort=True)
+        commands_list = await self.filter_commands(
+            self._category_commands(cog), sort=True
+        )
         view = HelpLayoutView(
             ctx,
             self._categories(ctx.bot),
@@ -1114,11 +1253,11 @@ class ComponentsHelpCommand(commands.HelpCommand):
 
     async def send_command_help(self, command: commands.Command[Any, ..., Any]) -> None:
         ctx = cast(Context, self.context)
-        selected_cog = command.cog if isinstance(command.cog, Cog) else None
+        selected_cog = self._category_for_command(ctx.bot, command)
         commands_list: list[commands.Command[Any, ..., Any]] = []
-        if selected_cog is not None:
+        if selected_cog is not None and hasattr(selected_cog, "get_commands"):
             commands_list = await self.filter_commands(
-                selected_cog.get_commands(), sort=True
+                self._category_commands(selected_cog), sort=True
             )
         view = HelpLayoutView(
             ctx,

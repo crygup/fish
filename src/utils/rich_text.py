@@ -148,6 +148,12 @@ def _inline_image_url(token: str) -> str:
     return TWEMOJI_URL.format(codepoints=_codepoints(token))
 
 
+def inline_image_url(token: str) -> str:
+    """Return the trusted CDN URL used for an inline emoji token."""
+
+    return _inline_image_url(token)
+
+
 async def resolve_inline_images(session: Any, texts: list[str]) -> dict[str, bytes]:
     tokens = list(
         dict.fromkeys(token for text in texts for token in inline_image_tokens(text))
