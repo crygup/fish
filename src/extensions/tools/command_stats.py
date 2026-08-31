@@ -227,6 +227,58 @@ class CommandStats(Cog):
             return
         await controller.send_stats(ctx)
 
+    @stats.command(name="race", aliases=("sea-race", "seaanimalrace"))
+    @app_commands.describe(user="The user whose race stats you want to see.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_race(
+        self,
+        ctx: Context,
+        user: discord.User = commands.param(
+            default=commands.Author,
+            description="The user whose race stats you want to see.",
+        ),
+    ) -> None:
+        """Show Sea Animal Race wins, losses, earnings, and faints."""
+        fun_cog: Any = ctx.bot.get_cog("Fun")
+        send_stats = cast(
+            Callable[..., Awaitable[Any]] | None,
+            getattr(fun_cog, "_send_race_stats", None),
+        )
+        if not callable(send_stats):
+            await ctx.send(
+                "Sea Animal Race statistics are not available right now.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        await send_stats(ctx, user)
+
+    @stats.command(name="luckyroll", aliases=("lucky-roll", "lr"))
+    @app_commands.describe(user="The user whose Lucky Roll stats you want to see.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_luckyroll(
+        self,
+        ctx: Context,
+        user: discord.User = commands.param(
+            default=commands.Author,
+            description="The user whose Lucky Roll stats you want to see.",
+        ),
+    ) -> None:
+        """Show Lucky Roll wins, losses, earnings, and losses."""
+        fun_cog: Any = ctx.bot.get_cog("Fun")
+        send_stats = cast(
+            Callable[..., Awaitable[Any]] | None,
+            getattr(fun_cog, "_send_luckyroll_stats", None),
+        )
+        if not callable(send_stats):
+            await ctx.send(
+                "Lucky Roll statistics are not available right now.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        await send_stats(ctx, user)
+
     @stats.command(name="video", aliases=("videos",))
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -311,6 +363,108 @@ class CommandStats(Cog):
             await ctx.send("Heads or Tails statistics are not available right now.")
             return
         await send_stats(ctx, "heads_or_tails", "Heads or Tails", user)
+
+    @stats.command(
+        name="rps",
+        aliases=("rock-paper-scissors", "rockpaperscissors"),
+    )
+    @app_commands.describe(user="The user whose highest streak you want to see.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_rock_paper_scissors(
+        self, ctx: Context, user: discord.User = commands.Author
+    ) -> None:
+        """Show wagered Rock Paper Scissors streak statistics."""
+        fun_cog: Any = ctx.bot.get_cog("Fun")
+        send_stats = cast(
+            Callable[..., Awaitable[Any]] | None,
+            getattr(fun_cog, "_send_streak_game_stats", None),
+        )
+        if send_stats is None:
+            await ctx.send(
+                "Rock Paper Scissors statistics are not available right now."
+            )
+            return
+        await send_stats(ctx, "rock_paper_scissors", "Rock Paper Scissors", user)
+
+    @stats.command(name="wordbomb", aliases=("wb", "word-bomb"))
+    @app_commands.describe(user="The user whose Word Bomb stats you want to see.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_wordbomb(
+        self, ctx: Context, user: discord.User = commands.Author
+    ) -> None:
+        """Show Word Bomb wins, losses, and the global wins leaderboard."""
+
+        visible = ctx.bot.db_cache.game_history_visible_to(user.id, ctx.author.id)
+        selected = None
+        if visible:
+            selected = await ctx.bot.pool.fetchrow(
+                "SELECT wins, losses FROM wordbomb_stats WHERE user_id = $1",
+                user.id,
+            )
+        rows = await ctx.bot.pool.fetch(
+            "SELECT user_id, wins, losses FROM wordbomb_stats "
+            "ORDER BY wins DESC, losses ASC, updated_at ASC, user_id ASC LIMIT 5"
+        )
+        rows = [
+            row
+            for row in rows
+            if ctx.bot.db_cache.game_history_visible_to(
+                int(row["user_id"]), ctx.author.id
+            )
+        ]
+
+        name = discord.utils.escape_markdown(
+            discord.utils.escape_mentions(getattr(user, "name", str(user.id)))
+        )
+        wins = int(selected["wins"]) if selected is not None else 0
+        losses = int(selected["losses"]) if selected is not None else 0
+        lines = [
+            f"## Word Bomb stats for {name}",
+            f"**Wins:** {wins:,} · **Losses:** {losses:,}",
+            "### Most wins",
+        ]
+        if rows:
+            for index, row in enumerate(rows, start=1):
+                listed_user = await get_or_fetch_user(ctx.bot, int(row["user_id"]))
+                listed_name = getattr(listed_user, "name", None) or str(row["user_id"])
+                safe_listed_name = discord.utils.escape_markdown(
+                    discord.utils.escape_mentions(listed_name)
+                )
+                lines.append(
+                    f"**#{index} {safe_listed_name}** · "
+                    f"{int(row['wins']):,} wins · {int(row['losses']):,} losses"
+                )
+        else:
+            lines.append("No Word Bomb games have been recorded yet.")
+
+        embed = discord.Embed(
+            title="Word Bomb stats",
+            description="\n".join(lines),
+            color=ctx.bot.embedcolor,
+        )
+        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+    @stats.command(name="lightsout", aliases=("lights-out", "lights"))
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_lightsout(self, ctx: Context) -> None:
+        """Show the fastest tracked Lights Out completions."""
+
+        fun_cog: Any = ctx.bot.get_cog("Fun")
+        send_stats = cast(
+            Callable[[Context], Awaitable[Any]] | None,
+            getattr(fun_cog, "_send_lightsout_stats", None),
+        )
+        if not callable(send_stats):
+            await ctx.send(
+                "Lights Out statistics are not available right now.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        async with ctx.typing():
+            await send_stats(ctx)
 
     @stats.command(
         name="reactions",

@@ -13,6 +13,7 @@ from discord import app_commands
 from discord.ext import commands
 from discord.utils import escape_markdown
 
+from core.handoff import is_legacy_instance
 from extensions.context import Context
 from extensions.media_effects.delivery import send_effect_result
 from extensions.media_effects.processing import repair_gif
@@ -175,28 +176,20 @@ class Tools(
         self._highlight_cache: dict[int, list[tuple[int, str, re.Pattern[str]]]] = {}
         self._highlight_tasks: set[asyncio.Task[None]] = set()
 
-    @cast(Any, commands.hybrid_group)(
+    @commands.group(
         name="text",
         invoke_without_command=True,
     )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def text(self, ctx: Context) -> None:
         """Transform text with Fishie's text utilities."""
         await ctx.send_help(ctx.command)
 
     @text.command(name="cyrillic", aliases=("cryllic",))
-    @app_commands.describe(words="Text to replace with similar-looking characters.")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def text_cyrillic(self, ctx: Context, *, words: str) -> None:
         """Replace Latin letters with similar-looking Cyrillic characters."""
         await self._send_cyrillic(ctx, words)
 
     @text.command(name="merica", aliases=("cm",))
-    @app_commands.describe(words="Text to separate with United States flag emojis.")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def text_merica(self, ctx: Context, *, words: str) -> None:
         """Separate words with United States flag emojis."""
         await ctx.send(
@@ -352,34 +345,21 @@ class Tools(
         )
         await ctx.send(view=view, allowed_mentions=discord.AllowedMentions.none())
 
-    @cast(Any, commands.hybrid_group)(
+    @commands.group(
         name="qr",
         aliases=("qrcode",),
-        fallback="make",
         invoke_without_command=True,
     )
-    @app_commands.describe(text="The text or URL to encode in a QR code.")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def qr(self, ctx: Context, *, text: str) -> None:
         """Generate a QR code from text. Use `qr read` to decode one."""
         await self._send_qr_make(ctx, text)
 
     @qr.command(name="generate")
-    @app_commands.describe(text="The text or URL to encode in a QR code.")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def qr_generate(self, ctx: Context, *, text: str) -> None:
         """Generate a QR code from text or a URL."""
         await self._send_qr_make(ctx, text)
 
     @qr.command(name="read", aliases=("decode", "scan"))
-    @app_commands.describe(
-        media="An image URL containing a QR code.",
-        attachment="An image attachment containing a QR code.",
-    )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def qr_read(
         self,
         ctx: Context,
@@ -514,6 +494,11 @@ class Tools(
 
     @commands.Cog.listener("on_message")
     async def _highlight_on_message(self, message: discord.Message) -> None:
+        # During the handoff the replacement instance owns all tracking and
+        # notification side effects.  Keep the legacy process read-only so it
+        # cannot duplicate highlight activity or DMs.
+        if is_legacy_instance(self.bot):
+            return
         guild = message.guild
         if guild is None or message.author.bot:
             return
@@ -551,6 +536,8 @@ class Tools(
         user: discord.User | discord.Member,
         when: datetime.datetime,
     ) -> None:
+        if is_legacy_instance(self.bot):
+            return
         guild = getattr(channel, "guild", None)
         if guild is not None and not user.bot:
             self._highlight_activity[(guild.id, user.id)] = (
@@ -790,12 +777,7 @@ class Tools(
 
         await ctx.send(f"Here is the real URL: {url}")
 
-    @commands.hybrid_command(name="embedfix", aliases=("embed-fix",))
-    @app_commands.describe(
-        media="An animated GIF URL or attachment to make Discord-friendly."
-    )
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="embedfix", aliases=("embed-fix",))
     async def embedfix(self, ctx: Context, *, media: str | None = None) -> None:
         """Re-encode an animated GIF that renders incorrectly in Discord."""
 
@@ -841,11 +823,15 @@ class Tools(
         menu = Pager(p, ctx=ctx)
         await menu.start(ctx)
 
-    @commands.hybrid_command(name="xp")
-    @app_commands.allowed_installs(guilds=True, users=True)
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @commands.command(name="xp")
     async def xp(self, ctx: Context, *, user: discord.User = commands.Author):
-        """Check the XP you have."""
+        """Check the XP you have.
+
+        You can get +5 xp per xp gain by doing one of the following:
+
+        - Giving `crygup` reputation via the `rep` command on Fishie or Tatsu bot
+        - Or giving the [support server](https://discord.gg/rM9u4MRFBE) rep with Fishie
+        """
         xp: Optional[int] = await self.bot.pool.fetchval(
             "SELECT xp FROM message_xp WHERE user_id = $1", user.id
         )
@@ -853,7 +839,10 @@ class Tools(
         if not bool(xp):
             raise commands.BadArgument("This user has no recorded XP")
 
-        await ctx.send(f"{user} has {xp:,} XP")
+        bonus = self.bot.db_cache.reputation_bonus_count(user.id) * 5
+        name = discord.utils.escape_markdown(user.name)
+        bonus_text = f"*+{bonus:,} bonus.*" if bonus else "*No XP bonuses active*"
+        await ctx.send(f"{name} has {xp:,} XP\n-# {bonus_text}")
 
     async def lb_name(self, user_id: int) -> discord.User | int:
         try:
@@ -861,25 +850,91 @@ class Tools(
         except discord.HTTPException:
             return user_id
 
-    @commands.hybrid_command(name="leaderboard", aliases=("lb",))
+    @commands.hybrid_group(name="leaderboard", aliases=("lb",), fallback="xp")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def leaderboard(self, ctx: Context):
         """Check the global XP leaderboard"""
-        xp = await self.bot.pool.fetch(
-            "SELECT user_id, xp FROM message_xp ORDER BY xp DESC LIMIT 100",
-        )
+        async with ctx.typing():
+            xp = await self.bot.pool.fetch(
+                "SELECT user_id, xp FROM message_xp "
+                "ORDER BY xp DESC, user_id ASC LIMIT 100",
+            )
 
-        if not bool(xp):
-            raise commands.BadArgument("No data found")
+            if not xp:
+                raise commands.BadArgument("No data found")
 
-        xp_by_user: dict[int, int] = dict(xp)  # type: ignore
-        entries = [
-            escape_markdown(f"{await self.lb_name(user_id)}: {xp:,}")
-            for user_id, xp in xp_by_user.items()
-        ]
+            # Most leaderboard users are already in the bot cache.  Resolve
+            # cache misses concurrently, but keep a small limit so a large
+            # leaderboard cannot burst Discord's user-fetch endpoint.
+            fetch_limit = asyncio.Semaphore(8)
+
+            async def resolve(user_id: int) -> discord.User | int:
+                cached = self.bot.get_user(user_id)
+                if cached is not None:
+                    return cached
+                async with fetch_limit:
+                    return await self.lb_name(user_id)
+
+            users = await asyncio.gather(*(resolve(int(row["user_id"])) for row in xp))
+            entries = [
+                escape_markdown(f"{user}: {int(row['xp']):,}")
+                for row, user in zip(xp, users)
+            ]
+
         pages = SimplePages(entries=entries, per_page=10, ctx=ctx)
         pages.embed.title = "Global ranks"
+        await pages.start(ctx)
+
+    @leaderboard.command(name="currency", aliases=("bal", "balance", "wallet", "coins"))
+    @app_commands.describe(
+        user="User whose Coins balance to check (defaults to yourself)."
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def leaderboard_currency(
+        self,
+        ctx: Context,
+        user: discord.User = commands.param(
+            default=commands.Author,
+            description="User whose Coins balance to check (defaults to yourself).",
+        ),
+    ) -> None:
+        """Show a user's Coins balance and the global Coins leaderboard."""
+
+        async with ctx.typing():
+            wallet = await ctx.bot.currency.get_wallet(user.id)
+            rows = await ctx.bot.pool.fetch(
+                "SELECT user_id, balance FROM currency_wallets "
+                "ORDER BY balance DESC, user_id ASC LIMIT 100"
+            )
+
+            async def resolve_name(user_id: int) -> str:
+                member = self.bot.get_user(user_id)
+                if member is None:
+                    try:
+                        member = await get_or_fetch_user(self.bot, user_id)
+                    except discord.HTTPException:
+                        member = None
+                return discord.utils.escape_markdown(
+                    member.name if member is not None else str(user_id)
+                )
+
+            names = await asyncio.gather(
+                *(resolve_name(int(row["user_id"])) for row in rows)
+            )
+
+        lines = [
+            f"{name} · {int(row['balance']):,} Coins" for row, name in zip(rows, names)
+        ]
+        target_name = discord.utils.escape_markdown(user.name)
+        if not lines:
+            lines = ["No wallets have been recorded yet."]
+        pages = SimplePages(entries=lines, per_page=10, ctx=ctx)
+        pages.embed.title = "Currency ranks"
+        pages.embed.set_author(
+            name=f"{target_name}'s balance: {wallet.balance:,} Coins"
+        )
         await pages.start(ctx)
 
     @commands.command(name="solve")

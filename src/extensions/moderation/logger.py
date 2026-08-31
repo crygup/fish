@@ -5,12 +5,12 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Sequence, cast
+from typing import TYPE_CHECKING, Any, Optional, Sequence, cast
 
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
 from utils.activities import (
     activity_identity,
     activity_image_url,
@@ -224,7 +224,68 @@ class _ChannelPositionChange:
     after_position: object | None
 
 
+@dataclass(frozen=True, slots=True)
+class _RolePositionChange:
+    """Snapshot of one role move during the short batching window."""
+
+    guild: discord.Guild
+    role_id: int
+    role_label: str
+    before_position: object | None
+    after_position: object | None
+
+
 CHANNEL_MOVE_BATCH_DELAY = 0.75
+
+
+async def _authorize_logger_interaction(
+    interaction: discord.Interaction, ctx: GuildContext
+) -> bool:
+    """Keep logger controls behind a live Manage Server check.
+
+    Logger setup views can remain attached to a message for several minutes,
+    so the command-level permission check is not sufficient.  The original
+    author must still be the actor, and their current member permissions are
+    checked immediately before changing a logger destination.
+    """
+
+    guild = ctx.guild
+    if guild is None or interaction.guild_id != guild.id:
+        message = "These logger controls can only be used in their original server."
+    elif interaction.user.id != ctx.author.id:
+        message = "Only the person who opened the logger controls can use these buttons."
+    else:
+        member = interaction.user
+        if (
+            getattr(getattr(member, "guild", None), "id", None) != guild.id
+            or not hasattr(member, "guild_permissions")
+        ):
+            get_member = getattr(guild, "get_member", None)
+            member = get_member(interaction.user.id) if callable(get_member) else None
+        if member and (
+            getattr(guild, "owner_id", None) == member.id
+            or bool(
+                getattr(
+                    getattr(member, "guild_permissions", None), "manage_guild", False
+                )
+            )
+        ):
+            return True
+        message = "You no longer have Manage Server permission to change logger settings."
+
+    if interaction.response.is_done():
+        await interaction.followup.send(
+            message,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    else:
+        await interaction.response.send_message(
+            message,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    return False
 
 
 class _LoggerView(discord.ui.LayoutView):
@@ -234,13 +295,7 @@ class _LoggerView(discord.ui.LayoutView):
         self.author_id = ctx.author.id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.author_id:
-            return True
-        await interaction.response.send_message(
-            "Only the person who opened the logger controls can use these buttons.",
-            ephemeral=True,
-        )
-        return False
+        return await _authorize_logger_interaction(interaction, self.ctx)
 
 
 class LoggerChannelModal(discord.ui.Modal, title="Logger channel"):
@@ -258,6 +313,8 @@ class LoggerChannelModal(discord.ui.Modal, title="Logger channel"):
         self.event = event
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _authorize_logger_interaction(interaction, self.ctx):
+            return
         try:
             channel = self.cog._resolve_logger_channel(
                 self.ctx.guild, str(self.channel_input.value)
@@ -337,6 +394,10 @@ class LoggerChannelPickerView(_LoggerView):
         super().__init__(ctx)
         self.cog = cog
         self.event = event
+        choose = discord.ui.Button(
+            label="Choose channels", style=discord.ButtonStyle.secondary
+        )
+        choose.callback = self._open_picker
         choose_text = discord.ui.Button(
             label="Enter channel name/ID", style=discord.ButtonStyle.secondary
         )
@@ -345,20 +406,33 @@ class LoggerChannelPickerView(_LoggerView):
             label="Set to current channel", style=discord.ButtonStyle.success
         )
         current.callback = self._set_current
+        back = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
+        back.callback = self._back
+        quit_button = discord.ui.Button(
+            label="Quit", style=discord.ButtonStyle.secondary
+        )
+        quit_button.callback = self._quit
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(f"## Configure {LOGGER_EVENTS[event]}"),
                 discord.ui.TextDisplay(
-                    "Use the channel picker below, enter a channel name/ID, or set this command's channel."
+                    "Choose a channel from the paginated list, enter a channel name/ID, "
+                    "or set this command's channel."
                 ),
-                discord.ui.ActionRow(LoggerChannelSelect(self)),
-                discord.ui.ActionRow(choose_text, current),
+                discord.ui.ActionRow(choose_text, choose),
+                discord.ui.ActionRow(current, back, quit_button),
             )
         )
 
     async def _open_modal(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(
             LoggerChannelModal(self.cog, self.ctx, self.event)
+        )
+
+    async def _open_picker(self, interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(
+            view=LoggerChannelPages(self.cog, self.ctx, self.event),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     async def _set_current(self, interaction: discord.Interaction) -> None:
@@ -387,7 +461,195 @@ class LoggerChannelPickerView(_LoggerView):
         configured = await self.cog._configured_logger_channels(self.ctx.guild.id)
         await interaction.response.edit_message(
             view=LoggerPanelView(self.cog, self.ctx, configured),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    async def _back(self, interaction: discord.Interaction) -> None:
+        configured = await self.cog._configured_logger_channels(self.ctx.guild.id)
+        await interaction.response.edit_message(
+            view=LoggerPanelView(self.cog, self.ctx, configured),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def _quit(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await interaction.response.edit_message(view=None)
+
+
+class LoggerChannelPages(_LoggerView):
+    """Paginated text-channel picker used by the logger controls."""
+
+    def __init__(self, cog: Logger, ctx: GuildContext, event: str) -> None:
+        super().__init__(ctx)
+        self.cog = cog
+        self.event = event
+        self.channels = sorted(
+            ctx.guild.text_channels, key=lambda channel: channel.position
+        )
+        self.page = 0
+        self.page_count = max(1, (len(self.channels) + 74) // 75)
+        self._render()
+
+    def _render(self) -> None:
+        self.clear_items()
+        page_channels = self.channels[self.page * 75 : (self.page + 1) * 75]
+        rows: list[discord.ui.Item[Any]] = []
+        for offset in range(0, len(page_channels), 25):
+            options = [
+                discord.SelectOption(
+                    label=channel.name[:100],
+                    value=str(channel.id),
+                    description=f"Position {channel.position}",
+                )
+                for channel in page_channels[offset : offset + 25]
+            ]
+            if not options:
+                continue
+            select = discord.ui.Select(
+                placeholder="Choose a text channel",
+                min_values=1,
+                max_values=1,
+                options=options,
+            )
+            select.callback = self._select_channel  # type: ignore[assignment]
+            rows.append(discord.ui.ActionRow(select))
+
+        previous = discord.ui.Button(label="<", style=discord.ButtonStyle.secondary)
+        previous.callback = self._previous
+        next_button = discord.ui.Button(label=">", style=discord.ButtonStyle.secondary)
+        next_button.callback = self._next
+        current = discord.ui.Button(
+            label="Set current channel", style=discord.ButtonStyle.secondary
+        )
+        current.callback = self._set_current
+        back = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
+        back.callback = self._back
+        quit_button = discord.ui.Button(
+            label="Quit", style=discord.ButtonStyle.secondary
+        )
+        quit_button.callback = self._quit
+        rows.append(
+            discord.ui.ActionRow(previous, next_button, current, back, quit_button)
+        )
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    f"## Choose {LOGGER_EVENTS[self.event]} channel\n"
+                    f"Page {self.page + 1}/{self.page_count} · {len(self.channels)} channels"
+                ),
+                *rows,
+            )
+        )
+
+    async def _select_channel(self, interaction: discord.Interaction) -> None:
+        data = interaction.data or {}
+        values = data.get("values", [])
+        if not values:
+            await interaction.response.send_message(
+                "Please choose a channel.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        try:
+            channel_id = int(values[0])
+        except (TypeError, ValueError):
+            await interaction.response.send_message(
+                "Please choose a text channel.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        channel = self.ctx.guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Please choose a text channel.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        try:
+            await self.cog._set_logger_channel(
+                self.ctx,
+                self.event,
+                channel,
+                announce=False,
+                actor_id=interaction.user.id,
+            )
+        except (
+            commands.BadArgument,
+            commands.BotMissingPermissions,
+            discord.HTTPException,
+        ) as exc:
+            await interaction.response.send_message(
+                str(exc),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        configured = await self.cog._configured_logger_channels(self.ctx.guild.id)
+        await interaction.response.edit_message(
+            view=LoggerPanelView(self.cog, self.ctx, configured),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def _previous(self, interaction: discord.Interaction) -> None:
+        self.page = (self.page - 1) % self.page_count
+        self._render()
+        await interaction.response.edit_message(
+            view=self, allowed_mentions=discord.AllowedMentions.none()
+        )
+
+    async def _next(self, interaction: discord.Interaction) -> None:
+        self.page = (self.page + 1) % self.page_count
+        self._render()
+        await interaction.response.edit_message(
+            view=self, allowed_mentions=discord.AllowedMentions.none()
+        )
+
+    async def _set_current(self, interaction: discord.Interaction) -> None:
+        channel = self.ctx.channel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "The command must be run in a text channel to use this option.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        try:
+            await self.cog._set_logger_channel(
+                self.ctx,
+                self.event,
+                channel,
+                announce=False,
+                actor_id=interaction.user.id,
+            )
+        except (
+            commands.BadArgument,
+            commands.BotMissingPermissions,
+            discord.HTTPException,
+        ) as exc:
+            await interaction.response.send_message(
+                str(exc),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        configured = await self.cog._configured_logger_channels(self.ctx.guild.id)
+        await interaction.response.edit_message(
+            view=LoggerPanelView(self.cog, self.ctx, configured),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def _back(self, interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(
+            view=LoggerChannelPickerView(self.cog, self.ctx, self.event),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def _quit(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await interaction.response.edit_message(view=None)
 
 
 class LoggerConfigureButton(discord.ui.Button):
@@ -398,8 +660,10 @@ class LoggerConfigureButton(discord.ui.Button):
         super().__init__(label="Choose channel", style=discord.ButtonStyle.primary)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.edit_message(
-            view=LoggerChannelPickerView(self.cog, self.ctx, self.event)
+        await interaction.response.send_message(
+            view=LoggerChannelPickerView(self.cog, self.ctx, self.event),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
 
@@ -476,6 +740,11 @@ class LoggerPanelView(_LoggerView):
 class Logger(Cog):
     """Per-server event logging to configured Discord channels."""
 
+    # Kept as a fallback for management scripts and tests that construct a
+    # lightweight bot without the runtime identity properties.
+    LEGACY_BOT_ID = 876391494485950504
+    REPLACEMENT_BOT_ID = 1537535633038381190
+
     _pending_purges: dict[tuple[int, int], float]
     _webhook_locks: dict[tuple[int, str], asyncio.Lock]
     _logged_webhook_creations: dict[tuple[int, int, str], float]
@@ -483,6 +752,229 @@ class Logger(Cog):
     _logged_audit_events: dict[int, float]
     _channel_move_batches: dict[int, list[_ChannelPositionChange]]
     _channel_move_tasks: dict[int, asyncio.Task[None]]
+    _role_move_batches: dict[int, list[_RolePositionChange]]
+    _role_move_tasks: dict[int, asyncio.Task[None]]
+    _logger_rebind_task: asyncio.Task[None] | None
+
+    def _is_replacement_instance(self) -> bool:
+        """Return whether this process is running the replacement app."""
+
+        marker = getattr(self.bot, "is_new_bot", None)
+        if marker is not None:
+            try:
+                return bool(marker() if callable(marker) else marker)
+            except Exception:
+                pass
+        user = getattr(self.bot, "user", None)
+        try:
+            return int(getattr(user, "id", 0)) == self.REPLACEMENT_BOT_ID
+        except (TypeError, ValueError):
+            return False
+
+    def _is_legacy_instance(self) -> bool:
+        """Return whether this logger is running on the retiring bot."""
+
+        marker = getattr(self.bot, "is_legacy_bot", None)
+        if marker is not None:
+            try:
+                return bool(marker() if callable(marker) else marker)
+            except Exception:
+                pass
+        for attribute in ("instance", "bot_instance"):
+            marker = getattr(self.bot, attribute, None)
+            if marker is None:
+                continue
+            try:
+                marker = marker() if callable(marker) else marker
+                return str(marker).casefold() in {"legacy", "old", "primary"}
+            except Exception:
+                pass
+        user = getattr(self.bot, "user", None)
+        try:
+            return int(getattr(user, "id", 0)) == self.LEGACY_BOT_ID
+        except (TypeError, ValueError):
+            return False
+
+    def _replacement_member_present(self, guild: discord.Guild) -> bool:
+        """Return whether the replacement application is in *guild*.
+
+        Bot members are normally cached even when a deployment has not
+        enabled privileged member chunking.  Iterate the cache as a fallback
+        for lightweight guild doubles used in tests.
+        """
+
+        replacement_id = self.REPLACEMENT_BOT_ID
+        marker = getattr(self.bot, "new_bot_id", None)
+        if marker is not None:
+            try:
+                replacement_id = int(marker() if callable(marker) else marker)
+            except (TypeError, ValueError):
+                pass
+        try:
+            if guild.get_member(replacement_id) is not None:
+                return True
+        except (AttributeError, TypeError):
+            pass
+        for member in list(getattr(guild, "members", ()) or ()):
+            try:
+                if int(getattr(member, "id", 0)) == replacement_id:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    async def _logger_webhook_owner_id(self, url: object) -> int | None:
+        """Resolve the account that owns a logger webhook, when possible."""
+
+        session = getattr(self.bot, "session", None)
+        if session is None:
+            return None
+        try:
+            webhook = discord.Webhook.from_url(
+                str(url), session=session
+            )
+            fetched = await webhook.fetch()
+        except (
+            discord.HTTPException,
+            discord.NotFound,
+            discord.Forbidden,
+            TypeError,
+            ValueError,
+            AttributeError,
+        ):
+            # A deleted/invalid URL is handled by the normal lazy replacement
+            # path when the first event is emitted.
+            return None
+        owner = getattr(getattr(fetched, "user", None), "id", None)
+        try:
+            return int(owner) if owner is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    async def rebind_logger_webhooks(self) -> int:
+        """Replace legacy-created logger webhooks for the new application.
+
+        Logger webhook URLs are bearer credentials and remain executable even
+        after the original bot leaves a guild.  The replacement process must
+        therefore create its own webhook per configured logger row, update the
+        shared URL, and then delete the legacy webhook.  Static config
+        webhooks (error/images/messages/phone logs) are intentionally outside
+        this table and are never touched.
+        """
+
+        if not self._is_replacement_instance():
+            return 0
+        rows = await self.bot.pool.fetch(
+            "SELECT guild_id, event, channel_id, webhook_url "
+            "FROM guild_log_channels WHERE webhook_url IS NOT NULL"
+        )
+        config = getattr(self.bot, "config", None)
+        configured_webhooks = (
+            config.get("webhooks", {}) if isinstance(config, dict) else {}
+        )
+        static_urls = {
+            str(value)
+            for value in configured_webhooks.values()
+            if value
+        }
+        rebound = 0
+        for row in rows:
+            guild_id = int(row["guild_id"])
+            if is_operational_guild(guild_id):
+                continue
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                continue
+            channel = guild.get_channel(int(row["channel_id"]))
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            stored_event = str(row["event"])
+            event = _canonical_logger_event(stored_event)
+            old_url = row["webhook_url"]
+            if not old_url:
+                continue
+            # Keep deployment-wide webhooks (error/image/message/phone logs)
+            # immutable even if a stale row happens to reference one.
+            if str(old_url) in static_urls:
+                continue
+            owner_id = await self._logger_webhook_owner_id(old_url)
+            current_id = getattr(self.bot, "active_bot_id", None)
+            try:
+                current_id = int(
+                    current_id() if callable(current_id) else current_id
+                )
+            except (TypeError, ValueError):
+                current_id = self.REPLACEMENT_BOT_ID
+            if owner_id == current_id:
+                continue
+
+            async with self._webhook_lock(guild_id, event):
+                current = await self.bot.pool.fetchrow(
+                    "SELECT channel_id, webhook_url FROM guild_log_channels "
+                    "WHERE guild_id = $1 AND event = $2",
+                    guild_id,
+                    stored_event,
+                )
+                if current is None or not current["webhook_url"]:
+                    continue
+                current_url = str(current["webhook_url"])
+                # Another process may have completed the replacement while we
+                # were fetching the owner.  Re-check the current URL before
+                # creating a second webhook.
+                current_owner = await self._logger_webhook_owner_id(current_url)
+                if current_owner == current_id:
+                    continue
+                try:
+                    replacement = await self._create_logger_webhook(
+                        channel,
+                        event,
+                        created_by=current_id,
+                    )
+                    updated = await self.bot.pool.execute(
+                        "UPDATE guild_log_channels SET webhook_url = $1 "
+                        "WHERE guild_id = $2 AND event = $3 AND webhook_url = $4",
+                        replacement.url,
+                        guild_id,
+                        stored_event,
+                        current_url,
+                    )
+                    # ``asyncpg`` returns ``UPDATE <count>``.  If a concurrent
+                    # setting change won the race, remove the orphan webhook
+                    # and leave the row untouched.
+                    if not updated.endswith(" 1"):
+                        await replacement.delete()
+                        continue
+                    await self._delete_logger_webhook(
+                        current_url, guild_id, event
+                    )
+                    rebound += 1
+                except (
+                    discord.HTTPException,
+                    commands.BotMissingPermissions,
+                    OSError,
+                    TypeError,
+                    ValueError,
+                ):
+                    self.bot.logger.warning(
+                        "Could not rebind logger webhook for guild %s event %s",
+                        guild_id,
+                        event,
+                        exc_info=True,
+                    )
+        return rebound
+
+    async def _rebind_logger_webhooks_when_ready(self) -> None:
+        try:
+            await self.bot.wait_until_ready()
+            rebound = await self.rebind_logger_webhooks()
+            if rebound:
+                self.bot.logger.info(
+                    "Rebound %s logger webhook(s) to the replacement bot", rebound
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.bot.logger.exception("Logger webhook rebinding failed")
 
     def _queue_channel_position_update(
         self,
@@ -539,9 +1031,36 @@ class Logger(Cog):
                         after_position=change.after_position,
                     )
             changes = list(merged.values())
+
+            # Position-only gateway updates are also emitted when Discord
+            # recalculates every channel's position as a side effect (for
+            # example after a category sync).  Those updates do not always
+            # have an audit-log entry of their own.  If the logger can view
+            # the audit log, require a recent matching channel update before
+            # writing a channel-move event; otherwise a harmless cache sync
+            # appears as a real moderation action with no actor.
+            guild = changes[0].guild
+            me = guild.me
+            if me is not None and me.guild_permissions.view_audit_log:
+                target_ids = {change.channel_id for change in changes}
+                audit_entry = await self._recent_audit_entry(
+                    guild,
+                    (discord.AuditLogAction.channel_update,),
+                    target_id=(changes[0].channel_id if len(changes) == 1 else None),
+                    target_ids=target_ids if len(changes) > 1 else None,
+                    max_age=30,
+                )
+                if audit_entry is None:
+                    self.bot.logger.debug(
+                        "Skipping channel position log for guild %s: "
+                        "no matching audit-log entry",
+                        guild.id,
+                    )
+                    return
+
             embed = self._channel_position_embed(changes)
             await self._emit_logger(
-                changes[0].guild,
+                guild,
                 "channel",
                 embed,
                 audit_action=discord.AuditLogAction.channel_update,
@@ -558,6 +1077,66 @@ class Logger(Cog):
                 if batches.get(guild_id):
                     tasks[guild_id] = asyncio.create_task(
                         self._flush_channel_position_updates(guild_id)
+                    )
+
+    def _queue_role_position_update(
+        self,
+        before: discord.Role,
+        after: discord.Role,
+    ) -> None:
+        batches: dict[int, list[_RolePositionChange]] = getattr(
+            self, "_role_move_batches", {}
+        )
+        tasks: dict[int, asyncio.Task[None]] = getattr(self, "_role_move_tasks", {})
+        self._role_move_batches = batches
+        self._role_move_tasks = tasks
+
+        guild_id = after.guild.id
+        batches.setdefault(guild_id, []).append(
+            _RolePositionChange(
+                guild=after.guild,
+                role_id=after.id,
+                role_label=after.mention or f"`{_display(after.name)}`",
+                before_position=getattr(before, "position", None),
+                after_position=getattr(after, "position", None),
+            )
+        )
+        if guild_id not in tasks:
+            tasks[guild_id] = asyncio.create_task(
+                self._flush_role_position_updates(guild_id)
+            )
+
+    async def _flush_role_position_updates(self, guild_id: int) -> None:
+        try:
+            await asyncio.sleep(CHANNEL_MOVE_BATCH_DELAY)
+            batches: dict[int, list[_RolePositionChange]] = getattr(
+                self, "_role_move_batches", {}
+            )
+            changes = batches.pop(guild_id, [])
+            if not changes:
+                return
+
+            # A single Discord role reorder produces update events for every
+            # role that shifted around the moved role.  The first event is the
+            # useful one; emit it once instead of flooding the logger.
+            change = changes[0]
+            embed = self._role_position_embed(change)
+            await self._emit_logger(
+                change.guild,
+                "role",
+                embed,
+                audit_action=discord.AuditLogAction.role_update,
+                audit_target_id=change.role_id if len(changes) == 1 else None,
+                audit_target_ids={item.role_id for item in changes},
+            )
+        finally:
+            tasks: dict[int, asyncio.Task[None]] = getattr(self, "_role_move_tasks", {})
+            if tasks.get(guild_id) is asyncio.current_task():
+                tasks.pop(guild_id, None)
+                batches = getattr(self, "_role_move_batches", {})
+                if batches.get(guild_id):
+                    tasks[guild_id] = asyncio.create_task(
+                        self._flush_role_position_updates(guild_id)
                     )
 
     @staticmethod
@@ -608,6 +1187,24 @@ class Logger(Cog):
             summary + "\n\n" + details,
             color=discord.Colour.orange(),
         )
+        return embed
+
+    @staticmethod
+    def _role_position_embed(change: _RolePositionChange) -> discord.Embed:
+        embed = Logger._embed(
+            "Roles moved",
+            f"{change.role_label} was moved.",
+            color=discord.Colour.orange(),
+        )
+        embed.add_field(
+            name="Position",
+            value=(
+                f"Before: {_display(change.before_position)}\n"
+                f"After: {_display(change.after_position)}"
+            ),
+            inline=False,
+        )
+        Logger._add_item_id(embed, discord.Object(change.role_id))
         return embed
 
     def _webhook_lock(self, guild_id: int, event: str) -> asyncio.Lock:
@@ -1201,6 +1798,18 @@ class Logger(Cog):
         audit_target: discord.User | discord.Member | None = None,
         audit_actor_label: str = "Changed by",
     ) -> None:
+        # The operational guild is reserved for private review/log channels.
+        # Generic logger events must never leak into that server; video/post
+        # review code addresses its channels explicitly and does not call this
+        # method.
+        if is_operational_guild(guild):
+            return
+        # The retiring process is read-only during the handoff.  Do not wait
+        # for the replacement member to appear in this guild: gateway events
+        # can arrive in either order and emitting here would duplicate logs or
+        # recreate legacy webhooks while the new process is taking ownership.
+        if self._is_legacy_instance():
+            return
         # A server administrator can disable all logger writes from the
         # settings panel.  Check the in-memory setting before doing any
         # database or webhook work so a disabled guild remains quiet.
@@ -2142,6 +2751,20 @@ class Logger(Cog):
             and not unicode_emoji_changed
         ):
             return
+        if position_changed and not (
+            before.name != after.name
+            or permission_changes
+            or color_changed
+            or hoist_changed
+            or mentionable_changed
+            or icon_changed
+            or unicode_emoji_changed
+        ):
+            # Reordering one role causes Discord to dispatch position-only
+            # updates for every role shifted around it.  Batch those updates
+            # and emit only the first changed role after the reorder settles.
+            self._queue_role_position_update(before, after)
+            return
         embed = self._embed(
             "Role updated",
             f"{after.mention} was updated.",
@@ -3012,8 +3635,17 @@ class Logger(Cog):
         await self._emit_logger(guild, "moderation", embed)
 
     def cog_unload(self) -> None:
-        """Cancel pending channel-move batches when the moderation cog reloads."""
-        for task in getattr(self, "_channel_move_tasks", {}).values():
+        """Cancel pending position batches when the moderation cog reloads."""
+        rebind_task = getattr(self, "_logger_rebind_task", None)
+        if rebind_task is not None:
+            rebind_task.cancel()
+            self._logger_rebind_task = None
+        for task in (
+            *getattr(self, "_channel_move_tasks", {}).values(),
+            *getattr(self, "_role_move_tasks", {}).values(),
+        ):
             task.cancel()
         getattr(self, "_channel_move_tasks", {}).clear()
         getattr(self, "_channel_move_batches", {}).clear()
+        getattr(self, "_role_move_tasks", {}).clear()
+        getattr(self, "_role_move_batches", {}).clear()

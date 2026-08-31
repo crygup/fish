@@ -9,7 +9,8 @@ import asyncpg
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 from utils import resize_to_limit
 
 if TYPE_CHECKING:
@@ -56,6 +57,10 @@ class Guild(Cog):
 
     @commands.Cog.listener("on_guild_update")
     async def icon_update(self, before_g: discord.Guild, after_g: discord.Guild):
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(after_g):
+            return
         if after_g.icon is None:
             return
 
@@ -76,6 +81,10 @@ class Guild(Cog):
 
     @commands.Cog.listener("on_guild_update")
     async def name_update(self, before_g: discord.Guild, after_g: discord.Guild):
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(after_g):
+            return
         if before_g.name == after_g.name:
             return
 

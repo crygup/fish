@@ -6,7 +6,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 from core.views import AuthorView
 
 if TYPE_CHECKING:
@@ -52,6 +53,7 @@ class Honeypot(Cog):
         name="honeypot",
         aliases=("honey-pot",),
         fallback="setup",
+        with_app_command=False,
     )
     @commands.guild_only()
     @commands.has_guild_permissions(manage_channels=True, ban_members=True)
@@ -116,7 +118,7 @@ class Honeypot(Cog):
             delete_after=10,
         )
 
-    @honeypot.command(name="remove")
+    @honeypot.command(name="remove", with_app_command=False)
     @commands.has_guild_permissions(manage_channels=True)
     async def honeypot_remove(self, ctx: GuildContext):
         """Remove the honeypot from this server."""
@@ -132,7 +134,13 @@ class Honeypot(Cog):
 
     @commands.Cog.listener("on_message")
     async def honeypot_on_message(self, message: discord.Message):
-        if not message.guild or message.author.bot:
+        if is_legacy_instance(self.bot):
+            return
+        if (
+            not message.guild
+            or is_operational_guild(message)
+            or message.author.bot
+        ):
             return
         if self.bot.cached_honeypots.get(message.guild.id) != message.channel.id:
             return

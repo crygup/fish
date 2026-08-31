@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import mimetypes
 import re
+import tempfile
 import time
+import zipfile
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
+from urllib.parse import urlsplit
 
 import asyncpg
 import discord
@@ -17,11 +22,14 @@ from utils import (
     AvatarsPageSource,
     FieldPageSource,
     Pager,
+    TemporaryMediaError,
+    fetch_public_bytes,
     format_bytes,
     get_or_fetch_user,
     human_timedelta,
     plural,
     to_image,
+    upload_temporary_media,
 )
 from utils.activities import (
     ActivityLike,
@@ -35,13 +43,18 @@ from utils.activities import (
 
 from .status_calendar import (
     StatusInterval,
-    hourly_statuses,
+    merged_hourly_statuses,
     render_status_calendar,
 )
 
 AVATAR_GRID_RE = re.compile(
     r"^(?P<width>\d{1,2})\s*x\s*(?P<height>\d{1,2})$", re.IGNORECASE
 )
+AVATAR_EXPORT_LIMIT = 1_000
+AVATAR_EXPORT_FETCH_CONCURRENCY = 5
+AVATAR_EXPORT_BATCH_SIZE = 5
+AVATAR_EXPORT_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+DISCORD_DM_FILE_LIMIT = 8 * 1024 * 1024
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
@@ -144,9 +157,8 @@ class Commands(Cog):
             None,
         )
 
-    @commands.hybrid_command(name="activity", aliases=("playing",))
+    @commands.command(name="activity", aliases=("playing",))
     @commands.guild_only()
-    @app_commands.describe(query="Activity name or server member to look up")
     async def activity(
         self,
         ctx: GuildContext,
@@ -207,9 +219,18 @@ class Commands(Cog):
         await Pager(source, ctx=ctx).start(ctx)
 
     async def avatars_func(
-        self, ctx: Context, user: discord.User, guild_id: Optional[int] = None
+        self,
+        ctx: Context,
+        user: discord.User | discord.Member,
+        guild_id: Optional[int] = None,
+        *,
+        edit: bool = False,
     ):
         self.ensure_history_visible(ctx, user)
+        if edit and user.id != ctx.author.id:
+            raise commands.BadArgument(
+                "You can only edit your own saved avatar history."
+            )
         sql = (
             """SELECT * FROM guild_avatars WHERE member_id = $1 AND guild_id = $2 ORDER BY created_at DESC"""
             if guild_id
@@ -245,10 +266,348 @@ class Commands(Cog):
             )
             source.embed.title = (
                 f"{['Avatars', 'Guild avatars'][bool(guild_id)]} for {user}"
+                + (" • Edit Mode" if edit else "")
             )
             source.embed.description = f"-# View all avatars [here](https://crygup.com/discord?tab=user&subtab=avatars&q={user.id})"
-            pager = Pager(source, ctx=ctx)
+
+            async def delete_avatar(page_number: int) -> bool:
+                if not 0 <= page_number < len(entries):
+                    return False
+                record_id = entries[page_number][2]
+                if guild_id is not None:
+                    result = await self.bot.pool.execute(
+                        "DELETE FROM guild_avatars "
+                        "WHERE id = $1 AND member_id = $2 AND guild_id = $3",
+                        record_id,
+                        ctx.author.id,
+                        guild_id,
+                    )
+                else:
+                    result = await self.bot.pool.execute(
+                        "DELETE FROM avatars WHERE id = $1 AND user_id = $2",
+                        record_id,
+                        ctx.author.id,
+                    )
+                return not result.endswith(" 0")
+
+            def delete_prompt(page_number: int) -> str:
+                record_id = entries[page_number][2]
+                return (
+                    f"Delete saved avatar ID `{record_id}` from Fishie's database? "
+                    "This cannot be undone."
+                )
+
+            pager = Pager(
+                source,
+                ctx=ctx,
+                delete_page=delete_avatar if edit else None,
+                delete_prompt=delete_prompt if edit else None,
+            )
             await pager.start(ctx)
+
+    @staticmethod
+    async def _avatar_list_arguments(
+        ctx: Context,
+        arguments: tuple[str, ...],
+    ) -> tuple[discord.User | discord.Member, bool]:
+        edit = False
+        user_arguments: list[str] = []
+        for argument in arguments:
+            if argument.strip().casefold() == "edit":
+                edit = True
+            else:
+                user_arguments.append(argument)
+
+        if not user_arguments:
+            return ctx.author, edit
+        raw_user = " ".join(user_arguments).strip()
+        try:
+            user = await commands.UserConverter().convert(ctx, raw_user)
+        except commands.UserNotFound as error:
+            raise commands.BadArgument(
+                f"Could not find a user matching {raw_user}."
+            ) from error
+        return user, edit
+
+    @staticmethod
+    async def _avatar_export_arguments(
+        ctx: Context,
+        arguments: tuple[str, ...],
+    ) -> tuple[discord.User | discord.Member, int | None]:
+        """Parse an order-independent export user and server scope."""
+
+        use_server = False
+        user_arguments: list[str] = []
+        for argument in arguments:
+            if argument.strip().casefold() in {"server", "guild"}:
+                use_server = True
+            else:
+                user_arguments.append(argument)
+
+        if use_server and ctx.guild is None:
+            raise commands.NoPrivateMessage(
+                "Server avatar exports can only be requested in a server."
+            )
+
+        if user_arguments:
+            raw_user = " ".join(user_arguments).strip()
+            try:
+                user = await commands.UserConverter().convert(ctx, raw_user)
+            except commands.UserNotFound as error:
+                raise commands.BadArgument(
+                    f"Could not find a user matching {raw_user}."
+                ) from error
+        else:
+            user = ctx.author
+
+        return user, ctx.guild.id if use_server and ctx.guild else None
+
+    async def _refresh_avatar_export_urls(self, urls: list[str]) -> list[str]:
+        """Refresh Discord CDN URLs in API-sized batches, preserving order."""
+
+        if not urls:
+            return []
+        mapping: dict[str, str] = {}
+        for chunk in utils.as_chunks(urls, max_size=50):
+            originals = [str(url).split("?", 1)[0] for url in chunk if url]
+            if not originals:
+                continue
+            try:
+                response = await self.bot.http.request(
+                    Route("POST", "/attachments/refresh-urls"),
+                    json={"attachment_urls": originals},
+                )
+            except (discord.HTTPException, OSError):
+                # Keep the existing URL; it may still be valid, and the
+                # bounded fetch below will report an individual failure.
+                continue
+            if not isinstance(response, dict):
+                continue
+            for item in response.get("refreshed_urls", []):
+                if not isinstance(item, dict):
+                    continue
+                original = str(item.get("original") or "").split("?", 1)[0]
+                refreshed = str(item.get("refreshed") or "")
+                if original and refreshed:
+                    mapping[original] = refreshed
+
+        return [mapping.get(str(url).split("?", 1)[0], str(url)) for url in urls]
+
+    @staticmethod
+    def _avatar_export_filename(
+        record: asyncpg.Record,
+        url: str,
+        content_type: str,
+    ) -> str:
+        """Build a stable, filesystem-safe ``ID_DATE.extension`` name."""
+
+        created_at = record["created_at"]
+        if isinstance(created_at, datetime.datetime):
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+            date = created_at.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d")
+        else:
+            date = "unknown-date"
+
+        extension = mimetypes.guess_extension(content_type.split(";", 1)[0]) or ""
+        if extension == ".jpe":
+            extension = ".jpg"
+        if extension not in {".gif", ".jpg", ".jpeg", ".png", ".webp"}:
+            try:
+                extension = Path(urlsplit(url).path).suffix.casefold()
+            except ValueError:
+                extension = ""
+        if extension == ".jpe":
+            extension = ".jpg"
+        if extension not in {".gif", ".jpg", ".jpeg", ".png", ".webp"}:
+            extension = ".bin"
+        return f"{int(record['id'])}_{date}{extension}"
+
+    @commands.group(
+        name="avatars",
+        aliases=("pfps", "avis", "avs"),
+        extras={"usage": "[user] [edit]"},
+        invoke_without_command=True,
+    )
+    async def avatars(self, ctx: Context, *arguments: str):
+        """Shows a user's previous avatars"""
+
+        user, edit = await self._avatar_list_arguments(ctx, arguments)
+        await self.avatars_func(ctx, user, edit=edit)
+
+    @avatars.command(
+        name="download",
+        aliases=("export",),
+        extras={"usage": "[user] [server|guild]"},
+    )
+    @commands.cooldown(1, 24 * 60 * 60, commands.BucketType.user)
+    async def avatars_download(self, ctx: Context, *arguments: str) -> None:
+        """Export a user's saved avatars as a ZIP archive."""
+
+        user, guild_id = await self._avatar_export_arguments(ctx, arguments)
+        self.ensure_history_visible(ctx, user)
+
+        if guild_id is not None:
+            records = await self.bot.pool.fetch(
+                "SELECT id, avatar, created_at FROM guild_avatars "
+                "WHERE member_id = $1 AND guild_id = $2 "
+                "ORDER BY created_at DESC, id DESC LIMIT $3",
+                user.id,
+                guild_id,
+                AVATAR_EXPORT_LIMIT + 1,
+            )
+        else:
+            records = await self.bot.pool.fetch(
+                "SELECT id, avatar, created_at FROM avatars "
+                "WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
+                user.id,
+                AVATAR_EXPORT_LIMIT + 1,
+            )
+
+        if not records:
+            scope = "server avatars" if guild_id is not None else "avatars"
+            raise commands.BadArgument(f"{user} has no {scope} on record.")
+
+        truncated = len(records) > AVATAR_EXPORT_LIMIT
+        records = list(records[:AVATAR_EXPORT_LIMIT])
+        progress = await ctx.send(
+            f"Preparing an export of **{discord.utils.escape_markdown(user.name)}** "
+            f"({len(records):,} avatar{'' if len(records) == 1 else 's'})...\n"
+            "0% complete",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+        urls = await self._refresh_avatar_export_urls(
+            [str(record["avatar"]) for record in records]
+        )
+        semaphore = asyncio.Semaphore(AVATAR_EXPORT_FETCH_CONCURRENCY)
+        completed = 0
+        downloaded = 0
+        failed = 0
+        last_progress = 0.0
+        used_names: set[str] = set()
+
+        async def fetch_avatar(url: str) -> Any:
+            async with semaphore:
+                return await fetch_public_bytes(
+                    ctx.session,
+                    url,
+                    max_bytes=AVATAR_EXPORT_MAX_IMAGE_BYTES,
+                    allowed_content_prefixes=("image/",),
+                )
+
+        async def update_progress(*, force: bool = False) -> None:
+            nonlocal last_progress
+            now = time.monotonic()
+            if not force and completed < len(records) and now - last_progress < 1:
+                return
+            last_progress = now
+            percent = int(completed * 100 / len(records))
+            try:
+                await progress.edit(
+                    content=(
+                        f"Preparing an export of **{discord.utils.escape_markdown(user.name)}**...\n"
+                        f"{percent}% complete"
+                    ),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                self.bot.logger.debug(
+                    "Could not update avatar export progress", exc_info=True
+                )
+
+        with tempfile.TemporaryDirectory(prefix=".pfps-export-") as directory:
+            archive_path = Path(directory) / f"avatars_{user.id}.zip"
+            with zipfile.ZipFile(
+                archive_path,
+                mode="w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=6,
+            ) as archive:
+                for start in range(0, len(records), AVATAR_EXPORT_BATCH_SIZE):
+                    batch = records[start : start + AVATAR_EXPORT_BATCH_SIZE]
+                    results = await asyncio.gather(
+                        *(
+                            fetch_avatar(url)
+                            for url in urls[start : start + len(batch)]
+                        ),
+                        return_exceptions=True,
+                    )
+                    batch_urls = urls[start : start + len(batch)]
+                    for record, url, result in zip(batch, batch_urls, results):
+                        completed += 1
+                        if isinstance(result, BaseException):
+                            failed += 1
+                            self.bot.logger.debug(
+                                "Could not export avatar %s for user %s: %s",
+                                record["id"],
+                                user.id,
+                                result,
+                            )
+                            continue
+                        filename = self._avatar_export_filename(
+                            record, url, result.content_type
+                        )
+                        if filename in used_names:
+                            stem, suffix = Path(filename).stem, Path(filename).suffix
+                            filename = f"{stem}_{record['id']}{suffix}"
+                        used_names.add(filename)
+                        archive.writestr(filename, result.data)
+                        downloaded += 1
+                    await update_progress()
+
+            await update_progress(force=True)
+            if not downloaded:
+                await progress.edit(
+                    content="None of the saved avatars could be downloaded.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+
+            archive_size = archive_path.stat().st_size
+            discord_limit = (
+                ctx.guild.filesize_limit if ctx.guild else DISCORD_DM_FILE_LIMIT
+            )
+            summary = (
+                f"Exported **{downloaded:,}/{len(records):,}** avatars"
+                + (f" ({failed:,} unavailable)" if failed else "")
+                + (" · Limited to the newest 1,000" if truncated else "")
+            )
+            archive_name = f"avatars_{user.id}.zip"
+            if archive_size <= discord_limit:
+                await progress.edit(
+                    content=summary,
+                    attachments=[discord.File(archive_path, filename=archive_name)],
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+
+            try:
+                hosted_url = await upload_temporary_media(
+                    self.bot,
+                    archive_path,
+                    archive_name,
+                    content_type="application/octet-stream",
+                )
+            except TemporaryMediaError as error:
+                await progress.edit(
+                    content=(
+                        f"{summary}\nThe ZIP is too large to send here, and temporary "
+                        "hosting was unavailable."
+                    ),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                raise commands.BadArgument(
+                    "The avatar ZIP exceeded both Discord's and temporary hosting's limits."
+                ) from error
+
+            await progress.edit(
+                content=(
+                    f"{summary}\n[Download the avatar export]({hosted_url})\n"
+                    "-# This download link expires in 30 minutes."
+                ),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
     async def avatars_grid(
         self,
@@ -368,20 +727,17 @@ class Commands(Cog):
             ) from error
         return user, grid_size, server
 
-    @commands.group(name="avatars", aliases=("pfps", "avis", "avs"))
-    async def avatars(self, ctx: Context, *, user: discord.User = commands.Author):
-        """Shows a user's previous avatars"""
-
-        await self.avatars_func(ctx, user)
-
-    @avatars.command(name="server", aliases=("guild", "s"))
+    @avatars.command(
+        name="server",
+        aliases=("guild", "s"),
+        extras={"usage": "[user] [edit]"},
+    )
     @commands.guild_only()
-    async def server_avatars(
-        self, ctx: GuildContext, *, user: discord.User = commands.Author
-    ):
+    async def server_avatars(self, ctx: GuildContext, *arguments: str):
         """Shows a member's previous server avatars"""
 
-        await self.avatars_func(ctx, user, ctx.guild.id)
+        user, edit = await self._avatar_list_arguments(ctx, arguments)
+        await self.avatars_func(ctx, user, ctx.guild.id, edit=edit)
 
     @commands.group(
         name="avatarhistory",
@@ -612,16 +968,42 @@ class Commands(Cog):
         pager = Pager(source, ctx=ctx)
         await pager.start(ctx)
 
-    @commands.command(name="icons")
-    async def icons(
-        self, ctx: Context, *, guild: discord.Guild = commands.CurrentGuild
-    ):
+    @commands.command(name="icons", extras={"usage": "[server] [edit]"})
+    async def icons(self, ctx: Context, *arguments: str):
         """Shows a server's previous icons"""
 
-        await self.icons_func(ctx, guild)
+        edit = False
+        guild_arguments: list[str] = []
+        for argument in arguments:
+            if argument.strip().casefold() == "edit":
+                edit = True
+            else:
+                guild_arguments.append(argument)
+        if guild_arguments:
+            guild = await commands.GuildConverter().convert(
+                ctx, " ".join(guild_arguments)
+            )
+        elif ctx.guild is not None:
+            guild = ctx.guild
+        else:
+            raise commands.NoPrivateMessage(
+                "A server must be provided when using this command in DMs."
+            )
+        await self.icons_func(ctx, guild, edit=edit)
 
-    async def icons_func(self, ctx: Context, guild: discord.Guild) -> None:
+    async def icons_func(
+        self,
+        ctx: Context,
+        guild: discord.Guild,
+        *,
+        edit: bool = False,
+    ) -> None:
         """Show a server's saved icons as a paginated list."""
+
+        if edit:
+            member = guild.get_member(ctx.author.id)
+            if member is None or not member.guild_permissions.manage_guild:
+                raise commands.MissingPermissions(["manage_guild"])
 
         sql = """
         SELECT * FROM guild_icons WHERE guild_id = $1
@@ -645,9 +1027,33 @@ class Commands(Cog):
 
             source = AvatarsPageSource(entries=entries)
             source.embed.color = self.bot.embedcolor
-            source.embed.title = f"Icons for {guild}"
+            source.embed.title = f"Icons for {guild}" + (" • Edit Mode" if edit else "")
             source.embed.description = f"-# View all icons [here](https://crygup.com/discord?tab=guild&subtab=icons&q={guild.id})"
-            pager = Pager(source, ctx=ctx)
+
+            async def delete_icon(page_number: int) -> bool:
+                if not 0 <= page_number < len(entries):
+                    return False
+                record_id = entries[page_number][2]
+                result = await self.bot.pool.execute(
+                    "DELETE FROM guild_icons WHERE id = $1 AND guild_id = $2",
+                    record_id,
+                    guild.id,
+                )
+                return not result.endswith(" 0")
+
+            def delete_prompt(page_number: int) -> str:
+                record_id = entries[page_number][2]
+                return (
+                    f"Delete saved server icon ID `{record_id}` from Fishie's "
+                    "database? This cannot be undone."
+                )
+
+            pager = Pager(
+                source,
+                ctx=ctx,
+                delete_page=delete_icon if edit else None,
+                delete_prompt=delete_prompt if edit else None,
+            )
             await pager.start(ctx)
 
     async def icons_grid(
@@ -754,35 +1160,35 @@ class Commands(Cog):
         cutoff = now - datetime.timedelta(days=31)
         rows = await self.bot.pool.fetch(
             """
-            SELECT status, started_at, ended_at
+            SELECT guild_id, status, started_at, ended_at
             FROM user_status_history
             WHERE user_id = $1
-              AND guild_id = $2
-              AND started_at <= $3
-              AND COALESCE(ended_at, $3) >= $4
-            ORDER BY started_at
+              AND started_at <= $2
+              AND COALESCE(ended_at, $2) >= $3
+            ORDER BY guild_id, started_at
             """,
             target.id,
-            ctx.guild.id,
             now,
             cutoff,
         )
-        if not rows or not any(row["started_at"] >= cutoff for row in rows):
+        if not rows:
             raise commands.BadArgument(
                 f"I have no status activity recorded for {target} in the last 31 days."
             )
 
-        intervals = [
-            StatusInterval(
-                status=row["status"],
-                started_at=row["started_at"],
-                ended_at=row["ended_at"],
+        intervals_by_guild: dict[int, list[StatusInterval]] = {}
+        for row in rows:
+            intervals_by_guild.setdefault(int(row["guild_id"]), []).append(
+                StatusInterval(
+                    status=row["status"],
+                    started_at=row["started_at"],
+                    ended_at=row["ended_at"],
+                )
             )
-            for row in rows
-        ]
         start_date = now.date() - datetime.timedelta(days=30)
-        statuses = hourly_statuses(
-            intervals,
+        statuses = merged_hourly_statuses(
+            intervals_by_guild,
+            ctx.guild.id,
             start_date,
             now=now,
         )

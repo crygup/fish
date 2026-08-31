@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from utils import fish_discord2
 
+from .boards import Boards
 from .emojis import Emojis
 from .info import Info
 from .pins import Pinboard
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
     from core import Fishie
 
 
-class Discord(Emojis, RawCommands, Info, Pinboard):
+class Discord(Boards, Emojis, RawCommands, Info, Pinboard):
     """Commands for discord itself"""
 
     emoji = fish_discord2

@@ -5,7 +5,8 @@ from datetime import datetime
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 
 
 class User(Cog):
@@ -50,6 +51,8 @@ class User(Cog):
     async def server_tag_update(
         self, before_u: discord.User, after_u: discord.User
     ) -> None:
+        if is_legacy_instance(self.bot):
+            return
         if self._server_tag_values(before_u) == self._server_tag_values(after_u):
             return
 
@@ -68,6 +71,8 @@ class User(Cog):
 
     @commands.Cog.listener("on_user_update")
     async def username_update(self, before_u: discord.User, after_u: discord.User):
+        if is_legacy_instance(self.bot):
+            return
         if before_u.name == after_u.name:
             return
 
@@ -88,6 +93,8 @@ class User(Cog):
 
     @commands.Cog.listener("on_user_update")
     async def display_name_update(self, before_u: discord.User, after_u: discord.User):
+        if is_legacy_instance(self.bot):
+            return
         if before_u.display_name == after_u.display_name:
             return
 
@@ -108,6 +115,10 @@ class User(Cog):
 
     @commands.Cog.listener("on_member_update")
     async def nickname_update(self, before_m: discord.Member, after_m: discord.Member):
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(after_m):
+            return
         if before_m.nick == after_m.nick:
             return
 
@@ -131,6 +142,10 @@ class User(Cog):
 
     @commands.Cog.listener("on_member_join")
     async def member_join_logs(self, member: discord.Member):
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(member):
+            return
         if self.bot.db_cache.user_tracking_opted_out(member.id, "joins"):
             return
 

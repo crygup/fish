@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
 import secrets
 import time
 from typing import TYPE_CHECKING
@@ -17,6 +13,7 @@ from utils import lastfm_command
 from utils.converters import normalize_letterboxd
 
 from .logging import Logging
+from .notify_commands import Notify
 from .server import Server
 
 if TYPE_CHECKING:
@@ -32,11 +29,6 @@ ANILIST_CALLBACK_URL = "https://crygup.com/fishie"
 ANILIST_STATE_TTL = 10 * 60
 
 
-def _oauth_state_secret(bot: Fishie) -> bytes:
-    """Use the existing server-side signing secret for account-link states."""
-    return bot.config["keys"]["lastfm_secret"].encode()
-
-
 def _lastfm_authorization_url(
     bot: Fishie,
     user_id: int,
@@ -44,24 +36,24 @@ def _lastfm_authorization_url(
     channel_id: int | None = None,
     message_id: int | None = None,
 ) -> str:
-    state_data = {
-        "user_id": str(user_id),
+    now = int(time.time())
+    states = getattr(bot, "_lastfm_oauth_states", None)
+    if states is None:
+        states = bot._lastfm_oauth_states = {}
+    for token, state_data in list(states.items()):
+        if int(state_data.get("expires", 0)) < now:
+            states.pop(token, None)
+    token = secrets.token_urlsafe(32)
+    state_data: dict[str, int | str] = {
+        "user_id": int(user_id),
         "source": "discord",
-        "expires": int(time.time()) + LASTFM_STATE_TTL,
+        "expires": now + LASTFM_STATE_TTL,
     }
     if channel_id is not None and message_id is not None:
         state_data["channel_id"] = str(channel_id)
         state_data["message_id"] = str(message_id)
-    payload = json.dumps(
-        state_data,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode()
-    encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
-    signature = hmac.new(
-        _oauth_state_secret(bot), encoded.encode(), hashlib.sha256
-    ).hexdigest()
-    state = f"{encoded}.{signature}"
+    states[token] = state_data
+    state = f"lastfm_{token}"
     callback = f"{LASTFM_CALLBACK_URL}?{urlencode({'lastfm_state': state})}"
     return "https://www.last.fm/api/auth/?" + urlencode(
         {"api_key": bot.config["keys"]["lastfm_cb"], "cb": callback}
@@ -269,7 +261,7 @@ def _accounts_text(row) -> str:
     return "## Connected Accounts\n\n" + "\n".join(lines)
 
 
-class Settings(Logging, Server):
+class Settings(Logging, Server, Notify):
     """User and server settings"""
 
     emoji = discord.PartialEmoji(name="\U00002699\U0000fe0f")

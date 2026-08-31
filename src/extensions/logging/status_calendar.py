@@ -87,6 +87,54 @@ def hourly_statuses(
     return result
 
 
+def merged_hourly_statuses(
+    intervals_by_guild: dict[int, list[StatusInterval]],
+    primary_guild_id: int,
+    start_date: datetime.date,
+    *,
+    days: int = 31,
+    now: datetime.datetime | None = None,
+) -> list[list[str | None]]:
+    """Merge user-wide presence without double-counting shared guild events.
+
+    Discord emits the same user presence through every shared guild. The
+    current guild remains authoritative wherever it has an observation; empty
+    hours are then filled from the most complete remaining guild timelines.
+    """
+    now = now or datetime.datetime.now(datetime.UTC)
+    timelines = {
+        guild_id: hourly_statuses(
+            intervals,
+            start_date,
+            days=days,
+            now=now,
+        )
+        for guild_id, intervals in intervals_by_guild.items()
+    }
+    merged: list[list[str | None]] = [[None] * 24 for _ in range(days)]
+
+    def observed_hours(timeline: list[list[str | None]]) -> int:
+        return sum(status is not None for day in timeline for status in day)
+
+    guild_order: list[int] = []
+    if primary_guild_id in timelines:
+        guild_order.append(primary_guild_id)
+    guild_order.extend(
+        sorted(
+            (guild_id for guild_id in timelines if guild_id != primary_guild_id),
+            key=lambda guild_id: (-observed_hours(timelines[guild_id]), guild_id),
+        )
+    )
+
+    for guild_id in guild_order:
+        timeline = timelines[guild_id]
+        for day_index, day in enumerate(timeline):
+            for hour, status in enumerate(day):
+                if merged[day_index][hour] is None and status is not None:
+                    merged[day_index][hour] = status
+    return merged
+
+
 def render_status_calendar(
     username: str,
     start_date: datetime.date,

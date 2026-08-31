@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from copy import deepcopy
 from io import StringIO
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generic, Optional, TypeVar
@@ -24,6 +25,65 @@ VALID_EDIT_KWARGS: Dict[str, Any] = {
     "allowed_mentions": None,
     "view": None,
 }
+
+
+def _color_value(value: object) -> int | None:
+    """Return a Discord colour as an integer without coercing ``None``."""
+
+    if isinstance(value, discord.Colour):
+        return value.value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, dict):
+        return _color_value(value.get("hex_value") or value.get("value"))
+    if isinstance(value, str):
+        text = value.strip().casefold()
+        if text.startswith("#"):
+            text = text[1:]
+        elif text.startswith("0x"):
+            text = text[2:]
+        if len(text) != 6:
+            return None
+        try:
+            parsed = int(text, 16)
+        except ValueError:
+            return None
+        return parsed if 0 <= parsed <= 0xFFFFFF else None
+    return None
+
+
+def _replace_default_container_colors(
+    item: object,
+    *,
+    default_color: int,
+    user_color: discord.Colour,
+) -> None:
+    """Apply a user's colour to Components V2 containers using Fishie's default.
+
+    This intentionally leaves explicit semantic colours (red errors, green
+    success states, role colours, and so on) untouched.  Views are traversed
+    recursively because Sections and Containers can nest their children.
+    """
+
+    sentinel = object()
+    current = getattr(item, "accent_color", sentinel)
+    if current is not sentinel and (
+        current is None or _color_value(current) == default_color
+    ):
+        try:
+            setattr(item, "accent_color", user_color)
+        except (AttributeError, TypeError):
+            pass
+
+    children = getattr(item, "children", None)
+    if not isinstance(children, (list, tuple)):
+        return
+    for child in children:
+        _replace_default_container_colors(
+            child,
+            default_color=default_color,
+            user_color=user_color,
+        )
 
 
 class ConfirmationView(discord.ui.View):
@@ -150,6 +210,79 @@ class Context(commands.Context["Fishie"]):
         self._message_count: int = 0
         self.pool = self.bot.pool
 
+    @property
+    def embed_color(self) -> discord.Colour:
+        """Return this author's equipped profile colour when available.
+
+        The colour cache is deliberately optional so command contexts created
+        by tests, migrations, or an older process continue to use Fishie's
+        standard accent colour until the bot's colour cache is ready.
+        """
+
+        fallback = _color_value(getattr(self.bot, "embedcolor", None))
+        if fallback is None:
+            fallback = discord.Colour.blurple().value
+
+        user_id = getattr(getattr(self, "author", None), "id", None)
+        getter = getattr(self.bot, "get_user_color", None)
+        if user_id is None or not callable(getter):
+            return discord.Colour(fallback)
+        try:
+            value = getter(int(user_id))
+        except Exception:
+            return discord.Colour(fallback)
+        # The cache API is synchronous by design.  Avoid leaking an un-awaited
+        # coroutine if an older deployment still exposes an async method.
+        if inspect.isawaitable(value):
+            close = getattr(value, "close", None)
+            if callable(close):
+                close()
+            return discord.Colour(fallback)
+        resolved = _color_value(value)
+        try:
+            return discord.Colour(fallback if resolved is None else resolved)
+        except (TypeError, ValueError):
+            return discord.Colour(fallback)
+
+    @property
+    def embedcolor(self) -> int:
+        """Integer form of :attr:`embed_color` for legacy command code."""
+
+        return self.embed_color.value
+
+    def _apply_user_embed_color(self, kwargs: Dict[str, Any]) -> None:
+        """Apply the cached user colour to embeds/views using the default.
+
+        Explicit colours are preserved.  This makes the hook safe for the
+        many commands that use red/orange/green colours to communicate state.
+        """
+
+        default = _color_value(getattr(self.bot, "embedcolor", None))
+        if default is None:
+            return
+        user_color = self.embed_color
+
+        embeds: list[object] = []
+        embed = kwargs.get("embed")
+        if embed is not None:
+            embeds.append(embed)
+        many_embeds = kwargs.get("embeds")
+        if isinstance(many_embeds, (list, tuple)):
+            embeds.extend(many_embeds)
+        for embed in embeds:
+            if not isinstance(embed, discord.Embed):
+                continue
+            if embed.colour is None or _color_value(embed.colour) == default:
+                embed.colour = user_color
+
+        view = kwargs.get("view")
+        if view is not None:
+            _replace_default_container_colors(
+                view,
+                default_color=default,
+                user_color=user_color,
+            )
+
     async def prompt(
         self,
         message: str,
@@ -259,6 +392,7 @@ class Context(commands.Context["Fishie"]):
         )
 
         kwargs["embeds"] = embeds
+        self._apply_user_embed_color(kwargs)
 
         if self._previous_message:
             new_kwargs = deepcopy(VALID_EDIT_KWARGS)
@@ -292,6 +426,7 @@ class Context(commands.Context["Fishie"]):
         self, content: str | None = None, **kwargs: Any
     ) -> discord.Message:
         """Send a separate response without replacing the cached response."""
+        self._apply_user_embed_color(kwargs)
         return await super().send(content, **kwargs)
 
     @property

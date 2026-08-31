@@ -20,6 +20,64 @@ def to_lower(argument: str):
     return argument.lower()
 
 
+async def _authorize_server_interaction(
+    interaction: discord.Interaction,
+    ctx: GuildContext,
+    guild: discord.Guild,
+) -> bool:
+    """Re-check the author and Manage Server permission for settings controls.
+
+    A component can outlive the command invocation that created it. The
+    command decorators therefore do not protect callbacks after a member's
+    roles change (or when a stale component is submitted). Keep the original
+    author boundary and verify the member's current guild permission before
+    every mutation, including modal submissions.
+    """
+
+    if interaction.guild_id != guild.id:
+        message = "These server settings can only be used in their original server."
+    elif interaction.user.id != ctx.author.id:
+        message = "Only the person who opened these server settings can use them."
+    else:
+        member = interaction.user
+        if (
+            getattr(getattr(member, "guild", None), "id", None) != guild.id
+            or not hasattr(member, "guild_permissions")
+        ):
+            get_member = getattr(guild, "get_member", None)
+            member = get_member(interaction.user.id) if callable(get_member) else None
+        allowed = bool(
+            member
+            and (
+                getattr(guild, "owner_id", None) == member.id
+                or bool(
+                    getattr(
+                        getattr(member, "guild_permissions", None),
+                        "manage_guild",
+                        False,
+                    )
+                )
+            )
+        )
+        if allowed:
+            return True
+        message = "You no longer have Manage Server permission to change these settings."
+
+    if interaction.response.is_done():
+        await interaction.followup.send(
+            message,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    else:
+        await interaction.response.send_message(
+            message,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    return False
+
+
 class Dropdown(discord.ui.ChannelSelect):
     def __init__(self, ctx: GuildContext):
         self.ctx = ctx
@@ -69,6 +127,13 @@ class DropdownView(AuthorLayoutView):
             )
         )
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.ctx.guild is None:
+            return False
+        return await _authorize_server_interaction(
+            interaction, self.ctx, self.ctx.guild
+        )
+
 
 class SettingsMessageView(AuthorLayoutView):
     """Render a one-off server-settings response as Components V2."""
@@ -111,6 +176,9 @@ class _LegacyServerSettingsView(AuthorLayoutView):
         self.values = values
         self._render()
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _authorize_server_interaction(interaction, self.ctx, self.guild)
+
     @classmethod
     async def create(cls, ctx: GuildContext) -> "_LegacyServerSettingsView":
         row = await ctx.bot.pool.fetchrow(
@@ -127,7 +195,10 @@ class _LegacyServerSettingsView(AuthorLayoutView):
         )
         values = {
             "tracking_enabled": bool(row["tracking_enabled"]) if row else True,
-            "history_public": bool(row["history_public"]) if row else False,
+            # Guild history is public by default; migration 0075 updates
+            # existing rows and this fallback covers a guild before its first
+            # settings row is created.
+            "history_public": bool(row["history_public"]) if row else True,
             "auto_download": row["auto_download"] if row else None,
             "poketwo": bool(row["poketwo"]) if row else False,
             "auto_reactions": bool(row["auto_reactions"]) if row else False,
@@ -358,14 +429,20 @@ def _media_set(value: object) -> set[str]:
 
 
 def _hourly_interval(value: object) -> int:
-    return value if isinstance(value, int) and value in _HOURLY_POST_INTERVAL_LABELS else 60
+    return (
+        value
+        if isinstance(value, int) and value in _HOURLY_POST_INTERVAL_LABELS
+        else 60
+    )
 
 
 async def _server_text_channel(ctx: Context, value: str) -> discord.TextChannel:
     """Resolve a text-channel name, ID, or mention inside ``ctx.guild``."""
     guild = ctx.guild
     if guild is None:
-        raise commands.BadArgument("That text channel could not be found in this server.")
+        raise commands.BadArgument(
+            "That text channel could not be found in this server."
+        )
     raw = value.strip()
     match = _SERVER_CHANNEL_ID_RE.fullmatch(raw)
     channel: discord.abc.GuildChannel | None = None
@@ -388,7 +465,9 @@ async def _server_text_channel(ctx: Context, value: str) -> discord.TextChannel:
             None,
         )
     if not isinstance(channel, discord.TextChannel) or channel.guild.id != guild.id:
-        raise commands.BadArgument("That text channel could not be found in this server.")
+        raise commands.BadArgument(
+            "That text channel could not be found in this server."
+        )
     return channel
 
 
@@ -405,6 +484,10 @@ class _ServerChannelModal(discord.ui.Modal, title="Server channel"):
         self.picker = picker
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _authorize_server_interaction(
+            interaction, self.picker.ctx, self.picker.parent_view.guild
+        ):
+            return
         try:
             channel = await _server_text_channel(
                 self.picker.ctx, str(self.channel_input.value)
@@ -469,20 +552,37 @@ class _ServerChannelPicker(AuthorLayoutView):
         self.kind = kind
         self._render()
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _authorize_server_interaction(
+            interaction, self.ctx, self.parent_view.guild
+        )
+
     def _render(self) -> None:
         self.clear_items()
         label = _SERVER_CHANNEL_LABELS[self.kind]
-        text_button = discord.ui.Button(label="Enter channel", style=discord.ButtonStyle.secondary)
+        text_button = discord.ui.Button(
+            label="Enter channel", style=discord.ButtonStyle.secondary
+        )
         text_button.callback = self._open_modal
-        picker_button = discord.ui.Button(label="Choose channels", style=discord.ButtonStyle.secondary)
+        picker_button = discord.ui.Button(
+            label="Choose channels", style=discord.ButtonStyle.secondary
+        )
         picker_button.callback = self._open_picker
-        current_button = discord.ui.Button(label="Set current channel", style=discord.ButtonStyle.secondary)
+        current_button = discord.ui.Button(
+            label="Set current channel", style=discord.ButtonStyle.secondary
+        )
         current_button.callback = self._set_current
-        create_button = discord.ui.Button(label="Create channel", style=discord.ButtonStyle.secondary)
+        create_button = discord.ui.Button(
+            label="Create channel", style=discord.ButtonStyle.secondary
+        )
         create_button.callback = self._create_channel
-        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
+        back_button = discord.ui.Button(
+            label="Back", style=discord.ButtonStyle.secondary
+        )
         back_button.callback = self._back
-        quit_button = discord.ui.Button(label="Quit", style=discord.ButtonStyle.secondary)
+        quit_button = discord.ui.Button(
+            label="Quit", style=discord.ButtonStyle.secondary
+        )
         quit_button.callback = self._quit
         disable_button = discord.ui.Button(
             label=f"Disable {label}", style=discord.ButtonStyle.danger
@@ -505,9 +605,9 @@ class _ServerChannelPicker(AuthorLayoutView):
             controls.append(discord.ui.ActionRow(edit_message))
 
         description = (
-                "Hourly posts sends approved library media to this channel. Choose the "
-                "channel first, then select the media types, repeat interval, and "
-                "blocked users."
+            "Hourly posts sends approved library media to this channel. Choose the "
+            "channel first, then select the media types, repeat interval, and "
+            "blocked users."
             if self.kind == "hourly_posts"
             else (
                 "Messages sent in this channel trigger honeypot protection. You can "
@@ -642,6 +742,11 @@ class _ServerChannelPages(AuthorLayoutView):
         self.page_count = max(1, (len(self.channels) + 74) // 75)
         self._render()
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _authorize_server_interaction(
+            interaction, self.ctx, self.picker.parent_view.guild
+        )
+
     def _render(self) -> None:
         self.clear_items()
         page_channels = self.channels[self.page * 75 : (self.page + 1) * 75]
@@ -661,9 +766,7 @@ class _ServerChannelPages(AuthorLayoutView):
                 placeholder="Choose a text channel",
                 min_values=1,
                 max_values=(
-                    min(25, len(options))
-                    if self.picker.kind == "auto_reactions"
-                    else 1
+                    min(25, len(options)) if self.picker.kind == "auto_reactions" else 1
                 ),
                 options=options,
             )
@@ -673,13 +776,19 @@ class _ServerChannelPages(AuthorLayoutView):
         previous.callback = self._previous
         next_button = discord.ui.Button(label=">", style=discord.ButtonStyle.secondary)
         next_button.callback = self._next
-        current = discord.ui.Button(label="Set current channel", style=discord.ButtonStyle.secondary)
+        current = discord.ui.Button(
+            label="Set current channel", style=discord.ButtonStyle.secondary
+        )
         current.callback = self._set_current
         back = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
         back.callback = self._back
-        quit_button = discord.ui.Button(label="Quit", style=discord.ButtonStyle.secondary)
+        quit_button = discord.ui.Button(
+            label="Quit", style=discord.ButtonStyle.secondary
+        )
         quit_button.callback = self._quit
-        rows.append(discord.ui.ActionRow(previous, next_button, current, back, quit_button))
+        rows.append(
+            discord.ui.ActionRow(previous, next_button, current, back, quit_button)
+        )
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
@@ -695,12 +804,12 @@ class _ServerChannelPages(AuthorLayoutView):
         data = interaction.data or {}
         selected = data.get("values", [])
         if not selected:
-            await interaction.response.send_message("Please choose a channel.", ephemeral=True)
+            await interaction.response.send_message(
+                "Please choose a channel.", ephemeral=True
+            )
             return
         if self.picker.kind == "auto_reactions":
-            selected_ids = {
-                int(value) for value in selected if str(value).isdigit()
-            }
+            selected_ids = {int(value) for value in selected if str(value).isdigit()}
             if not selected_ids:
                 await interaction.response.send_message(
                     "Please choose one or more text channels.", ephemeral=True
@@ -723,9 +832,11 @@ class _ServerChannelPages(AuthorLayoutView):
             view=(
                 _ServerMediaView(self.picker.parent_view, self.picker.kind)
                 if self.picker.kind in {"auto_upload", "hourly_posts"}
-                else _AutoReactionChannelsView(self.picker.parent_view)
-                if self.picker.kind == "auto_reactions"
-                else self.picker.parent_view
+                else (
+                    _AutoReactionChannelsView(self.picker.parent_view)
+                    if self.picker.kind == "auto_reactions"
+                    else self.picker.parent_view
+                )
             ),
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -733,16 +844,23 @@ class _ServerChannelPages(AuthorLayoutView):
     async def _previous(self, interaction: discord.Interaction) -> None:
         self.page = (self.page - 1) % self.page_count
         self._render()
-        await interaction.response.edit_message(view=self, allowed_mentions=discord.AllowedMentions.none())
+        await interaction.response.edit_message(
+            view=self, allowed_mentions=discord.AllowedMentions.none()
+        )
 
     async def _next(self, interaction: discord.Interaction) -> None:
         self.page = (self.page + 1) % self.page_count
         self._render()
-        await interaction.response.edit_message(view=self, allowed_mentions=discord.AllowedMentions.none())
+        await interaction.response.edit_message(
+            view=self, allowed_mentions=discord.AllowedMentions.none()
+        )
 
     async def _set_current(self, interaction: discord.Interaction) -> None:
         if not isinstance(self.ctx.channel, discord.TextChannel):
-            await interaction.response.send_message("The command must be run in a text channel to use this option.", ephemeral=True)
+            await interaction.response.send_message(
+                "The command must be run in a text channel to use this option.",
+                ephemeral=True,
+            )
             return
         await self.picker.set_channel(self.ctx.channel)
         await interaction.response.edit_message(
@@ -756,7 +874,9 @@ class _ServerChannelPages(AuthorLayoutView):
 
     async def _back(self, interaction: discord.Interaction) -> None:
         self.picker._render()
-        await interaction.response.edit_message(view=self.picker, allowed_mentions=discord.AllowedMentions.none())
+        await interaction.response.edit_message(
+            view=self.picker, allowed_mentions=discord.AllowedMentions.none()
+        )
 
     async def _quit(self, interaction: discord.Interaction) -> None:
         self.stop()
@@ -777,6 +897,10 @@ class _HourlyPostBlocksModal(discord.ui.Modal, title="Hourly-post blocked users"
         self.parent_view = parent
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _authorize_server_interaction(
+            interaction, self.parent_view.ctx, self.parent_view.guild
+        ):
+            return
         values = re.findall(r"\d{15,25}", str(self.users.value))
         user_ids = {int(value) for value in values}
         guild_id = self.parent_view.guild.id
@@ -815,6 +939,10 @@ class _HoneypotMessageModal(discord.ui.Modal, title="Honeypot message"):
         self.message_input.default = current[:1_024]
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _authorize_server_interaction(
+            interaction, self.picker.ctx, self.picker.parent_view.guild
+        ):
+            return
         message = str(self.message_input.value).strip()
         if not message:
             await interaction.response.send_message(
@@ -859,6 +987,10 @@ class _AutoReactionChannelsModal(discord.ui.Modal, title="Auto-reaction channels
         self.parent_view = parent
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _authorize_server_interaction(
+            interaction, self.parent_view.ctx, self.parent_view.guild
+        ):
+            return
         values = [
             value.strip()
             for value in re.split(r"[,\n\s]+", str(self.channels.value))
@@ -901,6 +1033,11 @@ class _AutoReactionChannelsView(AuthorLayoutView):
         self.ctx = parent.ctx
         self._render()
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _authorize_server_interaction(
+            interaction, self.ctx, self.parent_view.guild
+        )
+
     def _render(self) -> None:
         self.clear_items()
         selected = self.parent_view.values.get("auto_reaction_channels", set())
@@ -915,17 +1052,27 @@ class _AutoReactionChannelsView(AuthorLayoutView):
             else " ".join(f"<#{channel_id}>" for channel_id in sorted(selected_ids))
         )
 
-        enter = discord.ui.Button(label="Enter channels", style=discord.ButtonStyle.secondary)
+        enter = discord.ui.Button(
+            label="Enter channels", style=discord.ButtonStyle.secondary
+        )
         enter.callback = self._enter
-        choose = discord.ui.Button(label="Choose channels", style=discord.ButtonStyle.secondary)
+        choose = discord.ui.Button(
+            label="Choose channels", style=discord.ButtonStyle.secondary
+        )
         choose.callback = self._choose
-        server_wide = discord.ui.Button(label="Use server-wide", style=discord.ButtonStyle.secondary)
+        server_wide = discord.ui.Button(
+            label="Use server-wide", style=discord.ButtonStyle.secondary
+        )
         server_wide.callback = self._server_wide
-        current = discord.ui.Button(label="Set current channel", style=discord.ButtonStyle.secondary)
+        current = discord.ui.Button(
+            label="Set current channel", style=discord.ButtonStyle.secondary
+        )
         current.callback = self._current
         back = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
         back.callback = self._back
-        disable = discord.ui.Button(label="Disable auto reactions", style=discord.ButtonStyle.danger)
+        disable = discord.ui.Button(
+            label="Disable auto reactions", style=discord.ButtonStyle.danger
+        )
         disable.callback = self._disable
 
         self.add_item(
@@ -943,7 +1090,9 @@ class _AutoReactionChannelsView(AuthorLayoutView):
         )
 
     async def _enter(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(_AutoReactionChannelsModal(self.parent_view))
+        await interaction.response.send_modal(
+            _AutoReactionChannelsModal(self.parent_view)
+        )
 
     async def _choose(self, interaction: discord.Interaction) -> None:
         picker = _ServerChannelPicker(self.parent_view, "auto_reactions")
@@ -1003,6 +1152,11 @@ class _ServerMediaView(AuthorLayoutView):
         self.notice = notice
         self._render()
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _authorize_server_interaction(
+            interaction, self.parent_view.ctx, self.parent_view.guild
+        )
+
     def _render(self) -> None:
         self.clear_items()
         values = _media_set(self.parent_view.values.get(f"{self.kind}_media"))
@@ -1013,10 +1167,16 @@ class _ServerMediaView(AuthorLayoutView):
                 style=discord.ButtonStyle.secondary,
             )
 
-            async def toggle(interaction: discord.Interaction, selected: str = media) -> None:
-                await self.parent_view._set_media(self.kind, selected, selected not in values)
+            async def toggle(
+                interaction: discord.Interaction, selected: str = media
+            ) -> None:
+                await self.parent_view._set_media(
+                    self.kind, selected, selected not in values
+                )
                 self._render()
-                await interaction.response.edit_message(view=self, allowed_mentions=discord.AllowedMentions.none())
+                await interaction.response.edit_message(
+                    view=self, allowed_mentions=discord.AllowedMentions.none()
+                )
 
             button.callback = toggle
             buttons.append(button)
@@ -1043,12 +1203,10 @@ class _ServerMediaView(AuthorLayoutView):
 
         content: list[discord.ui.Item[Any]] = [
             discord.ui.TextDisplay(f"## {_SERVER_CHANNEL_LABELS[self.kind]} media"),
-            *(
-                [discord.ui.TextDisplay(self.notice)]
-                if self.notice
-                else []
+            *([discord.ui.TextDisplay(self.notice)] if self.notice else []),
+            discord.ui.TextDisplay(
+                "Choose which media types may be sent automatically."
             ),
-            discord.ui.TextDisplay("Choose which media types may be sent automatically."),
             discord.ui.ActionRow(*buttons),
         ]
         if self.kind == "hourly_posts":
@@ -1099,7 +1257,9 @@ class _ServerMediaView(AuthorLayoutView):
 
     async def _done(self, interaction: discord.Interaction) -> None:
         self.parent_view._render()
-        await interaction.response.edit_message(view=self.parent_view, allowed_mentions=discord.AllowedMentions.none())
+        await interaction.response.edit_message(
+            view=self.parent_view, allowed_mentions=discord.AllowedMentions.none()
+        )
 
     async def _change_channel(self, interaction: discord.Interaction) -> None:
         await self.parent_view._open_channel_picker(interaction, self.kind)
@@ -1129,6 +1289,9 @@ class _ServerSettingsView(AuthorLayoutView):
         self.values = values
         self._active_channel_view: AuthorLayoutView | None = None
         self._render()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _authorize_server_interaction(interaction, self.ctx, self.guild)
 
     @classmethod
     async def create(cls, ctx: GuildContext) -> "_ServerSettingsView":
@@ -1166,23 +1329,27 @@ class _ServerSettingsView(AuthorLayoutView):
         )
         values: dict[str, object] = {
             "tracking_enabled": bool(row["tracking_enabled"]) if row else True,
-            "history_public": bool(row["history_public"]) if row else False,
+            "history_public": bool(row["history_public"]) if row else True,
             "auto_download": row["auto_download"] if row else None,
             "auto_upload": row.get("auto_upload") if row else None,
             "auto_upload_media": {
-                key for key, enabled in (
+                key
+                for key, enabled in (
                     ("images", row.get("auto_upload_images", True) if row else True),
                     ("gifs", row.get("auto_upload_gifs", True) if row else True),
                     ("videos", row.get("auto_upload_videos", True) if row else True),
-                ) if enabled
+                )
+                if enabled
             },
             "hourly_posts": hourly["channel_id"] if hourly else None,
             "hourly_posts_media": {
-                key for key, enabled in (
+                key
+                for key, enabled in (
                     ("images", hourly["images"] if hourly else True),
                     ("gifs", hourly["gifs"] if hourly else True),
                     ("videos", hourly["videos"] if hourly else True),
-                ) if enabled
+                )
+                if enabled
             },
             "hourly_posts_interval": (
                 int(hourly.get("interval_minutes") or 60) if hourly else 60
@@ -1190,7 +1357,9 @@ class _ServerSettingsView(AuthorLayoutView):
             "poketwo": bool(row["poketwo"]) if row else False,
             "poketwo_channel": row.get("poketwo_channel") if row else None,
             "auto_reactions": bool(row["auto_reactions"]) if row else False,
-            "auto_reactions_channel": row.get("auto_reactions_channel") if row else None,
+            "auto_reactions_channel": (
+                row.get("auto_reactions_channel") if row else None
+            ),
             "auto_reaction_channels": auto_reaction_channels,
             "pinboard": row["pinboard"] if row else None,
             "honeypot": honeypot_row["channel_id"] if honeypot_row else None,
@@ -1219,7 +1388,9 @@ class _ServerSettingsView(AuthorLayoutView):
         self.clear_items()
         rows: list[list[discord.ui.Button]] = []
 
-        def toggle_button(setting: str, enabled_label: str, disabled_label: str) -> discord.ui.Button:
+        def toggle_button(
+            setting: str, enabled_label: str, disabled_label: str
+        ) -> discord.ui.Button:
             button = discord.ui.Button(
                 label=enabled_label if self.values[setting] else disabled_label,
                 style=(
@@ -1283,14 +1454,18 @@ class _ServerSettingsView(AuthorLayoutView):
 
         rows.append(
             [
-                toggle_button("tracking_enabled", "Disable tracking", "Enable tracking"),
+                toggle_button(
+                    "tracking_enabled", "Disable tracking", "Enable tracking"
+                ),
                 toggle_button(
                     "history_public", "Make history private", "Make history public"
                 ),
             ]
         )
         reaction_controls = [
-            toggle_button("auto_reactions", "Disable auto reactions", "Enable auto reactions")
+            toggle_button(
+                "auto_reactions", "Disable auto reactions", "Enable auto reactions"
+            )
         ]
         if self.values.get("auto_reactions"):
             edit_reactions = discord.ui.Button(
@@ -1342,7 +1517,10 @@ class _ServerSettingsView(AuthorLayoutView):
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     fetched = None
                 channel = fetched
-            if not isinstance(channel, discord.TextChannel) or channel.guild.id != self.guild.id:
+            if (
+                not isinstance(channel, discord.TextChannel)
+                or channel.guild.id != self.guild.id
+            ):
                 await self._clear_channel(kind)
 
         targets = self.values.get("auto_reaction_channels", set())
@@ -1350,7 +1528,9 @@ class _ServerSettingsView(AuthorLayoutView):
             valid_targets = {
                 int(channel_id)
                 for channel_id in targets
-                if isinstance(self.guild.get_channel(int(channel_id)), discord.TextChannel)
+                if isinstance(
+                    self.guild.get_channel(int(channel_id)), discord.TextChannel
+                )
             }
             if valid_targets != set(targets):
                 if self.values.get("auto_reactions"):
@@ -1381,13 +1561,19 @@ class _ServerSettingsView(AuthorLayoutView):
         self.values[setting] = value
         cache = self.ctx.bot.db_cache
         if setting == "tracking_enabled":
-            (cache.guild_tracking_disabled.discard if value else cache.guild_tracking_disabled.add)(self.guild.id)
+            (
+                cache.guild_tracking_disabled.discard
+                if value
+                else cache.guild_tracking_disabled.add
+            )(self.guild.id)
         elif setting == "history_public":
             cache.set_guild_history_public(self.guild.id, value)
         elif setting == "poketwo":
             (cache.add_poketwo if value else cache.remove_poketwo)(self.guild.id)
         elif setting == "auto_reactions":
-            (cache.add_reaction_guilds if value else cache.remove_reaction_guilds)(self.guild.id)
+            (cache.add_reaction_guilds if value else cache.remove_reaction_guilds)(
+                self.guild.id
+            )
 
     async def _open_channel_picker(
         self, interaction: discord.Interaction, kind: str
@@ -1483,7 +1669,11 @@ class _ServerSettingsView(AuthorLayoutView):
             await self.ctx.bot.pool.execute(
                 "INSERT INTO guild_settings (guild_id, auto_upload, auto_upload_images, auto_upload_gifs, auto_upload_videos) VALUES ($1, $2, $3, $4, $5) "
                 "ON CONFLICT (guild_id) DO UPDATE SET auto_upload=EXCLUDED.auto_upload, auto_upload_images=EXCLUDED.auto_upload_images, auto_upload_gifs=EXCLUDED.auto_upload_gifs, auto_upload_videos=EXCLUDED.auto_upload_videos",
-                guild_id, channel_id, "images" in media, "gifs" in media, "videos" in media,
+                guild_id,
+                channel_id,
+                "images" in media,
+                "gifs" in media,
+                "videos" in media,
             )
             if isinstance(old, int):
                 self.ctx.bot.db_cache.remove_auto_upload(old)
@@ -1507,7 +1697,8 @@ class _ServerSettingsView(AuthorLayoutView):
         else:
             await self.ctx.bot.pool.execute(
                 f"INSERT INTO guild_settings (guild_id, {kind}) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET {kind}=EXCLUDED.{kind}",
-                guild_id, channel_id,
+                guild_id,
+                channel_id,
             )
             if kind == "auto_download":
                 if isinstance(old, int):
@@ -1517,9 +1708,7 @@ class _ServerSettingsView(AuthorLayoutView):
                 self.ctx.bot.db_cache.add_pinboard(guild_id, channel_id)
         self.values[value_key] = channel_id
 
-    async def _set_auto_reaction_channels(
-        self, channel_ids: set[int] | None
-    ) -> None:
+    async def _set_auto_reaction_channels(self, channel_ids: set[int] | None) -> None:
         """Enable auto-reactions and replace its optional channel scope."""
         guild_id = self.guild.id
         await self.ctx.bot.pool.execute(
@@ -1600,7 +1789,10 @@ class _ServerSettingsView(AuthorLayoutView):
         if kind == "hourly_posts":
             await self.ctx.bot.pool.execute(
                 "UPDATE guild_hourly_posts SET images=$2, gifs=$3, videos=$4 WHERE guild_id=$1",
-                self.guild.id, "images" in values, "gifs" in values, "videos" in values,
+                self.guild.id,
+                "images" in values,
+                "gifs" in values,
+                "videos" in values,
             )
             channel_value = self.values.get(kind)
             if isinstance(channel_value, int):
@@ -1615,7 +1807,10 @@ class _ServerSettingsView(AuthorLayoutView):
             await self.ctx.bot.pool.execute(
                 "INSERT INTO guild_settings (guild_id, auto_upload_images, auto_upload_gifs, auto_upload_videos) VALUES ($1, $2, $3, $4) "
                 "ON CONFLICT (guild_id) DO UPDATE SET auto_upload_images=EXCLUDED.auto_upload_images, auto_upload_gifs=EXCLUDED.auto_upload_gifs, auto_upload_videos=EXCLUDED.auto_upload_videos",
-                self.guild.id, "images" in values, "gifs" in values, "videos" in values,
+                self.guild.id,
+                "images" in values,
+                "gifs" in values,
+                "videos" in values,
             )
             channel_value = self.values.get(kind)
             if isinstance(channel_value, int):
@@ -1634,19 +1829,21 @@ class _ServerSettingsView(AuthorLayoutView):
         )
         self.values["hourly_posts_interval"] = interval_minutes
         self.ctx.bot.db_cache.hourly_post_intervals[self.guild.id] = interval_minutes
-        self.ctx.bot.db_cache.set_hourly_post_next_at(
-            self.guild.id, next_post_at
-        )
+        self.ctx.bot.db_cache.set_hourly_post_next_at(self.guild.id, next_post_at)
 
     async def _clear_channel(self, kind: str) -> None:
         guild_id = self.guild.id
         value_key = _SERVER_CHANNEL_VALUE_KEYS.get(kind, kind)
         channel_id = self.values.get(value_key)
         if kind == "hourly_posts":
-            await self.ctx.bot.pool.execute("DELETE FROM guild_hourly_posts WHERE guild_id=$1", guild_id)
+            await self.ctx.bot.pool.execute(
+                "DELETE FROM guild_hourly_posts WHERE guild_id=$1", guild_id
+            )
             self.ctx.bot.db_cache.set_hourly_posts(guild_id, None)
         elif kind == "honeypot":
-            await self.ctx.bot.pool.execute("DELETE FROM honeypot_channels WHERE guild_id=$1", guild_id)
+            await self.ctx.bot.pool.execute(
+                "DELETE FROM honeypot_channels WHERE guild_id=$1", guild_id
+            )
             self.ctx.bot.cached_honeypots.pop(guild_id, None)
         elif kind in {"poketwo", "auto_reactions"}:
             channel_column = _SERVER_CHANNEL_VALUE_KEYS[kind]
@@ -1667,7 +1864,9 @@ class _ServerSettingsView(AuthorLayoutView):
                 self.ctx.bot.db_cache.remove_reaction_guilds(guild_id)
                 self.ctx.bot.db_cache.set_auto_reaction_channels(guild_id, None)
         else:
-            await self.ctx.bot.pool.execute(f"UPDATE guild_settings SET {kind}=NULL WHERE guild_id=$1", guild_id)
+            await self.ctx.bot.pool.execute(
+                f"UPDATE guild_settings SET {kind}=NULL WHERE guild_id=$1", guild_id
+            )
             if kind == "auto_download" and isinstance(channel_id, int):
                 self.ctx.bot.db_cache.remove_adl(channel_id)
             elif kind == "auto_upload" and isinstance(channel_id, int):

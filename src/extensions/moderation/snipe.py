@@ -9,7 +9,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -277,9 +278,12 @@ class Snipe(Cog):
 
     @commands.Cog.listener("on_message")
     async def snipe_message(self, message: discord.Message) -> None:
+        if is_legacy_instance(self.bot):
+            return
         guild = message.guild
         if (
             guild is None
+            or is_operational_guild(guild)
             or message.author.bot
             or guild.id
             not in self._snipe_enabled_guilds | self._editsnipe_enabled_guilds
@@ -293,9 +297,12 @@ class Snipe(Cog):
     async def snipe_message_edit(
         self, before: discord.Message, after: discord.Message
     ) -> None:
+        if is_legacy_instance(self.bot):
+            return
         guild = before.guild or after.guild
         if (
             guild is None
+            or is_operational_guild(guild)
             or before.guild is None
             or after.guild is None
             or before.author.bot
@@ -324,6 +331,10 @@ class Snipe(Cog):
     async def snipe_message_delete(
         self, payload: discord.RawMessageDeleteEvent
     ) -> None:
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(payload):
+            return
         if (
             payload.guild_id is None
             or payload.guild_id not in self._snipe_enabled_guilds
@@ -345,6 +356,10 @@ class Snipe(Cog):
     async def snipe_bulk_message_delete(
         self, payload: discord.RawBulkMessageDeleteEvent
     ) -> None:
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(payload):
+            return
         snapshots = [
             self._snipe_messages.pop(message_id, None)
             for message_id in payload.message_ids
@@ -368,7 +383,7 @@ class Snipe(Cog):
             time.monotonic(),
         )
 
-    @commands.hybrid_group(name="snipe", fallback="show")
+    @commands.hybrid_group(name="snipe", fallback="show", with_app_command=False)
     @commands.guild_only()
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
@@ -383,7 +398,7 @@ class Snipe(Cog):
         """Show the most recently deleted message in this channel."""
         await self._show_snipe(ctx, edited=False, channel=channel)
 
-    @snipe.command(name="enable")
+    @snipe.command(name="enable", with_app_command=False)
     @commands.guild_only()
     @commands.has_guild_permissions(manage_guild=True)
     @app_commands.allowed_installs(guilds=True)
@@ -392,7 +407,7 @@ class Snipe(Cog):
         """Enable deleted-message sniping for this server."""
         await self._set_snipe_enabled(ctx, kind="snipe", enabled=True)
 
-    @snipe.command(name="disable")
+    @snipe.command(name="disable", with_app_command=False)
     @commands.guild_only()
     @commands.has_guild_permissions(manage_guild=True)
     @app_commands.allowed_installs(guilds=True)
@@ -401,7 +416,12 @@ class Snipe(Cog):
         """Disable deleted-message sniping for this server."""
         await self._set_snipe_enabled(ctx, kind="snipe", enabled=False)
 
-    @commands.hybrid_group(name="editsnipe", aliases=("esnipe",), fallback="show")
+    @commands.hybrid_group(
+        name="editsnipe",
+        aliases=("esnipe",),
+        fallback="show",
+        with_app_command=False,
+    )
     @commands.guild_only()
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
@@ -416,7 +436,7 @@ class Snipe(Cog):
         """Show the most recently edited message in this channel."""
         await self._show_snipe(ctx, edited=True, channel=channel)
 
-    @editsnipe.command(name="enable")
+    @editsnipe.command(name="enable", with_app_command=False)
     @commands.guild_only()
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
@@ -425,7 +445,7 @@ class Snipe(Cog):
         """Enable edited-message sniping for this server."""
         await self._set_snipe_enabled(ctx, kind="editsnipe", enabled=True)
 
-    @editsnipe.command(name="disable")
+    @editsnipe.command(name="disable", with_app_command=False)
     @commands.guild_only()
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)

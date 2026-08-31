@@ -7,7 +7,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 
 if TYPE_CHECKING:
     from extensions.context import GuildContext
@@ -327,6 +328,7 @@ class CustomRoles(Cog):
             "userrole",
         ),
         fallback="help",
+        with_app_command=False,
     )
     @commands.guild_only()
     @commands.has_guild_permissions(manage_roles=True)
@@ -341,7 +343,7 @@ class CustomRoles(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @custom_role.command(name="create")
+    @custom_role.command(name="create", with_app_command=False)
     @app_commands.describe(
         name="Name for the custom role.",
         role="Existing role to register instead of creating one.",
@@ -417,7 +419,7 @@ class CustomRoles(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @custom_role.command(name="assign", aliases=("give",))
+    @custom_role.command(name="assign", aliases=("give",), with_app_command=False)
     @app_commands.describe(
         role="Registered custom role to assign.",
         user="Member to assign the role to.",
@@ -443,7 +445,7 @@ class CustomRoles(Cog):
         )
         await ctx.send(message, allowed_mentions=discord.AllowedMentions.none())
 
-    @custom_role.command(name="rename")
+    @custom_role.command(name="rename", with_app_command=False)
     @app_commands.describe(role="Registered custom role.", new_name="New role name.")
     async def custom_role_rename(
         self, ctx: GuildContext, role: discord.Role, new_name: str
@@ -465,7 +467,7 @@ class CustomRoles(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @custom_role.command(name="booster")
+    @custom_role.command(name="booster", with_app_command=False)
     @app_commands.describe(role="Registered custom role to toggle.")
     async def custom_role_booster(self, ctx: GuildContext, role: discord.Role) -> None:
         """Toggle whether a custom role follows a member's boost status."""
@@ -489,7 +491,7 @@ class CustomRoles(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @custom_role.command(name="emoji")
+    @custom_role.command(name="emoji", with_app_command=False)
     @app_commands.describe(
         role="Registered custom role.",
         emoji="Unicode or custom emoji. Leave blank to clear the role icon.",
@@ -525,7 +527,7 @@ class CustomRoles(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @custom_role.command(name="color", aliases=("colour",))
+    @custom_role.command(name="color", aliases=("colour",), with_app_command=False)
     @app_commands.describe(
         role="Registered custom role.",
         colour="Colour name or hex value. Leave blank to clear the colour.",
@@ -551,7 +553,7 @@ class CustomRoles(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @custom_role.command(name="unassign", aliases=("remove",))
+    @custom_role.command(name="unassign", aliases=("remove",), with_app_command=False)
     @app_commands.describe(
         role="Registered custom role.",
         user="Member to remove the role from.",
@@ -580,7 +582,7 @@ class CustomRoles(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @custom_role.command(name="delete")
+    @custom_role.command(name="delete", with_app_command=False)
     @app_commands.describe(role="Registered custom role to delete.")
     async def custom_role_delete(self, ctx: GuildContext, role: discord.Role) -> None:
         """Delete a custom role and its saved assignments."""
@@ -612,7 +614,7 @@ class CustomRoles(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @custom_role.command(name="clear")
+    @custom_role.command(name="clear", with_app_command=False)
     @app_commands.describe(target="A registered custom role or a user.")
     async def custom_role_clear(self, ctx: GuildContext, *, target: str) -> None:
         """Clear all assignments from a role or all custom roles from a user."""
@@ -708,6 +710,10 @@ class CustomRoles(Cog):
 
     @commands.Cog.listener("on_member_join")
     async def custom_role_member_join(self, member: discord.Member) -> None:
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(member):
+            return
         rows = await self.bot.pool.fetch(
             """
             SELECT a.role_id, r.booster_only
@@ -742,6 +748,10 @@ class CustomRoles(Cog):
     async def custom_role_member_update(
         self, before: discord.Member, after: discord.Member
     ) -> None:
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(after):
+            return
         if before.premium_since == after.premium_since:
             return
         rows = await self.bot.pool.fetch(
@@ -776,6 +786,10 @@ class CustomRoles(Cog):
 
     @commands.Cog.listener("on_guild_role_delete")
     async def custom_role_deleted(self, role: discord.Role) -> None:
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(role):
+            return
         await self.bot.pool.execute(
             "DELETE FROM custom_role_assignments WHERE guild_id = $1 AND role_id = $2",
             role.guild.id,

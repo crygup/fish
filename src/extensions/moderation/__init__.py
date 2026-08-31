@@ -9,7 +9,8 @@ from discord import app_commands
 from discord.ext import commands
 from typing_extensions import Annotated
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 from extensions.context import ConfirmationView
 from utils import time as time_utils
 
@@ -17,6 +18,7 @@ from .custom_roles import CustomRoles
 from .honeypot import Honeypot
 from .logger import Logger
 from .mass import Mass
+from .protection import Protection
 from .snipe import Snipe
 
 if TYPE_CHECKING:
@@ -69,7 +71,7 @@ def _parse_duration(until: datetime.datetime) -> int:
     return int(minutes)
 
 
-class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles):
+class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles, Protection):
     """Server moderation commands"""
 
     emoji = discord.PartialEmoji(name="\U0001f528")
@@ -83,6 +85,7 @@ class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles):
         self._last_snipes = {}
         self._last_editsnipes = {}
         self._snipe_last_prune = 0.0
+        self._initialize_protection()
 
     async def cog_load(self) -> None:
         rows = await self.bot.pool.fetch(
@@ -90,6 +93,18 @@ class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles):
         )
         self._dehoist_guilds = {int(row["guild_id"]) for row in rows}
         await self._load_snipe_settings()
+        await self._load_protection_settings()
+        # Discord does not populate the guild cache until READY.  Schedule
+        # replacement-app logger webhook rebinding after that point so the
+        # shared logger rows are moved off webhooks created by the legacy bot.
+        if getattr(self, "_is_replacement_instance", lambda: False)():
+            previous = getattr(self, "_logger_rebind_task", None)
+            if previous is not None and not previous.done():
+                previous.cancel()
+            self._logger_rebind_task = asyncio.create_task(
+                self._rebind_logger_webhooks_when_ready(),
+                name="fishie-logger-webhook-rebind",
+            )
 
     @staticmethod
     def _can_dehoist(member: discord.Member, me: discord.Member) -> bool:
@@ -131,7 +146,9 @@ class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles):
     async def dehoist_member_update(
         self, before: discord.Member, after: discord.Member
     ) -> None:
-        if after.guild.id not in self._dehoist_guilds:
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(after) or after.guild.id not in self._dehoist_guilds:
             return
         username_changed = before.name != after.name and bool(after.nick)
         await self._dehoist_member(
@@ -181,7 +198,7 @@ class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles):
         await update_progress(force=True)
         return total, changed
 
-    @commands.hybrid_command(name="dehoist")
+    @commands.hybrid_command(name="dehoist", with_app_command=False)
     @commands.guild_only()
     @commands.has_guild_permissions(manage_guild=True)
     async def dehoist(self, ctx: GuildContext) -> None:
@@ -537,26 +554,32 @@ class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles):
         member: discord.Member,
         *,
         when: Annotated[
-            time_utils.FriendlyTimeResult,
-            time_utils.UserFriendlyTime(commands.clean_content, default="1h"),
-        ],
+            Optional[time_utils.FriendlyTimeResult],
+            time_utils.UserFriendlyTime(commands.clean_content, default="2w"),
+        ] = None,
     ):
-        """Timeout a member. Examples: 10m, 1h, 2d, 1h30m. Max 2 weeks."""
+        """Timeout a member. Omit the duration for the maximum 2 weeks."""
         _check_target(ctx, member)
         if member.is_timed_out():
             raise commands.BadArgument("That member is already muted.")
 
-        minutes = _parse_duration(when.dt)
-        until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
+        now = discord.utils.utcnow()
+        if when is None:
+            until = now + datetime.timedelta(minutes=MAX_MUTE_MINUTES)
+            duration_argument = ""
+        else:
+            minutes = _parse_duration(when.dt)
+            until = now + datetime.timedelta(minutes=minutes)
+            duration_argument = when.arg
         reason = (
-            f"{str(ctx.author)} (ID: {ctx.author.id}): {when.arg}"
-            if bool(when.arg)
+            f"{str(ctx.author)} (ID: {ctx.author.id}): {duration_argument}"
+            if duration_argument
             else f"{str(ctx.author)} (ID: {ctx.author.id})"
         )
         await member.timeout(until, reason=reason)
         await ctx.send(
             f"Muted **{member}** for {time_utils.human_timedelta(until, suffix=False)}."
-            + (f" Reason: {when.arg}" if when.arg else "")
+            + (f" Reason: {duration_argument}" if duration_argument else "")
         )
 
     @commands.hybrid_command(name="unmute")
@@ -567,6 +590,61 @@ class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles):
             raise commands.BadArgument("That member is not muted.")
         await member.timeout(None, reason=f"{str(ctx.author)} (ID: {ctx.author.id})")
         await ctx.send(f"Unmuted **{member}**.")
+
+    @commands.command(name="selfmute")
+    @commands.guild_only()
+    async def selfmute(
+        self,
+        ctx: GuildContext,
+        when: Annotated[
+            Optional[time_utils.FriendlyTimeResult],
+            time_utils.UserFriendlyTime(commands.clean_content, default="1h"),
+        ] = None,
+    ) -> None:
+        """Timeout yourself after confirmation (one hour by default).
+
+        A self mute is intentionally text-only so it cannot be triggered by an
+        accidental slash-command invocation.  Durations longer than Discord's
+        two-week timeout limit are clamped to that limit.
+        """
+
+        guild = ctx.guild
+        if guild is None:  # ``guild_only`` handles this, but keeps type checkers happy.
+            raise commands.NoPrivateMessage(
+                "This command can only be used in a server."
+            )
+
+        me = guild.me
+        if me is None or not me.guild_permissions.moderate_members:
+            raise commands.BotMissingPermissions(["moderate_members"])
+        if ctx.author.id == guild.owner_id or ctx.author.top_role >= me.top_role:
+            raise commands.BadArgument(
+                "I cannot mute you because my highest role is not above yours."
+            )
+        if ctx.author.is_timed_out():
+            raise commands.BadArgument("You are already muted.")
+
+        now = discord.utils.utcnow()
+        maximum = now + datetime.timedelta(minutes=MAX_MUTE_MINUTES)
+        requested = now + datetime.timedelta(hours=1) if when is None else when.dt
+        if requested <= now:
+            raise commands.BadArgument("Duration must be in the future.")
+        until = min(requested, maximum)
+        duration = time_utils.human_timedelta(until, source=now, suffix=False)
+
+        confirmation = await ctx.prompt(
+            f"Are you sure you want to mute yourself for **{duration}**?",
+            confirm_label="Mute myself",
+            cancel_label="Cancel",
+        )
+        if confirmation is None:
+            return
+
+        await ctx.author.timeout(
+            until,
+            reason=f"{str(ctx.author)} (ID: {ctx.author.id}) self-muted",
+        )
+        await ctx.send(f"Muted yourself for **{duration}**.")
 
     @commands.command(name="kick")
     @mod_target("kick_members")

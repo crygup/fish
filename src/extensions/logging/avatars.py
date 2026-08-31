@@ -9,7 +9,8 @@ import asyncpg
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 from utils import resize_to_limit
 
 if TYPE_CHECKING:
@@ -78,6 +79,8 @@ class Avatars(Cog):
 
     @commands.Cog.listener("on_user_update")
     async def user_update(self, before_u: discord.User, after_u: discord.User):
+        if is_legacy_instance(self.bot):
+            return
         if before_u.display_avatar.key == after_u.display_avatar.key:
             return
 
@@ -88,6 +91,10 @@ class Avatars(Cog):
 
     @commands.Cog.listener("on_member_update")
     async def member_update(self, before_m: discord.Member, after_m: discord.Member):
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(after_m):
+            return
         if after_m.guild_avatar is None:
             return
 

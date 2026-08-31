@@ -57,6 +57,63 @@ MASS_FLAGS_HELP = """
         """
 
 
+def _member_can_manage_mass(
+    guild: discord.Guild,
+    author: discord.Member,
+    config: object | None,
+) -> bool:
+    if not isinstance(author, discord.Member):
+        return False
+    if author.id == guild.owner_id:
+        return True
+
+    protection_role_id = getattr(config, "protection_role_id", None)
+    if protection_role_id is not None and author.get_role(protection_role_id):
+        return True
+
+    me = guild.me
+    return bool(
+        me is not None
+        and author.guild_permissions.administrator
+        and author.top_role > me.top_role
+    )
+
+
+def _can_manage_mass(ctx: GuildContext) -> bool:
+    guild = ctx.guild
+    author = ctx.author
+    if guild is None or not isinstance(author, discord.Member):
+        return False
+    configs = getattr(ctx.cog, "_protection_configs", {})
+    config = configs.get(guild.id) if isinstance(configs, dict) else None
+    return _member_can_manage_mass(guild, author, config)
+
+
+async def _mass_manager_check(ctx: GuildContext) -> bool:
+    if _can_manage_mass(ctx):
+        return True
+    raise commands.CheckFailure(
+        "You must be the server owner, have the protection role, or have "
+        "Administrator with a role above Fishie to use mass commands."
+    )
+
+
+async def _mass_app_manager_check(interaction: discord.Interaction) -> bool:
+    guild = interaction.guild
+    member = interaction.user
+    if guild is not None and isinstance(member, discord.Member):
+        get_cog = getattr(interaction.client, "get_cog", None)
+        cog = get_cog("Moderation") if callable(get_cog) else None
+        configs = getattr(cog, "_protection_configs", {})
+        config = configs.get(guild.id) if isinstance(configs, dict) else None
+        if _member_can_manage_mass(guild, member, config):
+            return True
+    raise app_commands.CheckFailure(
+        "You must be the server owner, have the protection role, or have "
+        "Administrator with a role above Fishie to use mass commands."
+    )
+
+
 class MassFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
     """Filters shared by the mass moderation commands."""
 
@@ -151,9 +208,9 @@ class MassChange:
 
 def _mass_reason(ctx: GuildContext, action: str, *, undo: bool = False) -> str:
     suffix = " undo" if undo else ""
-    return (
-        f"Mass {action}{suffix} automated by {ctx.author} " f"(ID: {ctx.author.id})"
-    )[:512]
+    return (f"Mass {action}{suffix} automated by {ctx.author} (ID: {ctx.author.id})")[
+        :512
+    ]
 
 
 class MassOperationView(AuthorView):
@@ -249,7 +306,7 @@ class Mass(Cog):
 
     @staticmethod
     def _ensure_mass_permissions(ctx: GuildContext, action: str) -> None:
-        """Require Manage Server and the permission for the selected action.
+        """Recheck the trusted mass-command boundary and bot permissions.
 
         The decorators protect normal text and application invocations. This
         runtime check is kept as a second layer because mass operations are
@@ -258,17 +315,13 @@ class Mass(Cog):
         guild = ctx.guild
         if guild is None:
             raise commands.NoPrivateMessage()
+        if not _can_manage_mass(ctx):
+            raise commands.CheckFailure(
+                "You must be the server owner, have the protection role, or have "
+                "Administrator with a role above Fishie to use mass commands."
+            )
 
         required = MASS_ACTION_PERMISSIONS[action]
-        author_permissions = getattr(ctx.author, "guild_permissions", None)
-        missing = [
-            permission
-            for permission in ("manage_guild", required)
-            if author_permissions is None or not getattr(author_permissions, permission)
-        ]
-        if missing:
-            raise commands.MissingPermissions(missing)
-
         me = guild.me
         bot_permissions = me.guild_permissions if me is not None else None
         if bot_permissions is None or not getattr(bot_permissions, required):
@@ -716,8 +769,7 @@ class Mass(Cog):
         extras={"usage": "<ban|unban|nick|unnick|kick> " + MASS_USAGE},
     )
     @commands.guild_only()
-    @commands.has_guild_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
+    @commands.check(_mass_manager_check)
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
     async def mass(self, ctx: GuildContext) -> None:
@@ -738,10 +790,9 @@ class Mass(Cog):
         extras={"usage": MASS_USAGE},
         help="Ban every matching member.\n" + MASS_FLAGS_HELP,
     )
-    @commands.has_guild_permissions(manage_guild=True, ban_members=True)
     @commands.bot_has_guild_permissions(ban_members=True)
     @commands.guild_only()
-    @app_commands.checks.has_permissions(manage_guild=True, ban_members=True)
+    @app_commands.check(_mass_app_manager_check)
     @app_commands.checks.bot_has_permissions(ban_members=True)
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
@@ -755,10 +806,9 @@ class Mass(Cog):
         extras={"usage": MASS_USAGE},
         help="Unban every matching user.\n" + MASS_FLAGS_HELP,
     )
-    @commands.has_guild_permissions(manage_guild=True, ban_members=True)
     @commands.bot_has_guild_permissions(ban_members=True)
     @commands.guild_only()
-    @app_commands.checks.has_permissions(manage_guild=True, ban_members=True)
+    @app_commands.check(_mass_app_manager_check)
     @app_commands.checks.bot_has_permissions(ban_members=True)
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
@@ -772,10 +822,9 @@ class Mass(Cog):
         extras={"usage": f"<nickname> {MASS_USAGE}"},
         help="Set the same nickname for every matching member.\n" + MASS_FLAGS_HELP,
     )
-    @commands.has_guild_permissions(manage_guild=True, manage_nicknames=True)
     @commands.bot_has_guild_permissions(manage_nicknames=True)
     @commands.guild_only()
-    @app_commands.checks.has_permissions(manage_guild=True, manage_nicknames=True)
+    @app_commands.check(_mass_app_manager_check)
     @app_commands.checks.bot_has_permissions(manage_nicknames=True)
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
@@ -792,10 +841,9 @@ class Mass(Cog):
         extras={"usage": MASS_USAGE},
         help="Remove nicknames from every matching member.\n" + MASS_FLAGS_HELP,
     )
-    @commands.has_guild_permissions(manage_guild=True, manage_nicknames=True)
     @commands.bot_has_guild_permissions(manage_nicknames=True)
     @commands.guild_only()
-    @app_commands.checks.has_permissions(manage_guild=True, manage_nicknames=True)
+    @app_commands.check(_mass_app_manager_check)
     @app_commands.checks.bot_has_permissions(manage_nicknames=True)
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
@@ -809,10 +857,9 @@ class Mass(Cog):
         extras={"usage": MASS_USAGE},
         help="Kick every matching member.\n" + MASS_FLAGS_HELP,
     )
-    @commands.has_guild_permissions(manage_guild=True, kick_members=True)
     @commands.bot_has_guild_permissions(kick_members=True)
     @commands.guild_only()
-    @app_commands.checks.has_permissions(manage_guild=True, kick_members=True)
+    @app_commands.check(_mass_app_manager_check)
     @app_commands.checks.bot_has_permissions(kick_members=True)
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)

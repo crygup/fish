@@ -6,7 +6,8 @@ import discord
 from discord.ext import commands
 from discord.utils import escape_markdown
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 from utils import SimplePages, extract, ratio
 
 if TYPE_CHECKING:
@@ -486,6 +487,10 @@ class Tags(Cog):
     @commands.Cog.listener("on_member_remove")
     async def _tag_member_remove(self, member: discord.Member) -> None:
         """Release tags when their owner leaves instead of deleting them."""
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(member):
+            return
         await self.bot.pool.execute(
             "UPDATE tags SET claimed = FALSE, claimed_at = NULL "
             "WHERE guild_id = $1 AND author_id = $2",

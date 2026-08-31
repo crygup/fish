@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 from utils import AuthorView
 
 if TYPE_CHECKING:
@@ -129,9 +130,11 @@ class Pinboard(Cog):
 
     @commands.Cog.listener("on_message_edit")
     async def on_pin(self, old_message: discord.Message, message: discord.Message):
+        if is_legacy_instance(self.bot):
+            return
         guild = old_message.guild
 
-        if guild is None:
+        if guild is None or is_operational_guild(guild):
             return
 
         if not old_message.pinned and message.pinned:
