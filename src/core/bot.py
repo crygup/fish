@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import os
 import pkgutil
 import random
 import re
@@ -14,15 +15,18 @@ from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
     Callable,
     Dict,
     List,
+    Literal,
     Mapping,
     Optional,
     Tuple,
     Type,
     TypeVar,
     Union,
+    cast,
 )
 
 import aiohttp
@@ -42,12 +46,65 @@ from utils import (
     update_pokemon,
 )
 
+from .badges import BadgeService, reconcile_stat_badges
 from .cache import (
     REPUTATION_BONUS_GUILD_ID,
     REPUTATION_BONUS_USER_ID,
     db_cache,
 )
+from .currency import CurrencyService
+from .handoff import (
+    is_handoff_exempt_command,
+    is_legacy_instance,
+    send_handoff_notice,
+)
 from .migrations import check_migrations
+
+BotInstance = Literal["legacy", "new", "testing"]
+
+# Application IDs are not secrets.  They are only fallbacks for the short
+# period before Discord has populated ``Client.user`` (or when a partial
+# config is used by a management script).  Deployments can override these in
+# the ``[ids]`` section of config.toml.
+LEGACY_BOT_ID = 876391494485950504
+NEW_BOT_ID = 1537535633038381190
+
+
+def normalize_bot_instance(
+    value: str | None = None,
+    *,
+    testing: bool = False,
+) -> BotInstance:
+    """Return the configured Fishie application role.
+
+    Production has historically defaulted to the legacy application.  The
+    ``testing`` flag retains its old meaning and takes precedence when no
+    explicit instance is supplied.  ``FISHIE_BOT_INSTANCE`` is accepted here
+    as a convenience for code that constructs :class:`Fishie` directly; the
+    launcher passes its resolved value explicitly.
+    """
+
+    requested = value if value is not None else os.getenv("FISHIE_BOT_INSTANCE")
+    if requested is None or not requested.strip():
+        requested = "testing" if testing else "legacy"
+    normalized = requested.strip().casefold()
+    aliases = {
+        "old": "legacy",
+        "primary": "legacy",
+        "prod": "legacy",
+        "production": "legacy",
+        "replacement": "new",
+        "newbot": "new",
+        "test": "testing",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"legacy", "new", "testing"}:
+        raise ValueError(
+            "FISHIE_BOT_INSTANCE must be one of: legacy, new, testing"
+        )
+    if testing and normalized != "testing":
+        raise ValueError("The --testing flag cannot be combined with a non-testing instance")
+    return cast(BotInstance, normalized)
 
 SILENT_COMMAND_USERS: dict[str, frozenset[int]] = {
     "crab": frozenset({662378595192274974}),
@@ -179,26 +236,35 @@ APP_PARAMETER_DESCRIPTIONS = {
 ROTATING_STATUSES: tuple[str, ...] = (
     "fish help",
     "fish anime mob psycho",
+    "fish anime re:zero",
     "fish manga mob psycho",
     "fish image dr pepper",
     "fish character emilia",
     "fish remind 67 minutes",
     "fish download",
     "fish video",
-    "fish prefix",
+    "fish post",
     "fish fm",
     "fish anilist",
-    "fish caption i love dr pepper",
+    "fish caption @fishie i love dr pepper",
     "fish click",
-    "fish movie",
-    "fish letterboxd",
+    "fish movie the lego movie",
+    "fish show cowboy bebop",
     "fish twitch follow @pge4",
     "fish highlight",
-    "fish cube",
-    "fish globe",
+    "fish cube @fishie",
+    "fish globe @fishie",
     "fish chart",
     "fish phone",
     "fish badapple",
+    "fish play aint no rest for the wicked",
+    "can you hear me?",
+    "i love you",
+    "the cake is a lie",
+    "fish game portal 2",
+    "{commands_ran:,} commands ran",
+    "{commands_ran_today:,} commands ran today",
+    "Most used command today: {command_name}",
 )
 STATUS_ROTATION_INTERVAL = 60 * 30
 
@@ -287,6 +353,12 @@ TRACKING_CONSENT_EXCLUDED_COMMANDS = (
     "stats coinflip",
     "stats cf",
     "stats reactions",
+    "stats wordbomb",
+    "stats wb",
+    "stats word-bomb",
+    "stats lightsout",
+    "stats lights-out",
+    "stats lights",
     # Reaction history has its own opt-in switch for the person giving a
     # reaction.  Do not conflate that with the general saved-history consent.
     "reactions",
@@ -514,10 +586,53 @@ class FishieCommandTree(app_commands.CommandTree[Any]):
 
     async def interaction_check(self, interaction: discord.Interaction[Any]) -> bool:
         bot = self.client
+        command = interaction.command
+        # The retiring application remains online only to direct users to the
+        # replacement.  Autocomplete requests cannot receive a normal message
+        # response, so let those complete and block the eventual invocation.
+        if (
+            interaction.type != discord.InteractionType.autocomplete
+            and is_legacy_instance(bot)
+            and command is not None
+            and not getattr(interaction.user, "bot", False)
+            and not is_handoff_exempt_command(command)
+        ):
+            await send_handoff_notice(bot, interaction)
+            return False
         check = getattr(bot, "_check_app_command_disabled", None)
         if check is None:
             return True
         return await check(interaction)
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction[Any],
+        error: app_commands.AppCommandError,
+    ) -> None:
+        """Use a Discord relative timestamp for application cooldowns."""
+
+        if isinstance(error, app_commands.CommandOnCooldown):
+            expires_at = datetime.datetime.now(
+                datetime.timezone.utc
+            ) + datetime.timedelta(seconds=max(0.0, float(error.retry_after)))
+            content = (
+                "You are on cooldown. Try again "
+                f"{discord.utils.format_dt(expires_at, 'R')}."
+            )
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    content,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    content,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                    ephemeral=True,
+                )
+            return
+        await super().on_error(interaction, error)
 
 
 class Fishie(commands.Bot):
@@ -540,9 +655,18 @@ class Fishie(commands.Bot):
         pool: asyncpg.Pool,
         session: aiohttp.ClientSession,
         testing: bool = False,
+        instance: str | None = None,
     ):
         self.config: Config = config
+        self.instance: BotInstance = normalize_bot_instance(instance, testing=testing)
+        # Keep ``testing`` in sync with the selected instance so callers that
+        # only provide FISHIE_BOT_INSTANCE=testing still use the testing DB and
+        # command prefix.  Existing callers passing testing=True retain their
+        # previous behavior through normalize_bot_instance().
+        self.testing: bool = self.instance == "testing"
         self.db_cache = db_cache()
+        self.currency = CurrencyService(pool)
+        self.badges = BadgeService(pool)
         self.logger: Logger = logger
         self.pool = pool
         self.session = session
@@ -570,7 +694,6 @@ class Fishie(commands.Bot):
         self._status_rotation_task: asyncio.Task[None] | None = None
         self._status_rotation_index = 0
         self._restart_message_checked = False
-        self.testing: bool = testing
         self.error_logs = None
         self.dagpi_rl = commands.CooldownMapping.from_cooldown(
             60.0, 60.0, commands.BucketType.default
@@ -593,6 +716,91 @@ class Fishie(commands.Bot):
         )
         self.add_check(self._check_command_disabled)
         self.add_check(self._check_tracking_consent)
+
+    @property
+    def is_new_bot(self) -> bool:
+        """Whether this process is running the replacement application."""
+
+        return self.instance == "new"
+
+    @property
+    def is_legacy_bot(self) -> bool:
+        """Whether this process is running the original application."""
+
+        return self.instance == "legacy"
+
+    @property
+    def is_testing_bot(self) -> bool:
+        """Whether this process is running the testing application."""
+
+        return self.instance == "testing"
+
+    @property
+    def configured_bot_id(self) -> int:
+        """Return the configured ID before Discord's ready event.
+
+        ``Client.user`` is authoritative once logged in.  The optional IDs in
+        config.toml make the value explicit for deployments; known IDs remain
+        safe fallbacks for existing configurations that predate dual-bot
+        support.
+        """
+
+        ids = self.config.get("ids", {})
+        if self.is_new_bot:
+            configured = ids.get("new_bot_id")
+            return int(configured or NEW_BOT_ID)
+        if self.is_testing_bot:
+            configured = ids.get("testing_bot_id")
+            if configured:
+                return int(configured)
+        configured = ids.get("bot_id")
+        return int(configured or LEGACY_BOT_ID)
+
+    @property
+    def new_bot_id(self) -> int:
+        """Return the replacement application's configured/public ID."""
+
+        ids = self.config.get("ids", {})
+        return int(ids.get("new_bot_id") or NEW_BOT_ID)
+
+    @property
+    def legacy_bot_id(self) -> int:
+        """Return the original application's configured/public ID."""
+
+        ids = self.config.get("ids", {})
+        return int(ids.get("bot_id") or LEGACY_BOT_ID)
+
+    @property
+    def active_bot_id(self) -> int:
+        """Return the logged-in account ID, with a startup-safe fallback."""
+
+        return int(self.user.id) if self.user is not None else self.configured_bot_id
+
+    @property
+    def active_application_id(self) -> int:
+        """Return the OAuth/application ID for the selected bot instance."""
+
+        # discord.py obtains this value from Discord after login.  The bot
+        # account ID and application ID are identical for Fishie, so the
+        # configured/ready account ID is a reliable pre-ready fallback.
+        try:
+            application_id = super().application_id
+        except AttributeError:
+            # Lightweight management scripts/tests may inspect identity
+            # before commands.Bot has initialized its connection state.
+            application_id = None
+        return int(application_id or self.active_bot_id)
+
+    @property
+    def oauth_client_secret(self) -> str:
+        """Return the OAuth secret matching this bot application."""
+
+        keys = self.config.get("keys", {})
+        if self.is_new_bot:
+            secret = keys.get("new_client_secret")
+            if secret:
+                return str(secret)
+        return str(keys.get("client_secret") or "")
 
     @staticmethod
     def _command_disable_excluded(command: Any) -> bool:
@@ -817,6 +1025,22 @@ class Fishie(commands.Bot):
                 visit(command)
 
     async def invoke(self, ctx: commands.Context[Fishie]) -> None:
+        # Text commands (including the text side of hybrid commands) do not
+        # pass through the application-command tree, so apply the same
+        # replacement notice here before any command callback or tracking
+        # consent prompt can run.
+        if (
+            is_legacy_instance(self)
+            and ctx.command is not None
+            and not ctx.author.bot
+            and not is_handoff_exempt_command(ctx.command)
+        ):
+            await send_handoff_notice(
+                self,
+                ctx,
+                ephemeral=ctx.interaction is not None,
+            )
+            return
         if (
             ctx.command is not None
             and not ctx.author.bot
@@ -1095,6 +1319,7 @@ class Fishie(commands.Bot):
     async def load_extensions(self):
         required = {
             "extensions.context",
+            "extensions.currency",
             "extensions.events",
             "extensions.logging",
             "extensions.moderation",
@@ -1141,9 +1366,21 @@ class Fishie(commands.Bot):
             await check_migrations(connection)
 
         self._status_rotation_index = random.randrange(len(ROTATING_STATUSES))
-        self.activity = discord.CustomActivity(
-            name=ROTATING_STATUSES[self._status_rotation_index]
-        )
+        initial_status: str | None = None
+        for _ in range(len(ROTATING_STATUSES)):
+            initial_status = await self._format_rotating_status(
+                ROTATING_STATUSES[self._status_rotation_index]
+            )
+            if initial_status is not None:
+                break
+            self._status_rotation_index = (self._status_rotation_index + 1) % len(
+                ROTATING_STATUSES
+            )
+        if initial_status is None:
+            # There are normally many static statuses, but keep startup safe
+            # if the list is ever changed to contain only data-dependent ones.
+            initial_status = "fish help"
+        self.activity = discord.CustomActivity(name=initial_status)
 
         self.error_logs = discord.Webhook.from_url(
             self.config["webhooks"]["error_logs"], session=self.session
@@ -1154,6 +1391,13 @@ class Fishie(commands.Bot):
         for cog in self.cogs.values():
             for command in cog.get_app_commands():
                 describe_missing_app_parameters(command)
+        if not is_legacy_instance(self):
+            try:
+                await reconcile_stat_badges(self.pool, bot_id=self.active_bot_id)
+            except Exception:
+                # A missing/partially migrated badge schema must not prevent the
+                # bot from starting. The next stats refresh retries reconciliation.
+                self.logger.exception("Could not reconcile stat badges at startup")
         await self.populate_cache()
         await update_pokemon(self)
         self.logger.info(f"Added {len(self.pokemon):,} pokemon")
@@ -1172,9 +1416,12 @@ class Fishie(commands.Bot):
             self._status_rotation_index = (self._status_rotation_index + 1) % len(
                 ROTATING_STATUSES
             )
-            activity = discord.CustomActivity(
-                name=ROTATING_STATUSES[self._status_rotation_index]
+            status_name = await self._format_rotating_status(
+                ROTATING_STATUSES[self._status_rotation_index]
             )
+            if status_name is None:
+                continue
+            activity = discord.CustomActivity(name=status_name)
             self.activity = activity
             try:
                 await self.change_presence(activity=activity)
@@ -1182,6 +1429,71 @@ class Fishie(commands.Bot):
                 self.logger.warning(
                     "Could not update the rotating custom status", exc_info=True
                 )
+
+    async def _format_rotating_status(self, template: str) -> str | None:
+        """Render dynamic values used by rotating custom statuses."""
+
+        needs_command_totals = "{commands_ran" in template
+        needs_most_used = "{command_name" in template
+        if not needs_command_totals and not needs_most_used:
+            return template
+
+        try:
+            today = datetime.datetime.now(datetime.timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            queries: list[Awaitable[Any]] = []
+            if needs_command_totals:
+                queries.extend(
+                    (
+                        self.pool.fetchval("SELECT COUNT(*) FROM command_logs"),
+                        self.pool.fetchval(
+                            "SELECT COUNT(*) FROM command_logs WHERE created_at >= $1",
+                            today,
+                        ),
+                    )
+                )
+            if needs_most_used:
+                # Group by the complete qualified command name so nested
+                # commands are counted independently, then select the most
+                # frequently used one. Empty/NULL command rows are ignored.
+                queries.append(
+                    self.pool.fetchval(
+                        "SELECT ("
+                        "SELECT LOWER(BTRIM(command)) FROM command_logs "
+                        "WHERE created_at >= $1 AND command IS NOT NULL "
+                        "AND BTRIM(command) <> '' "
+                        "GROUP BY LOWER(BTRIM(command)) "
+                        "ORDER BY COUNT(*) DESC, LOWER(BTRIM(command)) ASC "
+                        "LIMIT 1)",
+                        today,
+                    )
+                )
+            results = await asyncio.gather(*queries)
+            result_index = 0
+            total = today_count = 0
+            most_used_command: str | None = None
+            if needs_command_totals:
+                total = int(results[result_index] or 0)
+                today_count = int(results[result_index + 1] or 0)
+                result_index += 2
+            if needs_most_used:
+                raw_command = results[result_index]
+                if raw_command is None:
+                    # A data-dependent status should not be shown until at
+                    # least one command has been recorded today.  Returning
+                    # None lets the rotation skip this entry cleanly.
+                    return None
+                most_used_command = str(raw_command)
+            values = {
+                "commands_ran": total,
+                "commands_ran_today": today_count,
+                "command_name": most_used_command,
+            }
+            return template.format(**values)
+        except Exception:
+            self.logger.exception("Could not render dynamic rotating status")
+            return template
 
     async def on_ready(self):
         # Cache bot accounts from the ready member cache so synchronous
@@ -1292,6 +1604,20 @@ class Fishie(commands.Bot):
             return
         self._resources_closed = True
         self.logger.info("Logging out")
+        # Flush the Fun cog's write-behind click counters/rewards before the
+        # database pool is closed.  Cog unload is synchronous, so relying on a
+        # task scheduled from ``cog_unload`` could lose the last minute of
+        # clicks during a restart.
+        fun = self.get_cog("Fun")
+        flush_click_cache = cast(
+            Callable[[], Awaitable[Any]] | None,
+            getattr(fun, "flush_click_cache", None),
+        )
+        if flush_click_cache is not None:
+            try:
+                await flush_click_cache()
+            except Exception:
+                self.logger.exception("Failed to flush click cache during shutdown")
         await self.unload_extensions()
         await self.close_sessions()
         await super().close()
@@ -1313,6 +1639,35 @@ class Fishie(commands.Bot):
             anilist=row["anilist"] if row else None,
         )
 
+    def get_user_color(
+        self, user_id: int, default: int | discord.Colour | None = None
+    ) -> discord.Colour:
+        """Return a user's equipped colour, falling back to Fishie's default."""
+
+        fallback = (
+            self.embedcolor
+            if default is None
+            else int(getattr(default, "value", default))
+        )
+        entry = self.db_cache.get_user_color(int(user_id))
+        raw_value = entry.get("hex_value") if entry is not None else None
+        try:
+            if raw_value is not None:
+                if isinstance(raw_value, str):
+                    text = raw_value.strip().lstrip("#")
+                    raw_value = int(text, 16)
+                return discord.Colour(int(raw_value))
+        except (TypeError, ValueError):
+            self.logger.warning("Ignoring invalid cached colour for user %s", user_id)
+        return discord.Colour(fallback)
+
+    def user_embed_color(self, user_id: int | None) -> discord.Colour:
+        """Return the colour to use for embeds associated with a user."""
+
+        if user_id is None:
+            return discord.Colour(self.embedcolor)
+        return self.get_user_color(int(user_id))
+
     async def populate_cache(self):
         self.db_cache.prefixes.clear()
         self.db_cache.opted_out.clear()
@@ -1330,10 +1685,13 @@ class Fishie(commands.Bot):
         self.db_cache.auto_reaction_targets.clear()
         self.db_cache.auto_reaction_channels.clear()
         self.db_cache.nsfw_covers.clear()
+        self.db_cache.user_colors.clear()
         self.db_cache.pinboard.clear()
         self.db_cache.lastfm.clear()
         self.db_cache.anilist.clear()
         self.db_cache.user_badges.clear()
+        self.db_cache.boards.clear()
+        self.db_cache.board_blocks.clear()
         self.db_cache.disabled_commands.clear()
         self.db_cache.globally_disabled_commands.clear()
         self.db_cache.globally_disabled_cogs.clear()
@@ -1344,6 +1702,7 @@ class Fishie(commands.Bot):
         self.db_cache.bot_users.clear()
         self.db_cache.known_non_bot_users.clear()
         self.db_cache.game_tracking_disabled_users.clear()
+        self.db_cache.currency_tracking_disabled_users.clear()
         self.db_cache.private_game_history_users.clear()
         self.db_cache.public_game_history_users.clear()
         self.db_cache.guild_tracking_disabled.clear()
@@ -1455,6 +1814,7 @@ class Fishie(commands.Bot):
                 history_public,
                 game_tracking_enabled,
                 game_history_public,
+                currency_tracking_enabled,
                 tracking_consent
             FROM user_settings
             """)
@@ -1465,6 +1825,8 @@ class Fishie(commands.Bot):
             self.db_cache.set_history_public(user_id, bool(row["history_public"]))
             if not row["game_tracking_enabled"]:
                 self.db_cache.game_tracking_disabled_users.add(user_id)
+            if not row.get("currency_tracking_enabled", True):
+                self.db_cache.currency_tracking_disabled_users.add(user_id)
             self.db_cache.set_game_history_public(
                 user_id, bool(row["game_history_public"])
             )
@@ -1584,6 +1946,37 @@ class Fishie(commands.Bot):
         for blocked in hourly_blocks:
             self.db_cache.add_hourly_post_block(blocked["guild_id"], blocked["user_id"])
 
+        board_rows = await self.pool.fetch(
+            "SELECT guild_id, board_type, channel_id, enabled, threshold, "
+            "allow_nsfw, emoji_name, emoji_id, emoji_animated, emoji_set_by "
+            "FROM guild_boards"
+        )
+        for board in board_rows:
+            self.db_cache.set_board(
+                board["guild_id"],
+                board["board_type"],
+                board["channel_id"],
+                enabled=board["enabled"],
+                threshold=board["threshold"],
+                allow_nsfw=board["allow_nsfw"],
+                emoji_name=board["emoji_name"],
+                emoji_id=board["emoji_id"],
+                emoji_animated=board["emoji_animated"],
+                emoji_set_by=board["emoji_set_by"],
+            )
+
+        board_blocks = await self.pool.fetch(
+            "SELECT guild_id, board_type, target_type, target_id "
+            "FROM guild_board_blocks"
+        )
+        for blocked in board_blocks:
+            self.db_cache.add_board_block(
+                blocked["guild_id"],
+                blocked["board_type"],
+                blocked["target_type"],
+                blocked["target_id"],
+            )
+
         accounts = await self.pool.fetch(
             "SELECT user_id, lastfm, anilist FROM accounts"
         )
@@ -1605,20 +1998,40 @@ class Fishie(commands.Bot):
             SELECT user_id, emoji_name, emoji_id, is_custom, animated,
                    badge_key, text, created_at
             FROM user_badges
-            WHERE badge_key = 'custom'
+            WHERE active
             ORDER BY id
             """)
         for row in user_badges:
             user_id = int(row["user_id"])
-            self.db_cache.user_badges[user_id] = {
-                "emoji_name": row["emoji_name"],
-                "emoji_id": row["emoji_id"],
-                "is_custom": bool(row["is_custom"]),
-                "animated": bool(row["animated"]),
-                "text": row["text"],
-                "badge_key": row["badge_key"],
-                "created_at": row["created_at"],
-            }
+            self.db_cache.user_badges.setdefault(user_id, []).append(
+                {
+                    "emoji_name": row["emoji_name"],
+                    "emoji_id": row["emoji_id"],
+                    "is_custom": bool(row["is_custom"]),
+                    "animated": bool(row["animated"]),
+                    "text": row["text"],
+                    "badge_key": row["badge_key"],
+                    "created_at": row["created_at"],
+                }
+            )
+
+        user_colors = await self.pool.fetch("""
+            SELECT user_id, color_key, hex_value
+            FROM user_colors
+            WHERE active AND equipped
+            """)
+        for row in user_colors:
+            try:
+                self.db_cache.set_user_color(
+                    int(row["user_id"]),
+                    str(row["color_key"]),
+                    str(row["hex_value"]),
+                )
+            except (TypeError, ValueError):
+                self.logger.warning(
+                    "Ignoring invalid equipped user color for user %s",
+                    row.get("user_id") if hasattr(row, "get") else "unknown",
+                )
 
         roblox_templates = await self.pool.fetch(
             "SELECT asset_id, image_url, extra FROM roblox_templates"

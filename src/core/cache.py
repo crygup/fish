@@ -1,9 +1,71 @@
 from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 REPUTATION_BONUS_USER_ID = 766953372309127168
 REPUTATION_BONUS_GUILD_ID = 848507662437449750
+
+BOARD_TYPES = frozenset({"starboard", "clownboard"})
+BOARD_BLOCK_TARGET_TYPES = frozenset({"user", "channel"})
+DEFAULT_BOARD_EMOJIS = {"starboard": "⭐", "clownboard": "🤡"}
+
+
+def _normalize_user_color(value: Any) -> str:
+    """Normalize a Discord color-like value to a ``#RRGGBB`` string."""
+
+    if isinstance(value, bool):
+        raise ValueError("User embed color must be a 24-bit RGB value")
+    if hasattr(value, "value") and not isinstance(value, (str, bytes)):
+        value = getattr(value, "value")
+    if isinstance(value, str):
+        text = value.strip().casefold()
+        if text.startswith("#"):
+            text = text[1:]
+        elif text.startswith("0x"):
+            text = text[2:]
+        if len(text) != 6:
+            raise ValueError("User embed color must be six hexadecimal digits")
+        try:
+            number = int(text, 16)
+        except ValueError as exc:
+            raise ValueError("User embed color must be hexadecimal") from exc
+    else:
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("User embed color must be a 24-bit RGB value") from exc
+    if not 0 <= number <= 0xFFFFFF:
+        raise ValueError("User embed color must be a 24-bit RGB value")
+    return f"#{number:06X}"
+
+
+@dataclass(frozen=True, slots=True)
+class BoardConfig:
+    guild_id: int
+    board_type: str
+    channel_id: int
+    emoji_name: str
+    enabled: bool = True
+    threshold: int = 3
+    allow_nsfw: bool = True
+    emoji_id: int | None = None
+    emoji_animated: bool = False
+    emoji_set_by: int | None = None
+
+    @property
+    def emoji_key(self) -> tuple[str, int | str]:
+        """Return the stable key used to keep both board emoji distinct."""
+        if self.emoji_id is not None:
+            return ("custom", self.emoji_id)
+        return ("unicode", self.emoji_name)
+
+    @property
+    def emoji_display(self) -> str:
+        if self.emoji_id is None:
+            return self.emoji_name
+        prefix = "a" if self.emoji_animated else ""
+        return f"<{prefix}:{self.emoji_name}:{self.emoji_id}>"
 
 
 class db_cache:
@@ -36,7 +98,16 @@ class db_cache:
         self.anilist: dict[int, str] = {}
         # Owner-managed userinfo badges.  Keep the source fields available so
         # userinfo can render a custom emoji without reparsing display text.
-        self.user_badges: dict[int, dict[str, Any]] = {}
+        self.user_badges: dict[int, list[dict[str, Any]]] = {}
+        # The currently equipped purchasable profile colour.  Keep this tiny
+        # cache separate from badges/titles so colour changes can be reflected
+        # immediately without rebuilding the account cache.
+        self.user_colors: dict[int, dict[str, Any]] = {}
+        # Starboard and clownboard use the same storage/cache model.  Configs
+        # are keyed by guild and board type; block sets are additionally keyed
+        # by target type so event checks do not hit PostgreSQL per reaction.
+        self.boards: dict[tuple[int, str], BoardConfig] = {}
+        self.board_blocks: dict[tuple[int, str, str], set[int]] = {}
         self.disabled_commands: set[tuple[int, str, int]] = set()
         # Owner-managed global command and user blocks.  These are loaded from
         # PostgreSQL at startup so the restrictions remain active after a
@@ -56,6 +127,10 @@ class db_cache:
         # database row cannot accidentally expose data.
         self.public_history_users: set[int] = set()
         self.game_tracking_disabled_users: set[int] = set()
+        # Currency commands persist wallet, wager, and reward history.  Keep
+        # a separate opt-out cache so command checks never need a database
+        # round-trip and can enforce the setting consistently.
+        self.currency_tracking_disabled_users: set[int] = set()
         self.private_game_history_users: set[int] = set()
         self.public_game_history_users: set[int] = set()
         self.guild_tracking_disabled: set[int] = set()
@@ -75,6 +150,71 @@ class db_cache:
         self.reputation_guild_bonus_givers: dict[int, set[str]] = {}
         self._reputation_user_period: date | None = None
         self._reputation_guild_period: date | None = None
+
+    def remove_user_badge(self, user_id: int, badge_key: str) -> None:
+        """Remove one persisted badge from the in-memory startup cache.
+
+        Badge rows can be sold or revoked while the bot is running.  Keeping
+        this small cache mutation alongside the other cache helpers prevents a
+        stale startup row from being rendered until the next restart.
+        """
+
+        entries = self.user_badges.get(int(user_id))
+        if not isinstance(entries, list):
+            return
+        key = str(badge_key)
+        entries[:] = [
+            entry for entry in entries if str(entry.get("badge_key") or "") != key
+        ]
+        if not entries:
+            self.user_badges.pop(int(user_id), None)
+
+    def set_user_color(
+        self,
+        user_id: int,
+        color_key: str,
+        hex_value: Any | None = None,
+    ) -> dict[str, Any]:
+        """Add or replace one user's equipped profile color.
+
+        ``hex_value`` is optional for callers that only need a raw color; the
+        currency service supplies the stable catalog key and resolved value.
+        """
+
+        if hex_value is None:
+            hex_value = color_key
+            color_key = "custom"
+        entry = {
+            "color_key": str(color_key),
+            "hex_value": _normalize_user_color(hex_value),
+        }
+        self.user_colors[int(user_id)] = entry
+        return entry.copy()
+
+    def get_user_color(
+        self, user_id: int, default: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """Return a user's equipped color, or *default* when it is not cached."""
+
+        entry = self.user_colors.get(int(user_id))
+        return entry.copy() if entry is not None else default
+
+    def remove_user_color(self, user_id: int) -> dict[str, Any] | None:
+        """Remove a user's equipped color, tolerating stale cache entries."""
+
+        return self.user_colors.pop(int(user_id), None)
+
+    def refresh_user_color(
+        self,
+        user_id: int,
+        color_key: str | None,
+        hex_value: Any | None = None,
+    ) -> dict[str, Any] | None:
+        """Refresh one cache entry after a database add/change/remove."""
+
+        if color_key is None:
+            return self.remove_user_color(user_id)
+        return self.set_user_color(user_id, color_key, hex_value)
 
     def add_lastfm(self, user_id: int, username: str) -> None:
         self.lastfm[user_id] = username
@@ -147,6 +287,174 @@ class db_cache:
     def remove_pinboard(self, guild_id: int, channel_id: int):
         return self.pinboard.pop(guild_id, None)
 
+    def set_board(
+        self,
+        guild_id: int,
+        board_type: str,
+        channel_id: int,
+        *,
+        enabled: bool = True,
+        threshold: int = 3,
+        allow_nsfw: bool = True,
+        emoji_name: str | None = None,
+        emoji_id: int | None = None,
+        emoji_animated: bool = False,
+        emoji_set_by: int | None = None,
+    ) -> BoardConfig:
+        """Cache one board configuration and enforce its shared invariants."""
+        board_type = board_type.casefold()
+        if board_type not in BOARD_TYPES:
+            raise ValueError(f"Unknown board type: {board_type}")
+        if threshold < 1:
+            raise ValueError("Board threshold must be at least 1")
+        if emoji_name is None:
+            emoji_name = DEFAULT_BOARD_EMOJIS[board_type]
+        if not emoji_name:
+            raise ValueError("Board emoji name cannot be empty")
+        if emoji_id is None and emoji_animated:
+            raise ValueError("A Unicode board emoji cannot be animated")
+
+        config = BoardConfig(
+            guild_id=int(guild_id),
+            board_type=board_type,
+            channel_id=int(channel_id),
+            emoji_name=emoji_name,
+            enabled=bool(enabled),
+            threshold=int(threshold),
+            allow_nsfw=bool(allow_nsfw),
+            emoji_id=int(emoji_id) if emoji_id is not None else None,
+            emoji_animated=bool(emoji_animated),
+            emoji_set_by=int(emoji_set_by) if emoji_set_by is not None else None,
+        )
+        if not self.board_emoji_is_available(
+            config.guild_id,
+            config.board_type,
+            config.emoji_name,
+            config.emoji_id,
+        ):
+            raise ValueError("Starboard and clownboard cannot use the same emoji")
+        self.boards[(config.guild_id, config.board_type)] = config
+        return config
+
+    def get_board(self, guild_id: int, board_type: str) -> BoardConfig | None:
+        return self.boards.get((int(guild_id), board_type.casefold()))
+
+    def update_board(
+        self, guild_id: int, board_type: str, **changes: Any
+    ) -> BoardConfig:
+        """Replace selected cached fields after a successful database update."""
+        current = self.get_board(guild_id, board_type)
+        if current is None:
+            raise KeyError(f"Board is not configured: {guild_id}/{board_type}")
+        immutable = {"guild_id", "board_type"}.intersection(changes)
+        if immutable:
+            raise ValueError("Board guild and type cannot be changed")
+        updated = replace(current, **changes)
+        return self.set_board(
+            updated.guild_id,
+            updated.board_type,
+            updated.channel_id,
+            enabled=updated.enabled,
+            threshold=updated.threshold,
+            allow_nsfw=updated.allow_nsfw,
+            emoji_name=updated.emoji_name,
+            emoji_id=updated.emoji_id,
+            emoji_animated=updated.emoji_animated,
+            emoji_set_by=updated.emoji_set_by,
+        )
+
+    def board_emoji_is_available(
+        self,
+        guild_id: int,
+        board_type: str,
+        emoji_name: str,
+        emoji_id: int | None = None,
+    ) -> bool:
+        """Return whether the other board is not already using an emoji."""
+        board_type = board_type.casefold()
+        emoji_key: tuple[str, int | str] = (
+            ("custom", int(emoji_id))
+            if emoji_id is not None
+            else ("unicode", emoji_name)
+        )
+        return all(
+            other_guild_id != int(guild_id)
+            or other_type == board_type
+            or other.emoji_key != emoji_key
+            for (other_guild_id, other_type), other in self.boards.items()
+        )
+
+    def board_default_emoji_is_available(self, guild_id: int, board_type: str) -> bool:
+        """Check whether a deleted custom emoji may safely use its fallback."""
+        board_type = board_type.casefold()
+        if board_type not in BOARD_TYPES:
+            raise ValueError(f"Unknown board type: {board_type}")
+        return self.board_emoji_is_available(
+            guild_id, board_type, DEFAULT_BOARD_EMOJIS[board_type]
+        )
+
+    def remove_board(self, guild_id: int, board_type: str) -> BoardConfig | None:
+        board_type = board_type.casefold()
+        removed = self.boards.pop((int(guild_id), board_type), None)
+        for target_type in BOARD_BLOCK_TARGET_TYPES:
+            self.board_blocks.pop((int(guild_id), board_type, target_type), None)
+        return removed
+
+    def add_board_block(
+        self,
+        guild_id: int,
+        board_type: str,
+        target_type: str,
+        target_id: int,
+    ) -> None:
+        board_type = board_type.casefold()
+        target_type = target_type.casefold()
+        if board_type not in BOARD_TYPES:
+            raise ValueError(f"Unknown board type: {board_type}")
+        if target_type not in BOARD_BLOCK_TARGET_TYPES:
+            raise ValueError(f"Unknown board block target type: {target_type}")
+        self.board_blocks.setdefault(
+            (int(guild_id), board_type, target_type), set()
+        ).add(int(target_id))
+
+    def remove_board_block(
+        self,
+        guild_id: int,
+        board_type: str,
+        target_type: str,
+        target_id: int,
+    ) -> None:
+        key = (int(guild_id), board_type.casefold(), target_type.casefold())
+        targets = self.board_blocks.get(key)
+        if targets is None:
+            return
+        targets.discard(int(target_id))
+        if not targets:
+            self.board_blocks.pop(key, None)
+
+    def is_board_blocked(
+        self,
+        guild_id: int,
+        board_type: str,
+        target_type: str,
+        target_id: int,
+    ) -> bool:
+        return int(target_id) in self.board_blocks.get(
+            (int(guild_id), board_type.casefold(), target_type.casefold()), set()
+        )
+
+    def board_message_is_blocked(
+        self,
+        guild_id: int,
+        board_type: str,
+        *,
+        author_id: int,
+        channel_id: int,
+    ) -> bool:
+        return self.is_board_blocked(
+            guild_id, board_type, "user", author_id
+        ) or self.is_board_blocked(guild_id, board_type, "channel", channel_id)
+
     def add_opt_out(self, object_id: int, value: str):
         try:
             if value not in self.opted_out[object_id]:
@@ -216,9 +524,7 @@ class db_cache:
             next_post_at = next_post_at.replace(tzinfo=timezone.utc)
         self.hourly_post_next_at[guild_id] = next_post_at
 
-    def set_hourly_post_next_at(
-        self, guild_id: int, next_post_at: datetime
-    ) -> None:
+    def set_hourly_post_next_at(self, guild_id: int, next_post_at: datetime) -> None:
         if guild_id not in self.hourly_posts:
             return
         if next_post_at.tzinfo is None:
@@ -304,9 +610,7 @@ class db_cache:
         targets = self.auto_reaction_targets.get(guild_id)
         return targets is None or channel_id in targets
 
-    def set_auto_reaction_channel(
-        self, guild_id: int, channel_id: int | None
-    ) -> None:
+    def set_auto_reaction_channel(self, guild_id: int, channel_id: int | None) -> None:
         # Compatibility wrapper for the pre-multi-channel setting.  A null
         # value means server-wide when the feature itself remains enabled.
         self.set_auto_reaction_channels(
@@ -366,6 +670,32 @@ class db_cache:
             and user_id not in self.game_tracking_disabled_users
         )
 
+    def set_tracking_enabled(self, user_id: int, enabled: bool) -> None:
+        if enabled:
+            self.tracking_disabled_users.discard(user_id)
+        else:
+            self.tracking_disabled_users.add(user_id)
+
+    def set_game_tracking_enabled(self, user_id: int, enabled: bool) -> None:
+        if enabled:
+            self.game_tracking_disabled_users.discard(user_id)
+        else:
+            self.game_tracking_disabled_users.add(user_id)
+
+    def user_currency_tracking_enabled(self, user_id: int) -> bool:
+        """Return whether a user may use currency features."""
+
+        return (
+            user_id not in self.tracking_disabled_users
+            and user_id not in self.currency_tracking_disabled_users
+        )
+
+    def set_currency_tracking_enabled(self, user_id: int, enabled: bool) -> None:
+        if enabled:
+            self.currency_tracking_disabled_users.discard(user_id)
+        else:
+            self.currency_tracking_disabled_users.add(user_id)
+
     def user_game_history_is_public(self, user_id: int) -> bool:
         return user_id in self.public_game_history_users or user_id in self.bot_users
 
@@ -396,6 +726,13 @@ class db_cache:
 
     def guild_tracking_enabled(self, guild_id: int) -> bool:
         return guild_id not in self.guild_tracking_disabled
+
+    def set_guild_tracking_enabled(self, guild_id: int, enabled: bool) -> None:
+        """Cache whether server-owned history collection is enabled."""
+        if enabled:
+            self.guild_tracking_disabled.discard(guild_id)
+        else:
+            self.guild_tracking_disabled.add(guild_id)
 
     def guild_history_is_public(self, guild_id: int) -> bool:
         return guild_id in self.public_guild_history
@@ -469,9 +806,7 @@ class db_cache:
         self._prepare_reputation_bonus_cache(now)
         self.reputation_guild_bonus_givers.setdefault(giver_id, set()).add(source)
 
-    def reputation_bonus_count(
-        self, giver_id: int, now: datetime | None = None
-    ) -> int:
+    def reputation_bonus_count(self, giver_id: int, now: datetime | None = None) -> int:
         """Return the currently active user and guild reputation bonus count."""
 
         self._prepare_reputation_bonus_cache(now)

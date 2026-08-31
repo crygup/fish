@@ -3,13 +3,16 @@ from __future__ import annotations
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 
 
 class StatusCog(Cog):
     _TRACKED_STATUSES = frozenset({"offline", "idle", "online", "dnd"})
 
     async def store_status(self, member: discord.Member, status: str) -> None:
+        if is_legacy_instance(self.bot):
+            return
         async with self.bot.pool.acquire() as connection:
             async with connection.transaction():
                 await connection.execute(
@@ -75,6 +78,10 @@ class StatusCog(Cog):
 
     @commands.Cog.listener("on_presence_update")
     async def _on_presence_update(self, before: discord.Member, after: discord.Member):
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(after):
+            return
         if self.bot.user and after.id == self.bot.user.id:
             return
         if self.bot.db_cache.user_tracking_opted_out(after.id, "status"):

@@ -58,6 +58,8 @@ curl-cffi==0.15.0
     # via -r requirements.in
 cyclonedx-python-lib==11.11.0
     # via pip-audit
+davey==0.1.6
+    # via -r requirements.in
 defusedxml==0.7.1
     # via
     #   -r requirements.in
@@ -79,6 +81,8 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
+geonamescache==3.0.2
+    # via -r requirements.in
 greenlet==3.5.3
     # via playwright
 h11==0.16.0
@@ -104,8 +108,6 @@ jishaku==2.7.5
 license-expression==30.4.4
     # via cyclonedx-python-lib
 lru-dict==1.4.1
-    # via -r requirements.in
-lxml==6.1.1
     # via -r requirements.in
 markdown-it-py==4.2.0
     # via rich
@@ -164,6 +166,8 @@ pydantic==2.13.4
     #   fastapi
 pydantic-core==2.46.4
     # via pydantic
+PyNaCl==1.5.0
+    # via -r requirements.in
 pyee==13.0.1
     # via playwright
 pygments==2.20.0

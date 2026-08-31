@@ -1,9 +1,11 @@
 [tokens]
 bot = ""
 testing_bot = ""
+new_bot = ""
 
 [keys]
 client_secret = ""
+new_client_secret = ""
 fishie_api = ""
 media_api = ""
 media_api_owner = ""
@@ -38,6 +40,7 @@ password = ""
 [ids]
 owner_id = 1
 bot_id = 1
+new_bot_id = 1
 poketwo_id = 1
 mudae_id = 1
 guild_id = 1

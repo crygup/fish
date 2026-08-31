@@ -7,7 +7,8 @@ import discord
 from discord import MediaGalleryItem, ui
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import HandoffNoticeThrottle, is_legacy_instance, send_handoff_notice
 from utils import (
     KLIPY_RE,
     TENOR_PAGE_RE,
@@ -30,12 +31,40 @@ class AutoDownload(Cog):
         1, 5, commands.BucketType.member
     )
 
+    def _handoff_throttle(self) -> HandoffNoticeThrottle:
+        """Return the throttle shared by legacy auto-download warnings."""
+
+        throttle = getattr(self.bot, "_handoff_notice_throttle", None)
+        if not isinstance(throttle, HandoffNoticeThrottle):
+            throttle = HandoffNoticeThrottle()
+            # Store it on the bot so an extension reload does not reset the
+            # warning throttle and spam the configured channel.
+            setattr(self.bot, "_handoff_notice_throttle", throttle)
+        return throttle
+
     @commands.Cog.listener("on_message")
     async def auto_download(self, message: discord.Message):
+        if is_operational_guild(message):
+            return
         if message.channel.id not in self.bot.db_cache.auto_downloads:
             return
 
         if message.author.bot:
+            return
+
+        # During migration the old application must not continue processing
+        # automatic downloads.  A throttled notice keeps bursts of links from
+        # spamming the channel while still exposing the replacement links.
+        if is_legacy_instance(self.bot):
+            channel_id = getattr(message.channel, "id", None)
+            user_id = getattr(message.author, "id", None)
+            if channel_id is not None and user_id is not None:
+                if await self._handoff_throttle().allow(user_id, channel_id):
+                    await send_handoff_notice(
+                        self.bot,
+                        message.channel,
+                        guild=message.guild,
+                    )
             return
 
         video_match = VIDEOS_RE.search(message.content)

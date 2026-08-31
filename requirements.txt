@@ -44,6 +44,8 @@ cryptography==49.0.0
     # via -r requirements.in
 curl-cffi==0.15.0
     # via -r requirements.in
+davey==0.1.6
+    # via -r requirements.in
 defusedxml==0.7.1
     # via -r requirements.in
 deno==2.9.3
@@ -63,6 +65,8 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
+geonamescache==3.0.2
+    # via -r requirements.in
 greenlet==3.5.3
     # via playwright
 h11==0.16.0
@@ -76,8 +80,6 @@ import-expression==2.2.1.post1
 jishaku==2.7.5
     # via -r requirements.in
 lru-dict==1.4.1
-    # via -r requirements.in
-lxml==6.1.1
     # via -r requirements.in
 markdown-it-py==4.2.0
     # via rich
@@ -116,6 +118,8 @@ pydantic==2.13.4
 pydantic-core==2.46.4
     # via pydantic
 pycountry==24.6.1
+    # via -r requirements.in
+PyNaCl==1.5.0
     # via -r requirements.in
 pyee==13.0.1
     # via playwright

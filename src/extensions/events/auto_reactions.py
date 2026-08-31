@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 
 if TYPE_CHECKING:
     pass
@@ -13,6 +14,10 @@ if TYPE_CHECKING:
 
 class Reactions(Cog):
     async def add_reactions(self, message: discord.Message):
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(message):
+            return
         if message.guild is None:
             return
 

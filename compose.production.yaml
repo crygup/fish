@@ -12,6 +12,11 @@ services:
       FISHIE_CREDENTIAL_KEY_FILE: /run/secrets/credential.key
       FISHIE_USER_BADGES_PATH: /app/data/user_badges.json
       FISHIE_API_HOST: 127.0.0.1
+      # The legacy process stays online only long enough to direct users to
+      # the replacement application.  The API is owned by the new process so
+      # OAuth always uses the replacement client credentials.
+      FISHIE_BOT_INSTANCE: legacy
+      FISHIE_API_ENABLED: "false"
       FISHIE_TRUSTED_PROXIES: ${FISHIE_TRUSTED_PROXIES:-127.0.0.1,::1}
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/.cache
@@ -24,6 +29,57 @@ services:
       - ./src/files/data:/app/data
       - ./src/files/downloads:/app/src/files/downloads
       - ./discord.log:/app/discord.log
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    healthcheck:
+      disable: true
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1g
+    shm_size: 1g
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  fishie-new:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "${FISHIE_UID:?set FISHIE_UID}:${FISHIE_GID:?set FISHIE_GID}"
+    network_mode: host
+    environment:
+      FISHIE_CONFIG: /run/secrets/config.toml
+      FISHIE_CREDENTIAL_KEY_FILE: /run/secrets/credential.key
+      FISHIE_USER_BADGES_PATH: /app/data/user_badges.json
+      FISHIE_BOT_INSTANCE: new
+      FISHIE_API_ENABLED: "true"
+      FISHIE_API_HOST: 127.0.0.1
+      # Keep the website's existing API endpoint on port 8001, now served by
+      # the replacement bot.  The legacy service above has API disabled.
+      FISHIE_API_PORT: "8001"
+      FISHIE_TRUSTED_PROXIES: ${FISHIE_TRUSTED_PROXIES:-127.0.0.1,::1}
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+      TZ: Europe/Berlin
+      # The replacement log is process-local so two RotatingFileHandlers
+      # never contend over the same host file.
+      FISHIE_LOG_PATH: /tmp/discord-new.log
+    volumes:
+      - ./src:/app/src:ro
+      - ./config.toml:/run/secrets/config.toml:ro
+      - ./src/files/secrets/credential.key:/run/secrets/credential.key:ro
+      - ./src/files/cookies:/app/src/files/cookies:ro
+      - ./src/files/data:/app/data
+      - ./src/files/downloads:/app/src/files/downloads
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     healthcheck:

@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Optional
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 
 if TYPE_CHECKING:
     pass
@@ -23,6 +24,8 @@ class Pokemon(Cog):
         method: str,
         guild_id: Optional[int] = None,
     ) -> None:
+        if is_legacy_instance(self.bot):
+            return
         if self.bot.db_cache.user_tracking_opted_out(user_id, "pokemon"):
             return
         sql = """
@@ -68,6 +71,10 @@ class Pokemon(Cog):
 
     @commands.Cog.listener("on_message")
     async def on_pokemon(self, message: discord.Message):
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(message):
+            return
         if message.author.id != POKETWO_ID:
             return
 

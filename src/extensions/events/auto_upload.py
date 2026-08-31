@@ -18,7 +18,8 @@ from urllib.parse import urlsplit
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
+from core.handoff import is_legacy_instance
 from utils.converters import MediaConverter
 from utils.downloads import (
     DIRECT_MEDIA_HOSTS,
@@ -100,9 +101,7 @@ class AutoUpload(Cog):
                 if bool(values.get(key, True))
             }
         if isinstance(values, (set, frozenset, list, tuple)):
-            return {
-                key for key in ("images", "gifs", "videos") if key in values
-            }
+            return {key for key in ("images", "gifs", "videos") if key in values}
         # Existing settings and newly-created channels default to all three
         # media types.  This also keeps the event compatible while a guild's
         # settings panel is being upgraded.
@@ -119,9 +118,13 @@ class AutoUpload(Cog):
             if not isinstance(value, str):
                 return
             try:
-                url = normalize_download_url(value.strip().strip("<>").rstrip(
-                    ".,!?;:'\"`]}",
-                ))
+                url = normalize_download_url(
+                    value.strip()
+                    .strip("<>")
+                    .rstrip(
+                        ".,!?;:'\"`]}",
+                    )
+                )
             except (TypeError, ValueError):
                 return
             if not _is_media_candidate_url(url):
@@ -193,9 +196,7 @@ class AutoUpload(Cog):
         while history and history[0][0] < cutoff:
             history.popleft()
         recent_30 = sum(
-            amount
-            for stamp, amount in history
-            if stamp >= now - SPAM_WINDOW_SECONDS
+            amount for stamp, amount in history if stamp >= now - SPAM_WINDOW_SECONDS
         )
         recent_300 = sum(amount for _stamp, amount in history)
         return recent_30, recent_300
@@ -251,6 +252,10 @@ class AutoUpload(Cog):
             self.bot.logger.debug("Could not warn auto-upload user", exc_info=True)
 
     async def _handle(self, message: discord.Message) -> None:
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(message):
+            return
         if message.author.bot or message.channel.id not in getattr(
             self.bot.db_cache, "auto_uploads", set()
         ):
@@ -293,9 +298,7 @@ class AutoUpload(Cog):
                 "You are uploading media too quickly. Auto-uploads are paused "
                 "for you for 5 minutes.",
             )
-            await self._upload_log(
-                message, count_30=count_30, count_300=count_300
-            )
+            await self._upload_log(message, count_30=count_30, count_300=count_300)
             return
 
         bucket = self.upload_cd_mapping.get_bucket(message)

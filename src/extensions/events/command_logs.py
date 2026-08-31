@@ -5,7 +5,9 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from core import SILENT_COMMAND_USERS, Cog
+from core import SILENT_COMMAND_USERS, Cog, is_operational_guild
+from core.badges import schedule_stat_badge_refresh
+from core.handoff import is_legacy_instance
 
 if TYPE_CHECKING:
     from context import Context
@@ -38,10 +40,18 @@ class CommandLogs(Cog):
             command_name,
             discord.utils.utcnow(),
         )
+        schedule_stat_badge_refresh(self.bot)
 
     @commands.Cog.listener("on_command")
     async def on_command(self, ctx: Context):
         if ctx.command is None:
+            return
+        # The legacy application only presents the replacement notice during
+        # the migration window.  Do not count those attempts as real command
+        # usage or let them influence command badges/statuses.
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(ctx.guild):
             return
         if ctx.author.id in SILENT_COMMAND_USERS.get(
             ctx.command.qualified_name.casefold(), frozenset()
@@ -60,6 +70,10 @@ class CommandLogs(Cog):
     async def on_command_completion(self, ctx: Context):
         if ctx.command is None:
             return
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(ctx.guild):
+            return
         message = getattr(ctx, "message", None)
         channel = getattr(ctx, "channel", None)
         await self._record_command(
@@ -76,6 +90,10 @@ class CommandLogs(Cog):
     async def on_app_command_completion(self, interaction, command) -> None:
         """Record slash commands with the same qualified names as text commands."""
 
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(interaction.guild_id):
+            return
         qualified_name = command.qualified_name.casefold()
         await self._record_command(
             user_id=interaction.user.id,

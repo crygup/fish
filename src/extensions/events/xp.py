@@ -6,8 +6,9 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from core import Cog
+from core import Cog, is_operational_guild
 from core.cache import REPUTATION_BONUS_GUILD_ID, REPUTATION_BONUS_USER_ID
+from core.handoff import is_legacy_instance
 
 if TYPE_CHECKING:
     pass
@@ -23,6 +24,8 @@ class XPCog(Cog):
     REPUTATION_GUILD_ID = REPUTATION_BONUS_GUILD_ID
 
     async def add_xp(self, message: discord.Message, amount: int | None = None):
+        if is_legacy_instance(self.bot):
+            return
         if amount is None:
             amount = random.randint(10, 20)
 
@@ -45,6 +48,10 @@ class XPCog(Cog):
 
     @commands.Cog.listener("on_message")
     async def xp_message(self, message: discord.Message):
+        if is_legacy_instance(self.bot):
+            return
+        if is_operational_guild(message):
+            return
         if message.author.bot:
             return
         if self.bot.db_cache.user_tracking_opted_out(message.author.id, "xp"):

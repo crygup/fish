@@ -28,6 +28,9 @@ USER_ID_TABLES = (
     "fishing_accounts",
     "pokemon_solves",
     "mudae_dm_consent",
+    "mudae_wishes",
+    "notify_twitch_follows",
+    "notify_anime_follows",
     "phone_consent",
     "download_stats",
     "download_events",
@@ -43,10 +46,22 @@ USER_ID_TABLES = (
     "wordle_games",
     "wordle_stats",
     "streak_game_stats",
+    "wordbomb_stats",
     "video_aliases",
     "video_library_blocks",
     "video_library_hides",
     "user_badges",
+    "user_titles",
+    "user_colors",
+    "user_profiles",
+    "guild_protection_locks",
+    "currency_transactions",
+    "currency_claims",
+    "currency_daily_rewards",
+    "currency_wagers",
+    "currency_gambling_stats",
+    "currency_wallets",
+    "lottery_tickets",
 )
 
 GUILD_ID_TABLES = (
@@ -71,14 +86,18 @@ GUILD_ID_TABLES = (
     "highlights",
     "twitch_follows",
     "twitch_announcement_deliveries",
+    "notify_twitch_follows",
+    "notify_anime_follows",
     "youtube_follows",
     "youtube_announcement_deliveries",
     "pinboard_pins",
     "pokemon_solves",
+    "mudae_wishes",
     "download_events",
     "mudae_timers",
     "mudae_subs",
     "mudae_channels",
+    "mudae_series_bundles",
     "honeypot_channels",
     "corn_reacts",
     "tags",
@@ -92,6 +111,11 @@ GUILD_ID_TABLES = (
     "reaction_logs",
     "wordle_games",
     "user_rep_logs",
+    "guild_boards",
+    "guild_protection",
+    "guild_protection_triggers",
+    "guild_protection_incidents",
+    "guild_protection_locks",
 )
 
 
@@ -122,6 +146,8 @@ async def erase_user(connection: Any, user_id: int) -> int:
         ("channel_locks", "locked_by"),
         ("global_user_blocks", "blocked_by"),
         ("global_command_disables", "disabled_by"),
+        ("guild_protection_incidents", "actor_id"),
+        ("lottery_rounds", "winner_user_id"),
     ):
         deleted += _count(
             await connection.execute(
@@ -185,6 +211,41 @@ async def erase_user(connection: Any, user_id: int) -> int:
     deleted += _count(
         await connection.execute(
             "DELETE FROM reaction_logs WHERE receiver_id = $1 OR giver_id = $1",
+            user_id,
+        )
+    )
+    # Board posts retain the source author so deleting a user must remove
+    # those mirrored messages as well. Board block rows also identify both
+    # the blocked user and the moderator who created the block.
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM guild_board_entries WHERE source_author_id = $1",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            """DELETE FROM guild_board_blocks
+               WHERE (target_type = 'user' AND target_id = $1)
+                  OR blocked_by = $1""",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            "UPDATE guild_boards SET emoji_set_by = NULL WHERE emoji_set_by = $1",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            "UPDATE guild_protection SET configured_by = NULL WHERE configured_by = $1",
+            user_id,
+        )
+    )
+    deleted += _count(
+        await connection.execute(
+            "UPDATE guild_protection SET updated_by = NULL WHERE updated_by = $1",
             user_id,
         )
     )
@@ -291,6 +352,20 @@ async def erase_guild(connection: Any, guild_id: int) -> int:
                     row["total"],
                 )
             )
+
+    # ``mudae_series`` is keyed by its bundle rather than directly by a
+    # guild.  Remove the child rows explicitly before deleting their parent
+    # bundles (the production schema also has an ON DELETE CASCADE, while the
+    # explicit query keeps this correct for older installations).
+    deleted += _count(
+        await connection.execute(
+            """DELETE FROM mudae_series
+               WHERE bundle_id IN (
+                   SELECT id FROM mudae_series_bundles WHERE guild_id = $1
+               )""",
+            guild_id,
+        )
+    )
 
     for table in GUILD_ID_TABLES:
         deleted += _count(

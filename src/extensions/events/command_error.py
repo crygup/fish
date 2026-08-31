@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import sys
 import traceback
 from typing import TYPE_CHECKING
@@ -7,7 +8,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from core import SILENT_COMMAND_USERS, Cog
+from core import SILENT_COMMAND_USERS, Cog, is_operational_guild
 from utils import ignored_errors
 
 if TYPE_CHECKING:
@@ -16,6 +17,15 @@ if TYPE_CHECKING:
 
 class CommandErrors(Cog):
     error_logs: discord.Webhook
+
+    @staticmethod
+    def _cooldown_message(retry_after: float) -> str:
+        """Render cooldown expiry as Discord's relative timestamp."""
+
+        expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+            seconds=max(0.0, float(retry_after))
+        )
+        return f"You are on cooldown. Try again {discord.utils.format_dt(expires_at, 'R')}."
 
     @commands.Cog.listener("on_command_error")
     async def on_command_error(self, ctx: Context, error: commands.CommandError):
@@ -56,18 +66,33 @@ class CommandErrors(Cog):
         #     return
 
         try:
-            error_str = self.bot.redact(str(error))
-            await ctx.send(error_str)
+            if isinstance(error, commands.CommandOnCooldown):
+                error_str = self._cooldown_message(error.retry_after)
+            else:
+                error_str = self.bot.redact(str(error))
+            await ctx.send(
+                error_str,
+                allowed_mentions=discord.AllowedMentions.none(),
+                ephemeral=ctx.interaction is not None,
+            )
         except Exception as e:
             ctx.bot.logger.error(
                 f"on_command_error handler itself failed: {e.__class__.__name__}: {e}"
             )
             try:
-                await ctx.send("An unexpected error occurred.")
+                await ctx.send(
+                    "An unexpected error occurred.",
+                    ephemeral=ctx.interaction is not None,
+                )
             except Exception:
                 pass
-        await self.bot.log_error(
-            error,
-            context=ctx,
-            interaction=getattr(ctx, "interaction", None),
-        )
+        # The operations guild is reserved for private review/upload work and
+        # is excluded from external error telemetry just like the other event
+        # streams.  Keep the user-facing error above so a failed command still
+        # receives a useful response there.
+        if not is_operational_guild(ctx.guild):
+            await self.bot.log_error(
+                error,
+                context=ctx,
+                interaction=getattr(ctx, "interaction", None),
+            )

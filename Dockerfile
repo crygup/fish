@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ffmpeg \
+        libopus0 \
         fonts-noto-cjk \
         fonts-noto-core \
         fonts-noto-mono \
