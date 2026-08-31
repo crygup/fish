@@ -107,7 +107,15 @@ def _install_guards() -> None:
 
         original_redirect = RedirectHandler.redirect_request
 
-        def guarded_redirect(self: Any, request: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
+        def guarded_redirect(
+            self: Any,
+            request: Any,
+            fp: Any,
+            code: int,
+            msg: str,
+            headers: Any,
+            newurl: str,
+        ) -> Any:
             _guard_url(str(newurl))
             return original_redirect(self, request, fp, code, msg, headers, newurl)
 

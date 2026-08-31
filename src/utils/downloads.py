@@ -1037,7 +1037,9 @@ class Downloader:
             if thumbnail_paths is not None:
                 return thumbnail_paths
 
-        if is_youtube and (blocked_message := _youtube_unavailable_message(last_stderr)):
+        if is_youtube and (
+            blocked_message := _youtube_unavailable_message(last_stderr)
+        ):
             self._cleanup_output()
             self.ctx.bot.logger.warning(
                 "YouTube rejected the video because of a claimed-content block "
@@ -1780,9 +1782,11 @@ class Downloader:
             and (urlsplit(self.url).hostname or "").casefold().rstrip(".")
             in DIRECT_MEDIA_HOSTS
         )
-        is_klipy_media = direct_media_host and (
-            urlsplit(self.url).hostname or ""
-        ).casefold().rstrip(".") == "static.klipy.com"
+        is_klipy_media = (
+            direct_media_host
+            and (urlsplit(self.url).hostname or "").casefold().rstrip(".")
+            == "static.klipy.com"
+        )
         is_site_media = bool(PIXIV_RE.search(self.url) or THREADS_RE.search(self.url))
 
         if is_site_media:

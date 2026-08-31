@@ -867,11 +867,19 @@ def _resize(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
             raise ValueError("Ratio must look like 16:9 or 1:1.") from error
         if ratio_width <= 0 or ratio_height <= 0:
             raise ValueError("Ratio values must be positive.")
-        current_area = max(1, frame.width * frame.height)
-        target_width = max(
-            1, round(math.sqrt(current_area * ratio_width / ratio_height))
-        )
-        target_height = max(1, round(target_width * ratio_height / ratio_width))
+        # Crop to the requested aspect ratio while retaining the largest
+        # possible dimension from the source.  Computing a same-area target
+        # (the old behavior) made extreme ratios such as 1:4 unexpectedly
+        # enlarge the image before cropping it, producing an enormous output
+        # and needlessly discarding detail.
+        target_ratio = ratio_width / ratio_height
+        source_ratio = frame.width / max(1, frame.height)
+        if source_ratio > target_ratio:
+            target_width = max(1, round(frame.height * target_ratio))
+            target_height = frame.height
+        else:
+            target_width = frame.width
+            target_height = max(1, round(frame.width / target_ratio))
         target = ImageOps.fit(
             frame,
             (target_width, target_height),

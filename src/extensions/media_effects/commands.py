@@ -96,6 +96,9 @@ MEDIA_INPUT_DESCRIPTION = "User/Emoji/Media URL"
 MEDIA_EFFECT_TIMEOUT = 60
 MEDIA_APP_COMMAND_LIMIT = 7_600
 MEDIA_APP_COMMAND_ROOT_OVERHEAD = 350
+MEDIA_OUTPUT_FORMATS = frozenset(
+    {"mp4", "mov", "webm", "gif", "mp3", "wav", "ogg", "opus"}
+)
 RANDOM_EFFECTS = (
     "blur",
     "brightness",
@@ -3519,6 +3522,7 @@ class Images(Cog):
             "deepvoice": "Lower voices.",
             "surround": "Widen stereo.",
             "echo": "Add an echo.",
+            "volume": "Change volume.",
         }
         numeric_parameters = {
             "amount",
@@ -3546,15 +3550,19 @@ class Images(Cog):
             for parameter in child.parameters:
                 if parameter.name in {"start", "stop", "at"}:
                     child._params[parameter.name].description = app_commands.locale_str(
-                        "0 to media length"
+                        "Media time"
                     )
                 elif parameter.name in {"source_start", "source_stop"}:
                     child._params[parameter.name].description = app_commands.locale_str(
-                        "0 to source length"
+                        "Source time"
                     )
                 elif parameter.name == "duration":
                     child._params[parameter.name].description = app_commands.locale_str(
-                        "0 = remaining, max media length"
+                        "Length"
+                    )
+                elif parameter.name in {"media", "audio_url"}:
+                    child._params[parameter.name].description = app_commands.locale_str(
+                        "Media"
                     )
                 elif parameter.name in numeric_parameters and " to " in str(
                     parameter.description
@@ -4860,9 +4868,44 @@ class Images(Cog):
         elif attachment is not None:
             image_url = attachment.url
 
+        # A bare first word is ambiguous when a caption is supplied.  For
+        # example, ``caption fish give ...`` can otherwise be interpreted as
+        # the Fishie user's avatar.  When the command replies to a message,
+        # prefer media from that message (including forwarded snapshots) and
+        # keep the entire text as the caption.  Do this explicitly instead of
+        # using ``MediaConverter.convert("")`` so a reply author's avatar is
+        # never used as a silent fallback when the reply has no media.
+        reference = getattr(getattr(ctx, "message", None), "reference", None)
+        reply_checked = reference is not None and not image_url
+        if reply_checked:
+            replied = getattr(reference, "resolved", None)
+            if replied is None and getattr(reference, "message_id", None):
+                try:
+                    replied = await ctx.fetch_message(reference.message_id)
+                except discord.HTTPException:
+                    replied = None
+            if replied is not None:
+                image_url = MediaConverter._message_media_url(replied) or ""
+                if not image_url:
+                    image_url = (
+                        await MediaConverter()._message_content_media_url(ctx, replied)
+                        or ""
+                    )
+
         if not image_url:
             parts = text.split(" ", 1)
-            if len(parts) == 2:
+            first_token = parts[0].strip() if parts else ""
+            explicit_source = bool(
+                first_token
+                and (
+                    _looks_like_url(first_token)
+                    or first_token.startswith(("<@", "<:", "<a:"))
+                    or TwemojiConverter.is_unicode_emoji(first_token)
+                )
+            )
+            # If a reply was supplied and its content had no media, do not
+            # reinterpret an ordinary caption word as a Discord user's avatar.
+            if len(parts) == 2 and (not reply_checked or explicit_source):
                 try:
                     maybe_url = await self._convert_effect_source(
                         ctx, parts[0], include_message_media=False
@@ -4874,7 +4917,7 @@ class Images(Cog):
 
             if not image_url:
                 parts = text.split(" ", 2)
-                if len(parts) >= 2:
+                if len(parts) >= 2 and (not reply_checked or explicit_source):
                     try:
                         maybe_url = await self._convert_effect_source(
                             ctx,
@@ -4886,13 +4929,17 @@ class Images(Cog):
                     except commands.BadArgument:
                         pass
 
-        if not image_url:
+        if not image_url and not reply_checked:
             try:
                 image_url = await self._convert_effect_source(ctx, "")
             except commands.BadArgument as error:
                 raise commands.BadArgument(
                     "No image or video found. Attach one, reply to media, or use a media URL."
                 ) from error
+        if not image_url:
+            raise commands.BadArgument(
+                "No image or video found. Attach one, reply to media, or use a media URL."
+            )
 
         if len(caption_text) > 1000:
             raise commands.BadArgument("Captions are limited to 1,000 characters.")
@@ -5676,14 +5723,38 @@ class Images(Cog):
 
     @commands.command(
         name="shuffle",
-        extras={"usage": "<media> [-start 0 -stop 0]"},
+        extras={"usage": "[media] [-start 0 -stop 0]"},
     )
     async def shuffle(self, ctx: Context, *, argument: str = "") -> None:
-        """Shuffle the frame order of a User/Emoji/Media URL.
+        """Shuffle the voice queue, or the frame order of supplied media.
 
         -# -start   Start the effect at this time in seconds.
         -# -stop    Stop the effect at this time in seconds.
         """
+        # ``shuffle`` is also the established media-frame effect.  Keep that
+        # command intact while making a bare invocation in a voice channel the
+        # queue shuffle requested by Voice Master.  Attachments and replies are
+        # deliberately left on the media path so ``fish shuffle`` still works
+        # for files without requiring an extra argument.
+        message = getattr(ctx, "message", None)
+        has_attachments = bool(getattr(message, "attachments", None))
+        has_reply = getattr(message, "reference", None) is not None
+        author_voice = getattr(getattr(ctx, "author", None), "voice", None)
+        voice_channel = getattr(author_voice, "channel", None)
+        get_cog = getattr(getattr(ctx, "bot", None), "get_cog", None)
+        voice_cog = get_cog("Voice Master") if callable(get_cog) else None
+        shuffle_queue = getattr(voice_cog, "_shuffle_impl", None)
+        if (
+            not argument.strip()
+            and getattr(ctx, "guild", None) is not None
+            and voice_channel is not None
+            and not has_attachments
+            and not has_reply
+            and callable(shuffle_queue)
+        ):
+            await shuffle_queue(ctx)
+            return
+
         media, options = _parse_effect_flags(argument)
         await self._apply_image_effect(ctx, "shuffle", source=media, **options)
 
@@ -6064,7 +6135,9 @@ class Images(Cog):
         ``-format`` to choose another file format. Values can be converted
         between supported currencies, Robux, crypto, stocks, temperatures,
         distances, and time units, for example ``10 usd to pounds``,
-        ``1btc``, ``100 robux``, or ``5m into sec``.
+        ``1btc``, ``100 robux``, or ``5m into sec``. A bare ``100f``/``100c``
+        swaps Fahrenheit and Celsius automatically; specify a target for
+        Kelvin or another unit.
 
         Accepted media output formats:
         - ``mp4``, ``mov``, ``webm``, and ``gif`` for video.
@@ -6088,6 +6161,24 @@ class Images(Cog):
             argument,
             values={"format": (("f",), str, "mp4")},
         )
+        # The text command also accepts the concise ``convert gif`` form.
+        # Without this normalization, ``gif`` is treated as a media source
+        # and the resolver quite correctly rejects it as an unsupported URL;
+        # an attached (or replied-to) video is therefore never reached.
+        # Only consume a positional format when ``-format`` was not supplied,
+        # preserving the existing flag form and allowing URLs/filenames that
+        # happen to contain a format-like token later in the input.
+        if str(options.get("format", "mp4")).casefold() == "mp4" and media:
+            try:
+                positional = shlex.split(media)
+            except ValueError:
+                positional = []
+            if positional and positional[0].casefold() in MEDIA_OUTPUT_FORMATS:
+                options["format"] = positional[0].casefold()
+                # Keep URLs intact. ``shlex.join`` would add shell quotes
+                # around query strings, which would then become part of the
+                # media URL passed to the resolver.
+                media = " ".join(positional[1:])
         await self._convert_effect(ctx, str(options["format"]), source=media)
 
     @commands.command(
@@ -6108,24 +6199,6 @@ class Images(Cog):
         except ConversionError as error:
             raise commands.BadArgument(str(error)) from error
         await ctx.send(result, allowed_mentions=discord.AllowedMentions.none())
-
-    @commands.command(
-        name="volume",
-        extras={"usage": "<media> [-volume 1 -start 0 -stop 0 -duration 0]"},
-    )
-    async def volume(self, ctx: Context, *, argument: str = "") -> None:
-        """Change the volume of a User/Emoji/Media URL.
-
-        -# -volume    Change the volume multiplier. Defaults to 1.
-        -# -start     Start the effect at this time in seconds.
-        -# -stop      Stop the effect at this time in seconds.
-        -# -duration  Apply the effect for this many seconds.
-        """
-        media, options = _parse_effect_flags(
-            argument,
-            values=_audio_values(volume=(("amount", "v"), float, 1.0)),
-        )
-        await self._apply_video_effect(ctx, "volume", source=media, **options)
 
     @commands.group(name="crop", invoke_without_command=True)
     async def crop_group(self, ctx: Context) -> None:
@@ -6299,16 +6372,27 @@ class Images(Cog):
         -# -opacity/-op  Change overlay opacity from 0 to 100%. Defaults to 70.
         -# -fr           Randomize the overlay size and position within the background.
         """
-        if not argument.strip():
+        # With no positional argument, two attachments are a complete overlay
+        # request: the first is the background and the second is the overlay.
+        # Do this check before sending help so attachment-only invocations such
+        # as ``fish overlay`` are handled the same way as URL invocations.
+        if not argument.strip() and len(ctx.message.attachments) < 2:
             await ctx.send_help(ctx.command)
             return
         source, second_source, options = _parse_overlay_text_argument(argument)
         options["overlay_audio"] = not bool(options.pop("no_audio", False))
+        second_attachment = None
+        if not second_source and len(ctx.message.attachments) > 1:
+            # An explicit source (including ``-overlay``) still takes
+            # precedence. Otherwise use the second attachment instead of the
+            # default random overlay.
+            second_attachment = ctx.message.attachments[1]
         await self._apply_image_effect(
             ctx,
             "overlay",
             source=source,
             second_source=second_source,
+            second_attachment=second_attachment,
             **options,
         )
 
@@ -6406,6 +6490,24 @@ class Images(Cog):
     async def audio_group_adhd(self, ctx: Context, *, media: str = "") -> None:
         """Randomly speed up and slow down a User/Emoji/Media URL."""
         await self._apply_video_effect(ctx, "adhd", source=media)
+
+    @audio_group.command(
+        name="volume",
+        extras={"usage": "<media> [-volume 1 -start 0 -stop 0 -duration 0]"},
+    )
+    async def audio_group_volume(self, ctx: Context, *, argument: str = "") -> None:
+        """Change the volume of a User/Emoji/Media URL.
+
+        -# -volume    Change the volume multiplier. Defaults to 1.
+        -# -start     Start the effect at this time in seconds.
+        -# -stop      Stop the effect at this time in seconds.
+        -# -duration  Apply the effect for this many seconds.
+        """
+        media, options = _parse_effect_flags(
+            argument,
+            values=_audio_values(volume=(("amount", "v"), float, 1.0)),
+        )
+        await self._apply_video_effect(ctx, "volume", source=media, **options)
 
     @audio_group.command(
         name="reverse",
@@ -8680,34 +8782,6 @@ class Images(Cog):
             attachments=attachments,
         )
 
-    @image_effect.command(name="volume")
-    @app_commands.describe(
-        volume="Volume multiplier from 0 to 10",
-        media=MEDIA_INPUT_DESCRIPTION,
-        attachment="Attach a video or audio file",
-    )
-    async def video_effects_volume(
-        self,
-        ctx: Context,
-        volume: float,
-        media: str | None = None,
-        attachment: discord.Attachment | None = None,
-        start: float = 0.0,
-        stop: float = 0.0,
-        duration: float = 0.0,
-    ) -> None:
-        """Change the volume of a User/Emoji/Media URL."""
-        await self._apply_video_effect(
-            ctx,
-            "volume",
-            source=media or "",
-            attachment=attachment,
-            volume=volume,
-            start=start,
-            stop=stop,
-            duration=duration,
-        )
-
     @image_effect.group(name="bass", invoke_without_command=True)
     async def video_effects_bass(self, ctx: Context) -> None:
         """Change the bass of a User/Emoji/Media URL."""
@@ -8763,6 +8837,34 @@ class Images(Cog):
     async def video_effects_audio(self, ctx: Context) -> None:
         """Apply an audio effect to a User/Emoji/Media URL."""
         await ctx.send_help(ctx.command)
+
+    @video_effects_audio.command(name="volume")
+    @app_commands.describe(
+        volume="Volume multiplier from 0 to 10",
+        media=MEDIA_INPUT_DESCRIPTION,
+        attachment="Attach a video or audio file",
+    )
+    async def video_effects_audio_volume(
+        self,
+        ctx: Context,
+        volume: float,
+        media: str | None = None,
+        attachment: discord.Attachment | None = None,
+        start: float = 0.0,
+        stop: float = 0.0,
+        duration: float = 0.0,
+    ) -> None:
+        """Change the volume of a User/Emoji/Media URL."""
+        await self._apply_video_effect(
+            ctx,
+            "volume",
+            source=media or "",
+            attachment=attachment,
+            volume=volume,
+            start=start,
+            stop=stop,
+            duration=duration,
+        )
 
     @image_effect.command(name="adhd")
     async def image_effect_adhd(
