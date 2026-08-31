@@ -1,3 +1,5 @@
+import pytest
+
 from core.cache import db_cache
 
 
@@ -58,6 +60,25 @@ def test_account_cache_updates_lastfm_and_anilist_together() -> None:
     assert 42 not in cache.anilist
 
 
+def test_user_color_cache_refreshes_and_validates_values() -> None:
+    cache = db_cache()
+    assert cache.get_user_color(42) is None
+    entry = cache.set_user_color(42, "custom", "#12abEF")
+    assert entry == {"color_key": "custom", "hex_value": "#12ABEF"}
+    assert cache.get_user_color(42) == entry
+
+    cache.refresh_user_color(42, "white", "0xFFFFFF")
+    assert cache.get_user_color(42) == {
+        "color_key": "white",
+        "hex_value": "#FFFFFF",
+    }
+    cache.refresh_user_color(42, None)
+    assert cache.get_user_color(42, {"color_key": "normal"}) == {"color_key": "normal"}
+
+    with pytest.raises(ValueError):
+        cache.set_user_color(42, "custom", "not-a-color")
+
+
 def test_global_tracking_and_history_settings_are_separate() -> None:
     cache = db_cache()
     cache.add_opt_out(42, "avatar")
@@ -104,3 +125,50 @@ def test_reaction_tracking_is_explicit_and_respects_global_disable() -> None:
     cache.tracking_disabled_users.remove(42)
     cache.disable_reaction_tracking(42)
     assert not cache.reaction_tracking_enabled(42)
+
+
+def test_board_cache_tracks_configs_and_keeps_emojis_distinct() -> None:
+    cache = db_cache()
+    starboard = cache.set_board(1, "starboard", 10)
+    clownboard = cache.set_board(
+        1,
+        "clownboard",
+        20,
+        emoji_name="party_clown",
+        emoji_id=99,
+        emoji_set_by=42,
+    )
+
+    assert starboard.emoji_display == "⭐"
+    assert clownboard.emoji_display == "<:party_clown:99>"
+    assert cache.get_board(1, "STARBOARD") == starboard
+    assert cache.board_default_emoji_is_available(1, "clownboard")
+    updated = cache.update_board(1, "starboard", threshold=5, enabled=False)
+    assert updated.threshold == 5
+    assert not updated.enabled
+
+    with pytest.raises(ValueError, match="cannot use the same emoji"):
+        cache.set_board(1, "clownboard", 20, emoji_name="⭐")
+
+    fallback_cache = db_cache()
+    fallback_cache.set_board(1, "starboard", 10, emoji_name="old_star", emoji_id=100)
+    fallback_cache.set_board(1, "clownboard", 20, emoji_name="⭐")
+    assert not fallback_cache.board_default_emoji_is_available(1, "starboard")
+
+
+def test_board_cache_tracks_user_and_channel_blocks_separately() -> None:
+    cache = db_cache()
+    cache.set_board(1, "starboard", 10)
+    cache.add_board_block(1, "starboard", "user", 42)
+    cache.add_board_block(1, "starboard", "channel", 20)
+
+    assert cache.board_message_is_blocked(1, "starboard", author_id=42, channel_id=99)
+    assert cache.board_message_is_blocked(1, "starboard", author_id=99, channel_id=20)
+    assert not cache.board_message_is_blocked(
+        1, "starboard", author_id=99, channel_id=98
+    )
+
+    cache.remove_board_block(1, "starboard", "user", 42)
+    assert not cache.is_board_blocked(1, "starboard", "user", 42)
+    cache.remove_board(1, "starboard")
+    assert cache.board_blocks == {}

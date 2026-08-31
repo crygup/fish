@@ -16,6 +16,8 @@ from extensions.tools.calculator import (
         ("comb(10, 2) + factorial(5)", 165),
         ("clamp(-4, 0, 10) + gcd(24, 18)", 6),
         ("2×3 + 8÷4", 8.0),
+        ("2x3 + 4 X -1", 2),
+        ("2 x sqrt(9)", 6.0),
     ],
 )
 def test_evaluate_math_expression(expression: str, expected: int | float) -> None:

@@ -58,6 +58,41 @@ def test_migrations_are_unique_and_have_content_checksums() -> None:
         49,
         50,
         51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
     ]
     assert len({item.checksum for item in migrations}) == len(migrations)
     assert all(len(item.checksum) == 64 for item in migrations)
@@ -72,7 +107,9 @@ def test_schema_no_longer_runs_from_bot_startup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_known_legacy_baseline_checksum_is_retained_for_existing_databases() -> None:
+async def test_known_legacy_baseline_checksum_is_retained_for_existing_databases() -> (
+    None
+):
     migrations = available_migrations()
     legacy_checksum = next(iter(LEGACY_BASELINE_CHECKSUMS))
 
@@ -84,9 +121,11 @@ async def test_known_legacy_baseline_checksum_is_retained_for_existing_databases
             return [
                 {
                     "version": migration.version,
-                    "checksum": legacy_checksum
-                    if migration.version == 1
-                    else migration.checksum,
+                    "checksum": (
+                        legacy_checksum
+                        if migration.version == 1
+                        else migration.checksum
+                    ),
                     "name": migration.name,
                 }
                 for migration in migrations
@@ -107,9 +146,9 @@ async def test_unknown_baseline_checksum_is_rejected() -> None:
             return [
                 {
                     "version": migration.version,
-                    "checksum": "0" * 64
-                    if migration.version == 1
-                    else migration.checksum,
+                    "checksum": (
+                        "0" * 64 if migration.version == 1 else migration.checksum
+                    ),
                     "name": migration.name,
                 }
                 for migration in migrations
@@ -132,6 +171,242 @@ def test_hourly_post_intervals_migration_adds_schedule_columns() -> None:
     assert migration.name == "hourly_post_intervals"
     assert "interval_minutes" in migration.sql
     assert "next_post_at" in migration.sql
+
+
+def test_message_boards_migration_tracks_settings_entries_and_blocks() -> None:
+    migration = next(item for item in available_migrations() if item.version == 52)
+    assert migration.name == "message_boards"
+    assert "CREATE TABLE IF NOT EXISTS guild_boards" in migration.sql
+    assert "board_type IN ('starboard', 'clownboard')" in migration.sql
+    assert "threshold INTEGER NOT NULL DEFAULT 3" in migration.sql
+    assert "allow_nsfw BOOLEAN NOT NULL DEFAULT TRUE" in migration.sql
+    assert "guild_boards_custom_emoji_unique_idx" in migration.sql
+    assert "guild_boards_unicode_emoji_unique_idx" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS guild_board_entries" in migration.sql
+    assert "guild_board_entries_message_unique_idx" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS guild_board_blocks" in migration.sql
+    assert "target_type IN ('user', 'channel')" in migration.sql
+
+
+def test_notify_migration_supports_guild_and_dm_follows() -> None:
+    migration = next(item for item in available_migrations() if item.version == 83)
+    assert migration.name == "notify_subscriptions"
+    assert "CREATE TABLE IF NOT EXISTS notify_twitch_follows" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS notify_anime_follows" in migration.sql
+    assert "notify_twitch_owner_check" in migration.sql
+    assert "notify_anime_owner_check" in migration.sql
+    assert "mention_role_id" in migration.sql
+    assert "next_airing_at" in migration.sql
+    assert "INSERT INTO notify_twitch_follows" in migration.sql
+
+
+def test_notify_scope_migration_deduplicates_and_uniquifies_follows() -> None:
+    migration = next(item for item in available_migrations() if item.version == 84)
+    assert migration.name == "notify_one_follow_per_scope"
+    assert "row_number() OVER" in migration.sql
+    assert "DROP INDEX IF EXISTS notify_anime_guild_key_idx" in migration.sql
+    assert "lower(btrim(channel_name))" in migration.sql
+    assert "CREATE UNIQUE INDEX notify_twitch_guild_key_idx" in migration.sql
+    assert "CREATE UNIQUE INDEX notify_twitch_user_key_idx" in migration.sql
+    assert "CREATE UNIQUE INDEX notify_anime_guild_key_idx" in migration.sql
+    assert "UPDATE twitch_follows AS legacy" in migration.sql
+
+
+def test_mudae_series_metadata_migration_adds_stable_ids_and_scrape_tables() -> None:
+    migration = next(item for item in available_migrations() if item.version == 85)
+    assert migration.name == "mudae_series_metadata"
+    assert "mudae_wishes_id_seq" in migration.sql
+    assert "mudae_wishes_id_idx" in migration.sql
+    assert "bundle_created_at" in migration.sql
+    assert "source_guild_id" in migration.sql
+    assert "kakera_threshold" in migration.sql
+    assert "mudae_auto_scrape_series" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS mudae_series_bundles" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS mudae_series" in migration.sql
+    assert "UNIQUE (bundle_id, normalized_name)" in migration.sql
+
+
+def test_title_shop_expansion_migration_adds_categories_prices_and_stands() -> None:
+    migration = next(item for item in available_migrations() if item.version == 86)
+    assert migration.name == "title_shop_expansion"
+    assert "ADD COLUMN IF NOT EXISTS category" in migration.sql
+    assert "('custom_title', 'Custom Title', 1000000000" in migration.sql
+    assert "('star_platinum', 'Star Platinum', 5000000" in migration.sql
+    assert "('light_rod', 'Light Rod', 25000000" in migration.sql
+    assert "SET price = 10000000000" in migration.sql
+
+
+def test_message_xp_migration_adds_leaderboard_index() -> None:
+    migration = next(item for item in available_migrations() if item.version == 54)
+    assert migration.name == "message_xp_leaderboard_index"
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS message_xp_leaderboard_idx" in (
+        migration.sql
+    )
+    assert "ON message_xp (xp DESC, user_id ASC)" in migration.sql
+
+
+def test_badge_shop_expansion_migration_adds_titles_and_emoji_badges() -> None:
+    migration = next(item for item in available_migrations() if item.version == 67)
+    assert migration.name == "badge_shop_expansion"
+    assert "purchase:custom_title" in migration.sql
+    assert "purchase:smiling_imp" in migration.sql
+    assert "display_name = 'Hamsa'" in migration.sql
+    assert "display_name = '#1 Connect4 Hard Mode Winner'" in migration.sql
+
+
+def test_titles_migration_separates_titles_from_badges() -> None:
+    migration = next(item for item in available_migrations() if item.version == 68)
+    assert migration.name == "titles"
+    assert "CREATE TABLE IF NOT EXISTS title_catalog" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS user_titles" in migration.sql
+    assert "UPDATE badge_catalog" in migration.sql
+    assert "migrated to user_titles" in migration.sql
+
+
+def test_title_equipping_migration_adds_single_equipped_title_state() -> None:
+    migration = next(item for item in available_migrations() if item.version == 69)
+    assert migration.name == "title_equipping"
+    assert "ADD COLUMN IF NOT EXISTS equipped BOOLEAN" in migration.sql
+    assert "user_titles_one_equipped_idx" in migration.sql
+    assert "ORDER BY user_id, purchased_at DESC" in migration.sql
+
+
+def test_currency_colors_migration_adds_equipped_user_colors() -> None:
+    migration = next(item for item in available_migrations() if item.version == 70)
+    assert migration.name == "currency_colors"
+    assert "CREATE TABLE IF NOT EXISTS color_catalog" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS user_colors" in migration.sql
+    assert "user_colors_one_equipped_idx" in migration.sql
+
+
+def test_guild_protection_migration_adds_settings_triggers_and_incidents() -> None:
+    migration = next(item for item in available_migrations() if item.version == 55)
+    assert migration.name == "guild_protection"
+    assert "CREATE TABLE IF NOT EXISTS guild_protection" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS guild_protection_triggers" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS guild_protection_incidents" in migration.sql
+    assert "response_mode IN ('warn', 'lock', 'both')" in migration.sql
+    assert "ON DELETE CASCADE" in migration.sql
+
+
+def test_guild_protection_lock_migration_saves_roles_for_unlocking() -> None:
+    migration = next(item for item in available_migrations() if item.version == 56)
+    assert migration.name == "guild_protection_locks"
+    assert "CREATE TABLE IF NOT EXISTS guild_protection_locks" in migration.sql
+    assert "role_ids BIGINT[]" in migration.sql
+
+
+def test_currency_migration_adds_wallets_claims_caps_and_wagers() -> None:
+    migration = next(item for item in available_migrations() if item.version == 57)
+    assert migration.name == "currency"
+    assert "CREATE TABLE IF NOT EXISTS currency_wallets" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS currency_transactions" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS currency_claims" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS currency_daily_rewards" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS currency_wagers" in migration.sql
+    assert "claim_type IN ('daily', 'weekly')" in migration.sql
+    assert "stake BETWEEN 1 AND 100" in migration.sql
+
+
+def test_currency_claim_streak_migration_adds_streak_columns() -> None:
+    migration = next(item for item in available_migrations() if item.version == 59)
+    assert migration.name == "currency_claim_streaks"
+    assert "ADD COLUMN IF NOT EXISTS streak" in migration.sql
+    assert "ADD COLUMN IF NOT EXISTS streak_bonus_amount" in migration.sql
+
+
+def test_mudae_wishes_migration_persists_per_server_filters() -> None:
+    migration = next(item for item in available_migrations() if item.version == 60)
+    assert migration.name == "mudae_wishes"
+    assert "CREATE TABLE IF NOT EXISTS mudae_wishes" in migration.sql
+    assert "wish_type IN ('character', 'series', 'kakera')" in migration.sql
+    assert "PRIMARY KEY (guild_id, user_id, wish_type, wish_value)" in migration.sql
+
+
+def test_wordbomb_migration_tracks_wins_and_losses() -> None:
+    migration = next(item for item in available_migrations() if item.version == 61)
+    assert migration.name == "wordbomb_stats"
+    assert "CREATE TABLE IF NOT EXISTS wordbomb_stats" in migration.sql
+    assert "wins BIGINT" in migration.sql
+    assert "losses BIGINT" in migration.sql
+
+
+def test_wordbomb_words_migration_tracks_custom_dictionary_entries() -> None:
+    migration = next(item for item in available_migrations() if item.version == 62)
+    assert migration.name == "wordbomb_words"
+    assert "CREATE TABLE IF NOT EXISTS wordbomb_custom_words" in migration.sql
+    assert "added_by BIGINT" in migration.sql
+
+
+def test_badges_migration_adds_catalog_and_purchase_metadata() -> None:
+    migration = next(item for item in available_migrations() if item.version == 63)
+    assert migration.name == "badges"
+    assert "badge_source" in migration.sql
+    assert "purchase_price" in migration.sql
+    assert "purchase_guild_id" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS badge_catalog" in migration.sql
+    assert "stat:corn_receiver" in migration.sql
+    assert "purchase:custom" in migration.sql
+
+
+def test_wager_stake_limit_migration_raises_cap_to_500() -> None:
+    migration = next(item for item in available_migrations() if item.version == 65)
+    assert migration.name == "wager_stake_limit"
+    assert "currency_wagers_stake_limit_check" in migration.sql
+    assert "CHECK (stake BETWEEN 1 AND 500)" in migration.sql
+
+
+def test_slots_wager_limit_migration_raises_database_cap_to_1000() -> None:
+    migration = next(item for item in available_migrations() if item.version == 76)
+    assert migration.name == "slots_wager_limit"
+    assert "DROP CONSTRAINT IF EXISTS currency_wagers_stake_limit_check" in (
+        migration.sql
+    )
+    assert "CHECK (stake BETWEEN 1 AND 1000)" in migration.sql
+
+
+def test_game_wager_limit_migration_uses_common_game_range() -> None:
+    migration = next(item for item in available_migrations() if item.version == 78)
+    assert migration.name == "game_wager_limit"
+    assert "DROP CONSTRAINT IF EXISTS currency_wagers_stake_limit_check" in (
+        migration.sql
+    )
+    assert "CHECK (stake BETWEEN 10 AND 2000)" in migration.sql
+
+
+def test_wager_stake_limit_migration_raises_ceiling_to_10000() -> None:
+    migration = next(item for item in available_migrations() if item.version == 79)
+    assert migration.name == "wager_stake_limit"
+    assert "DROP CONSTRAINT IF EXISTS currency_wagers_stake_limit_check" in (
+        migration.sql
+    )
+    assert "CHECK (stake BETWEEN 10 AND 10000)" in migration.sql
+
+
+def test_legacy_game_rewards_migration_splits_unambiguous_game_sources() -> None:
+    migration = next(item for item in available_migrations() if item.version == 82)
+    assert migration.name == "normalize_legacy_game_rewards"
+    assert "game_reward:game_tictactoe_" in migration.sql
+    assert "game_reward:game_connectfour_" in migration.sql
+    assert "candidate_count = 1" in migration.sql
+
+
+def test_currency_gambling_stats_migration_adds_durable_totals() -> None:
+    migration = next(item for item in available_migrations() if item.version == 66)
+    assert migration.name == "currency_gambling_stats"
+    assert "CREATE TABLE IF NOT EXISTS currency_gambling_stats" in migration.sql
+    assert "total_wagered BIGINT" in migration.sql
+    assert "total_earned BIGINT" in migration.sql
+    assert "total_lost BIGINT" in migration.sql
+    assert "wins BIGINT" in migration.sql
+    assert "losses BIGINT" in migration.sql
+
+
+def test_badge_orders_migration_adds_display_order_storage() -> None:
+    migration = next(item for item in available_migrations() if item.version == 64)
+    assert migration.name == "badge_orders"
+    assert "CREATE TABLE IF NOT EXISTS user_badge_orders" in migration.sql
+    assert "badge_keys TEXT[]" in migration.sql
 
 
 def test_owner_controls_migration_tracks_global_restrictions() -> None:
@@ -220,6 +495,13 @@ def test_user_badges_migration_adds_owner_managed_badges() -> None:
     assert "ON CONFLICT (user_id, badge_key)" in migration.sql
 
 
+def test_multiple_user_badges_migration_replaces_single_badge_keys() -> None:
+    migration = next(item for item in available_migrations() if item.version == 53)
+    assert migration.name == "multiple_user_badges"
+    assert "badge_key = 'custom:' || id::text" in migration.sql
+    assert "DROP INDEX IF EXISTS user_badges_user_key_idx" in migration.sql
+
+
 def test_auto_reaction_channels_migration_preserves_existing_targets() -> None:
     migration = next(item for item in available_migrations() if item.version == 50)
     assert migration.name == "auto_reaction_channels"
@@ -290,6 +572,38 @@ def test_streak_games_migration_tracks_personal_bests() -> None:
     assert "higher_or_lower" in migration.sql
     assert "heads_or_tails" in migration.sql
     assert "highest_streak" in migration.sql
+
+
+def test_rock_paper_scissors_streak_migration_extends_shared_game_constraint() -> None:
+    migration = next(item for item in available_migrations() if item.version == 58)
+    assert migration.name == "rock_paper_scissors_streaks"
+    assert "DROP CONSTRAINT IF EXISTS streak_game_stats_game_check" in migration.sql
+    assert "rock_paper_scissors" in migration.sql
+
+
+def test_streak_game_payout_migration_tracks_payout_leaderboards() -> None:
+    migration = next(item for item in available_migrations() if item.version == 71)
+    assert migration.name == "streak_game_payouts"
+    assert "highest_streak_payout" in migration.sql
+    assert "highest_payout" in migration.sql
+    assert "highest_payout_streak" in migration.sql
+    assert "streak_game_stats_payout_leaderboard_idx" in migration.sql
+
+
+def test_lucky_roll_migration_tracks_player_results() -> None:
+    migration = next(item for item in available_migrations() if item.version == 73)
+    assert migration.name == "lucky_roll"
+    assert "CREATE TABLE IF NOT EXISTS lucky_roll_stats" in migration.sql
+    assert "coins_earned BIGINT" in migration.sql
+    assert "coins_lost BIGINT" in migration.sql
+    assert "lucky_roll_stats_leaderboard_idx" in migration.sql
+
+
+def test_racing_emoji_migration_adds_user_ownership_and_equipped_index() -> None:
+    migration = next(item for item in available_migrations() if item.version == 74)
+    assert migration.name == "racing_emojis"
+    assert "CREATE TABLE IF NOT EXISTS user_racing_emojis" in migration.sql
+    assert "user_racing_emojis_one_equipped_idx" in migration.sql
 
 
 def test_privacy_migration_preserves_existing_data() -> None:
@@ -427,3 +741,15 @@ def test_channel_locks_migration_preserves_previous_overwrites() -> None:
     assert "had_overwrite BOOLEAN" in migration.sql
     assert "allow_bits BIGINT" in migration.sql
     assert "deny_bits BIGINT" in migration.sql
+
+
+def test_currency_colors_migration_seeds_presets_and_custom_ownership() -> None:
+    migration = next(item for item in available_migrations() if item.version == 70)
+    assert migration.name == "currency_colors"
+    assert "CREATE TABLE IF NOT EXISTS color_catalog" in migration.sql
+    assert "CREATE TABLE IF NOT EXISTS user_colors" in migration.sql
+    assert "user_colors_one_equipped_idx" in migration.sql
+    assert "('red', 'Red', '#FF0000', 5000)" in migration.sql
+    assert "('white', 'White', '#FFFFFF', 10000)" in migration.sql
+    assert "('black', 'Black', '#000000', 10000)" in migration.sql
+    assert "('custom', 'Custom', '#000000', 25000)" in migration.sql

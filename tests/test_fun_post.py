@@ -48,15 +48,19 @@ def test_tenor_legacy_media_url_has_current_cdn_variants() -> None:
     )
     variants = TenorUrlConverter.media_url_variants(url)
     assert (
-        "https://media.tenor.com/qiDqskwrsKgAAAAM/"
-        "take-your-clothes-off-paulie.gif"
+        "https://media.tenor.com/qiDqskwrsKgAAAAM/" "take-your-clothes-off-paulie.gif"
     ) in variants
 
 
 @pytest.mark.asyncio
 async def test_direct_tenor_media_is_fetched_as_a_post_source() -> None:
     cog = PostCommands()
-    expected = (Path("/tmp/post.gif"), "post.gif", 123, "https://media1.tenor.com/source")
+    expected = (
+        Path("/tmp/post.gif"),
+        "post.gif",
+        123,
+        "https://media1.tenor.com/source",
+    )
     cog._download_post_with_downloader = AsyncMock(  # type: ignore[method-assign]
         return_value=expected
     )

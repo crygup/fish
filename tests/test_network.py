@@ -142,6 +142,7 @@ def test_canonical_media_url_ignores_discord_signature_metadata() -> None:
     assert canonical_media_url(signed) == (
         "https://cdn.discordapp.com/attachments/1/2/file.png"
     )
-    assert canonical_media_url(
-        "https://example.com/file.png?cache=1"
-    ) == "https://example.com/file.png?cache=1"
+    assert (
+        canonical_media_url("https://example.com/file.png?cache=1")
+        == "https://example.com/file.png?cache=1"
+    )

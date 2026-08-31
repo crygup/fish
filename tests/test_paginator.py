@@ -59,6 +59,25 @@ def test_legacy_pager_uses_shared_controls() -> None:
     assert str(controls[4].emoji) == "🗑️"
 
 
+def test_editable_legacy_pager_uses_red_trash() -> None:
+    async def delete_page(_page_number: int) -> bool:
+        return True
+
+    pager = Pager(
+        menus.ListPageSource(["one", "two"], per_page=1),
+        ctx=cast(Any, _context()),
+        delete_page=delete_page,
+    )
+
+    controls = [
+        child for child in pager.children if isinstance(child, discord.ui.Button)
+    ]
+    assert all(
+        button.style is discord.ButtonStyle.secondary for button in controls[:-1]
+    )
+    assert controls[-1].style is discord.ButtonStyle.danger
+
+
 def test_layout_review_paginator_matches_userinfo_structure() -> None:
     pager = LayoutPager(
         ReviewPageSource(_reviews(), user_label="target"),
@@ -139,6 +158,29 @@ def test_userinfo_review_page_uses_shared_source() -> None:
         "#",
         None,
     ]
+
+
+def test_userinfo_index_shows_profile_title_before_mention() -> None:
+    user = SimpleNamespace(
+        id=1,
+        mention="<@1>",
+        bot=False,
+        banner=None,
+        display_avatar=SimpleNamespace(url="https://example.com/avatar.png"),
+    )
+    view = UserView(
+        cast(Any, _context()),
+        cast(Any, user),
+        cast(Any, user),
+        "**Badges:**\n🐟 Fishie",
+        "Footer",
+        profile_title="Dr Pepper test",
+    )
+
+    container = cast(discord.ui.Container, view.children[0])
+    section = cast(discord.ui.Section, container.children[0])
+    body = cast(discord.ui.TextDisplay, section.children[1]).content
+    assert body == "-# Dr Pepper test\n<@1>\n**Badges:**\n🐟 Fishie"
 
 
 def test_layout_pager_defers_before_preparing_a_lazy_page() -> None:

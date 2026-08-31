@@ -58,7 +58,12 @@ def test_media_converter_reads_raw_forwarded_snapshot_payload() -> None:
     }
 
     assert MediaConverter._message_media_url(message) == url
-    assert MediaConverter._attachment_url(message["message_snapshots"][0]["message"]["attachments"][0]) == url
+    assert (
+        MediaConverter._attachment_url(
+            message["message_snapshots"][0]["message"]["attachments"][0]
+        )
+        == url
+    )
 
 
 @pytest.mark.asyncio

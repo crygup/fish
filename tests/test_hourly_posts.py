@@ -9,8 +9,6 @@ def test_hourly_post_media_kind_distinguishes_gifs_from_images() -> None:
 
 def test_hourly_post_kind_enabled_uses_each_media_setting() -> None:
     assert hourly_post_kind_enabled("image", images=True, gifs=False, videos=False)
-    assert not hourly_post_kind_enabled(
-        "gif", images=True, gifs=False, videos=True
-    )
+    assert not hourly_post_kind_enabled("gif", images=True, gifs=False, videos=True)
     assert hourly_post_kind_enabled("video", images=False, gifs=False, videos=True)
     assert not hourly_post_kind_enabled("audio", images=True, gifs=True, videos=True)

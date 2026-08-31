@@ -51,10 +51,10 @@ def test_owner_spotify_controls_are_staged_but_public_catalog_remains() -> None:
     }.isdisjoint(spotify_commands)
 
 
-def test_corn_is_text_only_and_restart_aliases_shutdown() -> None:
+def test_corn_is_text_only_and_shutdown_has_no_voice_command_aliases() -> None:
     assert isinstance(Corn.corn, commands.Group)
     assert not isinstance(Corn.corn, commands.HybridGroup)
     shutdown = next(
         command for command in Owner.__cog_commands__ if command.name == "shutdown"
     )
-    assert "restart" in shutdown.aliases
+    assert "restart" not in shutdown.aliases

@@ -1,10 +1,15 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import pytest
+
+import extensions.fun.connectfour as connectfour
 from extensions.fun.connectfour import (
     COLOR_EMOJIS,
     COLS,
     ROWS,
     ConnectFourBoardView,
+    ConnectFourController,
     ConnectFourGame,
     board_result,
     board_text,
@@ -13,6 +18,8 @@ from extensions.fun.connectfour import (
     has_won,
     new_board,
     next_available_column,
+    other_color,
+    random_starting_color,
 )
 
 
@@ -94,7 +101,7 @@ def test_board_view_places_turn_summary_below_controls() -> None:
         started_by_id=1,
     )
     view = ConnectFourBoardView(game)
-    assert view.footer.content == "🟡 crygup · 🔴 fishie · crygup's turn"
+    assert view.footer.content == "🔴 fishie · 🟡 crygup · crygup's turn"
     assert [type(item).__name__ for item in view.container.children] == [
         "TextDisplay",
         "ActionRow",
@@ -109,6 +116,47 @@ def test_board_view_places_turn_summary_below_controls() -> None:
     game.result = "yellow"
     view.refresh()
     assert not view.rematch.disabled
+
+
+def test_pvp_result_shows_the_winner_wager_pool() -> None:
+    controller = SimpleNamespace(bot=SimpleNamespace(embedcolor=0x123456))
+    game = ConnectFourGame(
+        controller=controller,
+        ctx=None,
+        players={"yellow": 1, "red": 2},
+        names={1: "crygup", 2: "maronely"},
+        against_bot=False,
+        difficulty=None,
+        guild_id=None,
+        channel_id=1,
+        started_by_id=1,
+        result="yellow",
+        pvp_payout=250,
+    )
+    view = ConnectFourBoardView(game)
+
+    assert view.footer.content == "🔴 maronely · 🟡 crygup · crygup wins 250 Coins!"
+
+
+def test_completed_game_shows_awarded_coins() -> None:
+    controller = SimpleNamespace(bot=SimpleNamespace(embedcolor=0x123456))
+    game = ConnectFourGame(
+        controller=controller,
+        ctx=None,
+        players={"yellow": 1, "red": 2},
+        names={1: "player", 2: "Fishie"},
+        against_bot=True,
+        difficulty="normal",
+        guild_id=None,
+        channel_id=1,
+        started_by_id=1,
+        result="yellow",
+        coin_reward=20,
+    )
+
+    view = ConnectFourBoardView(game)
+
+    assert "Earned 20 Coins" in view.footer.content
 
 
 def test_game_records_moves_with_player_and_board_coordinates() -> None:
@@ -130,3 +178,285 @@ def test_game_records_moves_with_player_and_board_coordinates() -> None:
     assert game.move_history == [
         {"color": "yellow", "player_id": 1, "column": 3, "row": 5}
     ]
+
+
+@pytest.mark.parametrize(
+    ("difficulty", "amount", "daily_cap"),
+    (("easy", 50, 10_000), ("normal", 200, 10_000), ("hard", 1_000, 10_000)),
+)
+async def test_bot_win_awards_difficulty_coins_with_a_shared_daily_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    difficulty: str,
+    amount: int,
+    daily_cap: int,
+) -> None:
+    pool = object()
+    controller = ConnectFourController(
+        SimpleNamespace(bot=SimpleNamespace(pool=pool, user=SimpleNamespace(id=2)))
+    )
+    game = ConnectFourGame(
+        controller=controller,
+        ctx=None,
+        players={"yellow": 1, "red": 2},
+        names={1: "player", 2: "Fishie"},
+        against_bot=True,
+        difficulty=difficulty,
+        guild_id=None,
+        channel_id=10,
+        started_by_id=1,
+        result="yellow",
+    )
+    award = AsyncMock(return_value=amount)
+    monkeypatch.setattr(connectfour, "award_daily_capped_coins", award)
+
+    assert await controller.award_bot_win(game) == amount
+    award.assert_awaited_once_with(
+        pool, 1, amount, daily_cap, f"game_connectfour_{difficulty}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("result", "against_bot"),
+    (("red", True), ("draw", True), ("yellow", False)),
+)
+async def test_bot_game_coins_require_a_human_win(
+    monkeypatch: pytest.MonkeyPatch,
+    result: str,
+    against_bot: bool,
+) -> None:
+    controller = ConnectFourController(
+        SimpleNamespace(bot=SimpleNamespace(pool=object(), user=SimpleNamespace(id=2)))
+    )
+    game = ConnectFourGame(
+        controller=controller,
+        ctx=None,
+        players={"yellow": 1, "red": 2},
+        names={1: "player", 2: "Fishie"},
+        against_bot=against_bot,
+        difficulty="easy" if against_bot else None,
+        guild_id=None,
+        channel_id=10,
+        started_by_id=1,
+        result=result,
+    )
+    award = AsyncMock()
+    monkeypatch.setattr(connectfour, "award_daily_capped_coins", award)
+
+    assert await controller.award_bot_win(game) == 0
+    award.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("random_bit", "expected"),
+    ((0, "yellow"), (1, "red")),
+)
+def test_starting_color_uses_each_side_of_a_fair_random_bit(
+    monkeypatch: pytest.MonkeyPatch, random_bit: int, expected: str
+) -> None:
+    monkeypatch.setattr(connectfour.random, "getrandbits", lambda _bits: random_bit)
+
+    assert random_starting_color() == expected
+    assert other_color(expected) != expected
+
+
+async def test_random_player_can_start_as_red_and_records_its_opening_move(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = SimpleNamespace(
+        user=SimpleNamespace(id=2, name="fishie"),
+        embedcolor=0x123456,
+    )
+    controller = ConnectFourController(SimpleNamespace(bot=bot))
+    ctx = SimpleNamespace(
+        author=SimpleNamespace(id=1, name="player"),
+        guild=None,
+        channel=SimpleNamespace(id=10),
+    )
+    send_or_edit = AsyncMock()
+    monkeypatch.setattr(controller, "_send_or_edit", send_or_edit)
+    monkeypatch.setattr(controller, "schedule_timeout", lambda _game: None)
+    # The random draw selects Fishie as player 1, so Fishie receives Red and
+    # opens the game.
+    monkeypatch.setattr(connectfour.random, "getrandbits", lambda _bits: 0)
+    monkeypatch.setattr(connectfour, "choose_ai_move", lambda *_args: 3)
+    monkeypatch.setattr(
+        connectfour.asyncio,
+        "to_thread",
+        AsyncMock(side_effect=lambda function, *args: function(*args)),
+    )
+
+    game = await controller.start_bot_game(ctx, "hard")
+
+    assert game is not None
+    assert game.players == {"red": 2, "yellow": 1}
+    assert game.human_color == "yellow"
+    assert game.bot_color == "red"
+    assert game.bot_id == 2
+    assert game.current_color == "yellow"
+    assert game.board[ROWS - 1][3] == "red"
+    assert game.move_count == 1
+    assert game.move_history == [
+        {"color": "red", "player_id": 2, "column": 3, "row": ROWS - 1}
+    ]
+    assert controller.games == {1: game}
+    send_or_edit.assert_awaited_once()
+
+
+async def test_human_can_start_as_red_without_an_automatic_move(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = SimpleNamespace(
+        user=SimpleNamespace(id=2, name="fishie"),
+        embedcolor=0x123456,
+    )
+    controller = ConnectFourController(SimpleNamespace(bot=bot))
+    ctx = SimpleNamespace(
+        author=SimpleNamespace(id=1, name="player"),
+        guild=None,
+        channel=SimpleNamespace(id=10),
+    )
+    monkeypatch.setattr(controller, "_send_or_edit", AsyncMock())
+    monkeypatch.setattr(controller, "schedule_timeout", lambda _game: None)
+    monkeypatch.setattr(connectfour.random, "getrandbits", lambda _bits: 1)
+
+    game = await controller.start_bot_game(ctx, "hard")
+
+    assert game is not None
+    assert game.players == {"red": 1, "yellow": 2}
+    assert game.current_color == "red"
+    assert game.move_count == 0
+    assert game.move_history == []
+    assert game.board == new_board()
+
+
+async def test_other_bot_uses_its_name_but_keeps_fishie_stats_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = SimpleNamespace(
+        user=SimpleNamespace(id=2, name="fishie"),
+        embedcolor=0x123456,
+    )
+    controller = ConnectFourController(SimpleNamespace(bot=bot))
+    ctx = SimpleNamespace(
+        author=SimpleNamespace(id=1, name="player"),
+        guild=None,
+        channel=SimpleNamespace(id=10),
+    )
+    monkeypatch.setattr(controller, "_send_or_edit", AsyncMock())
+    monkeypatch.setattr(controller, "schedule_timeout", lambda _game: None)
+    # Let the human open so the test does not need to run the AI.
+    monkeypatch.setattr(connectfour.random, "getrandbits", lambda _bits: 1)
+
+    game = await controller.start_bot_game(
+        ctx,
+        "normal",
+        opponent=SimpleNamespace(id=99, name="NotSoBot"),
+    )
+
+    assert game is not None
+    assert game.players == {"red": 1, "yellow": 2}
+    assert game.bot_id == 2
+    assert game.names[game.bot_id] == "NotSoBot"
+    assert "NotSoBot" in ConnectFourBoardView(game).footer.content
+
+
+async def test_player_one_is_randomly_selected_for_player_duels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = SimpleNamespace(embedcolor=0x123456)
+    controller = ConnectFourController(SimpleNamespace(bot=bot))
+    ctx = SimpleNamespace(
+        author=SimpleNamespace(id=1, name="host"),
+        guild=None,
+        channel=SimpleNamespace(id=10),
+    )
+    opponent = SimpleNamespace(id=2, name="opponent")
+    monkeypatch.setattr(controller, "_send_or_edit", AsyncMock())
+    monkeypatch.setattr(controller, "schedule_timeout", lambda _game: None)
+    # The second participant is selected as player 1 for this draw.
+    monkeypatch.setattr(connectfour.random, "getrandbits", lambda _bits: 0)
+
+    game = await controller.start_user_game(ctx, opponent)
+
+    assert game is not None
+    assert game.players == {"red": 2, "yellow": 1}
+    assert game.player_ids == (2, 1)
+    assert game.current_color == "red"
+
+
+async def test_bot_rematch_rerolls_colors_and_plays_when_fishie_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = SimpleNamespace(
+        user=SimpleNamespace(id=2, name="fishie"),
+        embedcolor=0x123456,
+    )
+    controller = ConnectFourController(SimpleNamespace(bot=bot))
+    game = ConnectFourGame(
+        controller=controller,
+        ctx=None,
+        players={"yellow": 1, "red": 2},
+        names={1: "player", 2: "fishie"},
+        against_bot=True,
+        difficulty="hard",
+        guild_id=None,
+        channel_id=10,
+        started_by_id=1,
+        result="yellow",
+        recorded=True,
+    )
+    game.view = ConnectFourBoardView(game)
+    controller._register(game)
+    monkeypatch.setattr(controller, "schedule_timeout", lambda _game: None)
+    monkeypatch.setattr(connectfour.random, "getrandbits", lambda _bits: 0)
+    monkeypatch.setattr(connectfour, "choose_ai_move", lambda *_args: 4)
+    monkeypatch.setattr(
+        connectfour.asyncio,
+        "to_thread",
+        AsyncMock(side_effect=lambda function, *args: function(*args)),
+    )
+    response = SimpleNamespace(
+        is_done=lambda: False,
+        defer=AsyncMock(),
+        edit_message=AsyncMock(),
+    )
+    interaction = SimpleNamespace(response=response, message=SimpleNamespace())
+
+    await controller.restart_game(game, interaction)
+
+    assert game.players == {"red": 2, "yellow": 1}
+    assert game.current_color == "yellow"
+    assert game.result is None
+    assert game.move_history == [
+        {"color": "red", "player_id": 2, "column": 4, "row": ROWS - 1}
+    ]
+    assert game.move_count == 1
+    assert game.recorded is False
+    assert controller.games == {1: game}
+    response.edit_message.assert_awaited_once()
+
+
+async def test_human_red_win_against_yellow_fishie_awards_coins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = object()
+    controller = ConnectFourController(
+        SimpleNamespace(bot=SimpleNamespace(pool=pool, user=SimpleNamespace(id=2)))
+    )
+    game = ConnectFourGame(
+        controller=controller,
+        ctx=None,
+        players={"yellow": 2, "red": 1},
+        names={1: "player", 2: "fishie"},
+        against_bot=True,
+        difficulty="hard",
+        guild_id=None,
+        channel_id=10,
+        started_by_id=1,
+        result="red",
+    )
+    award = AsyncMock(return_value=1_000)
+    monkeypatch.setattr(connectfour, "award_daily_capped_coins", award)
+
+    assert await controller.award_bot_win(game) == 1_000
+    award.assert_awaited_once_with(pool, 1, 1_000, 10_000, "game_connectfour_hard")

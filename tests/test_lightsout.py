@@ -6,12 +6,15 @@ from unittest.mock import AsyncMock
 import discord
 import pytest
 
+import extensions.fun as fun_module
+from extensions.fun import Fun
 from extensions.fun.lightsout import (
     CELL_COUNT,
     OFF_BOARD,
     LightsOutGame,
     LightsOutView,
     affected_indices,
+    completion_payout,
     is_solved,
     press_board,
     scramble_board,
@@ -53,6 +56,16 @@ def test_game_counts_moves_and_stops_after_being_solved() -> None:
     assert game.move_count == 1
     assert not game.press(0)
     assert game.move_count == 1
+
+
+@pytest.mark.parametrize(
+    ("duration", "expected"),
+    ((0, 1000), (300, 505), (600, 10), (601, 10), (3600, 10)),
+)
+def test_completion_payout_scales_to_a_ten_minute_floor(
+    duration: float, expected: int
+) -> None:
+    assert completion_payout(duration) == expected
 
 
 def test_view_builds_five_rows_of_five_buttons() -> None:
@@ -120,3 +133,54 @@ async def test_timeout_disables_the_board_and_runs_cleanup_once() -> None:
     assert game.finished and game.timed_out
     assert all(button.disabled for button in view.buttons)
     on_finish.assert_awaited_once_with(game, True)
+
+
+async def test_solving_lights_out_awards_capped_daily_coins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    game = LightsOutGame(
+        user_id=1,
+        board=OFF_BOARD,
+        finished=True,
+        completed_duration=0,
+    )
+    pool = SimpleNamespace(execute=AsyncMock())
+    cog = SimpleNamespace(
+        _lightsout_games={1: game},
+        bot=SimpleNamespace(
+            pool=pool,
+            db_cache=SimpleNamespace(user_game_tracking_enabled=lambda _user_id: False),
+            logger=SimpleNamespace(exception=AsyncMock()),
+        ),
+    )
+    award = AsyncMock(return_value=10)
+    monkeypatch.setattr(fun_module, "award_daily_capped_coins", award)
+
+    await Fun._finish_lightsout(cast(Any, cog), game, False)
+
+    award.assert_awaited_once_with(pool, 1, 1000, 5000, "lightsout")
+    pool.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("timed_out", (True, False))
+async def test_incomplete_lights_out_does_not_award_coins(
+    monkeypatch: pytest.MonkeyPatch,
+    timed_out: bool,
+) -> None:
+    game = LightsOutGame(user_id=1, board=press_board(OFF_BOARD, 12))
+    pool = SimpleNamespace(execute=AsyncMock())
+    cog = SimpleNamespace(
+        _lightsout_games={1: game},
+        bot=SimpleNamespace(
+            pool=pool,
+            db_cache=SimpleNamespace(user_game_tracking_enabled=lambda _user_id: True),
+            logger=SimpleNamespace(exception=AsyncMock()),
+        ),
+    )
+    award = AsyncMock()
+    monkeypatch.setattr(fun_module, "award_daily_capped_coins", award)
+
+    await Fun._finish_lightsout(cast(Any, cog), game, timed_out)
+
+    award.assert_not_awaited()
+    pool.execute.assert_not_awaited()

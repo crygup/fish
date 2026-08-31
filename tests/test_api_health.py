@@ -114,6 +114,125 @@ def test_activity_is_available_as_an_individual_tracking_opt_out() -> None:
     assert "heads_tails" in api.VALID_OPTOUTS
 
 
+def test_lastfm_state_is_session_bound_and_one_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = SimpleNamespace(config={"keys": {"lastfm_secret": "state-secret"}})
+    monkeypatch.setattr(api, "bot_ref", bot)
+
+    state = api._lastfm_state(
+        42,
+        "website",
+        session_id="session-a",
+        browser_nonce="browser-a",
+    )
+
+    # A callback with the wrong browser credentials must not consume the state
+    # and prevent the legitimate redirect from completing.
+    with pytest.raises(HTTPException) as error:
+        api._decode_lastfm_state(
+            state,
+            session_id="session-b",
+            browser_nonce="browser-a",
+        )
+    assert error.value.status_code == 400
+
+    assert api._decode_lastfm_state(
+        state,
+        session_id="session-a",
+        browser_nonce="browser-a",
+    ) == (42, "website", None, None)
+    with pytest.raises(HTTPException) as error:
+        api._decode_lastfm_state(
+            state,
+            session_id="session-a",
+            browser_nonce="browser-a",
+        )
+    assert error.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("state_factory", "decoder", "prefix", "provider"),
+    [
+        ("_steam_state", "_decode_steam_state", "", "Steam"),
+        ("_spotify_state", "_decode_spotify_state", "spotify_", "Spotify"),
+        ("_anilist_state", "_decode_anilist_state", "anilist_", "AniList"),
+    ],
+)
+def test_account_oauth_states_are_browser_bound_and_one_time(
+    monkeypatch: pytest.MonkeyPatch,
+    state_factory: str,
+    decoder: str,
+    prefix: str,
+    provider: str,
+) -> None:
+    bot = SimpleNamespace(config={"keys": {"spotify_id": "client-id"}})
+    monkeypatch.setattr(api, "bot_ref", bot)
+    create_state = getattr(api, state_factory)
+    decode_state = getattr(api, decoder)
+    state = prefix + create_state(
+        42,
+        "website",
+        session_id="session-a",
+        browser_nonce="browser-a",
+    )
+
+    # A stolen callback state cannot be consumed from another browser.
+    with pytest.raises(HTTPException) as error:
+        decode_state(state, session_id="session-b", browser_nonce="browser-a")
+    assert error.value.status_code == 400
+    assert provider in str(error.value.detail)
+
+    assert decode_state(
+        state, session_id="session-a", browser_nonce="browser-a"
+    ) == (42, "website", None, None)
+    with pytest.raises(HTTPException) as error:
+        decode_state(state, session_id="session-a", browser_nonce="browser-a")
+    assert error.value.status_code == 400
+
+
+def test_twitch_eventsub_non_notification_message_ids_are_replay_protected() -> None:
+    api._twitch_eventsub_replays.clear()
+    assert asyncio.run(api._claim_twitch_eventsub_message("event-1"))
+    assert not asyncio.run(api._claim_twitch_eventsub_message("event-1"))
+
+
+@pytest.mark.asyncio
+async def test_history_user_resolution_negative_result_is_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Cache:
+        known_non_bot_users: set[int] = set()
+
+        def remember_user(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("an unavailable user should not be remembered")
+
+    class Pool:
+        async def fetchval(self, sql: str, *_args: object):
+            assert "history_public" in sql
+            return True
+
+    calls = 0
+
+    async def missing_user(_user_id: int):
+        nonlocal calls
+        calls += 1
+        raise asyncio.TimeoutError
+
+    bot = SimpleNamespace(
+        db_cache=Cache(),
+        get_user=lambda _user_id: None,
+        fetch_user=missing_user,
+    )
+    monkeypatch.setattr(api, "bot_ref", bot)
+    monkeypatch.setattr(api, "_check_pool", lambda: Pool())
+    api._discord_user_negative_cache.clear()
+
+    await api._history_visible_to(987654321, None, None)
+    await api._history_visible_to(987654321, None, None)
+    assert calls == 1
+
+
 @pytest.mark.asyncio
 async def test_private_history_only_allows_the_matching_session(
     monkeypatch,

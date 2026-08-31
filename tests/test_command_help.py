@@ -314,7 +314,7 @@ def test_standalone_media_commands_remain_text_only() -> None:
         Images.overlay_group,
         Images.reverse,
         Images.convert_command,
-        Images.volume,
+        Images.audio_group_volume,
     ):
         assert isinstance(command, commands.Command)
         assert not isinstance(command, commands.HybridCommand)

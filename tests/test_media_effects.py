@@ -75,6 +75,7 @@ from extensions.media_effects.processing import (
     _magik_working_frame,
     _overlay,
     _recursive_zoom_frame,
+    _resize,
     _sample_heavy_animation,
     compress_media_to_size_sync,
     convert_media_sync,
@@ -2176,6 +2177,36 @@ def test_random_text_command_reports_the_selected_effect(
     }
 
 
+def test_overlay_attachment_only_invocation_uses_two_attachments() -> None:
+    called: dict[str, Any] = {}
+    attachments = [object(), object(), object()]
+
+    async def apply_effect(
+        ctx: Any,
+        effect: str,
+        **options: Any,
+    ) -> None:
+        called.update(ctx=ctx, effect=effect, options=options)
+
+    fake_cog = SimpleNamespace(_apply_image_effect=apply_effect)
+    fake_ctx = SimpleNamespace(message=SimpleNamespace(attachments=attachments))
+    callback = cast(Any, Images.overlay_group.callback)
+
+    asyncio.run(
+        callback(
+            cast(Any, fake_cog),
+            cast(Any, fake_ctx),
+            argument="",
+        )
+    )
+
+    assert called["ctx"] is fake_ctx
+    assert called["effect"] == "overlay"
+    assert called["options"]["source"] == ""
+    assert called["options"]["second_source"] == ""
+    assert called["options"]["second_attachment"] is attachments[1]
+
+
 def test_sideways_hallway_command_and_pipeline_effect_are_removed() -> None:
     assert isinstance(Images.hallway, commands.Command)
     assert not isinstance(Images.hallway, commands.Group)
@@ -2191,7 +2222,7 @@ def test_average_colors_text_aliases_are_available() -> None:
 
 
 def test_image_and_video_application_groups_are_within_discord_limits() -> None:
-    assert len(Images.image_effect.commands) == 25
+    assert len(Images.image_effect.commands) == 24
     assert len(Images.effect_2.commands) == 25
     assert len(Images.effect_3.commands) == 19
     assert {command.name for command in Images.image_effect.commands} >= {
@@ -2296,6 +2327,7 @@ def test_image_and_video_application_groups_are_within_discord_limits() -> None:
         "surround",
         "sound-effect",
         "underwater",
+        "volume",
     }
     assert {command.name for command in Images.video_effects_audio.commands} == {
         command.name
@@ -2475,6 +2507,7 @@ def test_every_requested_effect_is_registered_in_the_slash_groups() -> None:
         "audio surround",
         "audio sound-effect",
         "audio underwater",
+        "audio volume",
         "bass boost",
         "bass lower",
         "adhd",
@@ -2499,7 +2532,6 @@ def test_every_requested_effect_is_registered_in_the_slash_groups() -> None:
         "spin",
         "spin3d",
         "swirl",
-        "volume",
         "wiggle",
     }
     assert qualified_children(Images.effect_2) == {
@@ -2847,6 +2879,20 @@ def test_resize_accepts_exact_width_by_height_for_images_and_pipelines() -> None
         )
     ]
     assert skipped == []
+
+
+def test_resize_ratio_crops_without_enlarging_extreme_aspect_ratios() -> None:
+    result = render_image_effect_sync(_png_bytes(), "resize", ratio="1:4")
+    with Image.open(BytesIO(result.data)) as output:
+        # The 32x24 source is cropped to the largest 1:4 rectangle (6x24),
+        # rather than expanded to a same-area 14x56 canvas.
+        assert output.size == (6, 24)
+
+    # Keep the helper's dimensions useful to callers that render individual
+    # frames (and ensure ratio input does not mutate the source image).
+    frame = Image.new("RGBA", (32, 24), (0, 0, 0, 255))
+    resized = _resize(frame, {"ratio": "4:1", "scale": 1})
+    assert resized.size == (32, 8)
 
 
 def test_text_effect_font_catalog_has_fifteen_distinct_ofl_choices() -> None:

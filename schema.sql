@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS anilist_default_media TEXT NOT NULL DEFAULT 'anime';
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS currency_tracking_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 
 CREATE TABLE IF NOT EXISTS user_statuses (
     user_id BIGINT NOT NULL,
@@ -211,6 +212,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     auto_reactions BOOLEAN DEFAULT FALSE,
     auto_reactions_channel BIGINT,
     pinboard BIGINT,
+    mudae_auto_scrape_series BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (guild_id)
 );
 
@@ -262,6 +264,74 @@ CREATE TABLE IF NOT EXISTS guild_hourly_post_blocks (
 
 CREATE INDEX IF NOT EXISTS guild_hourly_post_blocks_user_idx
     ON guild_hourly_post_blocks (user_id, guild_id);
+
+-- Starboard and clownboard share one settings model while remaining
+-- independently configurable.  A missing row means that board has not been
+-- set up in the guild yet.
+CREATE TABLE IF NOT EXISTS guild_boards (
+    guild_id BIGINT NOT NULL,
+    board_type TEXT NOT NULL CHECK (board_type IN ('starboard', 'clownboard')),
+    channel_id BIGINT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    threshold INTEGER NOT NULL DEFAULT 3 CHECK (threshold > 0),
+    allow_nsfw BOOLEAN NOT NULL DEFAULT TRUE,
+    emoji_name TEXT NOT NULL CHECK (length(emoji_name) > 0),
+    emoji_id BIGINT,
+    emoji_animated BOOLEAN NOT NULL DEFAULT FALSE,
+    emoji_set_by BIGINT,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, board_type),
+    CHECK (emoji_id IS NOT NULL OR NOT emoji_animated)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS guild_boards_custom_emoji_unique_idx
+    ON guild_boards (guild_id, emoji_id)
+    WHERE emoji_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS guild_boards_unicode_emoji_unique_idx
+    ON guild_boards (guild_id, emoji_name)
+    WHERE emoji_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS guild_boards_channel_idx
+    ON guild_boards (channel_id, guild_id);
+
+CREATE TABLE IF NOT EXISTS guild_board_entries (
+    guild_id BIGINT NOT NULL,
+    board_type TEXT NOT NULL,
+    source_channel_id BIGINT NOT NULL,
+    source_message_id BIGINT NOT NULL,
+    board_channel_id BIGINT NOT NULL,
+    board_message_id BIGINT NOT NULL,
+    reaction_count INTEGER NOT NULL DEFAULT 0 CHECK (reaction_count >= 0),
+    source_author_id BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, board_type, source_message_id),
+    FOREIGN KEY (guild_id, board_type)
+        REFERENCES guild_boards (guild_id, board_type)
+        ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS guild_board_entries_message_unique_idx
+    ON guild_board_entries (board_message_id);
+
+CREATE INDEX IF NOT EXISTS guild_board_entries_source_channel_idx
+    ON guild_board_entries (guild_id, source_channel_id, source_message_id);
+
+CREATE TABLE IF NOT EXISTS guild_board_blocks (
+    guild_id BIGINT NOT NULL,
+    board_type TEXT NOT NULL,
+    target_type TEXT NOT NULL CHECK (target_type IN ('user', 'channel')),
+    target_id BIGINT NOT NULL,
+    blocked_by BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, board_type, target_type, target_id),
+    FOREIGN KEY (guild_id, board_type)
+        REFERENCES guild_boards (guild_id, board_type)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS guild_board_blocks_target_idx
+    ON guild_board_blocks (target_type, target_id, guild_id);
 
 CREATE TABLE IF NOT EXISTS guild_log_channels (
     guild_id BIGINT NOT NULL,
@@ -449,6 +519,153 @@ CREATE UNIQUE INDEX IF NOT EXISTS user_rep_logs_source_message_idx
     ON user_rep_logs (source_message_id)
     WHERE source_message_id IS NOT NULL;
 
+-- Global Coins are separate from the legacy fishing minigame's coins.
+CREATE TABLE IF NOT EXISTS currency_wallets (
+    user_id BIGINT PRIMARY KEY,
+    balance BIGINT NOT NULL DEFAULT 0
+        CHECK (balance >= 0 AND balance <= 9000000000000000000),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS color_catalog (
+    color_key TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    hex_value TEXT NOT NULL,
+    price BIGINT NOT NULL CHECK (price > 0),
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS user_colors (
+    user_id BIGINT NOT NULL REFERENCES currency_wallets(user_id),
+    color_key TEXT NOT NULL REFERENCES color_catalog(color_key),
+    hex_value TEXT NOT NULL,
+    purchase_price BIGINT NOT NULL CHECK (purchase_price > 0),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    equipped BOOLEAN NOT NULL DEFAULT FALSE,
+    purchased_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, color_key)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS user_colors_one_equipped_idx
+    ON user_colors (user_id)
+    WHERE active AND equipped;
+
+INSERT INTO color_catalog (color_key, display_name, hex_value, price)
+VALUES
+    ('red', 'Red', '#FF0000', 5000),
+    ('orange', 'Orange', '#FFA500', 5000),
+    ('yellow', 'Yellow', '#FFD700', 5000),
+    ('green', 'Green', '#00FF00', 5000),
+    ('blue', 'Blue', '#0000FF', 5000),
+    ('purple', 'Purple', '#800080', 5000),
+    ('pink', 'Pink', '#FF69B4', 5000),
+    ('gray', 'Gray', '#808080', 5000),
+    ('white', 'White', '#FFFFFF', 10000),
+    ('black', 'Black', '#000000', 10000),
+    ('custom', 'Custom', '#000000', 25000)
+ON CONFLICT (color_key) DO UPDATE
+SET display_name = EXCLUDED.display_name,
+    hex_value = EXCLUDED.hex_value,
+    price = EXCLUDED.price,
+    enabled = TRUE;
+
+CREATE TABLE IF NOT EXISTS currency_transactions (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES currency_wallets(user_id)
+        ON DELETE CASCADE,
+    amount BIGINT NOT NULL CHECK (amount <> 0),
+    source TEXT NOT NULL,
+    reference_key TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS currency_transactions_reference_idx
+    ON currency_transactions (user_id, reference_key)
+    WHERE reference_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS currency_transactions_user_created_idx
+    ON currency_transactions (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS currency_claims (
+    user_id BIGINT NOT NULL REFERENCES currency_wallets(user_id)
+        ON DELETE CASCADE,
+    claim_type TEXT NOT NULL CHECK (claim_type IN ('daily', 'weekly')),
+    period_start DATE NOT NULL,
+    base_amount BIGINT NOT NULL CHECK (base_amount > 0),
+    bonus_amount BIGINT NOT NULL DEFAULT 0 CHECK (bonus_amount >= 0),
+    claimed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, claim_type, period_start)
+);
+
+CREATE TABLE IF NOT EXISTS currency_daily_rewards (
+    user_id BIGINT NOT NULL REFERENCES currency_wallets(user_id)
+        ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    period_start DATE NOT NULL,
+    amount BIGINT NOT NULL CHECK (amount >= 0),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, source, period_start)
+);
+
+CREATE TABLE IF NOT EXISTS currency_wagers (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES currency_wallets(user_id)
+        ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    stake BIGINT NOT NULL CHECK (stake >= 10),
+    status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'lost', 'cashed_out')),
+    payout BIGINT NOT NULL DEFAULT 0
+        CHECK (payout >= 0 AND payout <= 1000000000000000000),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    settled_at TIMESTAMP WITH TIME ZONE,
+    CHECK (
+        (status = 'open' AND payout = 0 AND settled_at IS NULL)
+        OR (status = 'lost' AND payout = 0 AND settled_at IS NOT NULL)
+        OR (status = 'cashed_out' AND payout > 0 AND settled_at IS NOT NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS currency_wagers_user_created_idx
+    ON currency_wagers (user_id, created_at DESC);
+
+-- The active hourly Coins lottery. Tickets are removed atomically when a
+-- round is drawn; the round row keeps the winning ticket for auditability.
+CREATE TABLE IF NOT EXISTS lottery_rounds (
+    round_start TIMESTAMP WITH TIME ZONE PRIMARY KEY,
+    prize_pool BIGINT NOT NULL DEFAULT 1000
+        CHECK (prize_pool >= 1000 AND prize_pool <= 9000000000000000000),
+    status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'drawn', 'no_winner')),
+    winning_ticket CHAR(6),
+    winner_user_id BIGINT REFERENCES currency_wallets(user_id)
+        ON DELETE SET NULL,
+    drawn_at TIMESTAMP WITH TIME ZONE,
+    CHECK (
+        (status = 'open' AND winning_ticket IS NULL AND winner_user_id IS NULL
+            AND drawn_at IS NULL)
+        OR (status = 'no_winner' AND winning_ticket IS NULL
+            AND winner_user_id IS NULL AND drawn_at IS NOT NULL)
+        OR (status = 'drawn' AND winning_ticket IS NOT NULL
+            AND drawn_at IS NOT NULL)
+    )
+);
+
+CREATE TABLE IF NOT EXISTS lottery_tickets (
+    id BIGSERIAL PRIMARY KEY,
+    round_start TIMESTAMP WITH TIME ZONE NOT NULL
+        REFERENCES lottery_rounds(round_start) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES currency_wallets(user_id)
+        ON DELETE CASCADE,
+    ticket_digits CHAR(6) NOT NULL CHECK (ticket_digits ~ '^[0-9]{6}$'),
+    purchased_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    UNIQUE (round_start, ticket_digits)
+);
+
+CREATE INDEX IF NOT EXISTS lottery_tickets_user_round_idx
+    ON lottery_tickets (user_id, round_start);
+
 CREATE TABLE IF NOT EXISTS pinboard_pins (
     message_id BIGINT,
     author_id BIGINT,
@@ -589,6 +806,90 @@ CREATE TABLE IF NOT EXISTS mudae_dm_consent (
     consented BOOLEAN NOT NULL DEFAULT TRUE
 );
 
+-- Persist per-server Mudae wishes.  Numbered migration 0060 creates this
+-- table on older installations; the complete definition here keeps a fresh
+-- bootstrap schema useful without requiring a second schema pass.
+CREATE TABLE IF NOT EXISTS mudae_wishes (
+    guild_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    wish_type TEXT NOT NULL
+        CHECK (wish_type IN ('character', 'series', 'series_kakera', 'kakera')),
+    wish_value TEXT NOT NULL CHECK (length(trim(wish_value)) > 0),
+    id BIGSERIAL UNIQUE,
+    bundle_id BIGINT,
+    bundle_key TEXT,
+    bundle_name TEXT,
+    bundle_created_at TIMESTAMP WITH TIME ZONE,
+    source_guild_id BIGINT,
+    source_channel_id BIGINT,
+    source_message_id BIGINT,
+    source_page INTEGER CHECK (source_page IS NULL OR source_page > 0),
+    source_entry INTEGER CHECK (source_entry IS NULL OR source_entry > 0),
+    kakera_threshold BIGINT CHECK (kakera_threshold IS NULL OR kakera_threshold >= 0),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, user_id, wish_type, wish_value),
+    CHECK (wish_type <> 'series_kakera' OR kakera_threshold IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS mudae_wishes_guild_idx
+    ON mudae_wishes (guild_id);
+
+CREATE INDEX IF NOT EXISTS mudae_wishes_user_idx
+    ON mudae_wishes (user_id);
+
+CREATE INDEX IF NOT EXISTS mudae_wishes_bundle_idx
+    ON mudae_wishes (guild_id, user_id, bundle_key)
+    WHERE bundle_key IS NOT NULL;
+
+-- A scraped ``$imab`` bundle is shared by every user in a guild and is kept
+-- apart from individual wishes.  ``first_seen_at`` never changes when a
+-- later page or message refreshes the bundle.
+CREATE TABLE IF NOT EXISTS mudae_series_bundles (
+    id BIGSERIAL PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    source_guild_id BIGINT,
+    source_channel_id BIGINT,
+    source_message_id BIGINT,
+    bundle_name TEXT NOT NULL CHECK (length(btrim(bundle_name)) > 0),
+    bundle_key TEXT NOT NULL CHECK (length(btrim(bundle_key)) > 0),
+    first_seen_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    latest_page INTEGER,
+    latest_total_pages INTEGER,
+    latest_message_id BIGINT,
+    UNIQUE (guild_id, bundle_key),
+    CHECK (latest_page IS NULL OR latest_page > 0),
+    CHECK (latest_total_pages IS NULL OR latest_total_pages > 0)
+);
+
+CREATE INDEX IF NOT EXISTS mudae_series_bundles_source_message_idx
+    ON mudae_series_bundles (source_message_id)
+    WHERE source_message_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS mudae_series (
+    id BIGSERIAL PRIMARY KEY,
+    bundle_id BIGINT NOT NULL REFERENCES mudae_series_bundles(id) ON DELETE CASCADE,
+    series_name TEXT NOT NULL CHECK (length(btrim(series_name)) > 0),
+    normalized_name TEXT NOT NULL CHECK (length(btrim(normalized_name)) > 0),
+    character_count INTEGER CHECK (character_count IS NULL OR character_count >= 0),
+    source_guild_id BIGINT,
+    source_channel_id BIGINT,
+    source_message_id BIGINT,
+    source_page INTEGER CHECK (source_page IS NULL OR source_page > 0),
+    source_entry INTEGER CHECK (source_entry IS NULL OR source_entry > 0),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    UNIQUE (bundle_id, normalized_name)
+);
+
+CREATE INDEX IF NOT EXISTS mudae_series_bundle_idx
+    ON mudae_series (bundle_id, source_page, source_entry);
+
+CREATE INDEX IF NOT EXISTS mudae_series_name_idx
+    ON mudae_series (normalized_name);
+
 CREATE TABLE IF NOT EXISTS phone_consent (
     user_id BIGINT PRIMARY KEY,
     consented BOOLEAN NOT NULL
@@ -655,3 +956,63 @@ CREATE TABLE IF NOT EXISTS ror2_enemies (
     extra JSONB DEFAULT ('{}'::jsonb),
     img_url TEXT
 );
+
+CREATE TABLE IF NOT EXISTS guild_protection (
+    guild_id BIGINT PRIMARY KEY,
+    channel_id BIGINT NOT NULL,
+    protection_role_id BIGINT,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    response_mode TEXT NOT NULL DEFAULT 'both'
+        CHECK (response_mode IN ('warn', 'lock', 'both')),
+    allowed_vanity_code TEXT,
+    configured_by BIGINT,
+    updated_by BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS guild_protection_triggers (
+    guild_id BIGINT NOT NULL REFERENCES guild_protection(guild_id)
+        ON DELETE CASCADE,
+    trigger TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    threshold INTEGER NOT NULL CHECK (threshold > 0),
+    window_seconds INTEGER NOT NULL CHECK (window_seconds > 0),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, trigger)
+);
+
+CREATE TABLE IF NOT EXISTS guild_protection_incidents (
+    id BIGSERIAL PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    actor_id BIGINT NOT NULL,
+    target_id BIGINT,
+    trigger TEXT NOT NULL,
+    audit_entry_id BIGINT,
+    response_mode TEXT NOT NULL
+        CHECK (response_mode IN ('warn', 'lock', 'both')),
+    contained BOOLEAN NOT NULL DEFAULT FALSE,
+    details TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS guild_protection_incidents_audit_idx
+    ON guild_protection_incidents (guild_id, audit_entry_id, trigger)
+    WHERE audit_entry_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS guild_protection_incidents_guild_created_idx
+    ON guild_protection_incidents (guild_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS guild_protection_incidents_actor_created_idx
+    ON guild_protection_incidents (actor_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS guild_protection_locks (
+    guild_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    role_ids BIGINT[] NOT NULL DEFAULT '{}',
+    trigger TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS guild_protection_locks_user_idx
+    ON guild_protection_locks (user_id);

@@ -120,6 +120,11 @@ def test_tracking_consent_excludes_games_and_marks_history_commands() -> None:
         extras={},
         parent=None,
     )
+    wordbomb_stats = SimpleNamespace(
+        qualified_name="stats wordbomb",
+        extras={},
+        parent=None,
+    )
     user_history = SimpleNamespace(
         qualified_name="user usernames",
         extras={},
@@ -235,4 +240,5 @@ def test_tracking_consent_excludes_games_and_marks_history_commands() -> None:
     assert not command_requires_tracking_consent(cast(Any, game))
     assert not command_requires_tracking_consent(cast(Any, alias_game))
     assert not command_requires_tracking_consent(cast(Any, shorthand_game))
+    assert not command_requires_tracking_consent(cast(Any, wordbomb_stats))
     assert not command_requires_tracking_consent(cast(Any, reactions))

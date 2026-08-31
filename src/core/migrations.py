@@ -17,6 +17,9 @@ BASELINE_VERSION = 1
 LEGACY_BASELINE_CHECKSUMS = frozenset(
     {
         "f81c85e95368b86b20acefdaee12d6f3a78ce203e1eeeb0ac9d202d3605144a7",
+        "f6ab37135016c8eb65f2c8b1f0a1593b33c48163b3000872e7ce474003e59aed",
+        "2481f2c4fe02098b7f26680a81148ec2b56836c49807b0a9f4d82687b0ba3ac4",
+        "dd81e242a8452f35f288b7a751230f869f5ab7713fe4757e4df9ba43c8f7f65e",
     }
 )
 logger = logging.getLogger(__name__)

@@ -10,6 +10,7 @@ from extensions.logging.status_calendar import (
     STATUS_COLORS,
     StatusInterval,
     hourly_statuses,
+    merged_hourly_statuses,
     render_status_calendar,
 )
 
@@ -79,6 +80,85 @@ def test_hourly_status_leaves_hours_without_observations_empty() -> None:
     )
 
     assert statuses == [[None] * 24, [None] * 24, [None] * 24]
+
+
+def test_status_merge_fills_primary_guild_gaps_from_longer_history() -> None:
+    start_date = datetime.date(2026, 8, 21)
+    now = datetime.datetime(2026, 8, 23, tzinfo=datetime.UTC)
+    histories = {
+        10: [
+            StatusInterval(
+                "online",
+                datetime.datetime(2026, 8, 22, tzinfo=datetime.UTC),
+                now,
+            )
+        ],
+        20: [
+            StatusInterval(
+                "offline",
+                datetime.datetime(2026, 8, 21, tzinfo=datetime.UTC),
+                datetime.datetime(2026, 8, 22, tzinfo=datetime.UTC),
+            ),
+            StatusInterval(
+                "idle",
+                datetime.datetime(2026, 8, 22, tzinfo=datetime.UTC),
+                now,
+            ),
+        ],
+    }
+
+    statuses = merged_hourly_statuses(
+        histories,
+        10,
+        start_date,
+        days=2,
+        now=now,
+    )
+
+    assert statuses[0] == ["offline"] * 24
+    assert statuses[1] == ["online"] * 24
+
+
+def test_status_merge_uses_multiple_donors_for_remaining_gaps() -> None:
+    start_date = datetime.date(2026, 8, 20)
+    now = datetime.datetime(2026, 8, 23, tzinfo=datetime.UTC)
+    histories = {
+        10: [
+            StatusInterval(
+                "online",
+                datetime.datetime(2026, 8, 22, tzinfo=datetime.UTC),
+                now,
+            )
+        ],
+        20: [
+            StatusInterval(
+                "idle",
+                datetime.datetime(2026, 8, 20, tzinfo=datetime.UTC),
+                datetime.datetime(2026, 8, 21, tzinfo=datetime.UTC),
+            )
+        ],
+        30: [
+            StatusInterval(
+                "dnd",
+                datetime.datetime(2026, 8, 21, tzinfo=datetime.UTC),
+                datetime.datetime(2026, 8, 22, tzinfo=datetime.UTC),
+            )
+        ],
+    }
+
+    statuses = merged_hourly_statuses(
+        histories,
+        10,
+        start_date,
+        days=3,
+        now=now,
+    )
+
+    assert statuses == [
+        ["idle"] * 24,
+        ["dnd"] * 24,
+        ["online"] * 24,
+    ]
 
 
 def test_status_calendar_renders_all_31_days() -> None:
@@ -180,7 +260,7 @@ async def test_status_transition_closes_before_opening_under_a_lock() -> None:
     assert connection.statements[3].lstrip().startswith("INSERT INTO user_statuses")
 
 
-async def test_status_cleanup_keeps_latest_status_occurrence() -> None:
+async def test_status_cleanup_keeps_a_one_day_retention_buffer() -> None:
     pool = RecordingPool()
     cog = Tasks()
     cog.bot = cast(Any, SimpleNamespace(pool=pool))
@@ -188,6 +268,5 @@ async def test_status_cleanup_keeps_latest_status_occurrence() -> None:
     deleted = await cog.cleanup_status_history()
 
     assert deleted == 7
-    assert "PARTITION BY user_id, guild_id, status" in pool.sql
-    assert "status_rank > 1" in pool.sql
-    assert "interval '31 days'" in pool.sql
+    assert "ended_at IS NOT NULL" in pool.sql
+    assert "interval '32 days'" in pool.sql

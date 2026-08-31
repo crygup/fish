@@ -64,6 +64,22 @@ def test_conversion_parser_accepts_measurement_examples() -> None:
         assert request.kind == "measurement"
 
 
+def test_bare_fahrenheit_and_celsius_values_swap_by_default() -> None:
+    fahrenheit = parse_conversion_expression("100f")
+    celsius = parse_conversion_expression("100c")
+
+    assert fahrenheit is not None and celsius is not None
+    assert (fahrenheit.source, fahrenheit.target) == ("f", "celsius")
+    assert (celsius.source, celsius.target) == ("c", "fahrenheit")
+
+
+def test_bare_temperature_default_does_not_override_explicit_kelvin() -> None:
+    request = parse_conversion_expression("100f to kelvin")
+
+    assert request is not None
+    assert (request.source, request.target) == ("f", "kelvin")
+
+
 def test_measurement_conversion_handles_ambiguous_m_as_minutes() -> None:
     request = parse_conversion_expression("5m into sec")
     assert request is not None

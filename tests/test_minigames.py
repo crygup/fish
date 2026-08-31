@@ -16,11 +16,16 @@ from extensions.fun.minigames import (
     color_memorize_content,
     scramble_word,
 )
+from extensions.tools.command_stats import CommandStats
 
 
 def test_minigame_commands_are_registered() -> None:
     names = {command.name for command in Fun.__cog_commands__}
-    assert {"dice", "game", "color", "unscramble", "lightsout"} <= names
+    assert {"dice", "game", "color", "unscramble", "lightsout", "blackjack"} <= names
+    wordbomb = next(
+        command for command in Fun.__cog_commands__ if command.name == "wordbomb"
+    )
+    assert set(wordbomb.aliases) == {"wb", "word-bomb"}
     assert {command.name for command in Fun.color.commands} == {"stats"}
     assert getattr(Fun.color, "app_command", None) is None
     assert {command.name for command in Fun.game.commands} == {
@@ -35,9 +40,16 @@ def test_minigame_commands_are_registered() -> None:
         "memory",
         "higher-or-lower",
         "heads-or-tails",
+        "wordbomb",
         "click",
+        "race",
+        "luckyroll",
+        "slots",
         "dice",
         "8ball",
+        "mines",
+        "blackjack",
+        "crash",
     }
 
     assert Fun.higher_or_lower.aliases == (
@@ -54,6 +66,10 @@ def test_minigame_commands_are_registered() -> None:
         "headortail",
         "coinflip",
         "cf",
+    )
+    assert {command.name for command in Fun.RPSCommand.commands} == {"stats"}
+    assert (
+        CommandStats.stats.get_command("rps") is CommandStats.stats_rock_paper_scissors
     )
 
 
