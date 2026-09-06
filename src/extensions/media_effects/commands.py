@@ -7,10 +7,10 @@ import random as random_module
 import re
 import shlex
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from functools import lru_cache, wraps
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Sequence, cast
 from urllib.parse import urlsplit
 
 import discord
@@ -753,13 +753,62 @@ def _is_klipy_media_url(url: str) -> bool:
     return hostname in {"klipy.com", "www.klipy.com", "static.klipy.com"}
 
 
+def _source_prefers_gif(url: str) -> bool:
+    """Return whether a source should retain GIF output after an effect.
+
+    Klipy pages are resolved to MP4 for reliable decoding, while Tenor and
+    ordinary ``.gif`` URLs can occasionally take the video fallback when a
+    GIF has unusual frame metadata.  In all of those cases the user supplied
+    an animated image, so the final result should be encoded as a GIF.
+    """
+
+    parsed = urlsplit(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if _is_klipy_media_url(url):
+        return True
+    if hostname in {
+        "tenor.com",
+        "www.tenor.com",
+        "tenor.co",
+        "media.tenor.com",
+        "media1.tenor.com",
+        "c.tenor.com",
+    }:
+        return True
+    return parsed.path.casefold().endswith(".gif")
+
+
 async def _finalize_pipeline_result(
     result: EffectResult,
     media_url: str,
 ) -> EffectResult:
-    """Convert Klipy's working video to one compatible GIF after all effects."""
-    if not _is_klipy_media_url(media_url) or result.filename.endswith(".gif"):
+    """Convert a working video to a compatible GIF for animated sources."""
+    if not _source_prefers_gif(media_url) or result.filename.casefold().endswith(
+        ".gif"
+    ):
         return result
+    extension = result.filename.rsplit(".", 1)[-1].casefold()
+    if extension not in {"mp4", "mov", "webm"}:
+        # A malformed or single-frame GIF can take Pillow's still-image path.
+        # Keep the container requested by the source rather than trying to
+        # feed a PNG/JPEG to the video-only converter.
+        try:
+            with Image.open(BytesIO(result.data)) as opened:
+                output = BytesIO()
+                opened.convert("RGBA").save(
+                    output,
+                    format="GIF",
+                    save_all=True,
+                    duration=100,
+                    loop=0,
+                )
+                return EffectResult(
+                    output.getvalue(),
+                    f"{result.filename.rsplit('.', 1)[0]}.gif",
+                    True,
+                )
+        except (UnidentifiedImageError, OSError, ValueError):
+            return result
     converted = await convert_media(result.data, "gif", 1)
     filename = f"{result.filename.rsplit('.', 1)[0]}.gif"
     return EffectResult(converted.data, filename, converted.displayable)
@@ -1497,9 +1546,16 @@ def make_caption(
 
     frame = _caption_frame(src.convert("RGBA"), caption_text, inline_images or {})
     buf = BytesIO()
-    frame.save(buf, format="PNG")
+    if force_gif:
+        # A GIF with a single frame (or a GIF whose frame metadata Pillow
+        # cannot iterate) should still keep its requested GIF container.
+        frame.save(buf, format="GIF", save_all=True, duration=100, loop=0)
+        filename = "captioned.gif"
+    else:
+        frame.save(buf, format="PNG")
+        filename = "captioned.png"
     buf.seek(0)
-    return buf, "captioned.png"
+    return buf, filename
 
 
 def _caption_frame(
@@ -2017,6 +2073,186 @@ def _parse_effect_flags(
     for name in implicit_switches - supplied_switches:
         options.pop(name, None)
     return " ".join(media), options
+
+
+def _meme_shell_tokens(argument: str) -> list[tuple[str, bool]]:
+    """Tokenize meme input while retaining whether a token was quoted.
+
+    ``shlex.split`` is useful for the other effect commands, but meme text has
+    one meaningful distinction: a quoted sentence is explicitly kept on one
+    line.  ``posix=False`` lets us retain the quote markers so the renderer can
+    honour that distinction without changing how escaped spaces are handled.
+    """
+
+    lexer = shlex.shlex(argument, posix=False)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    raw_tokens = list(lexer)
+    result: list[tuple[str, bool]] = []
+    for raw in raw_tokens:
+        quoted = len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}
+        value = raw[1:-1] if quoted else raw
+        if quoted:
+            # Keep common shell escapes useful in a quoted caption while
+            # leaving backslashes in languages such as Russian/Arabic intact.
+            value = value.replace("\\\\", "\\")
+            if raw[0] == '"':
+                value = value.replace('\\"', '"')
+            else:
+                value = value.replace("\\'", "'")
+        result.append((value, quoted))
+    return result
+
+
+def _parse_meme_scale_values(values: Sequence[str]) -> tuple[float, float]:
+    """Validate one or two meme text scale values."""
+
+    if not 1 <= len(values) <= 2:
+        raise commands.BadArgument(
+            "Meme scale requires one value, or top and bottom values."
+        )
+    try:
+        parsed = [float(value) for value in values]
+    except (TypeError, ValueError) as error:
+        raise commands.BadArgument(
+            "Meme scale values must be numbers from 0.1 to 10."
+        ) from error
+    if any(not math.isfinite(value) or not 0.1 <= value <= 10 for value in parsed):
+        raise commands.BadArgument("Meme scale values must be between 0.1 and 10.")
+    return parsed[0], parsed[-1]
+
+
+_MEME_CUSTOM_EMOJI_RE = re.compile(r"^<a?:[^:>]+:\d+>$")
+_MEME_USER_MENTION_RE = re.compile(r"<@!?\d+>")
+
+
+def _parse_meme_argument(
+    argument: str,
+    *,
+    attachment_available: bool = False,
+    allow_media: bool = True,
+) -> tuple[str, dict[str, Any]]:
+    """Parse positional meme text/media and a trailing ``-scale`` flag.
+
+    The first URL is the media source; any later URLs remain part of the
+    caption.  With an attachment or reply, omitting a URL leaves the source
+    empty so the normal effect resolver can select that message media.
+    """
+
+    try:
+        entries = _meme_shell_tokens(argument)
+    except ValueError as error:
+        raise commands.BadArgument(
+            "The meme arguments contain an unmatched quote."
+        ) from error
+    if not entries:
+        raise commands.BadArgument("Meme requires text.")
+
+    # Only a *complete* scale expression at the end of the input is a flag.
+    # Hyphens are ordinary caption text otherwise.  In particular, an input
+    # such as ``meme test -scale test`` must keep ``-scale test`` in the
+    # caption instead of producing a parser error.
+    scale_values: list[str] | None = None
+    scale_index: int | None = None
+    # Iterate from the right so a valid trailing expression wins even when
+    # an earlier ``-scale`` token is intentionally part of the caption.
+    for index in range(len(entries) - 1, -1, -1):
+        value, quoted = entries[index]
+        if quoted:
+            continue
+        lowered = value.casefold()
+        inline_scale: str | None = None
+        if lowered in {"-scale", "--scale"}:
+            values: list[str] = []
+        elif lowered.startswith("-scale=") or lowered.startswith("--scale="):
+            values = []
+            inline_scale = value.split("=", 1)[1]
+        else:
+            continue
+
+        if inline_scale is not None:
+            values.append(inline_scale)
+        consumed = index + 1
+        while consumed < len(entries) and len(values) < 2:
+            candidate, candidate_quoted = entries[consumed]
+            if candidate_quoted:
+                break
+            try:
+                float(candidate)
+            except (TypeError, ValueError):
+                break
+            values.append(candidate)
+            consumed += 1
+
+        # If the token is not followed by one or two numeric values through
+        # the end of the command, it is caption text and we keep searching for
+        # another (possibly later) valid trailing flag.
+        if not values or consumed != len(entries):
+            continue
+        scale_index = index
+        scale_values = values
+        entries = entries[:scale_index]
+        break
+
+    # A single quoted token is an explicit request to keep the caption as one
+    # top line.  A URL before it is still extracted as media.
+    media_index: int | None = None
+    if allow_media:
+        for index, (value, quoted) in enumerate(entries):
+            if quoted:
+                continue
+            candidate = value.strip("<>")
+            if _looks_like_url(candidate):
+                media_index = index
+                break
+        if media_index is None and not attachment_available:
+            # User mentions and emoji are valid media sources too.  Search
+            # the complete positional input so media can be placed before or
+            # after the caption just like a URL.  A source is only removed
+            # when it is a standalone token; emoji embedded in normal words
+            # remains part of the caption.
+            for index, (value, quoted) in enumerate(entries):
+                if quoted:
+                    continue
+                if (
+                    _MEME_USER_MENTION_RE.fullmatch(value)
+                    or _MEME_CUSTOM_EMOJI_RE.fullmatch(value)
+                    or TwemojiConverter.is_unicode_emoji(value)
+                ):
+                    # Require some caption text after removing the source;
+                    # otherwise ``meme 😂`` would have no text to render.
+                    if len(entries) > 1:
+                        media_index = index
+                        break
+
+    media = ""
+    if media_index is not None:
+        raw_media = entries[media_index][0]
+        # Angle brackets are Discord's normal wrapper for URLs, but they are
+        # part of mention/custom-emoji syntax and must be retained for the
+        # media converter to resolve those sources correctly.
+        media = (
+            raw_media.strip("<>")
+            if _looks_like_url(raw_media.strip("<>"))
+            else raw_media
+        )
+        entries = [entry for index, entry in enumerate(entries) if index != media_index]
+
+    text = " ".join(value for value, _ in entries).strip()
+    if not text:
+        raise commands.BadArgument("Meme requires text.")
+
+    options: dict[str, Any] = {"text": text}
+    if scale_values is not None:
+        top_scale, bottom_scale = _parse_meme_scale_values(scale_values)
+        options["scale_top"] = top_scale
+        if len(scale_values) == 2:
+            options["scale_bottom"] = bottom_scale
+    # Suppress automatic word-boundary splitting for any explicitly quoted
+    # caption.  An explicit ``|`` still wins, even inside a quoted caption.
+    if len(entries) == 1 and entries[0][1] and "|" not in text:
+        options["meme_no_split"] = True
+    return media, options
 
 
 def _parse_bool(value: str) -> bool:
@@ -3069,12 +3305,24 @@ def _parse_effect_pipeline(
             raise commands.BadArgument(
                 f"Effect repetition must be between 1 and {MAX_PIPELINE_EFFECTS}."
             )
-        _, values, switches = PIPELINE_EFFECTS[effect]
-        remainder, options = _parse_effect_flags(
-            " ".join(shlex.quote(token) for token in effect_tokens),
-            values=values,
-            switches=switches,
-        )
+        effect_argument = " ".join(shlex.quote(token) for token in effect_tokens)
+        if effect == "meme":
+            # Meme text is positional and has a special trailing scale flag;
+            # parse it separately from the generic effect flags.  Media is
+            # already selected by the pipeline source, so every token here is
+            # caption text.
+            _, options = _parse_meme_argument(
+                effect_argument,
+                allow_media=False,
+            )
+            remainder = ""
+        else:
+            _, values, switches = PIPELINE_EFFECTS[effect]
+            remainder, options = _parse_effect_flags(
+                effect_argument,
+                values=values,
+                switches=switches,
+            )
         if effect == "overlayflag" and remainder:
             positional_media, positional_flag = _positional_flag(remainder)
             if positional_flag is not None and not positional_media:
@@ -3091,9 +3339,7 @@ def _parse_effect_pipeline(
             else:
                 options["overlay"] = remainder or "random"
             remainder = ""
-        elif (
-            effect in {"caption", "meme", "text"} and remainder and not options["text"]
-        ):
+        elif effect in {"caption", "text"} and remainder and not options["text"]:
             options["text"] = remainder
             remainder = ""
         elif effect == "zoom" and remainder.casefold() in {"forever", "infinite"}:
@@ -4411,6 +4657,71 @@ class Images(Cog):
         except ValueError as error:
             raise commands.BadArgument(str(error)) from error
 
+    async def _resolve_meme_mentions(self, ctx: Context, text: str) -> str:
+        """Render Discord user mentions as readable ``@display names``.
+
+        Mentions are part of the meme caption rather than a Discord mention
+        in the generated image.  Resolve users from the message/guild/bot
+        caches first and only fetch a user when no cached object is available;
+        if the account cannot be resolved, retain a readable ``@id`` token.
+        """
+
+        matches = list(_MEME_USER_MENTION_RE.finditer(text))
+        if not matches:
+            return text
+
+        cached_mentions: dict[int, Any] = {}
+        for mention in getattr(getattr(ctx, "message", None), "mentions", ()) or ():
+            try:
+                cached_mentions[int(mention.id)] = mention
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+        replacements: dict[str, str] = {}
+        for match in matches:
+            raw = match.group(0)
+            try:
+                user_id = int(match.group(0).lstrip("<@! ").rstrip(">"))
+            except ValueError:
+                replacements[raw] = raw
+                continue
+
+            user = cached_mentions.get(user_id)
+            guild = getattr(ctx, "guild", None)
+            if user is None and guild is not None:
+                get_member = getattr(guild, "get_member", None)
+                if callable(get_member):
+                    user = get_member(user_id)
+            if user is None:
+                get_user = getattr(self.bot, "get_user", None)
+                if callable(get_user):
+                    user = get_user(user_id)
+            if user is None:
+                fetch_user = getattr(self.bot, "fetch_user", None)
+                if callable(fetch_user):
+                    try:
+                        user = await cast(Callable[[int], Awaitable[Any]], fetch_user)(
+                            user_id
+                        )
+                    except (discord.HTTPException, discord.NotFound):
+                        user = None
+
+            display_name = getattr(user, "display_name", None) if user else None
+            if not isinstance(display_name, str) or not display_name.strip():
+                display_name = getattr(user, "global_name", None) if user else None
+            if not isinstance(display_name, str) or not display_name.strip():
+                display_name = getattr(user, "name", None) if user else None
+            replacements[raw] = (
+                f"@{display_name.strip()}"
+                if isinstance(display_name, str) and display_name.strip()
+                else f"@{user_id}"
+            )
+
+        return _MEME_USER_MENTION_RE.sub(
+            lambda match: replacements.get(match.group(0), match.group(0)),
+            text,
+        )
+
     @media_effect_timeout
     async def _apply_image_effect(
         self,
@@ -4480,6 +4791,15 @@ class Images(Cog):
                 options,
                 media_duration=float(getattr(media_probe, "duration", 0.0)),
             )
+            if effect == "meme":
+                options["text"] = await self._resolve_meme_mentions(
+                    ctx,
+                    str(options.get("text", "")),
+                )
+                options["inline_images"] = await resolve_inline_images(
+                    ctx.session,
+                    [str(options.get("text", ""))],
+                )
             renderer_options = _renderer_effect_options(effect, options)
             try:
                 if effect == "overlay":
@@ -4498,6 +4818,12 @@ class Images(Cog):
                     )
             except ValueError as error:
                 raise commands.BadArgument(str(error)) from error
+            # Klipy's resolver intentionally uses its clean MP4 source while
+            # downloading.  Meme output should still preserve the source's
+            # GIF semantics, so convert that rendered video back to a GIF
+            # before sending it to Discord.
+            if effect == "meme":
+                result = await _finalize_pipeline_result(result, media_url)
             random_note = (
                 _random_overlay_note(random_overlay_label)
                 if random_overlay_label is not None
@@ -4877,7 +5203,7 @@ class Images(Cog):
         # never used as a silent fallback when the reply has no media.
         reference = getattr(getattr(ctx, "message", None), "reference", None)
         reply_checked = reference is not None and not image_url
-        if reply_checked:
+        if reply_checked and reference is not None:
             replied = getattr(reference, "resolved", None)
             if replied is None and getattr(reference, "message_id", None):
                 try:
@@ -4955,7 +5281,7 @@ class Images(Cog):
                 img_data,
                 caption_text,
                 inline_images,
-                force_gif=_is_klipy_media_url(image_url),
+                force_gif=_source_prefers_gif(image_url),
             )
 
             if filename.endswith(".mp4"):
@@ -5637,27 +5963,22 @@ class Images(Cog):
             note=f"Applied: random ({chosen})",
         )
 
-    @commands.command(name="meme", extras={"usage": "<media> <text>"})
+    @commands.command(
+        name="meme", extras={"usage": "<text> [media] [-scale 5 [bottom-scale]]"}
+    )
     async def meme(self, ctx: Context, *, argument: str = "") -> None:
         """Add impact-style top and bottom text to a User/Emoji/Media URL.
 
-        -# -text       Text to place on the media. Use `|` to split top and bottom.
+        Text and media may be supplied in either order. Use `|` to split top
+        and bottom text, or quote the full caption to keep it on one line.
+
+        -# -scale      Text scale from 0.1 to 10; one value applies to both
+        -#              lines and two values set top and bottom independently.
         """
-        media, options = _parse_effect_flags(
-            argument, values={"text": (("t",), str, "")}
+        media, options = _parse_meme_argument(
+            argument,
+            attachment_available=bool(getattr(ctx.message, "attachments", ())),
         )
-        if not options["text"]:
-            parts = media.split(maxsplit=1)
-            if len(parts) < 2:
-                raise commands.BadArgument("Meme requires media followed by text.")
-            candidate, text_value = parts
-            if ctx.message.attachments and not candidate.startswith(
-                ("http://", "https://", "<@", "<:", "<a:")
-            ):
-                options["text"] = media
-                media = ""
-            else:
-                media, options["text"] = candidate, text_value
         await self._apply_image_effect(ctx, "meme", source=media, **options)
 
     @commands.command(
@@ -5752,7 +6073,7 @@ class Images(Cog):
             and not has_reply
             and callable(shuffle_queue)
         ):
-            await shuffle_queue(ctx)
+            await cast(Callable[..., Awaitable[Any]], shuffle_queue)(ctx)
             return
 
         media, options = _parse_effect_flags(argument)
@@ -6882,7 +7203,20 @@ class Images(Cog):
             text = str(options.get("text", "")).strip()
             if not text:
                 raise ValueError("Meme requires text.")
-            return await render_image_effect(current_data, "meme", text=text)
+            meme_options = options.copy()
+            meme_options["text"] = await self._resolve_meme_mentions(
+                ctx,
+                text,
+            )
+            meme_options["inline_images"] = await resolve_inline_images(
+                ctx.session,
+                [str(meme_options["text"])],
+            )
+            return await render_image_effect(
+                current_data,
+                "meme",
+                **meme_options,
+            )
 
         if effect == "convert":
             return await convert_media(
@@ -7971,20 +8305,35 @@ class Images(Cog):
         )
 
     @effect_3.command(name="meme")
+    @app_commands.describe(
+        text="Text to place at the top (use | for top and bottom).",
+        media=MEDIA_INPUT_DESCRIPTION,
+        attachment="Attach an image, GIF, or video.",
+        scale="One scale, or top and bottom scales, from 0.1 to 10.",
+    )
     async def effect_3_meme(
         self,
         ctx: Context,
         text: str,
         media: str | None = None,
         attachment: discord.Attachment | None = None,
+        scale: str | None = None,
     ) -> None:
         """Add impact-style text to a User/Emoji/Media URL."""
+        options: dict[str, Any] = {"text": text}
+        if scale:
+            top_scale, bottom_scale = _parse_meme_scale_values(
+                scale.replace(",", " ").split()
+            )
+            options["scale_top"] = top_scale
+            if len(scale.replace(",", " ").split()) == 2:
+                options["scale_bottom"] = bottom_scale
         await self._application_effect(
             ctx,
             "meme",
             media,
             attachment,
-            text=text,
+            **options,
         )
 
     @cast(Any, commands.hybrid_group)(

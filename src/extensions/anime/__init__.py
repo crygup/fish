@@ -23,6 +23,7 @@ from utils.anilist import (
     select_anilist_media,
 )
 from utils.credentials import decrypt_credential
+from utils.formats import plural
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -53,6 +54,11 @@ ANILIST_MEDIA_RE = re.compile(
     re.IGNORECASE,
 )
 ANILIST_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s<>\)]+)\)")
+ANILIST_USER_URL_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?anilist\.co/user/(?P<username>[^/?#\s]+)"
+    r"(?:[/?#].*)?$",
+    re.IGNORECASE,
+)
 ANILIST_SPOILER_RE = re.compile(r"~!(.*?)!~", re.DOTALL)
 CHARACTER_HEIGHT_RE = re.compile(
     r"(?im)^[ \t]*(?:\*\*|__)?height(?:\*\*|__)?[ \t]*:[ \t]*(.+?)[ \t]*(?=\n|$)"
@@ -257,6 +263,75 @@ query ($userName: String!, $type: MediaType!, $statuses: [MediaListStatus!]!) {
           chapters
         }
       }
+    }
+  }
+}
+"""
+ANILIST_USER_QUERY = """
+query ($name: String!) {
+  User(name: $name) {
+    id
+    name
+    siteUrl
+  }
+}
+"""
+ANILIST_RECENT_ACTIVITY_QUERY = """
+query ($userId: Int!, $page: Int!, $perPage: Int!) {
+  Page(page: $page, perPage: $perPage) {
+    pageInfo {
+      total
+      currentPage
+      lastPage
+      hasNextPage
+      perPage
+    }
+    activities(userId: $userId, sort: ID_DESC) {
+      ... on ListActivity {
+        __typename
+        id
+        createdAt
+        siteUrl
+        status
+        progress
+        type
+        media {
+          id
+          type
+          siteUrl
+          title { userPreferred english romaji native }
+          mediaListEntry { score }
+        }
+      }
+      ... on TextActivity {
+        __typename
+        id
+        createdAt
+        siteUrl
+        text(asHtml: false)
+      }
+      ... on MessageActivity {
+        __typename
+        id
+        createdAt
+        siteUrl
+        message(asHtml: false)
+        recipient { name }
+        messenger { name }
+      }
+    }
+  }
+}
+"""
+ANILIST_RECENT_RATINGS_QUERY = """
+query ($userId: Int!, $mediaIds: [Int]) {
+  User(id: $userId) {
+    mediaListOptions { scoreFormat }
+  }
+  Page(perPage: 50) {
+    mediaList(userId: $userId, mediaId_in: $mediaIds) {
+      mediaId
+      score
     }
   }
 }
@@ -2663,6 +2738,367 @@ def _profile_view(
     )
 
 
+def _recent_activity_text(value: object, *, limit: int = 320) -> str:
+    """Make an AniList activity value safe and compact for a Discord line."""
+
+    text = " ".join(str(value or "").split())
+    text = discord.utils.escape_mentions(discord.utils.escape_markdown(text))
+    if len(text) > limit:
+        return text[: max(1, limit - 1)].rstrip() + "…"
+    return text
+
+
+def _recent_activity_link(label: str, url: object) -> str:
+    if isinstance(url, str) and url.startswith(("https://", "http://")):
+        return f"[{label}]({url})"
+    return label
+
+
+def _recent_activity_media(activity: dict[str, Any]) -> dict[str, Any]:
+    media = activity.get("media")
+    return media if isinstance(media, dict) else {}
+
+
+def _recent_activity_unit(activity: dict[str, Any]) -> str:
+    """Return the progress unit used by an AniList list activity."""
+
+    media = _recent_activity_media(activity)
+    media_type = str(media.get("type") or activity.get("type") or "").upper()
+    return "chapter" if media_type == "MANGA" else "episode"
+
+
+def _recent_progress_text(
+    value: object,
+    activity: dict[str, Any],
+    *,
+    unit: str | None = None,
+) -> str:
+    """Normalise AniList progress into singular/plural episode/chapter text.
+
+    AniList has returned progress as both ``Episode 4`` and ``4 - 8`` over
+    time.  Keep accepting either form and choose the noun using the number of
+    entries represented by the range rather than the raw label.
+    """
+
+    raw = " ".join(str(value or "").split())
+    if not raw:
+        return ""
+    unit = unit or _recent_activity_unit(activity)
+    pattern = re.compile(
+        r"^(?:(?P<prefix>episodes?|chapters?)\s*)?"
+        r"(?P<start>\d+)\s*(?:(?:-|–|—|to)\s*(?P<end>\d+))?$",
+        re.IGNORECASE,
+    )
+    match = pattern.fullmatch(raw)
+    if not match:
+        suffix_pattern = re.compile(
+            r"^(?P<start>\d+)\s*(?P<prefix>episodes?|chapters?)$",
+            re.IGNORECASE,
+        )
+        match = suffix_pattern.fullmatch(raw)
+    if not match:
+        return _recent_activity_text(raw, limit=100)
+
+    try:
+        start = int(match.group("start"))
+        end_text = match.groupdict().get("end")
+        end = int(end_text) if end_text else None
+    except (AttributeError, TypeError, ValueError):
+        return _recent_activity_text(raw, limit=100)
+    if end is None:
+        count = 1
+        suffix = ""
+    else:
+        count = abs(end - start) + 1
+        suffix = f" - {end}"
+    noun = format(plural(count, False), unit).title()
+    return f"{noun} {start}{suffix}"
+
+
+def _recent_activity_rating(activity: dict[str, Any]) -> str | None:
+    """Extract an optional rating without adding a placeholder when absent."""
+
+    candidates: list[object] = [activity.get("rating"), activity.get("score")]
+    media = _recent_activity_media(activity)
+    media_entry = media.get("mediaListEntry")
+    if isinstance(media_entry, dict):
+        candidates.extend((media_entry.get("rating"), media_entry.get("score")))
+    media_entry = activity.get("mediaListEntry")
+    if isinstance(media_entry, dict):
+        candidates.extend((media_entry.get("rating"), media_entry.get("score")))
+    for value in candidates:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            if value <= 0:
+                continue
+            score_format = None
+            media = _recent_activity_media(activity)
+            media_entry = media.get("mediaListEntry")
+            if isinstance(media_entry, dict):
+                score_format = media_entry.get("scoreFormat")
+            score_format = score_format or activity.get("scoreFormat")
+            score_format = score_format or activity.get("_scoreFormat")
+            if score_format in ANILIST_SMILEY_SCORE_FORMATS:
+                index = max(
+                    0,
+                    min(len(ANILIST_SMILEY_EMOJIS) - 1, round(float(value)) - 1),
+                )
+                return ANILIST_SMILEY_EMOJIS[index]
+            if score_format == "POINT_10_DECIMAL":
+                return f"{value:.1f}/10.0"
+            if score_format == "POINT_10":
+                return f"{value:g}/10"
+            if score_format == "POINT_5":
+                return f"{value:g}/5"
+            if score_format == "POINT_3":
+                return f"{value:g}/3"
+            return f"{value:g}"
+        text = _recent_activity_text(value, limit=80)
+        if text:
+            return text
+    return None
+
+
+def _recent_activity_parts(activity: dict[str, Any]) -> tuple[str, str | None]:
+    """Return the primary and optional metadata lines for one activity."""
+
+    activity_type = str(activity.get("__typename") or "").casefold()
+    activity_url = activity.get("siteUrl")
+    created_at = activity.get("createdAt")
+    timestamp: str | None = None
+    try:
+        created_timestamp = int(created_at) if created_at is not None else 0
+    except (TypeError, ValueError):
+        created_timestamp = 0
+    if created_timestamp > 0:
+        timestamp = f"<t:{created_timestamp}:R>"
+
+    if activity_type == "listactivity":
+        media_data = _recent_activity_media(activity)
+        title_text = _recent_activity_text(_anime_title(media_data), limit=220)
+        # The activity URL is the useful destination for a recent-activity
+        # entry.  Fall back to the media page for older API payloads.
+        title_url = activity_url or media_data.get("siteUrl")
+        title = _recent_activity_link(title_text, title_url)
+        status_raw = " ".join(str(activity.get("status") or "").split())
+        status_key = status_raw.casefold()
+        status = _recent_activity_text(_media_enum_label(status_raw), limit=40)
+        progress = activity.get("progress")
+
+        # AniList uses statuses such as ``watched episode`` and ``read
+        # chapter`` for progress activities.  The unit is part of the status,
+        # while the actual number/range is returned separately in progress.
+        progress_status_match = re.fullmatch(
+            r"(?P<action>watched|rewatched|read|reread)\s+"
+            r"(?P<unit>episodes?|chapters?)",
+            status_key,
+        )
+        if progress_status_match:
+            action = progress_status_match.group("action").title()
+            progress_unit = progress_status_match.group("unit").rstrip("s")
+            progress_text = _recent_progress_text(
+                progress,
+                activity,
+                unit=progress_unit,
+            )
+            if progress_text:
+                primary = f"{action} {progress_text} for {title}"
+            else:
+                primary = f"{action} {title}"
+        else:
+            progress_text = _recent_progress_text(progress, activity)
+            if status_key == "plans to":
+                media_type = str(media_data.get("type") or activity.get("type") or "")
+                verb = "Read" if media_type.upper() == "MANGA" else "Watch"
+                linked_label = _recent_activity_link(f"{verb} {title_text}", title_url)
+                primary = f"{status or 'Plans To'} {linked_label}"
+            elif progress_text and status_key in {
+                "watched",
+                "rewatched",
+                "read",
+                "reread",
+            }:
+                primary = f"{status} {progress_text} for {title}"
+            else:
+                primary = f"{status} {title}" if status else title
+    elif activity_type == "textactivity":
+        text = _recent_activity_text(activity.get("text"), limit=270)
+        primary = f"Posted: {text}" if text else "Posted an update"
+    elif activity_type == "messageactivity":
+        message = _recent_activity_text(activity.get("message"), limit=245)
+        recipient = activity.get("recipient")
+        recipient_name = (
+            _recent_activity_text(recipient.get("name"), limit=80)
+            if isinstance(recipient, dict) and recipient.get("name")
+            else "a user"
+        )
+        primary = (
+            f"Messaged {recipient_name}: {message}"
+            if message
+            else f"Messaged {recipient_name}"
+        )
+    else:
+        primary = "Shared an AniList activity"
+
+    metadata = [_recent_activity_rating(activity), timestamp]
+    metadata_text = " · ".join(item for item in metadata if item)
+    return primary, metadata_text or None
+
+
+def _recent_activity_line(activity: dict[str, Any]) -> str:
+    """Format one AniList activity as a compact two-line block."""
+
+    primary, metadata = _recent_activity_parts(activity)
+    return f"{primary}\n-# {metadata}" if metadata else primary
+
+
+class AniListRecentView(discord.ui.LayoutView):
+    """Paginate a user's newest public AniList activities."""
+
+    PAGE_SIZE = 5
+
+    def __init__(
+        self,
+        cog: "Anime",
+        ctx: Context,
+        *,
+        user_id: int,
+        username: str,
+        access_token: str | None,
+        entries: list[dict[str, Any]],
+        page_count: int,
+        timeout: float = 300,
+    ) -> None:
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.ctx = ctx
+        self.user_id = user_id
+        self.username = username
+        self.access_token = access_token
+        self.entries = entries
+        self.page_count = max(1, page_count)
+        self.page = 1
+        self.message: discord.Message | None = None
+        self._buttons: list[discord.ui.Button] = []
+        self._render()
+
+    def _render(self) -> None:
+        self.clear_items()
+        username = _recent_activity_text(self.username, limit=100)
+        # The API returns only the requested page, so ``entries`` always
+        # represents the current page rather than the complete activity list.
+        page_entries = self.entries[: self.PAGE_SIZE]
+        children: list[discord.ui.Item[Any]] = [
+            discord.ui.TextDisplay(f"## Recent AniList activity for {username}"),
+            discord.ui.Separator(),
+        ]
+        if page_entries:
+            # Keep each activity as its own display so separators remain
+            # visible and ratings/timestamps stay attached to the activity.
+            for index, entry in enumerate(page_entries):
+                children.append(discord.ui.TextDisplay(_recent_activity_line(entry)))
+                if index < len(page_entries) - 1:
+                    children.append(discord.ui.Separator())
+        else:
+            children.append(discord.ui.TextDisplay("No recent AniList activity found."))
+        children.extend(
+            [
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"-# *Page {self.page}/{self.page_count} · AniList*"
+                ),
+            ]
+        )
+        self.add_item(
+            discord.ui.Container(
+                *children,
+                # Context.embedcolor resolves the caller's cached colour;
+                # using the bot default here made later pages lose it when
+                # the view was rebuilt.
+                accent_color=getattr(
+                    self.ctx,
+                    "embedcolor",
+                    getattr(self.ctx.bot, "embedcolor", discord.Colour.blurple()),
+                ),
+            )
+        )
+
+        previous = discord.ui.Button(
+            label="<",
+            style=discord.ButtonStyle.secondary,
+            disabled=self.page_count <= 1,
+        )
+        next_button = discord.ui.Button(
+            label=">",
+            style=discord.ButtonStyle.secondary,
+            disabled=self.page_count <= 1,
+        )
+
+        async def previous_callback(interaction: discord.Interaction) -> None:
+            await self._change_page(interaction, -1)
+
+        async def next_callback(interaction: discord.Interaction) -> None:
+            await self._change_page(interaction, 1)
+
+        previous.callback = previous_callback
+        next_button.callback = next_callback
+        self._buttons = [previous, next_button]
+        self.add_item(discord.ui.ActionRow(previous, next_button))
+
+    async def _change_page(
+        self, interaction: discord.Interaction, direction: int
+    ) -> None:
+        await interaction.response.defer()
+        requested_page = self.page + direction
+        if requested_page < 1:
+            requested_page = self.page_count
+        elif requested_page > self.page_count:
+            requested_page = 1
+        try:
+            entries, page_count = await self.cog._fetch_recent_activity_page(
+                self.user_id,
+                self.access_token,
+                requested_page,
+            )
+        except commands.BadArgument as error:
+            await interaction.followup.send(
+                str(error),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        self.entries = entries
+        self.page_count = max(1, page_count)
+        self.page = min(max(1, requested_page), self.page_count)
+        self._render()
+        await interaction.edit_original_response(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.ctx.author.id:
+            return True
+        await interaction.response.send_message(
+            "Only the person who opened this list can use its controls.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return False
+
+    async def on_timeout(self) -> None:
+        for button in self._buttons:
+            button.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
 class Anime(Cog):
     """Anime related commands"""
 
@@ -2762,7 +3198,7 @@ class Anime(Cog):
             if response_status == 401:
                 raise commands.BadArgument(
                     "The AniList connection has expired. Please reconnect AniList "
-                    "with `fish link anilist`."
+                    "with `fish accounts`."
                 )
             if response_status >= 500:
                 raise commands.BadArgument(
@@ -2832,6 +3268,198 @@ class Anime(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    async def _lookup_anilist_user(
+        self, username: str, access_token: str | None = None
+    ) -> tuple[int, str]:
+        response_status, payload = await self._anilist_request(
+            ANILIST_USER_QUERY,
+            {"name": username},
+            access_token,
+        )
+        error_message = _graphql_error(payload)
+        if response_status == 429:
+            raise commands.BadArgument(
+                "AniList is currently rate limited. Please try again in a minute."
+            )
+        if response_status == 401 and access_token:
+            raise commands.BadArgument(
+                "The AniList connection has expired. Please reconnect AniList "
+                "with `fish accounts`."
+            )
+        if response_status >= 500:
+            raise commands.BadArgument(
+                "AniList is temporarily unavailable. Please try again shortly."
+            )
+        if response_status != 200 or error_message:
+            detail = (
+                f" ({discord.utils.escape_markdown(error_message)})"
+                if error_message
+                else ""
+            )
+            raise commands.BadArgument(f"AniList rejected that user lookup{detail}.")
+
+        data = payload.get("data") if isinstance(payload, dict) else None
+        profile = data.get("User") if isinstance(data, dict) else None
+        if not isinstance(profile, dict):
+            raise commands.BadArgument(
+                f"Could not find the AniList user **{_recent_activity_text(username)}**."
+            )
+        try:
+            user_id = int(profile["id"])
+        except (KeyError, TypeError, ValueError):
+            raise commands.BadArgument(
+                "AniList did not return a valid user for that lookup."
+            ) from None
+        canonical_name = str(profile.get("name") or username)
+        return user_id, canonical_name
+
+    async def _fetch_recent_activity_page(
+        self,
+        user_id: int,
+        access_token: str | None,
+        page: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        response_status, payload = await self._anilist_request(
+            ANILIST_RECENT_ACTIVITY_QUERY,
+            {
+                "userId": int(user_id),
+                "page": max(1, int(page)),
+                "perPage": AniListRecentView.PAGE_SIZE,
+            },
+            access_token,
+        )
+        error_message = _graphql_error(payload)
+        if response_status == 429:
+            raise commands.BadArgument(
+                "AniList is currently rate limited. Please try again in a minute."
+            )
+        if response_status == 401 and access_token:
+            raise commands.BadArgument(
+                "The AniList connection has expired. Please reconnect AniList "
+                "with `fish accounts`."
+            )
+        if response_status >= 500:
+            raise commands.BadArgument(
+                "AniList is temporarily unavailable. Please try again shortly."
+            )
+        if response_status != 200 or error_message:
+            detail = (
+                f" ({discord.utils.escape_markdown(error_message)})"
+                if error_message
+                else ""
+            )
+            raise commands.BadArgument(
+                f"AniList rejected the recent activity request{detail}."
+            )
+
+        data = payload.get("data") if isinstance(payload, dict) else None
+        page_data = data.get("Page") if isinstance(data, dict) else None
+        if not isinstance(page_data, dict):
+            raise commands.BadArgument("AniList did not return a recent activity page.")
+        raw_entries = page_data.get("activities")
+        entries = (
+            [entry for entry in raw_entries if isinstance(entry, dict)]
+            if isinstance(raw_entries, list)
+            else []
+        )
+        await self._attach_recent_activity_ratings(user_id, entries, access_token)
+        page_info = page_data.get("pageInfo")
+        raw_page_count = page_info.get("lastPage") if isinstance(page_info, dict) else 1
+        try:
+            page_count = max(1, int(raw_page_count or 1))
+        except (TypeError, ValueError):
+            page_count = 1
+        return entries, page_count
+
+    async def _attach_recent_activity_ratings(
+        self,
+        user_id: int,
+        entries: list[dict[str, Any]],
+        access_token: str | None,
+    ) -> None:
+        """Add the activity owner's ratings to a recent activity page.
+
+        ``ListActivity`` does not expose the list score itself.  Its nested
+        ``mediaListEntry`` is the *authenticated viewer's* entry, so it is
+        empty whenever the command is viewing another AniList user.  Resolve
+        the five media IDs on the page through ``Page.mediaList`` instead;
+        AniList applies the target user's public-list/privacy rules there.
+        Ratings are optional metadata, so a failed lookup must never make the
+        activity page fail.
+        """
+
+        media_ids: set[int] = set()
+        for activity in entries:
+            if str(activity.get("__typename") or "").casefold() != "listactivity":
+                continue
+            media = _recent_activity_media(activity)
+            try:
+                media_id = int(media.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if media_id > 0:
+                media_ids.add(media_id)
+        if not media_ids:
+            return
+
+        try:
+            response_status, payload = await self._anilist_request(
+                ANILIST_RECENT_RATINGS_QUERY,
+                {"userId": int(user_id), "mediaIds": sorted(media_ids)},
+                access_token,
+            )
+        except commands.BadArgument as error:
+            logger = getattr(self.bot, "logger", None)
+            if logger is not None:
+                logger.debug(
+                    "Could not fetch AniList recent activity ratings: %s", error
+                )
+            return
+        if response_status != 200 or _graphql_error(payload):
+            logger = getattr(self.bot, "logger", None)
+            if logger is not None:
+                logger.debug(
+                    "AniList did not return ratings for recent activity (status=%s)",
+                    response_status,
+                )
+            return
+
+        data = payload.get("data") if isinstance(payload, dict) else None
+        page_data = data.get("Page") if isinstance(data, dict) else None
+        raw_scores = page_data.get("mediaList") if isinstance(page_data, dict) else None
+        if not isinstance(raw_scores, list):
+            return
+        user_data = data.get("User") if isinstance(data, dict) else None
+        user_options = (
+            user_data.get("mediaListOptions") if isinstance(user_data, dict) else None
+        )
+        score_format = (
+            user_options.get("scoreFormat") if isinstance(user_options, dict) else None
+        )
+        scores: dict[int, object] = {}
+        for list_entry in raw_scores:
+            if not isinstance(list_entry, dict):
+                continue
+            try:
+                media_id = int(list_entry.get("mediaId") or 0)
+            except (TypeError, ValueError):
+                continue
+            score = list_entry.get("score")
+            if media_id > 0 and score is not None:
+                scores[media_id] = score
+        for activity in entries:
+            if str(activity.get("__typename") or "").casefold() != "listactivity":
+                continue
+            media = _recent_activity_media(activity)
+            try:
+                media_id = int(media.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if media_id in scores:
+                activity["rating"] = scores[media_id]
+                if score_format:
+                    activity["_scoreFormat"] = score_format
+
     async def _resolve_anilist_target(
         self, ctx: Context, user: object
     ) -> tuple[str, str | None]:
@@ -2855,6 +3483,9 @@ class Anime(Cog):
             username = raw_target.lstrip("@").strip()
             if not username:
                 raise commands.BadArgument("Provide an AniList username.")
+            user_url = ANILIST_USER_URL_RE.fullmatch(username)
+            if user_url is not None:
+                username = user_url.group("username")
             return username, None
 
         account = await self.bot.pool.fetchrow(
@@ -2865,7 +3496,7 @@ class Anime(Cog):
         if not username:
             if target_user.id == ctx.author.id:
                 raise commands.BadArgument(
-                    "Connect AniList first with `fish link anilist`."
+                    "Connect AniList first with `fish accounts`."
                 )
             raise commands.BadArgument(
                 f"{target_user.display_name} has not connected an AniList account."
@@ -2907,7 +3538,7 @@ class Anime(Cog):
         if response_status == 401 and access_token:
             raise commands.BadArgument(
                 "The AniList connection has expired. Please reconnect AniList "
-                "with `fish link anilist`."
+                "with `fish accounts`."
             )
         if response_status >= 500:
             raise commands.BadArgument(
@@ -2961,6 +3592,32 @@ class Anime(Cog):
                 str(score_format) if score_format else None,
                 str(username),
             ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def _show_recent(self, ctx: Context, user: object) -> None:
+        username, access_token = await self._resolve_anilist_target(ctx, user)
+        async with ctx.typing():
+            user_id, canonical_name = await self._lookup_anilist_user(
+                username,
+                access_token,
+            )
+            entries, page_count = await self._fetch_recent_activity_page(
+                user_id,
+                access_token,
+                1,
+            )
+        view = AniListRecentView(
+            self,
+            ctx,
+            user_id=user_id,
+            username=canonical_name,
+            access_token=access_token,
+            entries=entries,
+            page_count=page_count,
+        )
+        view.message = await ctx.send(
+            view=view,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -3061,6 +3718,23 @@ class Anime(Cog):
         """Show the manga you are currently reading or rereading."""
         await self._show_active_list(ctx, "MANGA", user)
 
+    @commands.hybrid_command(name="recent")
+    @app_commands.describe(
+        user="A Discord user mention or AniList username/link",
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def recent(
+        self,
+        ctx: Context,
+        user: str = commands.param(
+            default=commands.Author,
+            description="A Discord user mention or AniList username/link",
+        ),
+    ):
+        """Show a user's recent AniList activity."""
+        await self._show_recent(ctx, user)
+
     @commands.hybrid_group(name="anilist", aliases=("ani",), fallback="profile")
     @app_commands.describe(user="A Discord user mention or AniList username")
     @app_commands.allowed_installs(guilds=True, users=True)
@@ -3103,7 +3777,7 @@ class Anime(Cog):
         if response.status == 401:
             raise commands.BadArgument(
                 "The AniList connection has expired. Please reconnect AniList "
-                "with `fish link anilist`."
+                "with `fish accounts`."
             )
         if response.status >= 500:
             raise commands.BadArgument(

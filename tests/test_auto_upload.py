@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+# Test doubles supply only the Discord/service fields exercised by each test.
+from typing import cast
+
+import discord
+
 from extensions.events.auto_upload import (
     AutoUpload,
     _is_media_candidate_url,
@@ -39,7 +44,7 @@ def test_auto_upload_collects_attachments_and_content_without_duplicates() -> No
         content="https://cdn.example.test/photo.png?token=two",
     )
 
-    entries = AutoUpload._collect(message)
+    entries = AutoUpload._collect(cast("discord.Message", message))
     assert len(entries) == 1
     assert entries[0][0] == "attachment"
 
@@ -61,7 +66,7 @@ def test_auto_upload_prefers_a_link_over_its_discord_preview() -> None:
         ],
     )
 
-    entries = AutoUpload._collect(message)
+    entries = AutoUpload._collect(cast("discord.Message", message))
     assert entries == [("url", "https://www.youtube.com/watch?v=abcdefghijk")]
 
 

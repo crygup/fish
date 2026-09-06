@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import datetime
 
+from test_support import not_none
+
 from utils.anilist import (
     anilist_airing_datetime,
     anilist_datetime,
@@ -38,7 +40,10 @@ def test_select_anilist_media_prefers_exact_title_in_search_page() -> None:
         },
     ]
     assert (
-        select_anilist_media(results, results[1]["title"]["userPreferred"])["id"] == 2
+        not_none(select_anilist_media(results, results[1]["title"]["userPreferred"]))[
+            "id"
+        ]
+        == 2
     )
 
 

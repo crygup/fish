@@ -22,12 +22,17 @@ import pytest
 from discord import app_commands
 from discord.ext import commands
 from PIL import Image, ImageChops
+from test_support import require_type
 
 import extensions.media_effects.audio_effects as audio_effects_module
 import extensions.media_effects.commands as media_effect_commands
 import extensions.media_effects.delivery as media_effect_delivery
 import extensions.media_effects.processing as media_effect_processing
 import extensions.media_effects.runtime as media_effect_runtime
+
+# Test doubles supply only the Discord/service fields exercised by each test.
+from core import Fishie
+from extensions.context import Context
 from extensions.fun import Fun
 from extensions.media_effects import MediaEffects
 from extensions.media_effects.audio_effects import (
@@ -38,7 +43,6 @@ from extensions.media_effects.audio_effects import (
 from extensions.media_effects.commands import (
     PIPELINE_EFFECTS,
     RANDOM_EFFECTS,
-    RANDOM_OVERLAY_EFFECTS,
     Images,
     _country_flag_code,
     _extract_sound_effect_selector,
@@ -46,6 +50,7 @@ from extensions.media_effects.commands import (
     _normalize_effect_options,
     _parse_effect_flags,
     _parse_effect_pipeline,
+    _parse_meme_argument,
     _parse_overlay_selector,
     _parse_overlay_text_argument,
     _playback_factor,
@@ -71,12 +76,14 @@ from extensions.media_effects.processing import (
     MAGIK_GIF_WORKING_SIZE,
     MAGIK_MAX_GIF_FRAMES,
     MAGIK_WORKING_SIZE,
+    EffectResult,
     _adhd_segments,
     _magik_working_frame,
     _overlay,
     _recursive_zoom_frame,
     _resize,
     _sample_heavy_animation,
+    _split_meme_text,
     compress_media_to_size_sync,
     convert_media_sync,
     make_flag_asset,
@@ -99,7 +106,6 @@ from utils.converters import (
     TenorUrlConverter,
     TwemojiConverter,
 )
-from utils.downloads import is_downloadable_media_page
 
 
 def _png_bytes() -> bytes:
@@ -453,8 +459,7 @@ def test_effect_text_flags_accept_a_separated_dash_and_leave_no_fake_media() -> 
 
 def test_effect_pipeline_keeps_order_and_effect_specific_flags() -> None:
     source, effects, skipped = _parse_effect_pipeline(
-        "https://example.com/a.gif invert blur -radius 8 -type motion "
-        "pixelate -size 10"
+        "https://example.com/a.gif invert blur -radius 8 -type motion pixelate -size 10"
     )
     assert source == "https://example.com/a.gif"
     assert effects == [
@@ -507,9 +512,110 @@ def test_effect_pipeline_accepts_caption_and_meme_text() -> None:
     assert source == "https://example.com/a.gif"
     assert effects == [
         ("caption", {"text": "top text"}),
-        ("meme", {"text": "bottom text"}),
+        ("meme", {"text": "bottom text", "meme_no_split": True}),
     ]
     assert skipped == []
+
+
+def test_meme_accepts_positional_media_in_either_order_and_keeps_later_links() -> None:
+    media, options = _parse_meme_argument(
+        "hello world https://example.com/first.png https://example.com/second.png"
+    )
+    assert media == "https://example.com/first.png"
+    assert options["text"] == "hello world https://example.com/second.png"
+
+    media, options = _parse_meme_argument(
+        "https://example.com/first.png hello world",
+        attachment_available=False,
+    )
+    assert media == "https://example.com/first.png"
+    assert options["text"] == "hello world"
+
+
+def test_meme_scale_is_trailing_and_supports_top_and_bottom_values() -> None:
+    media, options = _parse_meme_argument(
+        "https://example.com/first.png hello world -scale 4 1"
+    )
+    assert media == "https://example.com/first.png"
+    assert options["scale_top"] == 4.0
+    assert options["scale_bottom"] == 1.0
+
+    # A non-trailing scale token is caption text; hyphens anywhere in the
+    # caption must not trigger a parser error.
+    media, options = _parse_meme_argument(
+        "-scale 4 https://example.com/first.png hello"
+    )
+    assert media == "https://example.com/first.png"
+    assert options["text"] == "-scale 4 hello"
+
+    media, options = _parse_meme_argument(
+        "https://example.com/first.png test -scale test"
+    )
+    assert media == "https://example.com/first.png"
+    assert options["text"] == "test -scale test"
+
+
+def test_meme_attachment_text_is_positional_and_quoted_long_text_stays_on_top() -> None:
+    _, attachment_options = _parse_meme_argument(
+        "hello world",
+        attachment_available=True,
+    )
+    assert attachment_options["text"] == "hello world"
+
+    long_text = (
+        '"hello world today i went to the store and bought some grapes and then '
+        'ran into someone i had not seen in a long time."'
+    )
+    _, quoted_options = _parse_meme_argument(long_text, attachment_available=True)
+    assert quoted_options["meme_no_split"] is True
+
+
+def test_meme_accepts_mentions_and_emoji_as_positional_media() -> None:
+    media, options = _parse_meme_argument(
+        "<@891372917978452028> hello world",
+    )
+    assert media == "<@891372917978452028>"
+    assert options["text"] == "hello world"
+
+    media, options = _parse_meme_argument(
+        "hello world <:custom:123456789012345678>",
+    )
+    assert media == "<:custom:123456789012345678>"
+    assert options["text"] == "hello world"
+
+    media, options = _parse_meme_argument("😂 hello world")
+    assert media == "😂"
+    assert options["text"] == "hello world"
+
+
+def test_meme_splits_short_captions_evenly_and_honors_explicit_controls() -> None:
+    assert _split_meme_text("hello world") == ("hello", "world")
+    assert _split_meme_text("hello world", allow_auto_split=False) == (
+        "hello world",
+        "",
+    )
+    assert _split_meme_text("hello | world") == ("hello", "world")
+
+
+@pytest.mark.asyncio
+async def test_meme_caption_mentions_use_display_names() -> None:
+    images = object.__new__(Images)
+    images.bot = cast(
+        "Fishie",
+        SimpleNamespace(
+            get_user=lambda _: SimpleNamespace(display_name="hatt"),
+            fetch_user=None,
+        ),
+    )
+    ctx = SimpleNamespace(
+        message=SimpleNamespace(mentions=()),
+        guild=None,
+    )
+    result = await images._resolve_meme_mentions(
+        cast("Context", ctx),
+        "**Paul** given to <@891372917978452028>",
+    )
+    assert result == "**Paul** given to @hatt"
 
 
 def test_effect_pipeline_recognizes_overlay_group_commands() -> None:
@@ -760,7 +866,9 @@ def test_random_asset_overlay_returns_bundled_image_bytes(
         session=None,
     )
     images = Images.__new__(Images)
-    data, label = asyncio.run(images._random_overlay_data(ctx, "random image"))
+    data, label = asyncio.run(
+        images._random_overlay_data(cast("Context", ctx), "random image")
+    )
 
     assert threaded_reads
     assert label.startswith("image: ")
@@ -788,7 +896,9 @@ def test_image_asset_overlay_accepts_id_or_name(
         session=None,
     )
     images = Images.__new__(Images)
-    data, label = asyncio.run(images._random_overlay_data(ctx, f"image {selector}"))
+    data, label = asyncio.run(
+        images._random_overlay_data(cast("Context", ctx), f"image {selector}")
+    )
 
     assert label == "image: Hattori"
     assert data.startswith(b"\x89PNG")
@@ -935,7 +1045,9 @@ def test_untyped_random_overlay_can_choose_an_approved_video(
         session=None,
     )
 
-    data, label = asyncio.run(images._random_overlay_data(ctx, "random"))
+    data, label = asyncio.run(
+        images._random_overlay_data(cast("Context", ctx), "random")
+    )
 
     assert data == b"approved-video"
     assert label == "video: 67"
@@ -1794,7 +1906,7 @@ def test_run_batches_consecutive_sound_effects_into_one_render(
 
 def test_sound_effect_random_time_and_full_random_flags() -> None:
     _, effects, skipped = _parse_effect_pipeline(
-        "audio sound-effect random -fr " "audio sound-effect random -random_time false"
+        "audio sound-effect random -fr audio sound-effect random -random_time false"
     )
     first = effects[0][1]
     second = effects[1][1]
@@ -1885,7 +1997,7 @@ def test_embedfix_reencodes_opaque_gifs_without_transparency() -> None:
     result = repair_gif_sync(_gif_bytes())
     assert result.filename == "embedfix.gif"
     repaired = Image.open(BytesIO(result.data))
-    assert repaired.n_frames == 2
+    assert getattr(repaired, "n_frames", 1) == 2
     assert "transparency" not in repaired.info
     assert probe_media_sync(result.data).duration > 0.1
 
@@ -1991,8 +2103,7 @@ def test_effect_fetch_refreshes_discord_attachment_urls(
             "refreshed_urls": [
                 {
                     "refreshed": (
-                        "https://cdn.discordapp.com/attachments/1/2/file.png"
-                        "?ex=fresh"
+                        "https://cdn.discordapp.com/attachments/1/2/file.png?ex=fresh"
                     )
                 }
             ]
@@ -2361,7 +2472,7 @@ def test_media_application_commands_fit_discords_size_limit() -> None:
 def test_rebalanced_media_application_groups_use_sequential_names() -> None:
     cog = MediaEffects(cast(Any, SimpleNamespace()))
     groups = [
-        child.app_command
+        require_type(child, commands.HybridGroup).app_command
         for child in cog.__cog_commands__
         if child.parent is None
         and isinstance(getattr(child, "app_command", None), app_commands.Group)
@@ -2383,7 +2494,7 @@ def test_rebalanced_media_application_groups_use_sequential_names() -> None:
 def test_rebalanced_media_groups_do_not_duplicate_leaf_names() -> None:
     cog = MediaEffects(cast(Any, SimpleNamespace()))
     groups = [
-        child.app_command
+        require_type(child, commands.HybridGroup).app_command
         for child in cog.__cog_commands__
         if child.parent is None
         and isinstance(getattr(child, "app_command", None), app_commands.Group)
@@ -2402,6 +2513,7 @@ def test_rebalanced_media_groups_do_not_duplicate_leaf_names() -> None:
         child for group in groups for child in group.commands if child.name == "overlay"
     ]
     assert len(overlay_commands) == 1
+    assert isinstance(overlay_commands[0], app_commands.Command)
     assert "audio_media" in {
         parameter.name for parameter in overlay_commands[0].parameters
     }
@@ -2797,9 +2909,7 @@ def test_media_converter_reads_discord_urls_from_recent_message_content() -> Non
         embeds=[],
         components=[],
         stickers=[],
-        content=(
-            "https://cdn.discordapp.com/attachments/1/2/video.mp4" "?ex=abc&hm=def"
-        ),
+        content=("https://cdn.discordapp.com/attachments/1/2/video.mp4?ex=abc&hm=def"),
     )
 
     async def history(*, limit: int) -> AsyncIterator[Any]:
@@ -3835,7 +3945,7 @@ def test_cancelled_media_worker_finishes_before_cancellation_propagates(
             "get_running_loop",
             lambda: FakeLoop(),
         )
-        task = asyncio.create_task(blocking_work())
+        task = asyncio.ensure_future(blocking_work())
         await asyncio.sleep(0)
         assert started.is_set()
         task.cancel()
@@ -3878,9 +3988,9 @@ def test_effect_delivery_compresses_to_the_discord_limit_and_keeps_footer(
 
     asyncio.run(
         media_effect_delivery.send_effect_result(
-            SimpleNamespace(embedcolor=discord.Colour.blurple()),
-            ctx,
-            result,
+            cast("Fishie", SimpleNamespace(embedcolor=discord.Colour.blurple())),
+            cast("Context", ctx),
+            cast("EffectResult", result),
             started=0.0,
         )
     )
@@ -3912,9 +4022,9 @@ def test_bulk_effect_delivery_keeps_invoker_without_hosted_files() -> None:
 
     asyncio.run(
         media_effect_delivery.send_effect_results(
-            SimpleNamespace(embedcolor=discord.Colour.blurple()),
-            ctx,
-            [result],
+            cast("Fishie", SimpleNamespace(embedcolor=discord.Colour.blurple())),
+            cast("Context", ctx),
+            [cast("EffectResult", result)],
             started=0.0,
         )
     )

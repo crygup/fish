@@ -1928,73 +1928,184 @@ def _oilpaint(frame: Image.Image) -> Image.Image:
     return _preserve_alpha(frame, Image.fromarray(array, "RGB"))
 
 
+def _split_meme_text(
+    text: str,
+    *,
+    max_chars: int | None = None,
+    allow_auto_split: bool = True,
+) -> tuple[str, str]:
+    """Return balanced top/bottom meme lines without splitting words.
+
+    ``|`` is an explicit separator.  Otherwise an unquoted caption containing
+    multiple words is split near its midpoint.  ``max_chars`` is retained for
+    callers that want to opt out for short captions; the meme command leaves
+    it unset so even a two-word caption (``hello world``) is split evenly.
+    Quoted captions can opt out through ``allow_auto_split=False``.
+    """
+
+    text = str(text).strip()
+    # A single pipe is the explicit top/bottom separator.  Discord spoiler
+    # markup uses a pair (``||text||``), which must remain part of the caption
+    # instead of accidentally splitting the meme after the first pipe.
+    separator = re.search(r"(?<!\|)\|(?!\|)", text)
+    if separator is not None:
+        top = text[: separator.start()]
+        bottom = text[separator.end() :]
+        return top.strip(), bottom.strip()
+    if not allow_auto_split or (max_chars is not None and len(text) <= max_chars):
+        return text, ""
+    words = text.split()
+    if len(words) < 2:
+        return text, ""
+    midpoint = len(text) / 2
+    word_midpoint = len(words) / 2
+    lengths: list[int] = []
+    current = 0
+    for index, word in enumerate(words[:-1], start=1):
+        current += len(word) + (1 if index > 1 else 0)
+        lengths.append(current)
+    split_at = min(
+        range(1, len(words)),
+        # Keep the two sides as close as possible by word count first.  The
+        # character midpoint is only a tie-breaker for odd-length captions.
+        key=lambda index: (
+            abs(index - word_midpoint),
+            abs(lengths[index - 1] - midpoint),
+        ),
+    )
+    return " ".join(words[:split_at]), " ".join(words[split_at:])
+
+
+def _meme_scale_pair(options: dict[str, Any]) -> tuple[float, float]:
+    """Read and validate the top/bottom meme text scales."""
+
+    top_value = options.get("scale_top", options.get("scale", 5.0))
+    bottom_value = options.get("scale_bottom", top_value)
+    try:
+        top = float(top_value)
+        bottom = float(bottom_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Meme scale values must be numbers from 0.1 to 10.") from error
+    if any(
+        not math.isfinite(value) or not 0.1 <= value <= 10 for value in (top, bottom)
+    ):
+        raise ValueError("Meme scale values must be between 0.1 and 10.")
+    return top, bottom
+
+
 def _meme(frame: Image.Image, options: dict[str, Any]) -> Image.Image:
     text = str(options.get("text", "")).strip()
     if not text:
         raise ValueError("Meme requires text.")
     image = frame.convert("RGBA").copy()
-    # Leave enough room for the outline while keeping the tall, condensed
-    # proportions of the usual meme font at Discord's attachment sizes.
-    size = max(18, min(96, round(image.width / 8 * 0.91)))
-    middle_text = ""
-    if "|" in text:
-        top_text, bottom_text = (part.strip() for part in text.split("|", 1))
-    else:
-        words = text.split()
-        if len(words) < 6:
-            top_text = bottom_text = ""
-            middle_text = text
-        else:
-            midpoint = max(1, len(words) // 2)
-            top_text = " ".join(words[:midpoint])
-            bottom_text = " ".join(words[midpoint:])
+    top_text, bottom_text = _split_meme_text(
+        text,
+        allow_auto_split=not bool(options.get("meme_no_split")),
+    )
+    top_scale, bottom_scale = _meme_scale_pair(options)
+    assets = cast(dict[str, bytes], options.get("inline_images") or {})
 
-    def draw_centered(value: str, bottom: int | None = None) -> None:
+    margin = max(6, round(min(image.size) * 0.03))
+    has_bottom = bool(bottom_text)
+    if has_bottom:
+        # Reserve a readable region for each side and leave a small clear gap
+        # between them.  This keeps a long caption from shrinking to a single
+        # unreadable line merely because the other side is shorter.
+        region_height = max(1, (image.height - margin * 3) // 2)
+    else:
+        region_height = max(1, image.height - margin * 2)
+
+    def requested_size(value: str, scale: float) -> int:
+        # Five remains the default scale.  The size is subsequently reduced
+        # only when wrapping would exceed the available vertical region.
+        return max(4, min(160, round(image.width / 6.8 * (scale / 5))))
+
+    def make_layout(
+        value: str,
+        scale: float,
+        *,
+        size_override: int | None = None,
+    ) -> tuple[Image.Image, int] | None:
         if not value:
-            return
-        value = value.upper()
-        font = meme_font(value, size)
-        stroke = max(3, round(size * 0.04))
-        box = font.getbbox(value, stroke_width=stroke)
-        padding = stroke + 2
+            return None
+        size = size_override or requested_size(value, scale)
+        while True:
+            font = meme_font(value, size)
+            stroke = max(2, round(size * 0.045))
+            padding = stroke + 2
+            max_width = max(1, image.width - margin * 2 - padding * 2)
+            lines = wrap_inline_text(value, font, size, assets, max_width)
+            line_box = font.getbbox("Ag", stroke_width=stroke)
+            line_height = max(size, line_box[3] - line_box[1])
+            line_gap = max(1, round(size * 0.08))
+            block_height = (
+                len(lines) * line_height
+                + max(0, len(lines) - 1) * line_gap
+                + padding * 2
+            )
+            if block_height <= region_height or size <= 4:
+                break
+            next_size = max(4, round(size * 0.9))
+            if next_size == size:
+                next_size = size - 1
+            size = max(4, next_size)
+
+        widths = [measure_inline_tokens(line, font, size, assets) for line in lines]
         layer = Image.new(
             "RGBA",
-            (
-                round(box[2] - box[0] + padding * 2),
-                round(box[3] - box[1] + padding * 2),
-            ),
+            (image.width, max(1, round(block_height))),
             (0, 0, 0, 0),
         )
-        layer_draw = ImageDraw.Draw(layer)
-        layer_draw.text(
-            (padding - box[0], padding - box[1]),
-            value,
-            font=font,
-            fill="white",
-            stroke_width=stroke,
-            stroke_fill="black",
-        )
-        # Impact-style meme fonts are much narrower than the general-purpose
-        # multilingual fonts available in the container. Compress only the
-        # horizontal axis so the familiar tall lettering is retained.
-        target_width = max(1, round(layer.width * 0.61))
-        if target_width > image.width - 12:
-            target_width = image.width - 12
-        layer = layer.resize((target_width, layer.height), Image.Resampling.LANCZOS)
-        x = (image.width - layer.width) // 2
-        if bottom is None:
-            y = 8
-        else:
-            y = image.height - layer.height - bottom
-        image.alpha_composite(layer, (x, y))
+        for index, (line, width) in enumerate(zip(lines, widths)):
+            x = max(0, round((image.width - width) / 2))
+            y = padding + index * (line_height + line_gap) - line_box[1]
+            draw_inline_tokens(
+                layer,
+                line,
+                (x, round(y)),
+                font=font,
+                image_size=size,
+                assets=assets,
+                fill="white",
+                stroke_width=stroke,
+                stroke_fill="black",
+            )
+        # Remove the transparent padding introduced by the line metrics.  In
+        # addition to keeping the text visually centered, this lets the
+        # bottom block sit close to the lower edge instead of appearing
+        # several dozen pixels too high on square images.
+        alpha_bbox = layer.getchannel("A").getbbox()
+        if alpha_bbox is not None:
+            # Keep the full canvas width: the line was centered against that
+            # width, so cropping horizontally would move it to the left when
+            # the layer is composited back onto the source image.
+            layer = layer.crop((0, alpha_bbox[1], layer.width, alpha_bbox[3]))
+        return layer, size
 
-    draw_centered(top_text)
-    if bottom_text:
-        draw_centered(bottom_text, bottom=4)
-    if middle_text:
-        font = meme_font(middle_text, size)
-        box = font.getbbox(middle_text, stroke_width=max(3, round(size * 0.04)))
-        draw_centered(middle_text, bottom=round((image.height - (box[3] - box[1])) / 2))
+    top_layout = make_layout(top_text, top_scale)
+    bottom_layout = make_layout(bottom_text, bottom_scale)
+    # The default scales are equal, so use one common fitted size.  This
+    # prevents a long top half from becoming tiny while a short bottom half
+    # remains oversized. Explicitly different scales retain their difference.
+    if top_layout is not None and bottom_layout is not None:
+        if math.isclose(top_scale, bottom_scale):
+            common_size = min(top_layout[1], bottom_layout[1])
+            top_layout = make_layout(top_text, top_scale, size_override=common_size)
+            bottom_layout = make_layout(
+                bottom_text,
+                bottom_scale,
+                size_override=common_size,
+            )
+
+    if top_layout is not None:
+        image.alpha_composite(top_layout[0], (0, margin))
+    if bottom_layout is not None:
+        bottom_layer = bottom_layout[0]
+        bottom_margin = max(4, round(min(image.size) * 0.008))
+        image.alpha_composite(
+            bottom_layer,
+            (0, max(margin, image.height - bottom_margin - bottom_layer.height)),
+        )
     return image
 
 
@@ -3031,21 +3142,14 @@ def _video_filter(
             "oilpaint.mp4",
         )
     if effect == "meme":
-        text = str(options.get("text", "")).strip().upper()
+        text = str(options.get("text", "")).strip()
         if not text:
             raise ValueError("Meme requires text.")
-        middle_text = ""
-        if "|" in text:
-            top_text, bottom_text = (part.strip() for part in text.split("|", 1))
-        else:
-            words = text.split()
-            if len(words) < 6:
-                top_text = bottom_text = ""
-                middle_text = text
-            else:
-                midpoint = max(1, len(words) // 2)
-                top_text = " ".join(words[:midpoint])
-                bottom_text = " ".join(words[midpoint:])
+        top_text, bottom_text = _split_meme_text(
+            text,
+            allow_auto_split=not bool(options.get("meme_no_split")),
+        )
+        top_scale, bottom_scale = _meme_scale_pair(options)
 
         def quote_drawtext(value: str) -> str:
             return value.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
@@ -3060,19 +3164,15 @@ def _video_filter(
         if top_text:
             filters.append(
                 f"drawtext=fontfile={fontfile}:"
-                f"text='{quote_drawtext(top_text)}':x=(w-text_w)/2:y=8:fontsize=min(w/8\\,96):"
+                f"text='{quote_drawtext(top_text)}':x=(w-text_w)/2:y=8:"
+                f"fontsize=min(w/6.8*{top_scale / 5:g}\\,160):"
                 "fontcolor=white:borderw=3:bordercolor=black"
             )
         if bottom_text:
             filters.append(
                 f"drawtext=fontfile={fontfile}:"
-                f"text='{quote_drawtext(bottom_text)}':x=(w-text_w)/2:y=h-text_h-12:fontsize=min(w/8\\,96):"
-                "fontcolor=white:borderw=3:bordercolor=black"
-            )
-        if middle_text:
-            filters.append(
-                f"drawtext=fontfile={fontfile}:"
-                f"text='{quote_drawtext(middle_text)}':x=(w-text_w)/2:y=(h-text_h)/2:fontsize=min(w/8\\,96):"
+                f"text='{quote_drawtext(bottom_text)}':x=(w-text_w)/2:y=h-text_h-12:"
+                f"fontsize=min(w/6.8*{bottom_scale / 5:g}\\,160):"
                 "fontcolor=white:borderw=3:bordercolor=black"
             )
         return ",".join(filters), "meme.mp4"
@@ -3460,6 +3560,34 @@ def _render_video_visual(
             x=int(options.get("x", 0)),
             y=int(options.get("y", 0)),
         )
+
+    if effect == "meme":
+        # Render the text with Pillow first so the video path has the same
+        # wrapping, scale, and emoji/script fallback behavior as still images.
+        # A transparent overlay is then composited over the original video.
+        with tempfile.TemporaryDirectory(prefix="fishie-meme-video-") as directory:
+            input_path = os.path.join(directory, "input.media")
+            Path(input_path).write_bytes(data)
+            probe = _probe_path(input_path)
+            if not probe.has_video:
+                raise ValueError("That effect requires an image, GIF, or video.")
+            overlay = _meme(
+                Image.new("RGBA", (probe.width, probe.height), (0, 0, 0, 0)),
+                options,
+            )
+            overlay_buffer = BytesIO()
+            overlay.save(overlay_buffer, "PNG")
+            return _video_command_output(
+                data,
+                # ``_video_command_output`` appends the selected extension;
+                # passing an extension here produced ``meme.mp4.mp4``.
+                filename="meme",
+                second_data=overlay_buffer.getvalue(),
+                filter_complex="[0:v][1:v]overlay=0:0:format=auto[v]",
+                map_arguments=["-map", "[v]", "-map", "0:a?"],
+                output_duration=probe.duration,
+                media_probe=probe,
+            )
 
     with tempfile.TemporaryDirectory(prefix="fishie-image-effect-") as directory:
         input_path = os.path.join(directory, "input.media")
@@ -5592,6 +5720,12 @@ def render_video_effect_sync(
             probe = _probe_path(path)
     else:
         probe = media_probe
+
+    if effect == "meme":
+        # Keep direct video-effect callers on the same Pillow-backed renderer
+        # as the image-effect path.  The older drawtext fallback did not wrap
+        # long captions and could return a video with inconsistent sizing.
+        return _render_video_visual(input_data, effect, options)
 
     if effect in {"magik", "swirl", "gifmagik", "gifswirl"}:
         raise ValueError(

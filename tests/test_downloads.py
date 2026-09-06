@@ -87,7 +87,9 @@ def test_direct_and_unapproved_urls_do_not_use_the_page_downloader() -> None:
 
 
 def test_all_yt_dlp_invocations_use_the_guarded_entry_point() -> None:
-    source = Path("src/utils/downloads.py").read_text()
+    source = (
+        Path(__file__).resolve().parents[1] / "src/utils/downloads.py"
+    ).read_text()
     assert '"utils.ytdlp_safe"' in source
     assert '"yt_dlp",' not in source
 
@@ -99,7 +101,7 @@ def test_twitter_selector_falls_back_when_gif_dimensions_are_unknown() -> None:
         res_target=1080,
     )
 
-    assert selector == ("bestvideo[height<=1080]+bestaudio/" "best[height<=1080]/best")
+    assert selector == ("bestvideo[height<=1080]+bestaudio/best[height<=1080]/best")
 
 
 def test_tiktok_selector_falls_back_when_dimensions_are_unavailable() -> None:

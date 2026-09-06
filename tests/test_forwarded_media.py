@@ -1,7 +1,9 @@
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
+from extensions.context import Context
 from extensions.fun.post import PostCommands
 from extensions.fun.video import VideoCommands
 from utils.converters import MediaConverter
@@ -76,7 +78,8 @@ async def test_reply_video_sources_include_forwarded_video_attachments() -> None
     )
 
     attachments, media_url = await VideoCommands()._reply_video_sources(
-        SimpleNamespace(), replied  # type: ignore[arg-type]
+        cast("Context", SimpleNamespace()),
+        replied,  # type: ignore[arg-type]
     )
 
     assert attachments == [attachment]
@@ -97,7 +100,8 @@ async def test_reply_post_sources_include_all_forwarded_attachments() -> None:
     )
 
     attachments, media_urls = await PostCommands()._reply_post_sources(
-        SimpleNamespace(), replied  # type: ignore[arg-type]
+        cast("Context", SimpleNamespace()),
+        replied,  # type: ignore[arg-type]
     )
 
     assert attachments == [first, second]
