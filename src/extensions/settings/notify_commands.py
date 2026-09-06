@@ -36,6 +36,7 @@ from .notify import (
     normalize_twitch_channel,
     select_anilist_media,
     twitch_list_details,
+    youtube_list_details,
 )
 
 if TYPE_CHECKING:
@@ -220,8 +221,15 @@ def _split_anime_mention(
             if tail.casefold().endswith(suffix):
                 candidate = role.name
                 tail = tail[: -len(suffix)].rstrip()
-                break
     return tail or value, candidate if candidate is not None else mention
+
+
+def _follow_display_name(row: Any, kind: str) -> str:
+    """Return a follow's human display name for notification messages."""
+
+    if kind in {"youtube", "twitch"}:
+        return str(row.get("channel_name") or "")
+    return str(row.get("title") or "")
 
 
 class Notify(Cog):
@@ -267,16 +275,130 @@ class Notify(Cog):
         renderer here also ensures text and slash fallbacks use identical
         Components V2 output.
         """
-
         text = (
             "## Notifications\n"
-            "Follow Twitch channels or anime releases and receive notifications "
-            "in this server or by DM.\n\n"
-            "Use `notify add twitch <channel>` or `notify add anime <title>`."
+            "Follow Twitch channels, YouTube channels, or anime releases and "
+            "receive notifications in this server or by DM.\n\n"
+            "Use `notify add twitch <channel>`, `notify add youtube <channel>`, "
+            "or `notify add anime <title>`."
         )
         await self._send(
             ctx,
             view=NotifyView(text, "Use `notify list` to view active follows."),
+            allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=ctx.interaction is not None,
+        )
+
+
+    async def _youtube_channel(self, value: str) -> dict[str, Any] | None:
+        """Resolve a YouTube channel via the Events cog."""
+
+        events = self._events()
+        if events is None or not hasattr(events, "resolve_youtube_channel"):
+            return None
+        return await events.resolve_youtube_channel(value)
+
+    async def _youtube_search(self, query: str) -> list[dict[str, Any]]:
+        """Search YouTube channels via the Events cog."""
+
+        events = self._events()
+        if events is None or not hasattr(events, "search_youtube_channels"):
+            return []
+        return await events.search_youtube_channels(query)
+
+    @staticmethod
+    def _youtube_events(value: str | None) -> tuple[str, ...]:
+        """Map a ``events`` option to YouTube event type names.
+
+        ``uploads`` and ``live`` are the only choices exposed by the command;
+        ``both`` expands to ``video`` + ``live``.
+        """
+
+        choice = (value or "both").strip().lower()
+        if choice in {"upload", "uploads", "video", "videos"}:
+            return ("video",)
+        if choice in {"live", "livestream", "stream"}:
+            return ("live",)
+        return ("video", "live")
+
+    async def _add_youtube(
+        self, ctx: Context, channel: str, events: str | None
+    ) -> None:
+        """Resolve and persist one YouTube follow in the current scope."""
+
+        self._require_server_admin(ctx)
+        youtube_channel = await self._youtube_channel(channel)
+        if not youtube_channel or not youtube_channel.get("id"):
+            raise commands.BadArgument(
+                f"Could not find a YouTube channel named **{discord.utils.escape_markdown(channel)}**."
+            )
+        channel_id = str(youtube_channel["id"])
+        event_types = self._youtube_events(events)
+        guild_id, user_id = _scope(ctx)
+        scope_column = "guild_id" if guild_id is not None else "user_id"
+        scope_id = guild_id if guild_id is not None else user_id
+        announce_channel_id = int(ctx.channel.id) if guild_id is not None else None
+        async with self.bot.pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    f"notify:youtube:{scope_id}",
+                )
+                existing = await connection.fetchval(
+                    f"SELECT id FROM youtube_follows WHERE {scope_column} = $1 "
+                    "AND youtube_channel_id = $2",
+                    scope_id,
+                    channel_id,
+                )
+                if existing is not None:
+                    raise commands.BadArgument(
+                        "That YouTube channel is already followed here."
+                    )
+                count = await connection.fetchval(
+                    f"SELECT COUNT(*) FROM youtube_follows WHERE {scope_column} = $1",
+                    scope_id,
+                )
+                if int(count or 0) >= 10:
+                    raise commands.BadArgument(
+                        "You can follow up to 10 YouTube channels per server or DM."
+                    )
+                inserted = await connection.fetchrow(
+                    f"INSERT INTO youtube_follows "
+                    f"({scope_column}, youtube_channel_id, channel_name, "
+                    "channel_handle, announce_channel_id, event_types) "
+                    "VALUES ($1, $2, $3, $4, $5, $6::text[]) "
+                    "ON CONFLICT DO NOTHING RETURNING id",
+                    scope_id,
+                    channel_id,
+                    youtube_channel["name"],
+                    youtube_channel.get("handle"),
+                    announce_channel_id,
+                    list(event_types),
+                )
+                if inserted is None:
+                    raise commands.BadArgument(
+                        "That YouTube channel is already followed here."
+                    )
+                follow_id = int(inserted["id"])
+        events_cog = self._events()
+        if events_cog is not None and hasattr(
+            events_cog, "ensure_youtube_subscription"
+        ):
+            await events_cog.ensure_youtube_subscription(channel_id)
+        label = (
+            "uploads + live"
+            if event_types == ("video", "live")
+            else "uploads"
+            if event_types == ("video",)
+            else "live"
+        )
+        await self._send(
+            ctx,
+            view=NotifyView(
+                "## YouTube notifications",
+                f"Following **{discord.utils.escape_markdown(youtube_channel['name'])}** "
+                f"(ID: `{follow_id}`) for {label}.",
+            ),
             allowed_mentions=discord.AllowedMentions.none(),
             ephemeral=ctx.interaction is not None,
         )
@@ -436,12 +558,16 @@ class Notify(Cog):
         raw = str(selector or "").strip()
         if not raw:
             return None
-        if kind not in {"twitch", "anime"}:
+        if kind not in {"twitch", "anime", "youtube"}:
             raise ValueError(f"Unknown notification kind: {kind}")
         guild_id, user_id = _scope(ctx)
         scope_column = "guild_id" if guild_id is not None else "user_id"
         scope_id = guild_id if guild_id is not None else user_id
-        table = f"notify_{kind}_follows"
+        table = (
+            "youtube_follows"
+            if kind == "youtube"
+            else f"notify_{kind}_follows"
+        )
 
         # A follow ID is deliberately checked before any provider-specific ID
         # (such as AniList's media ID).  This makes the IDs shown by
@@ -470,6 +596,15 @@ class Notify(Cog):
                 "ORDER BY id LIMIT 1",
                 scope_id,
                 name,
+            )
+
+        if kind == "youtube":
+            return await self.bot.pool.fetchrow(
+                f"SELECT * FROM {table} WHERE {scope_column} = $1 "
+                "AND (lower(btrim(channel_name)) = lower(btrim($2)) "
+                "OR youtube_channel_id = $2) ORDER BY id LIMIT 1",
+                scope_id,
+                raw,
             )
 
         anime = self._normalize_anime_query(raw)
@@ -578,6 +713,74 @@ class Notify(Cog):
                 )
             )
         return choices[:25]
+
+    async def _followed_youtube_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Return followed YouTube channels visible in the current scope."""
+
+        try:
+            if interaction.guild is None:
+                rows = await self.bot.pool.fetch(
+                    "SELECT id, channel_name FROM youtube_follows "
+                    "WHERE user_id = $1 ORDER BY lower(btrim(channel_name)), id LIMIT 100",
+                    interaction.user.id,
+                )
+            else:
+                rows = await self.bot.pool.fetch(
+                    "SELECT id, channel_name FROM youtube_follows "
+                    "WHERE guild_id = $1 "
+                    "ORDER BY lower(btrim(channel_name)), id LIMIT 100",
+                    interaction.guild.id,
+                )
+        except Exception:
+            self.bot.logger.exception("Notify YouTube autocomplete lookup failed")
+            return []
+        needle = self._autocomplete_needle(current)
+        choices: list[app_commands.Choice[str]] = []
+        for row in rows:
+            name = str(row["channel_name"]).strip()
+            follow_id = str(row["id"])
+            if not name or (
+                needle and needle not in name.casefold() and needle not in follow_id
+            ):
+                continue
+            choices.append(
+                app_commands.Choice(name=f"{follow_id} · {name}"[:100], value=follow_id)
+            )
+        return choices[:25]
+
+    async def _resolve_youtube_follow(
+        self, ctx: Context, selector: str
+    ) -> Any | None:
+        """Resolve a YouTube follow by ID, channel name, or channel ID."""
+
+        raw = str(selector or "").strip()
+        if not raw:
+            return None
+        guild_id, user_id = _scope(ctx)
+        scope_column = "guild_id" if guild_id is not None else "user_id"
+        scope_id = guild_id if guild_id is not None else user_id
+        table = "youtube_follows"
+        try:
+            follow_id = int(raw)
+        except (TypeError, ValueError, OverflowError):
+            follow_id = 0
+        if 0 < follow_id <= 9_223_372_036_854_775_807:
+            row = await self.bot.pool.fetchrow(
+                f"SELECT * FROM {table} WHERE {scope_column} = $1 AND id = $2",
+                scope_id,
+                follow_id,
+            )
+            if row is not None:
+                return row
+        return await self.bot.pool.fetchrow(
+            f"SELECT * FROM {table} WHERE {scope_column} = $1 "
+            "AND (lower(btrim(channel_name)) = lower(btrim($2)) "
+            "OR youtube_channel_id = $2) ORDER BY id LIMIT 1",
+            scope_id,
+            raw,
+        )
 
     @staticmethod
     def _guild_channel_choices(
@@ -762,6 +965,49 @@ class Notify(Cog):
             seen.add(title.casefold())
             value = title if len(title) <= 100 else str(media_id)
             choices.append(app_commands.Choice(name=title[:100], value=value))
+        result = choices[:25]
+        _AUTOCOMPLETE_CACHE[cache_key] = tuple(result)
+        return result
+
+    async def _youtube_search_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Search YouTube channels for add/lookup command suggestions."""
+
+        query = str(current or "").strip()
+        if not query:
+            return []
+        if not _autocomplete_allowed(interaction):
+            return []
+        cache_key = f"youtube:{query.casefold()[:100]}"
+        cached = _AUTOCOMPLETE_CACHE.get(cache_key)
+        if cached is not None:
+            return list(cached)
+        # An exact channel URL/handle/ID is cheaper to resolve through the
+        # existing lookup than through the search endpoint.
+        exact = await self._youtube_channel(query)
+        choices: list[app_commands.Choice[str]] = []
+        if exact and exact.get("id"):
+            name = str(exact.get("name") or exact["id"])
+            choices.append(
+                app_commands.Choice(name=name[:100], value=str(exact["id"])[:100])
+            )
+            _AUTOCOMPLETE_CACHE[cache_key] = tuple(choices)
+            return choices
+        try:
+            results = await self._youtube_search(query)
+        except Exception:
+            results = []
+        seen: set[str] = set()
+        for result in results:
+            channel_id = str(result.get("id") or "")
+            if not channel_id or channel_id.casefold() in seen:
+                continue
+            seen.add(channel_id.casefold())
+            name = str(result.get("name") or channel_id)
+            choices.append(
+                app_commands.Choice(name=name[:100], value=channel_id[:100])
+            )
         result = choices[:25]
         _AUTOCOMPLETE_CACHE[cache_key] = tuple(result)
         return result
@@ -1103,6 +1349,70 @@ class Notify(Cog):
     ) -> list[app_commands.Choice[str]]:
         return await self._anime_search_choices(interaction, current)
 
+    @notify_add.command(name="youtube")
+    @app_commands.describe(
+        channel="YouTube channel name, handle, or channel URL.",
+        events="Which events to notify for: uploads, live, or both (default both).",
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def notify_add_youtube(
+        self,
+        ctx: Context,
+        channel: str,
+        events: str | None = None,
+    ) -> None:
+        """Follow a YouTube channel in this server or by DM."""
+        async with ctx.typing(ephemeral=ctx.interaction is not None):
+            await self._add_youtube(ctx, channel, events)
+
+    @notify_add_youtube.autocomplete("channel")
+    async def notify_add_youtube_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return await self._youtube_search_choices(interaction, current)
+
+    @notify.command(name="youtube")
+    @app_commands.describe(
+        channel="YouTube channel name, handle, or channel URL.",
+        events="Which events to notify for: uploads, live, or both (default both).",
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def notify_youtube(
+        self,
+        ctx: Context,
+        channel: str,
+        events: str | None = None,
+    ) -> None:
+        """Follow a YouTube channel (shorthand for ``notify add youtube``)."""
+        async with ctx.typing(ephemeral=ctx.interaction is not None):
+            await self._add_youtube(ctx, channel, events)
+
+    @notify_youtube.autocomplete("channel")
+    async def notify_youtube_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return await self._youtube_search_choices(interaction, current)
+
+    @notify_youtube.autocomplete("events")
+    async def notify_youtube_events_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        options = [
+            app_commands.Choice(name="Uploads", value="uploads"),
+            app_commands.Choice(name="Live streams", value="live"),
+            app_commands.Choice(name="Both (default)", value="both"),
+        ]
+        needle = current.casefold()
+        return [choice for choice in options if needle in choice.name.casefold()][:25]
+
+    @notify_add_youtube.autocomplete("events")
+    async def notify_add_youtube_events_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return await self.notify_youtube_events_autocomplete(interaction, current)
+
     @notify.group(
         name="remove",
         aliases=("unfollow",),
@@ -1255,6 +1565,73 @@ class Notify(Cog):
         """Suggest followed anime titles for the current server or DM."""
         return await self._followed_anime_choices(interaction, current)
 
+    async def _remove_youtube(self, ctx: Context, channel: str) -> None:
+        """Stop following a YouTube channel in this scope."""
+        self._require_server_admin(ctx)
+        row = await self._resolve_follow(ctx, "youtube", channel)
+        if row is None:
+            raise commands.BadArgument(
+                f"You are not following **{discord.utils.escape_markdown(channel)}**."
+            )
+        follow_id = int(row["id"])
+        name = str(row["channel_name"])
+        channel_id = str(row["youtube_channel_id"])
+        guild_id, user_id = _scope(ctx)
+        scope_column = "guild_id" if guild_id is not None else "user_id"
+        scope_id = guild_id if guild_id is not None else user_id
+        result = await self.bot.pool.execute(
+            f"DELETE FROM youtube_follows WHERE id = $1 AND "
+            f"{scope_column} = $2",
+            follow_id,
+            scope_id,
+        )
+        try:
+            removed = int(str(result).rsplit(" ", 1)[-1])
+        except (ValueError, IndexError):
+            removed = 0
+        if not removed:
+            raise commands.BadArgument(f"You are not following **{name}**.")
+        events_cog = self._events()
+        if events_cog is not None and hasattr(
+            events_cog, "remove_youtube_subscription"
+        ):
+            try:
+                await events_cog.remove_youtube_subscription(channel_id)
+            except Exception as error:
+                self.bot.logger.warning(
+                    "Could not remove YouTube notification subscription for %s: %s",
+                    name,
+                    error,
+                )
+        await self._send(
+            ctx,
+            view=NotifyView(
+                "## YouTube notifications",
+                f"No longer following **{discord.utils.escape_markdown(name)}** "
+                f"(ID: `{follow_id}`).",
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @notify_remove.command(name="youtube")
+    @app_commands.describe(
+        channel="Follow ID, YouTube channel name, or channel URL to unfollow."
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def notify_remove_youtube(self, ctx: Context, *, channel: str) -> None:
+        """Stop following a YouTube channel in this scope."""
+        async with ctx.typing(ephemeral=ctx.interaction is not None):
+            await self._remove_youtube(ctx, channel)
+
+    @notify_remove_youtube.autocomplete("channel")
+    async def notify_remove_youtube_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Suggest followed YouTube channels for the current server or DM."""
+        return await self._followed_youtube_choices(interaction, current)
+
     @notify.group(name="mention", fallback="info")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -1271,7 +1648,7 @@ class Notify(Cog):
         row = await self._resolve_follow(ctx, kind, entity)
         if row is None:
             raise commands.BadArgument("That notification follow was not found.")
-        table = f"notify_{kind}_follows"
+        table = "youtube_follows" if kind == "youtube" else f"notify_{kind}_follows"
         follow_id = int(row["id"])
         scope_column = "guild_id" if guild_id is not None else "user_id"
         scope_id = guild_id if guild_id is not None else user_id
@@ -1290,11 +1667,11 @@ class Notify(Cog):
             view=NotifyView(
                 f"## {kind.title()} notifications",
                 (
-                    f"Mention for **{row['channel_name'] if kind == 'twitch' else row['title']}** "
+                    f"Mention for **{_follow_display_name(row, kind)}** "
                     f"(ID: `{follow_id}`) set to {label}."
                     if label
                     else (
-                        f"Mentions for **{row['channel_name'] if kind == 'twitch' else row['title']}** "
+                        f"Mentions for **{_follow_display_name(row, kind)}** "
                         f"(ID: `{follow_id}`) cleared."
                     )
                 ),
@@ -1353,6 +1730,106 @@ class Notify(Cog):
         """Suggest the anime notifications available in the current scope."""
         return await self._followed_anime_choices(interaction, current)
 
+    @notify_mention.command(name="youtube")
+    @app_commands.describe(
+        channel="Follow ID or followed YouTube channel name/URL.",
+        mention="Role, @everyone, or omit to clear mentions.",
+    )
+    async def notify_mention_youtube(
+        self, ctx: Context, channel: str, mention: str | None = None
+    ) -> None:
+        """Configure the role or @everyone mention for a YouTube follow."""
+        async with ctx.typing(ephemeral=ctx.interaction is not None):
+            await self._set_mention(ctx, "youtube", channel, mention)
+
+    @notify_mention_youtube.autocomplete("channel")
+    async def notify_mention_youtube_channel_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return await self._followed_youtube_choices(interaction, current)
+
+    @notify_mention_youtube.autocomplete("mention")
+    async def notify_mention_youtube_role_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return self._guild_role_choices(interaction, current)
+
+    @notify.group(name="events", fallback="info")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def notify_events(self, ctx: Context) -> None:
+        """Choose which events a followed notification reports."""
+        await self._send_info(ctx)
+
+    async def _set_youtube_events(
+        self, ctx: Context, channel: str, events: str | None
+    ) -> None:
+        """Update the event types for an existing YouTube follow."""
+        self._require_server_admin(ctx)
+        row = await self._resolve_follow(ctx, "youtube", channel)
+        if row is None:
+            raise commands.BadArgument(
+                "That YouTube notification follow was not found."
+            )
+        event_types = self._youtube_events(events)
+        follow_id = int(row["id"])
+        name = str(row["channel_name"])
+        guild_id, user_id = _scope(ctx)
+        scope_column = "guild_id" if guild_id is not None else "user_id"
+        scope_id = guild_id if guild_id is not None else user_id
+        result = await self.bot.pool.execute(
+            "UPDATE youtube_follows SET event_types = $3::text[], updated_at = now() "
+            f"WHERE id = $1 AND {scope_column} = $2",
+            follow_id,
+            scope_id,
+            list(event_types),
+        )
+        if result.endswith(" 0"):
+            raise commands.BadArgument(
+                "That YouTube notification follow was not found."
+            )
+        label = (
+            "uploads + live"
+            if event_types == ("video", "live")
+            else "uploads"
+            if event_types == ("video",)
+            else "live"
+        )
+        await self._send(
+            ctx,
+            view=NotifyView(
+                "## YouTube notifications",
+                f"**{discord.utils.escape_markdown(name)}** (ID: `{follow_id}`) "
+                f"will now notify for {label}.",
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @notify_events.command(name="youtube")
+    @app_commands.describe(
+        channel="Follow ID or followed YouTube channel name/URL.",
+        events="Which events to notify for: uploads, live, or both.",
+    )
+    async def notify_events_youtube(
+        self, ctx: Context, channel: str, events: str
+    ) -> None:
+        """Change the event types for a followed YouTube channel."""
+        async with ctx.typing(ephemeral=ctx.interaction is not None):
+            await self._set_youtube_events(ctx, channel, events)
+
+    @notify_events_youtube.autocomplete("channel")
+    async def notify_events_youtube_channel_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return await self._followed_youtube_choices(interaction, current)
+
+    @notify_events_youtube.autocomplete("events")
+    async def notify_events_youtube_events_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return await self.notify_youtube_events_autocomplete(interaction, current)
+
     @notify.group(name="list", fallback="info")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -1406,15 +1883,34 @@ class Notify(Cog):
         )
         return list(rows)
 
-    async def _list_all(self, ctx: Context) -> None:
-        """Render both follow types in one panel for ``notify list``."""
+    async def _fetch_youtube_follows(self, ctx: Context) -> list[Any]:
+        """Return YouTube follows for the current server or DM scope."""
 
-        twitch_rows, anime_rows = await asyncio.gather(
+        guild_id, user_id = _scope(ctx)
+        predicate, scope_id = _scope_predicate(guild_id, user_id)
+        rows = await self.bot.pool.fetch(
+            f"""
+            SELECT id, youtube_channel_id, channel_name, channel_handle,
+                   announce_channel_id, event_types, mention_role_id, mention_everyone
+            FROM youtube_follows
+            WHERE {predicate}
+            ORDER BY lower(btrim(channel_name)), id
+            """,
+            scope_id,
+        )
+        return list(rows)
+
+    async def _list_all(self, ctx: Context) -> None:
+        """Render all follow types in one panel for ``notify list``."""
+
+        twitch_rows, anime_rows, youtube_rows = await asyncio.gather(
             self._fetch_twitch_follows(ctx),
             self._fetch_anime_follows(ctx),
+            self._fetch_youtube_follows(ctx),
         )
         twitch = twitch_list_details(twitch_rows) or "No Twitch channels followed."
         anime = anime_list_details(anime_rows) or "No anime followed."
+        youtube = youtube_list_details(youtube_rows) or "No YouTube channels followed."
         scope_title = (
             f"Notifications for {ctx.guild.name}"
             if ctx.guild is not None
@@ -1424,10 +1920,10 @@ class Notify(Cog):
             ctx,
             view=NotifyListView(
                 f"## {discord.utils.escape_markdown(scope_title)}",
-                (("Twitch", twitch), ("Anime", anime)),
+                (("Twitch", twitch), ("YouTube", youtube), ("Anime", anime)),
                 mention=(
                     f"Remove a notification with `{_notify_prefix(ctx)}notify "
-                    "remove twitch/anime <id, name, or link>`."
+                    "remove twitch/youtube/anime <id, name, or link>`."
                 ),
             ),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -1459,6 +1955,21 @@ class Notify(Cog):
                 view=NotifyView(
                     "## Followed anime",
                     anime_list_details(rows) or "No anime followed.",
+                ),
+                allowed_mentions=discord.AllowedMentions.none(),
+                ephemeral=ctx.interaction is not None,
+            )
+
+    @notify_list.command(name="youtube")
+    async def notify_list_youtube(self, ctx: Context) -> None:
+        """List YouTube channels followed in this server or DM scope."""
+        async with ctx.typing(ephemeral=ctx.interaction is not None):
+            rows = await self._fetch_youtube_follows(ctx)
+            await self._send(
+                ctx,
+                view=NotifyView(
+                    "## Followed YouTube channels",
+                    youtube_list_details(rows) or "No YouTube channels followed.",
                 ),
                 allowed_mentions=discord.AllowedMentions.none(),
                 ephemeral=ctx.interaction is not None,
@@ -1540,28 +2051,35 @@ class Notify(Cog):
             except commands.BadArgument:
                 pass
             if candidate_channel is not None:
-                rows = await self.bot.pool.fetch(
-                    (
+                if kind == "twitch":
+                    query = (
                         "SELECT id, channel_name, announce_channel_id, last_live_at, "
                         "last_offline_at, mention_role_id, mention_everyone "
                         "FROM notify_twitch_follows "
                         "WHERE guild_id = $1 AND announce_channel_id = $2 "
                         "ORDER BY lower(btrim(channel_name)), id"
-                        if kind == "twitch"
-                        else "SELECT id, title, announce_channel_id, release_at, "
+                    )
+                    detail_fn = twitch_list_details
+                elif kind == "youtube":
+                    query = (
+                        "SELECT id, channel_name, channel_handle, announce_channel_id, "
+                        "event_types, mention_role_id, mention_everyone "
+                        "FROM youtube_follows "
+                        "WHERE guild_id = $1 AND announce_channel_id = $2 "
+                        "ORDER BY lower(btrim(channel_name)), id"
+                    )
+                    detail_fn = youtube_list_details
+                else:
+                    query = (
+                        "SELECT id, title, announce_channel_id, release_at, "
                         "next_airing_at, next_episode, mention_role_id, "
                         "mention_everyone FROM notify_anime_follows "
                         "WHERE guild_id = $1 AND announce_channel_id = $2 "
                         "ORDER BY lower(btrim(title)), id"
-                    ),
-                    guild_id,
-                    candidate_channel.id,
-                )
-                details = (
-                    twitch_list_details(rows)
-                    if kind == "twitch"
-                    else anime_list_details(rows)
-                )
+                    )
+                    detail_fn = anime_list_details
+                rows = await self.bot.pool.fetch(query, guild_id, candidate_channel.id)
+                details = detail_fn(rows)
                 await self._send(
                     ctx,
                     view=NotifyView(
@@ -1594,7 +2112,7 @@ class Notify(Cog):
         if row is None:
             raise commands.BadArgument("That followed notification could not be found.")
         follow_id = int(row["id"])
-        display_name = str(row["channel_name"] if kind == "twitch" else row["title"])
+        display_name = _follow_display_name(row, kind)
         if not await ctx.prompt(
             f"Send {kind} notifications for **{display_name}** "
             f"(ID: `{follow_id}`) to {destination.mention}?",
@@ -1622,6 +2140,14 @@ class Notify(Cog):
                 row["channel_name"],
                 destination.id,
                 row["broadcaster_id"],
+            )
+        elif kind == "youtube":
+            result = await self.bot.pool.execute(
+                "UPDATE youtube_follows SET announce_channel_id = $3, "
+                "updated_at = now() WHERE id = $1 AND guild_id = $2",
+                follow_id,
+                guild_id,
+                destination.id,
             )
         else:
             result = await self.bot.pool.execute(
@@ -1698,3 +2224,31 @@ class Notify(Cog):
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
         return await self._followed_anime_choices(interaction, current)
+
+    @notify_channel.command(name="youtube")
+    @app_commands.describe(
+        channel="Channel name, ID, or mention; can be omitted when using the current channel.",
+        youtube="Follow ID or followed YouTube channel name/URL.",
+    )
+    async def notify_channel_youtube(
+        self,
+        ctx: GuildContext,
+        channel: str | None = None,
+        *,
+        youtube: str | None = None,
+    ) -> None:
+        """Route a followed YouTube channel to a server text channel."""
+        async with ctx.typing(ephemeral=ctx.interaction is not None):
+            await self._channel_for(ctx, "youtube", channel, youtube)
+
+    @notify_channel_youtube.autocomplete("channel")
+    async def notify_channel_youtube_channel_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return self._guild_channel_choices(interaction, current)
+
+    @notify_channel_youtube.autocomplete("youtube")
+    async def notify_channel_youtube_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return await self._followed_youtube_choices(interaction, current)

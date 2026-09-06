@@ -400,6 +400,48 @@ def anime_list_details(rows: Iterable[Any]) -> str:
         lines.append(f"{follow_id} · {title}\n-# *{metadata}*")
     return "\n".join(lines)
 
+def youtube_list_details(rows: Iterable[Any]) -> str:
+    """Render the YouTube follows for the combined notify list panel."""
+
+    lines: list[str] = []
+    for row in rows:
+        follow_id = row.get("id")
+        if follow_id is None:
+            follow_id = "?"
+        name = _safe_text(row["channel_name"], 80)
+        handle = _safe_text(row.get("channel_handle"), 40)
+        destination = (
+            f"<#{row['announce_channel_id']}>"
+            if row.get("announce_channel_id")
+            else "DM"
+        )
+        events = tuple(str(value) for value in row.get("event_types", ()) or ())
+        label = _youtube_event_label(events)
+        mention = mention_text(row.get("mention_role_id"), row.get("mention_everyone"))
+        metadata = f"{destination} · {label}"
+        if handle:
+            metadata = f"{destination} · {handle} · {label}"
+        if mention:
+            metadata = f"{destination} · {mention} · {label}"
+        lines.append(f"{follow_id} · {name}\n-# *{metadata}*")
+    return "\n".join(lines)
+
+def _youtube_event_label(events: Iterable[str]) -> str:
+    """Return a short human label for a follow's configured event types."""
+
+    selected = {str(value).strip().lower() for value in events}
+    if selected == {"video", "live"}:
+        return "uploads + live"
+    if selected == {"video"}:
+        return "uploads"
+    if selected == {"live"}:
+        return "live"
+    if selected == {"short"}:
+        return "shorts"
+    if selected == {"community"}:
+        return "community"
+    return ", ".join(sorted(selected)) or "no events"
+
 
 __all__ = [
     "ANILIST_MEDIA_URL_RE",
@@ -426,4 +468,5 @@ __all__ = [
     "notify_allowed_mentions",
     "select_anilist_media",
     "twitch_list_details",
+    "youtube_list_details",
 ]
