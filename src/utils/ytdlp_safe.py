@@ -8,6 +8,7 @@ redirects so a supported source cannot turn into an SSRF primitive.
 
 from __future__ import annotations
 
+import os
 import socket
 import urllib.error
 import urllib.parse
@@ -21,6 +22,67 @@ _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 5
 
 
+def _configured_pot_provider() -> tuple[str, str, int] | None:
+    """Return the exact host/port allowed for the local PO-token provider.
+
+    The provider is an operator-managed sidecar, so it intentionally runs on
+    a private Docker address.  All other yt-dlp requests remain restricted to
+    public addresses by the normal SSRF guard.
+    """
+
+    raw_url = os.environ.get("FISHIE_YOUTUBE_POT_PROVIDER_URL", "").strip()
+    if not raw_url:
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(raw_url)
+        port = parsed.port
+    except ValueError:
+        return None
+    hostname = (parsed.hostname or "").casefold().rstrip(".")
+    if (
+        parsed.scheme.casefold() not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return (
+        parsed.scheme.casefold(),
+        hostname,
+        port or (443 if parsed.scheme.casefold() == "https" else 80),
+    )
+
+
+_POT_PROVIDER = _configured_pot_provider()
+
+
+def _is_pot_provider_url(url: str) -> bool:
+    if _POT_PROVIDER is None:
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    hostname = (parsed.hostname or "").casefold().rstrip(".")
+    return (
+        parsed.scheme.casefold(),
+        hostname,
+        port or (443 if parsed.scheme.casefold() == "https" else 80),
+    ) == _POT_PROVIDER
+
+
+def _is_pot_provider_host(hostname: object, port: object = None) -> bool:
+    if _POT_PROVIDER is None or not isinstance(hostname, str):
+        return False
+    if hostname.casefold().rstrip(".") != _POT_PROVIDER[1]:
+        return False
+    return port is None or str(port) == str(_POT_PROVIDER[2])
+
+
 def _guard_url(url: str) -> str:
     try:
         parsed = urllib.parse.urlsplit(url)
@@ -28,6 +90,8 @@ def _guard_url(url: str) -> str:
         raise urllib.error.URLError("Invalid URL") from error
     if parsed.scheme.casefold() not in {"http", "https"}:
         raise urllib.error.URLError("Only public HTTP(S) URLs are allowed")
+    if _is_pot_provider_url(url):
+        return url
     try:
         return validate_public_url_sync(url)
     except ValueError as error:
@@ -38,6 +102,10 @@ def _guard_getaddrinfo(original: Callable[..., Any]) -> Callable[..., Any]:
     """Reject private DNS answers used by Python HTTP handlers."""
 
     def guarded(*args: Any, **kwargs: Any) -> Any:
+        hostname = args[0] if args else kwargs.get("host")
+        port = args[1] if len(args) > 1 else kwargs.get("port")
+        if _is_pot_provider_host(hostname, port):
+            return original(*args, **kwargs)
         results = original(*args, **kwargs)
         addresses = {str(item[4][0]) for item in results if len(item) > 4}
         if any(not is_public_address(address) for address in addresses):

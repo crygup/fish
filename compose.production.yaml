@@ -1,6 +1,32 @@
 name: fishie-production
 
 services:
+  bgutil-pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:1.3.2
+    ports:
+      - "127.0.0.1:4416:4416"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:4416/ping').then(response => {
+          if (!response.ok) process.exit(1); }).catch(() => process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 5s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
   fishie:
     build:
       context: .
@@ -14,6 +40,7 @@ services:
       FISHIE_BURGERS_ROOT: /app/data/burgers
       FISHIE_BURGERS_CATALOG_PATH: /app/data/burgers_catalog.json
       FISHIE_API_HOST: 127.0.0.1
+      FISHIE_YOUTUBE_POT_PROVIDER_URL: http://127.0.0.1:4416
       # The legacy process stays online only long enough to direct users to
       # the replacement application.  The API is owned by the new process so
       # OAuth always uses the replacement client credentials.
@@ -23,6 +50,9 @@ services:
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/.cache
       TZ: Europe/Berlin
+    depends_on:
+      bgutil-pot-provider:
+        condition: service_healthy
     volumes:
       - ./src:/app/src:ro
       - ./config.toml:/run/secrets/config.toml:ro
@@ -67,6 +97,7 @@ services:
       FISHIE_BOT_INSTANCE: new
       FISHIE_API_ENABLED: "true"
       FISHIE_API_HOST: 127.0.0.1
+      FISHIE_YOUTUBE_POT_PROVIDER_URL: http://127.0.0.1:4416
       # Keep the website's existing API endpoint on port 8001, now served by
       # the replacement bot.  The legacy service above has API disabled.
       FISHIE_API_PORT: "8001"
@@ -77,6 +108,9 @@ services:
       # The replacement log is process-local so two RotatingFileHandlers
       # never contend over the same host file.
       FISHIE_LOG_PATH: /tmp/discord-new.log
+    depends_on:
+      bgutil-pot-provider:
+        condition: service_healthy
     volumes:
       - ./src:/app/src:ro
       - ./config.toml:/run/secrets/config.toml:ro

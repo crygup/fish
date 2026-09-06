@@ -51,6 +51,20 @@ The authoritative deployment guide for the two repositories is
 It covers backups, migrations, both bots, all website services, and Nginx.
 Do not start the retired `fish.service` or `avatar-lookup.service` units.
 
+## YouTube voice playback
+
+The Compose files start a local `bgutil` proof-of-origin token provider for
+yt-dlp.  It is bound to loopback in production and is only used for YouTube
+requests.  The bot also needs a current Netscape-format export at
+`src/files/cookies/youtube-cookies.txt`; that ignored file is mounted into the
+containers and must never be committed.
+
+When YouTube reports “Sign in to confirm you’re not a bot”, open a fresh
+private browsing window, sign in, visit `https://www.youtube.com/robots.txt`,
+export the `youtube.com` cookies from that same tab, replace the mounted file,
+and restart the Fishie container.  YouTube rotates account cookies from normal
+open tabs, so reusing an old export will keep the same error.
+
 ## Local development without Docker
 
 Create a virtual environment, install the locked requirements, apply the

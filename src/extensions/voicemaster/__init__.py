@@ -82,6 +82,12 @@ SPOTIFY_EPISODE_RE = re.compile(
 )
 URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 SFX_QUERY_RE = re.compile(r"^\s*sfx\s*:\s*(?P<selector>.+?)\s*$", re.IGNORECASE)
+YOUTUBE_PLAYER_CLIENTS = (
+    os.environ.get(
+        "FISHIE_YOUTUBE_PLAYER_CLIENT", "web_embedded,web_safari,mweb"
+    ).strip()
+    or "web_embedded,web_safari,mweb"
+)
 
 
 def _clean_query(value: str) -> str:
@@ -247,6 +253,29 @@ def _copy_youtube_cookies() -> Path | None:
     return destination
 
 
+def _youtube_extractor_args() -> list[str]:
+    """Return yt-dlp's YouTube client and optional PO-token provider args."""
+
+    args = [
+        "--extractor-args",
+        f"youtube:player_client={YOUTUBE_PLAYER_CLIENTS}",
+    ]
+    provider_url = os.environ.get("FISHIE_YOUTUBE_POT_PROVIDER_URL", "").strip()
+    if provider_url:
+        args.extend(
+            [
+                "--extractor-args",
+                f"youtubepot-bgutilhttp:base_url={provider_url.rstrip('/')}",
+            ]
+        )
+    return args
+
+
+def _is_youtube_bot_challenge(value: object) -> bool:
+    lowered = str(value or "").casefold()
+    return "sign in to confirm" in lowered and "not a bot" in lowered
+
+
 class _YtDlpPipeAudio(discord.FFmpegPCMAudio):
     """Stream yt-dlp's downloader output into FFmpeg.
 
@@ -277,7 +306,7 @@ class _YtDlpPipeAudio(discord.FFmpegPCMAudio):
         ]
         if self._cookie_path is not None:
             command.extend(["--cookies", str(self._cookie_path)])
-            command.extend(["--extractor-args", "youtube:player_client=web_embedded"])
+        command.extend(_youtube_extractor_args())
         command.extend(["-o", "-", source])
         self._downloader = subprocess.Popen(
             command,
@@ -1083,9 +1112,8 @@ class VoiceMaster(commands.Cog, name="Voice Master"):
                 args = [*base_args]
                 if attempt == 0 and cookie_path is not None:
                     args.extend(["--cookies", str(cookie_path)])
-                    args.extend(
-                        ["--extractor-args", "youtube:player_client=web_embedded"]
-                    )
+                if _is_youtube_query(query):
+                    args.extend(_youtube_extractor_args())
                 args.append(query)
                 process = await asyncio.create_subprocess_exec(
                     *args,
@@ -1143,6 +1171,11 @@ class VoiceMaster(commands.Cog, name="Voice Master"):
             if cookie_path is not None:
                 cookie_path.unlink(missing_ok=True)
         detail = _public_error(last_stderr)
+        if _is_youtube_bot_challenge(last_stderr):
+            raise commands.BadArgument(
+                "YouTube rejected this server's playback session. Refresh the "
+                "mounted YouTube cookies and try again."
+            )
         if detail:
             raise commands.BadArgument(f"Could not find playable media: {detail}")
         raise commands.BadArgument("The media search returned no playable result.")
@@ -1432,6 +1465,7 @@ class VoiceMaster(commands.Cog, name="Voice Master"):
                                 use_ytdlp_transport = (
                                     track.local_path is None
                                     and _is_youtube_query(track.lookup)
+                                    and not track.stream_url
                                     and bool(track.webpage_url)
                                 )
                                 if use_ytdlp_transport:

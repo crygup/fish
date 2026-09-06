@@ -28,9 +28,11 @@ from extensions.voicemaster import (
     _ffmpeg_before_options,
     _is_direct_media_url,
     _is_image_url,
+    _is_youtube_bot_challenge,
     _public_error,
     _rank_spotify_results,
     _volume_gain,
+    _youtube_extractor_args,
 )
 
 
@@ -134,6 +136,25 @@ def test_audio_url_prefers_selected_audio_and_falls_back_to_formats() -> None:
             }
         )
         == "https://cdn.example.test/high"
+    )
+
+
+def test_youtube_extractor_uses_supported_clients_and_bot_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FISHIE_YOUTUBE_POT_PROVIDER_URL", raising=False)
+    assert _youtube_extractor_args() == [
+        "--extractor-args",
+        "youtube:player_client=web_embedded,web_safari,mweb",
+    ]
+    assert _is_youtube_bot_challenge(
+        "ERROR: [youtube] abc: Sign in to confirm you're not a bot"
+    )
+    assert not _is_youtube_bot_challenge("ERROR: [youtube] abc: Video unavailable")
+
+    monkeypatch.setenv("FISHIE_YOUTUBE_POT_PROVIDER_URL", "http://provider:4416/")
+    assert _youtube_extractor_args()[-1] == (
+        "youtubepot-bgutilhttp:base_url=http://provider:4416"
     )
 
 

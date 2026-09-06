@@ -253,11 +253,10 @@ _TIKTOK_EXTRACTOR_PROFILES: tuple[str, ...] = (
     ),
 )
 
-# YouTube's default authenticated client can intermittently return SABR-only
-# formats and the misleading "page needs to be reloaded" error.  The
-# embedded client continues to expose normal downloadable formats when the
-# same authenticated cookies are available.
-_YOUTUBE_AUTHENTICATED_CLIENT = "youtube:player_client=web_embedded"
+# YouTube's default client set can intermittently return SABR-only formats
+# and the misleading "page needs to be reloaded" error.  Try the embedded
+# client first, then clients that can expose HLS or progressive fallbacks.
+_YOUTUBE_AUTHENTICATED_CLIENT = "youtube:player_client=web_embedded,web_safari,mweb"
 
 _COOKIE_MAP: list[tuple[Any, str]] = [
     (YOUTUBE_RE, str(FILES_ROOT / "cookies" / "youtube-cookies.txt")),
@@ -873,8 +872,14 @@ class Downloader:
             cookie_arg_index = len(args)
             args += ["--cookies", self._prepare_cookie_file(cookies)]
 
-        if is_youtube and cookie_arg_index is not None:
+        if is_youtube:
             args += ["--extractor-args", _YOUTUBE_AUTHENTICATED_CLIENT]
+            provider_url = os.environ.get("FISHIE_YOUTUBE_POT_PROVIDER_URL", "").strip()
+            if provider_url:
+                args += [
+                    "--extractor-args",
+                    f"youtubepot-bgutilhttp:base_url={provider_url.rstrip('/')}",
+                ]
 
         # Instagram returns different DASH manifests over this host's IPv6
         # route for some Reels.  The IPv4 response includes the matching audio
