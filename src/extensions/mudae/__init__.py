@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any, cast
 
+import asyncpg
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from core import Cog, is_operational_guild
 from core.handoff import is_legacy_instance
@@ -20,6 +24,20 @@ from .copy import (
     parse_source_guild_id,
     prepare_wish_copy,
     validate_copy_scope,
+)
+from .kakera_exchange import (
+    FISHIE_OWNER_ID,
+    SUPPORT_GUILD_ID,
+    MudaeKakeraGift,
+    parse_mudae_kakera_gift,
+)
+from .recent_claims import (
+    RecentClaim,
+    RecentClaimsView,
+    claim_transition,
+    claiming_username,
+    parse_mudae_spawn,
+    reaction_count,
 )
 from .series_list import (
     ScrapedSeriesBundle,
@@ -50,6 +68,11 @@ if TYPE_CHECKING:
 
 
 MIN_WISHKAKERA = 67
+SUPPORTER_BADGE_KEY = "earned:fishie_supporter"
+SUPPORTER_BADGE_EMOJI_NAME = "booster_star"
+SUPPORTER_BADGE_EMOJI_ID = 1544375074289885236
+SUPPORTER_BADGE_TEXT = "Fishie Supporter"
+SUPPORTER_MONTHLY_COINS = 100_000
 WISH_EXAMPLE_FILES = {
     "character": ("Wish Example", "$im <character>", "wish_example.png"),
     "series": ("Wishseries Example", "$ima <series>", "wishseries_example.png"),
@@ -88,6 +111,334 @@ class Mudae(SphereCog):
         # acknowledgement is a short-lived convenience, while the catalogue
         # itself is persisted in PostgreSQL.
         self._series_scrape_responses: dict[int, discord.Message] = {}
+        # Recent-claim tracking is enabled by default for every guild.  Keep
+        # the setting in memory so Mudae message edits do not query PostgreSQL
+        # on every gateway event; the toggle updates this cache immediately.
+        self._recent_claims_enabled: dict[int, bool] = {}
+        # Keep a compact snapshot of unclaimed Mudae cards so a raw message
+        # update can be compared with its previous state.  The cache is
+        # bounded because a busy server can produce many rolls over time.
+        self._recent_claim_snapshots: dict[int, dict[str, Any]] = {}
+
+    @staticmethod
+    def _supporter_month(now: datetime | None = None) -> str:
+        """Return the UTC calendar month used for supporter rewards."""
+
+        value = now or datetime.now(timezone.utc)
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).strftime("%Y-%m")
+
+    def _cache_supporter_badge(self, user_id: int, *, active: bool) -> None:
+        """Mirror the supporter badge in the in-memory badge cache."""
+
+        cache = getattr(self.bot, "db_cache", None)
+        badges = getattr(cache, "user_badges", None)
+        if not isinstance(badges, dict):
+            return
+        user_id = int(user_id)
+        entries = badges.get(user_id)
+        if not isinstance(entries, list):
+            entries = []
+        entries[:] = [
+            entry
+            for entry in entries
+            if str(entry.get("badge_key") or "") != SUPPORTER_BADGE_KEY
+        ]
+        if active:
+            entries.append(
+                {
+                    "emoji_name": SUPPORTER_BADGE_EMOJI_NAME,
+                    "emoji_id": SUPPORTER_BADGE_EMOJI_ID,
+                    "is_custom": True,
+                    "animated": False,
+                    "text": SUPPORTER_BADGE_TEXT,
+                    "badge_key": SUPPORTER_BADGE_KEY,
+                }
+            )
+            badges[user_id] = entries
+        elif entries:
+            badges[user_id] = entries
+        else:
+            badges.pop(user_id, None)
+
+    async def _set_supporter_badge(self, user_id: int, *, active: bool) -> bool:
+        """Activate or deactivate the durable Fishie Supporter badge."""
+
+        pool = getattr(self.bot, "pool", None)
+        execute = getattr(pool, "execute", None)
+        if not callable(execute):
+            self._debug(
+                "Could not update Fishie Supporter badge for %s: pool unavailable",
+                user_id,
+            )
+            return False
+        try:
+            if active:
+                await cast(Any, execute)(
+                    """
+                    INSERT INTO user_badges (
+                        user_id, emoji_name, emoji_id, is_custom, unicode, animated,
+                        badge_key, text, badge_source, catalog_key, active,
+                        revoked_at, refund_amount, revocation_reason
+                    )
+                    VALUES ($1, $2, $3, TRUE, FALSE, FALSE, $4, $5,
+                            'owner', NULL, TRUE, NULL, 0, NULL)
+                    ON CONFLICT (user_id, badge_key) DO UPDATE
+                    SET emoji_name = EXCLUDED.emoji_name,
+                        emoji_id = EXCLUDED.emoji_id,
+                        is_custom = TRUE,
+                        unicode = FALSE,
+                        animated = FALSE,
+                        text = EXCLUDED.text,
+                        active = TRUE,
+                        revoked_at = NULL,
+                        refund_amount = 0,
+                        revocation_reason = NULL
+                    """,
+                    int(user_id),
+                    SUPPORTER_BADGE_EMOJI_NAME,
+                    SUPPORTER_BADGE_EMOJI_ID,
+                    SUPPORTER_BADGE_KEY,
+                    SUPPORTER_BADGE_TEXT,
+                )
+            else:
+                await cast(Any, execute)(
+                    """
+                    UPDATE user_badges
+                    SET active = FALSE,
+                        revoked_at = now(),
+                        revocation_reason = 'No longer boosting Fishie support server'
+                    WHERE user_id = $1 AND badge_key = $2 AND active
+                    """,
+                    int(user_id),
+                    SUPPORTER_BADGE_KEY,
+                )
+        except asyncpg.PostgresError:
+            self.bot.logger.exception(
+                "Failed to %s Fishie Supporter badge for user %s",
+                "activate" if active else "deactivate",
+                user_id,
+            )
+            return False
+        except Exception:
+            self.bot.logger.exception(
+                "Failed to %s Fishie Supporter badge for user %s",
+                "activate" if active else "deactivate",
+                user_id,
+            )
+            return False
+        self._cache_supporter_badge(int(user_id), active=active)
+        return True
+
+    async def _award_supporter_monthly_coins(self, user_id: int) -> bool:
+        """Award the monthly supporter reward exactly once per UTC month."""
+
+        currency = getattr(self.bot, "currency", None)
+        credit = getattr(currency, "credit", None)
+        if not callable(credit):
+            self._debug(
+                "Skipping Fishie Supporter reward for %s: currency service unavailable",
+                user_id,
+            )
+            return False
+        reference = f"fishie_supporter:{int(user_id)}:{self._supporter_month()}"
+        try:
+            await cast(Any, credit)(
+                int(user_id),
+                SUPPORTER_MONTHLY_COINS,
+                "fishie_supporter",
+                reference_key=reference,
+            )
+        except asyncpg.UniqueViolationError:
+            # The unique currency reference means this month's reward was
+            # already granted, commonly after a reconnect or member update.
+            return False
+        except Exception:
+            self.bot.logger.exception(
+                "Failed to award Fishie Supporter Coins for user %s",
+                user_id,
+            )
+            return False
+        self.bot.logger.info(
+            "Awarded Fishie Supporter Coins user=%s amount=%s month=%s",
+            user_id,
+            SUPPORTER_MONTHLY_COINS,
+            self._supporter_month(),
+        )
+        return True
+
+    async def _sync_supporter_member(self, member: discord.Member) -> None:
+        """Synchronize one support-server member's badge and monthly reward."""
+
+        guild = getattr(member, "guild", None)
+        # Reconciliation can receive a partial member from
+        # ``Guild.premium_subscribers`` without a guild attribute.  The
+        # caller has already obtained it from the support guild in that case;
+        # only reject an explicitly different guild.
+        if guild is not None and getattr(guild, "id", None) != SUPPORT_GUILD_ID:
+            return
+        if not self._member_is_support_booster(member):
+            await self._set_supporter_badge(member.id, active=False)
+            return
+        if await self._set_supporter_badge(member.id, active=True):
+            await self._award_supporter_monthly_coins(member.id)
+
+    @staticmethod
+    def _member_is_support_booster(member: discord.Member) -> bool:
+        """Return whether a member currently has supporter/booster status.
+
+        Discord normally exposes this through ``premium_since``.  Some
+        gateway payloads, however, deliver the managed premium-subscriber
+        role update before (or without) refreshing that timestamp.  Checking
+        both sources keeps badge removal and monthly rewards consistent when
+        that role is added or removed.
+        """
+
+        guild = getattr(member, "guild", None)
+        booster_role = getattr(guild, "premium_subscriber_role", None)
+        booster_role_id = getattr(booster_role, "id", None)
+        if booster_role_id is not None:
+            try:
+                booster_role_id = int(booster_role_id)
+            except (TypeError, ValueError, OverflowError):
+                booster_role_id = None
+            if booster_role_id is not None:
+                roles = getattr(member, "roles", None)
+                if roles is not None:
+                    for role in roles:
+                        try:
+                            if int(getattr(role, "id", 0)) == booster_role_id:
+                                return True
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                    # If Discord exposes the managed booster role, its
+                    # membership is authoritative.  A stale ``premium_since``
+                    # timestamp must not keep a badge/reward active after the
+                    # role has been removed.
+                    return False
+        return getattr(member, "premium_since", None) is not None
+
+    async def _support_booster_ids(self) -> set[int] | None:
+        """Return current support-server boosters, or ``None`` if unavailable."""
+
+        get_guild = getattr(self.bot, "get_guild", None)
+        guild = get_guild(SUPPORT_GUILD_ID) if callable(get_guild) else None
+        if guild is None:
+            return None
+
+        # ``premium_subscribers`` is Discord.py's purpose-built view of
+        # members currently boosting.  Prefer it when available; it avoids
+        # scanning every member on the daily reconciliation pass.
+        subscribers = getattr(guild, "premium_subscribers", None)
+        result: set[int] = set()
+        for member in subscribers or ():
+            try:
+                result.add(int(member.id))
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+        members = list(getattr(guild, "members", ()) or ())
+        # An unchunked guild may expose only a partial member cache, so its
+        # subscriber list and role scan cannot safely establish who is no
+        # longer boosting.  Fetch the complete member list before reconciling;
+        # if fetching fails, skip removals rather than revoking valid badges
+        # based on an incomplete snapshot.
+        chunked = getattr(guild, "chunked", True)
+        if not chunked:
+            fetch_members = getattr(guild, "fetch_members", None)
+            if callable(fetch_members):
+                try:
+                    fetched = cast(
+                        AsyncIterator[discord.Member], fetch_members(limit=None)
+                    )
+                    members = [member async for member in fetched]
+                except (discord.Forbidden, discord.HTTPException, TypeError):
+                    return None
+        if not members and not result:
+            # An empty cache is not evidence that every booster disappeared.
+            # Avoid revoking active badges when member/presence intents left
+            # the guild snapshot incomplete.
+            return None
+        for member in members:
+            if not self._member_is_support_booster(member):
+                continue
+            try:
+                result.add(int(member.id))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return result
+
+    async def _reconcile_support_boosters(self) -> None:
+        """Refresh supporter badges and monthly rewards for current boosters."""
+
+        # Only the replacement bot owns supporter rewards.  The legacy
+        # instance shares this cog/database during handoff; letting it run the
+        # reconciliation would duplicate monthly credits and race badge state.
+        if is_legacy_instance(self.bot):
+            return
+        current = await self._support_booster_ids()
+        if current is None:
+            return
+        pool = getattr(self.bot, "pool", None)
+        fetch = getattr(pool, "fetch", None)
+        if not callable(fetch):
+            return
+        try:
+            rows = await cast(Any, fetch)(
+                """
+                SELECT user_id
+                FROM user_badges
+                WHERE badge_key = $1 AND active
+                """,
+                SUPPORTER_BADGE_KEY,
+            )
+        except asyncpg.PostgresError:
+            self.bot.logger.debug(
+                "Could not reconcile Fishie Supporter badges", exc_info=True
+            )
+            return
+        except Exception:
+            self.bot.logger.debug(
+                "Could not reconcile Fishie Supporter badges", exc_info=True
+            )
+            return
+
+        known = set()
+        for row in rows or ():
+            try:
+                known.add(int(self._row_value(row, "user_id")))
+            except (TypeError, ValueError):
+                continue
+
+        guild = self.bot.get_guild(SUPPORT_GUILD_ID)
+        for user_id in current:
+            member = guild.get_member(user_id) if guild is not None else None
+            if member is not None:
+                await self._sync_supporter_member(member)
+            else:
+                # The subscriber list can contain a partial member.  Keep the
+                # persisted badge active and award the monthly transaction;
+                # the next member update will refresh the full cache entry.
+                if await self._set_supporter_badge(user_id, active=True):
+                    await self._award_supporter_monthly_coins(user_id)
+        for user_id in known - current:
+            await self._set_supporter_badge(user_id, active=False)
+
+    @tasks.loop(hours=24.0)
+    async def support_booster_reconcile_task(self) -> None:
+        """Daily reconciliation for booster joins, leaves, and month rewards."""
+
+        try:
+            await self._reconcile_support_boosters()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.bot.logger.exception("Fishie Supporter reconciliation failed")
+
+    @support_booster_reconcile_task.before_loop
+    async def before_support_booster_reconcile_task(self) -> None:
+        await self.bot.wait_until_ready()
 
     async def cog_load(self) -> None:
         """Load persisted, per-server wish filters before handling events."""
@@ -151,6 +502,48 @@ class Mudae(SphereCog):
                 if guild_id is not None:
                     self._mudae_series_scraper.set_enabled(int(guild_id))
 
+        try:
+            recent_settings = await self.bot.pool.fetch(
+                "SELECT guild_id, mudae_recent_claims FROM guild_settings"
+            )
+        except Exception:
+            recent_settings = ()
+        for row in recent_settings:
+            guild_id = self._row_value(row, "guild_id")
+            if guild_id is None:
+                continue
+            enabled = self._row_value(row, "mudae_recent_claims", True)
+            self._recent_claims_enabled[int(guild_id)] = (
+                True if enabled is None else bool(enabled)
+            )
+
+        # Synchronize supporter badges/rewards once at startup and then daily.
+        # ``before_loop`` waits for the gateway to be ready, so the first loop
+        # iteration performs the initial reconciliation with a populated guild
+        # cache.  Never start it on the legacy instance: both processes share
+        # the database and only the replacement bot should grant rewards.
+        wait_until_ready = getattr(self.bot, "wait_until_ready", None)
+        if (
+            not is_legacy_instance(self.bot)
+            and callable(wait_until_ready)
+            and not self.support_booster_reconcile_task.is_running()
+        ):
+            try:
+                self.support_booster_reconcile_task.start()
+            except RuntimeError:
+                # A cog can be loaded by a management/test process without a
+                # running event loop.  The live bot will start the task when
+                # loaded in its event loop; do not make startup fail here.
+                self.bot.logger.debug(
+                    "Could not start Fishie Supporter reconciliation task",
+                    exc_info=True,
+                )
+
+    def cog_unload(self) -> None:
+        task = self.support_booster_reconcile_task
+        if task.is_running():
+            task.cancel()
+
     @staticmethod
     def _row_value(row: object, key: str, default: Any = None) -> Any:
         if isinstance(row, dict):
@@ -165,6 +558,310 @@ class Mudae(SphereCog):
         debug = getattr(logger, "debug", None)
         if callable(debug):
             debug(message, *args)
+
+    @staticmethod
+    def _recent_claim_embed_data(embed: object) -> dict[str, Any]:
+        """Copy the small portion of an embed needed for claim detection."""
+
+        if isinstance(embed, dict):
+            return dict(embed)
+        to_dict = getattr(embed, "to_dict", None)
+        if callable(to_dict):
+            try:
+                value = to_dict()
+            except Exception:
+                value = None
+            if isinstance(value, dict):
+                return value
+
+        author = getattr(embed, "author", None)
+        footer = getattr(embed, "footer", None)
+        return {
+            "author": {
+                "name": getattr(author, "name", None),
+            },
+            "description": getattr(embed, "description", "") or "",
+            "footer": {
+                "text": getattr(footer, "text", None),
+            },
+        }
+
+    @classmethod
+    def _recent_claim_snapshot(
+        cls,
+        source: object,
+        *,
+        fallback: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Make a stable, raw-message-like snapshot for edit comparisons."""
+
+        if isinstance(source, dict):
+            data: dict[str, Any] = dict(source)
+        else:
+            data = {
+                "id": getattr(source, "id", None),
+                "guild_id": getattr(getattr(source, "guild", None), "id", None),
+                "channel_id": getattr(getattr(source, "channel", None), "id", None),
+                "edited_timestamp": getattr(source, "edited_at", None),
+                "timestamp": getattr(source, "created_at", None),
+            }
+            author = getattr(source, "author", None)
+            if author is not None:
+                data["author"] = {"id": getattr(author, "id", None)}
+            embeds = getattr(source, "embeds", None)
+            if embeds is not None:
+                data["embeds"] = [
+                    cls._recent_claim_embed_data(embed) for embed in embeds
+                ]
+            reactions = getattr(source, "reactions", None)
+            if reactions is not None:
+                raw_reactions: list[dict[str, Any]] = []
+                for reaction in reactions:
+                    emoji = getattr(reaction, "emoji", None)
+                    raw_reactions.append(
+                        {
+                            "count": getattr(reaction, "count", 0),
+                            "emoji": {
+                                "id": getattr(emoji, "id", None),
+                                "name": getattr(emoji, "name", None),
+                            },
+                        }
+                    )
+                data["reactions"] = raw_reactions
+
+        if fallback is not None:
+            merged = dict(fallback)
+            merged.update(data)
+            data = merged
+
+        embeds = data.get("embeds")
+        if not isinstance(embeds, (list, tuple)) or not embeds:
+            return None
+        data["embeds"] = [cls._recent_claim_embed_data(embed) for embed in embeds]
+        reactions = data.get("reactions")
+        if reactions is None:
+            data["reactions"] = []
+        elif not isinstance(reactions, (list, tuple)):
+            data["reactions"] = []
+        return data
+
+    @staticmethod
+    def _recent_claim_timestamp(snapshot: dict[str, Any]) -> datetime:
+        """Return the edit time carried by Discord, falling back to now."""
+
+        value = snapshot.get("edited_timestamp") or snapshot.get("edited_at")
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+        if isinstance(value, str):
+            parsed = discord.utils.parse_time(value)
+            if parsed is not None:
+                return parsed
+        return discord.utils.utcnow()
+
+    @classmethod
+    def _recent_claim_event_key(
+        cls,
+        snapshot: dict[str, Any],
+        *,
+        message_id: int,
+        claimant_id: int,
+    ) -> str:
+        """Build a stable idempotency key for one Mudae message edit."""
+
+        edited = snapshot.get("edited_timestamp") or snapshot.get("edited_at")
+        if isinstance(edited, datetime):
+            if edited.tzinfo is None:
+                edited = edited.replace(tzinfo=timezone.utc)
+            edited = edited.isoformat()
+        if isinstance(edited, str) and edited.strip():
+            parsed = discord.utils.parse_time(edited.strip())
+            return parsed.isoformat() if parsed is not None else edited.strip()
+        return f"{message_id}:{reaction_count(snapshot)}:{claimant_id}"
+
+    def _recent_claims_enabled_for(self, guild_id: int) -> bool:
+        """Return the cached toggle, defaulting to enabled for new guilds."""
+
+        return self._recent_claims_enabled.get(int(guild_id), True)
+
+    def _cache_recent_claim_message(self, message: object) -> None:
+        """Remember a valid Mudae card for a later edit event."""
+
+        guild = getattr(message, "guild", None)
+        message_id = getattr(message, "id", None)
+        if guild is None or message_id is None:
+            return
+        guild_id = getattr(guild, "id", None)
+        if guild_id is None or not self._recent_claims_enabled_for(int(guild_id)):
+            return
+        snapshot = self._recent_claim_snapshot(message)
+        if snapshot is None:
+            return
+        embeds = snapshot.get("embeds") or ()
+        if not embeds or not parse_mudae_spawn(embeds[0], allow_claimed=True):
+            return
+        self._recent_claim_snapshots[int(message_id)] = snapshot
+        # Keep the cache bounded without introducing a second dependency.
+        while len(self._recent_claim_snapshots) > 5000:
+            self._recent_claim_snapshots.pop(next(iter(self._recent_claim_snapshots)))
+
+    async def _resolve_recent_claimant(
+        self,
+        guild: discord.Guild,
+        snapshot: dict[str, Any],
+        message: discord.Message | None = None,
+    ) -> tuple[int, str]:
+        """Resolve Mudae's visible claimant username to a guild member."""
+
+        snapshot_embed = next(iter(snapshot.get("embeds") or ()), None)
+        visible_name = claiming_username(snapshot_embed) if snapshot_embed else None
+        normalized_name = (visible_name or "").casefold().strip()
+        if normalized_name:
+            for member in getattr(guild, "members", ()):
+                names = {
+                    str(getattr(member, "name", "")).casefold(),
+                    str(getattr(member, "global_name", "") or "").casefold(),
+                }
+                if normalized_name in names:
+                    return int(member.id), str(getattr(member, "name", visible_name))
+
+        # With a custom `$setfooter`, Mudae may omit the username.  The claim
+        # reaction still identifies the claimant when the message is cached;
+        # use it as a best-effort fallback rather than guessing from a footer.
+        if message is not None:
+            for reaction in getattr(message, "reactions", ()) or ():
+                users = getattr(reaction, "users", None)
+                if not callable(users):
+                    continue
+                try:
+                    async for user in cast(Any, users(limit=25)):
+                        if getattr(user, "id", None) == MudaeID:
+                            continue
+                        return int(user.id), str(getattr(user, "name", "Unknown"))
+                except (discord.Forbidden, discord.HTTPException):
+                    continue
+        return 1, "Unknown"
+
+    async def _record_recent_claim_edit(
+        self,
+        before: object,
+        after: object,
+        *,
+        guild: discord.Guild,
+        message: discord.Message | None = None,
+    ) -> None:
+        """Persist one unclaimed-to-claimed Mudae card transition."""
+
+        if not self._recent_claims_enabled_for(guild.id):
+            return
+        transition = claim_transition(before, after)
+        if transition is None:
+            return
+        after_snapshot = self._recent_claim_snapshot(after)
+        if after_snapshot is None:
+            return
+        message_id = after_snapshot.get("id") or getattr(message, "id", None)
+        channel_id = after_snapshot.get("channel_id")
+        if channel_id is None and message is not None:
+            channel_id = getattr(getattr(message, "channel", None), "id", None)
+        if message_id is None or channel_id is None:
+            return
+        try:
+            message_id = int(message_id)
+            channel_id = int(channel_id)
+        except (TypeError, ValueError):
+            return
+        embeds = after_snapshot.get("embeds") or ()
+        if not embeds:
+            return
+        claimant_id, claimant_name = await self._resolve_recent_claimant(
+            guild, after_snapshot, message
+        )
+        claimed_at = self._recent_claim_timestamp(after_snapshot)
+        event_key = self._recent_claim_event_key(
+            after_snapshot,
+            message_id=message_id,
+            claimant_id=claimant_id,
+        )
+        character = transition[1].character.strip()
+        try:
+            await self.bot.pool.execute(
+                """
+                INSERT INTO mudae_recent_claims (
+                    guild_id, channel_id, message_id, character_name,
+                    claiming_username, claiming_user_id, claimed_at, event_key
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (guild_id, message_id, event_key) DO NOTHING
+                """,
+                guild.id,
+                channel_id,
+                message_id,
+                character,
+                claimant_name,
+                claimant_id,
+                claimed_at,
+                event_key,
+            )
+        except Exception:
+            self.bot.logger.exception(
+                "Could not save Mudae recent claim guild=%s message=%s",
+                guild.id,
+                message_id,
+            )
+            return
+        self._debug(
+            "Recorded Mudae claim %s for %s in guild %s",
+            character,
+            claimant_name,
+            guild.id,
+        )
+
+    async def _recent_claims_command(self, ctx: Context) -> None:
+        """Show the latest Mudae claims for the current server."""
+
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage(
+                "Recent Mudae claims can only be viewed in a server."
+            )
+        rows = await self.bot.pool.fetch(
+            """
+            SELECT id, channel_id, character_name, claiming_username,
+                   claiming_user_id, claimed_at
+            FROM mudae_recent_claims
+            WHERE guild_id = $1
+            ORDER BY claimed_at DESC, id DESC
+            """,
+            ctx.guild.id,
+        )
+        claims: list[RecentClaim] = []
+        for row in rows:
+            try:
+                claims.append(
+                    RecentClaim(
+                        id=int(self._row_value(row, "id")),
+                        channel_id=int(self._row_value(row, "channel_id")),
+                        character_name=str(self._row_value(row, "character_name", "")),
+                        claiming_username=str(
+                            self._row_value(row, "claiming_username", "Unknown")
+                        ),
+                        claiming_user_id=int(
+                            self._row_value(row, "claiming_user_id", 1)
+                        ),
+                        claimed_at=self._row_value(
+                            row, "claimed_at", discord.utils.utcnow()
+                        ),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+        view = RecentClaimsView(ctx, claims)
+        view.message = await ctx.send(
+            view=view,
+            ephemeral=getattr(ctx, "interaction", None) is not None,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @classmethod
     def _cache_series_id(
@@ -195,7 +892,6 @@ class Mudae(SphereCog):
     ) -> None:
         if ctx.guild is None:
             raise commands.NoPrivateMessage("Mudae wishes can only be used in servers.")
-
         if kind == "character":
             text = str(value).strip()
             if not text:
@@ -521,6 +1217,7 @@ class Mudae(SphereCog):
             raise commands.BadArgument("Provide the name of a saved Mudae bundle.")
         if ctx.guild is None:
             raise commands.NoPrivateMessage("Mudae wishes can only be used in servers.")
+        guild_id = ctx.guild.id
 
         bundles, _total_series, _total_bundles, _highest_guilds = (
             await self._fetch_scraped_series_catalog()
@@ -547,7 +1244,7 @@ class Mudae(SphereCog):
         bundle = max(
             matches,
             key=lambda candidate: (
-                int(candidate.guild_id == ctx.guild.id),
+                int(candidate.guild_id == guild_id),
                 len(candidate.entries),
             ),
         )
@@ -1432,6 +2129,38 @@ class Mudae(SphereCog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    async def _toggle_recent_claims(self, ctx: Context) -> None:
+        """Toggle recent-claim tracking for the current server."""
+
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage(
+                "This setting can only be changed in a server."
+            )
+        guild_id = int(ctx.guild.id)
+        enabled = not self._recent_claims_enabled_for(guild_id)
+        await self.bot.pool.execute(
+            """
+            INSERT INTO guild_settings (guild_id, mudae_recent_claims)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id) DO UPDATE
+            SET mudae_recent_claims = EXCLUDED.mudae_recent_claims
+            """,
+            guild_id,
+            enabled,
+        )
+        self._recent_claims_enabled[guild_id] = enabled
+        if not enabled:
+            self._recent_claim_snapshots = {
+                message_id: snapshot
+                for message_id, snapshot in self._recent_claim_snapshots.items()
+                if int(snapshot.get("guild_id") or 0) != guild_id
+            }
+        state = "enabled" if enabled else "disabled"
+        await ctx.send(
+            f"Mudae recent-claim tracking is now **{state}**.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     async def _copy_wishes(self, ctx: Context, mode: str, source_value: str) -> None:
         if ctx.guild is None:
             raise commands.NoPrivateMessage(
@@ -1707,6 +2436,16 @@ class Mudae(SphereCog):
             ctx, kind="kakera", response="Cleared your kakera wishes."
         )
 
+    @commands.command(
+        name="recent-claimed",
+        aliases=("recentclaims", "recentc", "rc"),
+    )
+    @commands.guild_only()
+    async def recent_claimed(self, ctx: Context) -> None:
+        """Show the most recently claimed Mudae characters in this server."""
+
+        await self._recent_claims_command(ctx)
+
     @cast(Any, SphereCog.mudae).command(
         name="wish",
         description="Notify yourself when Mudae rolls a character.",
@@ -1875,6 +2614,17 @@ class Mudae(SphereCog):
         )
 
     @cast(Any, SphereCog.mudae).command(
+        name="recent-claimed",
+        aliases=("recentclaims", "recentc", "rc"),
+        description="Show the most recently claimed Mudae characters in this server.",
+    )
+    @commands.guild_only()
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def mudae_recent_claimed(self, ctx: Context) -> None:
+        await self._recent_claims_command(ctx)
+
+    @cast(Any, SphereCog.mudae).command(
         name="scrapeseries",
         description="Save series names from a Mudae $imab bundle.",
     )
@@ -1941,7 +2691,8 @@ class Mudae(SphereCog):
     async def mudae_toggle(self, ctx: Context) -> None:
         """Configure optional Mudae server features."""
         await ctx.send(
-            "Choose `auto-scrape-series` to toggle automatic `$imab` scraping.",
+            "Choose `auto-scrape-series` to toggle automatic `$imab` scraping, "
+            "or `recent-claims` to toggle claim tracking.",
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -1955,6 +2706,18 @@ class Mudae(SphereCog):
     @app_commands.allowed_contexts(guilds=True)
     async def mudae_toggle_auto_scrape_series(self, ctx: Context) -> None:
         await self._toggle_auto_scrape_series(ctx)
+
+    @mudae_toggle.command(
+        name="recent-claims",
+        aliases=("recentclaimed", "recentclaims", "recentc", "rc"),
+        description="Toggle recent Mudae character claim tracking.",
+    )
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.allowed_installs(guilds=True)
+    @app_commands.allowed_contexts(guilds=True)
+    async def mudae_toggle_recent_claims(self, ctx: Context) -> None:
+        await self._toggle_recent_claims(ctx)
 
     @cast(Any, SphereCog.mudae).group(
         name="copy",
@@ -2021,12 +2784,158 @@ class Mudae(SphereCog):
             return None
         return parsed.character, parsed.series or "", parsed.kakera
 
+    async def _award_mudae_kakera_exchange(
+        self, message: discord.Message, gift: MudaeKakeraGift
+    ) -> bool:
+        """Credit the giver for a validated Mudae kakera gift.
+
+        Currency transactions already have a unique ``reference_key`` index,
+        so the Mudae message ID is used as the idempotency boundary.  This is
+        important when the gateway redelivers a message or both Fishie
+        processes observe it during a rolling handoff: at most one wallet
+        credit can be committed.  No response is sent to the channel; this
+        exchange is intentionally silent, like imported Tatsu reputation
+        rewards.
+        """
+
+        if gift.coins <= 0:
+            # A one-kakera gift cannot produce a whole Coin.  Ignore it rather
+            # than creating a zero-value ledger row (which the currency schema
+            # intentionally disallows).
+            return False
+
+        raw_message_id = getattr(message, "id", None)
+        if raw_message_id is None:
+            self._debug(
+                "Skipping Mudae kakera gift without a message ID: giver=%s",
+                gift.giver_id,
+            )
+            return False
+        try:
+            message_id = int(raw_message_id)
+        except (TypeError, ValueError, OverflowError):
+            self._debug(
+                "Skipping Mudae kakera gift without a valid message ID: giver=%s",
+                gift.giver_id,
+            )
+            return False
+
+        reference_key = f"mudae_kakera_exchange:{message_id}"
+        pool = getattr(self.bot, "pool", None)
+        fetchval = getattr(pool, "fetchval", None)
+        if callable(fetchval):
+            try:
+                existing = await cast(Any, fetchval)(
+                    """
+                    SELECT 1
+                    FROM currency_transactions
+                    WHERE user_id = $1 AND reference_key = $2
+                    LIMIT 1
+                    """,
+                    gift.giver_id,
+                    reference_key,
+                )
+            except Exception as exc:
+                # A transient read failure should not turn into a lost reward;
+                # the credit transaction remains the authoritative check and
+                # will still reject a duplicate reference atomically.
+                self._debug(
+                    "Could not check existing Mudae kakera exchange %s: %s",
+                    message_id,
+                    exc,
+                )
+                existing = None
+            if existing is not None:
+                return False
+
+        currency = getattr(self.bot, "currency", None)
+        credit = getattr(currency, "credit", None)
+        if not callable(credit):
+            self._debug(
+                "Skipping Mudae kakera exchange %s: currency service unavailable",
+                message_id,
+            )
+            return False
+        try:
+            await cast(Any, credit)(
+                gift.giver_id,
+                gift.coins,
+                "mudae_kakera_exchange",
+                reference_key=reference_key,
+            )
+        except asyncpg.UniqueViolationError:
+            # Another event handler committed this exact gift first.
+            return False
+        except Exception:
+            self.bot.logger.exception(
+                "Failed to credit Mudae kakera exchange message=%s giver=%s "
+                "kakera=%s coins=%s",
+                message_id,
+                gift.giver_id,
+                gift.kakera,
+                gift.coins,
+            )
+            return False
+        self.bot.logger.info(
+            "Credited Mudae kakera exchange message=%s giver=%s kakera=%s coins=%s",
+            message_id,
+            gift.giver_id,
+            gift.kakera,
+            gift.coins,
+        )
+        return True
+
+    @commands.Cog.listener("on_message")
+    async def _mudae_kakera_exchange_listener(self, message: discord.Message) -> None:
+        """Exchange kakera gifted to Fishie in the support server.
+
+        Only Mudae's exact gift message in the Fishie support guild is
+        eligible.  Restricting both the author and recipient prevents ordinary
+        messages that happen to contain ``kakera`` from minting Coins.
+        """
+
+        if is_legacy_instance(self.bot):
+            return
+        guild = getattr(message, "guild", None)
+        if guild is None or getattr(guild, "id", None) != SUPPORT_GUILD_ID:
+            return
+        if getattr(getattr(message, "author", None), "id", None) != MudaeID:
+            return
+        gift = parse_mudae_kakera_gift(getattr(message, "content", None))
+        if gift is None:
+            return
+        if gift.receiver_id != FISHIE_OWNER_ID or gift.giver_id == FISHIE_OWNER_ID:
+            return
+        await self._award_mudae_kakera_exchange(message, gift)
+
+    @commands.Cog.listener("on_member_update")
+    async def _support_booster_member_update(
+        self, before: discord.Member, after: discord.Member
+    ) -> None:
+        """Keep the supporter badge/reward in sync with boost changes."""
+
+        if is_legacy_instance(self.bot):
+            return
+        guild = getattr(after, "guild", None) or getattr(before, "guild", None)
+        if guild is None or getattr(guild, "id", None) != SUPPORT_GUILD_ID:
+            return
+        # A role update can be the only signal Discord sends for a boost
+        # transition.  Compare the combined timestamp/managed-role status,
+        # not just ``premium_since``.
+        if self._member_is_support_booster(before) == self._member_is_support_booster(
+            after
+        ):
+            return
+        await self._sync_supporter_member(after)
+
     @commands.Cog.listener("on_message")
     async def _mudae_wish_listener(self, message: discord.Message) -> None:
         if is_legacy_instance(self.bot):
             return
         if is_operational_guild(message):
             return
+        if message.guild is not None and getattr(message.author, "id", None) == MudaeID:
+            self._cache_recent_claim_message(message)
         # ``$imab`` is opt-in per server.  Handle it before ordinary character
         # spawn parsing; the bundle parser has a strict ``(Bundle)`` guard so
         # information/profile embeds cannot be scraped accidentally.
@@ -2117,6 +3026,115 @@ class Mudae(SphereCog):
                     "Could not DM Mudae wish notification to user %s",
                     user_id,
                 )
+
+    @commands.Cog.listener("on_message_edit")
+    async def _mudae_recent_claim_message_edit(
+        self, before: discord.Message, after: discord.Message
+    ) -> None:
+        """Record an unclaimed Mudae card when a member claims it."""
+
+        if is_legacy_instance(self.bot):
+            return
+        guild = getattr(after, "guild", None) or getattr(before, "guild", None)
+        if guild is None or is_operational_guild(guild):
+            return
+        before_author = getattr(getattr(before, "author", None), "id", None)
+        after_author = getattr(getattr(after, "author", None), "id", None)
+        if before_author != MudaeID and after_author != MudaeID:
+            return
+        if not self._recent_claims_enabled_for(int(guild.id)):
+            return
+        before_snapshot = self._recent_claim_snapshot(before)
+        after_snapshot = self._recent_claim_snapshot(after)
+        if before_snapshot is None or after_snapshot is None:
+            return
+        await self._record_recent_claim_edit(
+            before_snapshot,
+            after_snapshot,
+            guild=guild,
+            message=after,
+        )
+        self._recent_claim_snapshots[int(after.id)] = after_snapshot
+
+    @commands.Cog.listener("on_raw_message_edit")
+    async def _mudae_recent_claim_raw_edit(
+        self, payload: discord.RawMessageUpdateEvent
+    ) -> None:
+        """Handle claim edits even when Discord did not cache the message."""
+
+        if is_legacy_instance(self.bot):
+            return
+        guild_id = getattr(payload, "guild_id", None)
+        if guild_id is None or is_operational_guild(guild_id):
+            return
+        try:
+            guild_id = int(guild_id)
+            message_id = int(payload.message_id)
+        except (TypeError, ValueError, AttributeError):
+            return
+        if not self._recent_claims_enabled_for(guild_id):
+            return
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+        data = getattr(payload, "data", None) or {}
+        if not isinstance(data, dict):
+            return
+        raw_author = data.get("author")
+        if isinstance(raw_author, dict) and raw_author.get("id") is not None:
+            try:
+                if int(raw_author["id"]) != MudaeID:
+                    return
+            except (TypeError, ValueError):
+                return
+        elif data.get("application_id") is not None:
+            try:
+                if int(data["application_id"]) != MudaeID:
+                    return
+            except (TypeError, ValueError):
+                return
+        cached_message = getattr(payload, "cached_message", None)
+        before_snapshot = self._recent_claim_snapshots.get(message_id)
+        if before_snapshot is None and cached_message is not None:
+            before_snapshot = self._recent_claim_snapshot(cached_message)
+        if before_snapshot is None:
+            return
+        # Discord usually includes a complete embed/reaction payload.  If a
+        # gateway version sends only changed fields, retain the cached values
+        # for the missing parts while still replacing the edited timestamp.
+        after_snapshot = self._recent_claim_snapshot(
+            data,
+            fallback=before_snapshot,
+        )
+        if after_snapshot is None:
+            return
+        after_snapshot["id"] = message_id
+        after_snapshot["guild_id"] = guild_id
+        after_snapshot.setdefault("channel_id", getattr(payload, "channel_id", None))
+        if claim_transition(before_snapshot, after_snapshot) is None:
+            self._recent_claim_snapshots[message_id] = after_snapshot
+            return
+        after_message: discord.Message | None = None
+        # A raw payload does not expose reaction users.  Fetch the updated
+        # message only after the local transition check has found a likely
+        # claim, so ordinary Mudae edits do not add an API request.
+        after_embed = next(iter(after_snapshot.get("embeds") or ()), None)
+        if after_embed is not None and claiming_username(after_embed) is None:
+            channel_id = after_snapshot.get("channel_id")
+            channel = self.bot.get_channel(channel_id) if channel_id else None
+            fetch_message = getattr(channel, "fetch_message", None)
+            if callable(fetch_message):
+                try:
+                    after_message = await cast(Any, fetch_message)(message_id)
+                except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                    after_message = None
+        await self._record_recent_claim_edit(
+            before_snapshot,
+            after_snapshot,
+            guild=guild,
+            message=after_message,
+        )
+        self._recent_claim_snapshots[message_id] = after_snapshot
 
     @commands.Cog.listener("on_raw_message_edit")
     async def _mudae_series_edit_listener(

@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock
 
 import discord
 import pytest
+from discord.ext import commands
+from test_support import not_none, require_type
 
+# Test doubles supply only the Discord/service fields exercised by each test.
+from core import Fishie
+from extensions.context import Context
 from extensions.mudae import MIN_WISHKAKERA, Mudae, MudaeID, _MudaeWishes
 from extensions.mudae.wishes import (
     MudaeSeriesBundleEntry,
@@ -35,6 +40,7 @@ def test_mudae_wish_helpers_are_text_commands_and_group_subcommands() -> None:
     assert standalone["unwishseries"].parent is None
     assert standalone["clearwishseries"].parent is None
     assert standalone["unwishkakera"].parent is None
+    assert standalone["recent-claimed"].parent is None
     assert all(
         getattr(standalone[name], "app_command", None) is None
         for name in (
@@ -47,6 +53,7 @@ def test_mudae_wish_helpers_are_text_commands_and_group_subcommands() -> None:
             "unwishseries",
             "clearwishseries",
             "unwishkakera",
+            "recent-claimed",
         )
     )
 
@@ -61,7 +68,13 @@ def test_mudae_wish_helpers_are_text_commands_and_group_subcommands() -> None:
         "unwishseries",
         "clearwishseries",
         "unwishkakera",
+        "recent-claimed",
     } <= children.keys()
+    toggle_children = {
+        command.name: command
+        for command in require_type(children["toggle"], commands.Group).commands
+    }
+    assert "recent-claims" in toggle_children
     assert MIN_WISHKAKERA == 67
 
 
@@ -215,7 +228,7 @@ async def test_wishseries_suggests_saved_typo_before_registering() -> None:
             fetch=AsyncMock(return_value=[{"series_name": "Berserk"}]),
         )
     )
-    cog = Mudae(bot)
+    cog = Mudae(cast("Fishie", bot))
     cast(Any, cog)._register_mudae_wish = register
     ctx = SimpleNamespace(
         guild=SimpleNamespace(id=123),
@@ -225,7 +238,7 @@ async def test_wishseries_suggests_saved_typo_before_registering() -> None:
         send=AsyncMock(),
     )
 
-    await cog._register_series_wishes_with_suggestions(ctx, "Berserkk")
+    await cog._register_series_wishes_with_suggestions(cast("Context", ctx), "Berserkk")
 
     ctx.prompt.assert_awaited_once()
     assert "Berserk" in ctx.prompt.await_args.args[0]
@@ -241,7 +254,7 @@ async def test_wishseries_suggests_saved_typo_before_registering() -> None:
 async def test_wishbundle_confirms_and_adds_saved_series() -> None:
     register = AsyncMock()
     bot = SimpleNamespace(pool=SimpleNamespace())
-    cog = Mudae(bot)
+    cog = Mudae(cast("Fishie", bot))
     cast(Any, cog)._register_mudae_wish = register
     cast(Any, cog)._fetch_scraped_series_catalog = AsyncMock(
         return_value=(
@@ -271,7 +284,7 @@ async def test_wishbundle_confirms_and_adds_saved_series() -> None:
         send=AsyncMock(),
     )
 
-    await cog._wish_bundle_command(ctx, "jojo's bizarre adventure")
+    await cog._wish_bundle_command(cast("Context", ctx), "jojo's bizarre adventure")
 
     ctx.prompt.assert_awaited_once()
     assert "2" in ctx.prompt.await_args.args[0]
@@ -491,7 +504,7 @@ async def test_mudae_cog_load_caches_persisted_wishes() -> None:
         ),
         logger=SimpleNamespace(info=lambda *args: None, warning=lambda *args: None),
     )
-    cog = Mudae(bot)
+    cog = Mudae(cast("Fishie", bot))
 
     await cog.cog_load()
 
@@ -507,17 +520,24 @@ async def test_new_mudae_wish_is_persisted_before_cache_update() -> None:
     bot = SimpleNamespace(
         pool=SimpleNamespace(execute=execute),
     )
-    cog = Mudae(bot)
+    cog = Mudae(cast("Fishie", bot))
     ctx = SimpleNamespace(
         guild=SimpleNamespace(id=123),
         author=SimpleNamespace(id=42),
         send=AsyncMock(),
     )
 
-    await cog._register_mudae_wish(ctx, kind="character", value="  Riza Hawkeye ")
+    await cog._register_mudae_wish(
+        cast("Context", ctx), kind="character", value="  Riza Hawkeye "
+    )
 
     execute.assert_awaited_once()
-    assert execute.await_args.args[1:] == (123, 42, "character", "riza hawkeye")
+    assert not_none(execute.await_args).args[1:] == (
+        123,
+        42,
+        "character",
+        "riza hawkeye",
+    )
     assert cog._mudae_wishes[(123, 42)].characters == {"riza hawkeye"}
 
 
@@ -525,7 +545,7 @@ async def test_new_mudae_wish_is_persisted_before_cache_update() -> None:
 async def test_series_kakera_threshold_updates_replace_stale_cache_value() -> None:
     execute = AsyncMock()
     bot = SimpleNamespace(pool=SimpleNamespace(execute=execute))
-    cog = Mudae(bot)
+    cog = Mudae(cast("Fishie", bot))
     ctx = SimpleNamespace(
         guild=SimpleNamespace(id=123),
         author=SimpleNamespace(id=42),
@@ -533,10 +553,10 @@ async def test_series_kakera_threshold_updates_replace_stale_cache_value() -> No
     )
 
     await cog._register_mudae_wish(
-        ctx, kind="series_kakera", value="JoJo", kakera_threshold=100
+        cast("Context", ctx), kind="series_kakera", value="JoJo", kakera_threshold=100
     )
     await cog._register_mudae_wish(
-        ctx, kind="series_kakera", value="jojo", kakera_threshold=200
+        cast("Context", ctx), kind="series_kakera", value="jojo", kakera_threshold=200
     )
 
     assert cog._mudae_wishes[(123, 42)].series_kakera == {"jojo": {200}}
@@ -546,7 +566,7 @@ async def test_series_kakera_threshold_updates_replace_stale_cache_value() -> No
 async def test_mudae_wish_removals_update_database_and_cache() -> None:
     execute = AsyncMock()
     bot = SimpleNamespace(pool=SimpleNamespace(execute=execute))
-    cog = Mudae(bot)
+    cog = Mudae(cast("Fishie", bot))
     cast(Any, cog)._mudae_wishes = {
         (123, 42): _MudaeWishes(
             characters={"riza hawkeye"}, series={"fullmetal alchemist"}, kakera={100}
@@ -558,12 +578,19 @@ async def test_mudae_wish_removals_update_database_and_cache() -> None:
         send=AsyncMock(),
     )
 
-    await cog._unwish_character(ctx, "Riza Hawkeye")
-    assert execute.await_args.args[1:] == (123, 42, "character", "riza hawkeye")
+    await cog._unwish_character(cast("Context", ctx), "Riza Hawkeye")
+    assert not_none(execute.await_args).args[1:] == (
+        123,
+        42,
+        "character",
+        "riza hawkeye",
+    )
     assert cog._mudae_wishes[(123, 42)].characters == set()
 
-    await cog._clear_mudae_wishes(ctx, kind="series", response="cleared")
+    await cog._clear_mudae_wishes(
+        cast("Context", ctx), kind="series", response="cleared"
+    )
     assert cog._mudae_wishes[(123, 42)].series == set()
 
-    await cog._register_mudae_wish(ctx, kind="kakera", value=0)
+    await cog._register_mudae_wish(cast("Context", ctx), kind="kakera", value=0)
     assert cog._mudae_wishes == {}

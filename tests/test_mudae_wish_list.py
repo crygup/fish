@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 import discord
 import pytest
 
+# Test doubles supply only the Discord/service fields exercised by each test.
+from extensions.context import Context
 from extensions.mudae import Mudae, _MudaeWishes
 from extensions.mudae.wish_list import SeriesWishEntry, SeriesWishListView
 
@@ -36,7 +38,7 @@ async def test_series_wishes_mark_unscraped_names_italic() -> None:
         author=SimpleNamespace(id=456, name="Tester"),
     )
 
-    entries = await cog._series_wish_entries(ctx, _MudaeWishes())
+    entries = await cog._series_wish_entries(cast("Context", ctx), _MudaeWishes())
 
     assert entries == (
         SeriesWishEntry(id=12, name="Saved Show", exact=True),
@@ -56,7 +58,7 @@ def test_series_wish_list_view_has_ten_entry_pages_and_looping_controls() -> Non
         for index in range(11)
     )
 
-    view = SeriesWishListView(ctx, entries)
+    view = SeriesWishListView(cast("Context", ctx), entries)
 
     assert view.page_count == 2
     assert [button.label for button in view._buttons] == ["<", ">"]
@@ -69,7 +71,7 @@ def test_series_wish_list_view_empty_page_keeps_requested_heading() -> None:
         author=SimpleNamespace(id=456, name="Tester"),
         bot=SimpleNamespace(embedcolor=discord.Colour.blurple()),
     )
-    view = SeriesWishListView(ctx, ())
+    view = SeriesWishListView(cast("Context", ctx), ())
 
     assert view.page_count == 1
     assert view.entries == ()

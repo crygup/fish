@@ -45,7 +45,7 @@ class SeriesWishListView(discord.ui.LayoutView):
         self.entries = tuple(entries)
         self.page = 0
         self.message: discord.Message | None = None
-        self._buttons: tuple[discord.ui.Button, discord.ui.Button] = ()
+        self._buttons: tuple[discord.ui.Button, ...] = ()
         self._render()
 
     @property

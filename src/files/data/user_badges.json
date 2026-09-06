@@ -140,23 +140,6 @@
       "is_custom": false,
       "text": "Jane"
     },
-    "766953372309127168": [
-      {
-        "emoji_name": "drpepper",
-        "emoji_id": 1526723524587421778,
-        "is_custom": true,
-        "animated": true,
-        "text": "z"
-      },
-      {
-        "emoji_name": "gup",
-        "emoji_id": 1004422894056656916,
-        "is_custom": true,
-        "animated": true,
-        "text": "gup",
-        "badge_key": "custom:b48706a4876f4e6eaea42f5e477632d9"
-      }
-    ],
     "639539828400062485": {
       "emoji_name": "jpj",
       "emoji_id": 1132056944308400220,
