@@ -255,7 +255,8 @@ class Topster(Cog):
             lfm_user = self.bot.db_cache.lastfm[target.id]
         except KeyError:
             raise commands.BadArgument(
-                "This user has not connected their last.fm account"
+                "This user has not connected their Last.fm account. "
+                "Use `fish accounts` to connect it."
             )
 
         async with ctx.typing():

@@ -22,6 +22,7 @@ from utils import (
 from utils.credentials import decrypt_credential
 
 from .charts import Charts, search_spotify, search_spotify_data
+from .lyrics import Lyrics
 from .top import Top
 from .topster import Topster
 
@@ -146,7 +147,7 @@ class LastfmInfoView(discord.ui.LayoutView):
         self.add_item(discord.ui.Container(*first, accent_color=ctx.bot.embedcolor))
 
 
-class Lastfm(Top, Charts, Topster):
+class Lastfm(Lyrics, Top, Charts, Topster):
     """Last.fm integration"""
 
     emoji = lfm_emoji
@@ -279,7 +280,8 @@ class Lastfm(Top, Charts, Topster):
                 lfm_user = self.bot.db_cache.lastfm[user.id]
             except KeyError:
                 raise commands.BadArgument(
-                    "This user has not connected their last.fm account"
+                    "This user has not connected their Last.fm account. "
+                    "Use `fish accounts` to connect it."
                 )
 
             data = {"method": "user.getrecenttracks", "user": lfm_user}
@@ -423,7 +425,8 @@ class Lastfm(Top, Charts, Topster):
         username = self._linked_username(ctx.author)
         if not username:
             raise commands.BadArgument(
-                "Connect your Last.fm account first to use this command."
+                "Connect your Last.fm account with `fish accounts` first "
+                "to use this command."
             )
 
         if not query or not query.strip():
@@ -801,7 +804,8 @@ class Lastfm(Top, Charts, Topster):
                 username = self._linked_username(ctx.author)
                 if not username:
                     raise commands.BadArgument(
-                        "Connect your Last.fm account first to use `track` without a query."
+                        "Connect your Last.fm account with `fish accounts` first "
+                        "to use `track` without a query."
                     )
                 artist, title = await self._lastfm_current_track(username)
                 query = f"{artist} - {title}"
@@ -818,7 +822,8 @@ class Lastfm(Top, Charts, Topster):
                 username = self._linked_username(ctx.author)
                 if not username:
                     raise commands.BadArgument(
-                        "Connect your Last.fm account first to use `artist` without a query."
+                        "Connect your Last.fm account with `fish accounts` first "
+                        "to use `artist` without a query."
                     )
                 query, _ = await self._lastfm_current_track(username)
             await self._send_entity(ctx, "artist", query)
@@ -836,7 +841,8 @@ class Lastfm(Top, Charts, Topster):
                 username = self._linked_username(ctx.author)
                 if not username:
                     raise commands.BadArgument(
-                        "Connect your Last.fm account first to use `album` without a query."
+                        "Connect your Last.fm account with `fish accounts` first "
+                        "to use `album` without a query."
                     )
                 artist, album = await self._lastfm_current_album(username)
                 query = f"{artist} - {album}"

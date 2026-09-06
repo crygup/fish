@@ -80,7 +80,10 @@ async def chart_cmd(
     try:
         lfm_user = ctx.bot.db_cache.lastfm[user.id]
     except KeyError:
-        raise commands.BadArgument("This user has not connected their last.fm account")
+        raise commands.BadArgument(
+            "This user has not connected their Last.fm account. "
+            "Use `fish accounts` to connect it."
+        )
 
     data = {"method": "user.getrecenttracks", "user": lfm_user}
     image_task = asyncio.create_task(
