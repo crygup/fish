@@ -198,23 +198,46 @@ def bot_wagers(
     minimum: int = 50,
     fallback_maximum: int = 100,
 ) -> list[int]:
-    """Generate wagers bounded by the human bids in the lobby.
+    """Generate wagers capped by the highest human bid in the lobby.
 
-    With multiple humans, bots use the inclusive lowest-to-highest human bid
-    range.  With one human, the range starts at 50 and ends at that player's
-    bid.  The fallback range only applies defensively when a caller has no
-    humans (the current games always require at least one).
+    The cap scales down as more humans join: bots may bid up to 80% of the
+    highest human bid with one human, 60% with two, 40% with three, 30% with
+    four, and 10% with five or more.  The player count is the number of human
+    participants, so adding virtual opponents does not change the cap.
+
+    The existing lower-bound behavior is retained: a solo lobby starts at
+    ``minimum`` and a multi-human lobby starts at its lowest human bid,
+    clamped to ``minimum``.  If the scaled cap falls below that lower bound,
+    the lower bound wins so that the random range remains valid.  The fallback
+    range only applies defensively when a caller has no humans (the current
+    games always require at least one).
     """
 
     if count <= 0:
         return []
-    bids = [int(bid) for bid in human_bids]
-    if len(bids) >= 2:
-        low, high = min(bids), max(bids)
-    elif len(bids) == 1:
-        low, high = minimum, max(minimum, bids[0])
+    minimum = max(0, int(minimum))
+    bids = [max(0, int(bid)) for bid in human_bids]
+    if bids:
+        highest_bid = max(minimum, max(bids))
+        low = minimum if len(bids) == 1 else max(minimum, min(bids))
+        high = max(low, _bot_wager_cap(highest_bid, len(bids), minimum))
     else:
-        low, high = minimum, max(minimum, fallback_maximum)
-    low = max(minimum, low)
-    high = max(low, high)
+        low = minimum
+        high = max(minimum, int(fallback_maximum))
     return [int(rng.randint(low, high)) for _ in range(count)]
+
+
+def _bot_wager_cap(highest_bid: int, player_count: int, minimum: int) -> int:
+    """Return the inclusive per-bot cap for a human-player count."""
+
+    if player_count <= 1:
+        percentage = 80
+    elif player_count == 2:
+        percentage = 60
+    elif player_count == 3:
+        percentage = 40
+    elif player_count == 4:
+        percentage = 30
+    else:
+        percentage = 10
+    return max(minimum, highest_bid * percentage // 100)

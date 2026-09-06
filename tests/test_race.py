@@ -7,8 +7,10 @@ from typing import cast
 import pytest
 
 from core import Fishie
+from extensions.fun.bot_participants import bot_wagers
 from extensions.fun.race import (
     RACE_COLUMNS,
+    RACE_MIN_BID,
     RACE_ROWS,
     RaceGame,
     RaceParticipant,
@@ -51,6 +53,17 @@ def test_solo_human_injury_odds_are_five_percent() -> None:
         injury_roll(solo_human=True, is_bot=False, rng=rng) for _ in range(10_000)
     )
     assert 400 < injuries < 600
+
+
+def test_race_bot_wagers_respect_minimum_when_scaled_cap_is_smaller() -> None:
+    wagers = bot_wagers(
+        [RACE_MIN_BID],
+        3,
+        rng=random.Random(8),
+        minimum=RACE_MIN_BID,
+    )
+
+    assert wagers == [RACE_MIN_BID] * 3
 
 
 class _FakeCurrency:
