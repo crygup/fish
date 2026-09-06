@@ -60,7 +60,12 @@ USER_ID_TABLES = (
     "currency_daily_rewards",
     "currency_wagers",
     "currency_gambling_stats",
-    "currency_wallets",
+    "user_racing_emojis",  # Must precede the referenced currency wallet.
+    "user_rings",  # Must precede the referenced currency wallet.
+    "user_birthdays",
+    "birthday_rewards",
+    "social_user_settings",
+    "social_marriage_cooldowns",
     "lottery_tickets",
 )
 
@@ -93,6 +98,7 @@ GUILD_ID_TABLES = (
     "pinboard_pins",
     "pokemon_solves",
     "mudae_wishes",
+    "mudae_recent_claims",
     "download_events",
     "mudae_timers",
     "mudae_subs",
@@ -116,6 +122,8 @@ GUILD_ID_TABLES = (
     "guild_protection_triggers",
     "guild_protection_incidents",
     "guild_protection_locks",
+    "guild_hourly_posts",
+    "guild_hourly_post_blocks",
 )
 
 
@@ -130,6 +138,22 @@ async def erase_user(connection: Any, user_id: int) -> int:
     """Remove all rows that identify a Discord user in one transaction."""
 
     deleted = 0
+    # Deleting a marriage also removes both membership rows through its FK.
+    # Remove either side of relationships, including rows owned by another user.
+    for table, predicate in (
+        ("social_friend_requests", "requester_id = $1 OR recipient_id = $1"),
+        ("social_friendships", "user_low_id = $1 OR user_high_id = $1"),
+        ("social_follows", "follower_id = $1 OR followed_id = $1"),
+        ("social_marriages", "proposer_id = $1 OR recipient_id = $1"),
+        ("mudae_recent_claims", "claiming_user_id = $1"),
+        (
+            "guild_hourly_post_blocks",
+            "user_id = $1 OR blocked_by = $1",
+        ),
+    ):
+        deleted += _count(
+            await connection.execute(f"DELETE FROM {table} WHERE {predicate}", user_id)
+        )
     for table in USER_ID_TABLES:
         deleted += _count(
             await connection.execute(f"DELETE FROM {table} WHERE user_id = $1", user_id)
@@ -319,6 +343,13 @@ async def erase_user(connection: Any, user_id: int) -> int:
                  AND target.item = updated.item
                  AND cardinality(updated.user_ids) = 0""",
             user_id,
+        )
+    )
+    # Wallets are referenced by inventories, rewards, wagers, and lottery rows.
+    # Delete the parent only after every dependent row has been handled.
+    deleted += _count(
+        await connection.execute(
+            "DELETE FROM currency_wallets WHERE user_id = $1", user_id
         )
     )
     return deleted

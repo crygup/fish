@@ -60,6 +60,8 @@ async def test_full_user_erasure_covers_linked_and_legacy_data() -> None:
         "guild_protection SET updated_by",
         "guild_protection_incidents",
         "guild_protection_locks",
+        "guild_hourly_post_blocks",
+        "user_racing_emojis",
         "currency_transactions",
         "currency_claims",
         "currency_daily_rewards",
@@ -103,5 +105,47 @@ async def test_full_guild_erasure_covers_logs_configuration_and_deliveries() -> 
         "guild_protection_triggers",
         "guild_protection_incidents",
         "guild_protection_locks",
+        "guild_hourly_posts",
+        "guild_hourly_post_blocks",
     ):
         assert table in sql
+
+
+async def test_erasure_covers_birthdays_rings_and_both_sides_of_relationships() -> None:
+    connection = RecordingConnection()
+    await erase_user(connection, 42)
+    statements = [sql for sql, _ in connection.calls]
+    for table in (
+        "user_birthdays",
+        "birthday_rewards",
+        "user_racing_emojis",
+        "user_rings",
+        "social_user_settings",
+        "social_marriage_cooldowns",
+    ):
+        assert f"DELETE FROM {table} WHERE user_id = $1" in statements
+    assert statements.index("DELETE FROM user_racing_emojis WHERE user_id = $1") < statements.index(
+        "DELETE FROM currency_wallets WHERE user_id = $1"
+    )
+    for table, predicate in (
+        ("social_friend_requests", "requester_id = $1 OR recipient_id = $1"),
+        ("social_friendships", "user_low_id = $1 OR user_high_id = $1"),
+        ("social_follows", "follower_id = $1 OR followed_id = $1"),
+        ("social_marriages", "proposer_id = $1 OR recipient_id = $1"),
+        ("mudae_recent_claims", "claiming_user_id = $1"),
+        (
+            "guild_hourly_post_blocks",
+            "user_id = $1 OR blocked_by = $1",
+        ),
+    ):
+        assert f"DELETE FROM {table} WHERE {predicate}" in statements
+    assert statements[-1] == "DELETE FROM currency_wallets WHERE user_id = $1"
+
+
+async def test_guild_erasure_removes_recent_claims() -> None:
+    connection = RecordingConnection()
+    await erase_guild(connection, 42)
+    assert (
+        "DELETE FROM mudae_recent_claims WHERE guild_id = $1",
+        (42,),
+    ) in connection.calls
