@@ -49,9 +49,11 @@ async def protect_cookie_requests(request: Request, call_next):
     request_limit = (
         api_state.MAX_MEDIA_API_BYTES
         if media_request
-        else api_state.MAX_WEBHOOK_BYTES
-        if webhook_request
-        else api_state.MAX_REQUEST_BYTES
+        else (
+            api_state.MAX_WEBHOOK_BYTES
+            if webhook_request
+            else api_state.MAX_REQUEST_BYTES
+        )
     )
     content_length = request.headers.get("content-length")
     if content_length:

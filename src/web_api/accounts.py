@@ -260,9 +260,11 @@ def _spotify_authorization_url(
     )
     return "https://accounts.spotify.com/authorize?" + urlencode(
         {
-            "client_id": api_state.bot_ref.config["keys"]["spotify_id"]
-            if api_state.bot_ref
-            else "",
+            "client_id": (
+                api_state.bot_ref.config["keys"]["spotify_id"]
+                if api_state.bot_ref
+                else ""
+            ),
             "response_type": "code",
             "redirect_uri": api_state.SPOTIFY_CALLBACK_URL,
             "scope": "user-read-private",

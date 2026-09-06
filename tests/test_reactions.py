@@ -168,7 +168,9 @@ async def test_mudae_corn_and_random_reactions_are_limited_to_configured_guilds(
     allowed_message.add_reaction.assert_awaited_once_with(CORN_EMOJI)
 
     allowed_message.add_reaction.reset_mock()
-    monkeypatch.setattr("extensions.events.random.choice", lambda _groups: ("6️⃣", "7️⃣"))
+    monkeypatch.setattr(
+        "extensions.events.random.choice", lambda _groups: ("6️⃣", "7️⃣")
+    )
     await event.on_special_reaction_message(cast("discord.Message", allowed_message))
     assert [call.args[0] for call in allowed_message.add_reaction.await_args_list] == [
         "6️⃣",

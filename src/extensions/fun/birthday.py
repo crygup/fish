@@ -131,21 +131,21 @@ class BirthdayCommands:
 
     @tasks.loop(minutes=5)
     async def birthday_reward_loop(self) -> None:
-        rows = await self.bot.pool.fetch(
-            """
+        rows = await self.bot.pool.fetch("""
             SELECT b.user_id FROM user_birthdays b
             LEFT JOIN birthday_rewards r USING (user_id)
             WHERE b.month = EXTRACT(MONTH FROM now() AT TIME ZONE 'UTC')
               AND b.day = EXTRACT(DAY FROM now() AT TIME ZONE 'UTC')
               AND (r.last_awarded_on IS NULL OR
                    r.last_awarded_on + INTERVAL '1 year' <= (now() AT TIME ZONE 'UTC')::date)
-            """
-        )
+            """)
         for row in rows:
             try:
                 await self.bot.currency.award_birthday(int(row["user_id"]))
             except Exception:
-                self.bot.logger.exception("Could not award birthday Coins to user %s", row["user_id"])
+                self.bot.logger.exception(
+                    "Could not award birthday Coins to user %s", row["user_id"]
+                )
 
     @birthday_reward_loop.before_loop
     async def before_birthday_rewards(self) -> None:

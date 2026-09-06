@@ -762,9 +762,7 @@ class SocialListView(discord.ui.LayoutView):
 
 
 class FriendRequestsView(discord.ui.LayoutView):
-    def __init__(
-        self, cog: SocialCommands, ctx: Context, users: Sequence[DiscordUser]
-    ):
+    def __init__(self, cog: SocialCommands, ctx: Context, users: Sequence[DiscordUser]):
         super().__init__(timeout=300)
         self.cog = cog
         self.ctx = ctx

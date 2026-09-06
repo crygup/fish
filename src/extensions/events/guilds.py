@@ -230,9 +230,7 @@ class Guilds(Cog):
             Iterable[discord.Guild], getattr(self.bot, "guilds", ()) or ()
         )
         guilds: list[discord.Guild] = [
-            item
-            for item in configured_guilds
-            if not is_operational_guild(item)
+            item for item in configured_guilds if not is_operational_guild(item)
         ]
         if not is_operational_guild(guild) and guild not in guilds:
             guilds.append(guild)

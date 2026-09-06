@@ -33,17 +33,42 @@ topMode: TypeAlias = Union[
 modeName = {"gettopartists": "artist", "gettopalbums": "album", "gettoptracks": "track"}
 DISCORD_USER_RE = re.compile(r"^(?:<@!?(?P<mention>\d{15,22})>|(?P<id>\d{15,22}))$")
 TRACK_PERIODS = {
-    "overall": "overall", "alltime": "overall", "all-time": "overall", "all": "overall",
-    "hourly": "hourly", "hour": "hourly", "1h": "hourly",
-    "daily": "daily", "day": "daily", "1d": "daily",
-    "weekly": "7day", "week": "7day", "7d": "7day", "7day": "7day",
-    "monthly": "1month", "month": "1month", "1m": "1month", "1month": "1month",
-    "quarterly": "3month", "3m": "3month", "3month": "3month",
-    "half-yearly": "6month", "6m": "6month", "6month": "6month",
-    "yearly": "12month", "year": "12month", "1y": "12month", "12m": "12month", "12month": "12month",
-    "biyearly": "24month", "2y": "24month", "24month": "24month",
+    "overall": "overall",
+    "alltime": "overall",
+    "all-time": "overall",
+    "all": "overall",
+    "hourly": "hourly",
+    "hour": "hourly",
+    "1h": "hourly",
+    "daily": "daily",
+    "day": "daily",
+    "1d": "daily",
+    "weekly": "7day",
+    "week": "7day",
+    "7d": "7day",
+    "7day": "7day",
+    "monthly": "1month",
+    "month": "1month",
+    "1m": "1month",
+    "1month": "1month",
+    "quarterly": "3month",
+    "3m": "3month",
+    "3month": "3month",
+    "half-yearly": "6month",
+    "6m": "6month",
+    "6month": "6month",
+    "yearly": "12month",
+    "year": "12month",
+    "1y": "12month",
+    "12m": "12month",
+    "12month": "12month",
+    "biyearly": "24month",
+    "2y": "24month",
+    "24month": "24month",
 }
-ARTIST_TRACK_CACHE = TTLCache[tuple[str, str], list[dict[str, Any]]](maxsize=128, ttl=300)
+ARTIST_TRACK_CACHE = TTLCache[tuple[str, str], list[dict[str, Any]]](
+    maxsize=128, ttl=300
+)
 
 
 def _track_value(value: Any, *keys: str) -> str:
@@ -66,7 +91,11 @@ def _track_playcount(value: Any) -> int:
 
 
 def _sorted_tracks(tracks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted((track for track in tracks if _track_playcount(track) > 0), key=_track_playcount, reverse=True)
+    return sorted(
+        (track for track in tracks if _track_playcount(track) > 0),
+        key=_track_playcount,
+        reverse=True,
+    )
 
 
 def _track_target_id(value: str) -> int | None:
@@ -118,17 +147,32 @@ class TrackListPageSource:
                 discord.ui.Separator(),
                 discord.ui.TextDisplay("\n".join(rows) or "No played tracks found."),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(f"{len(self.tracks):,} total {plural(len(self.tracks), False):track}"),
+                discord.ui.TextDisplay(
+                    f"{len(self.tracks):,} total {plural(len(self.tracks), False):track}"
+                ),
             ]
         )
         return children
 
 
 class Top(Cog):
-    async def _range_tracks(self, username: str, artist: str, period_value: str, album: str | None = None) -> list[dict[str, Any]]:
+    async def _range_tracks(
+        self, username: str, artist: str, period_value: str, album: str | None = None
+    ) -> list[dict[str, Any]]:
         """Count actual scrobbles within an inclusive UTC date range."""
-        aliases = {"hourly": 1 / 24, "daily": 1, "7day": 7, "1month": 30, "3month": 90, "6month": 180, "12month": 365, "24month": 730}
-        value = TRACK_PERIODS.get(period_value.strip().lower(), period_value.strip().lower())
+        aliases = {
+            "hourly": 1 / 24,
+            "daily": 1,
+            "7day": 7,
+            "1month": 30,
+            "3month": 90,
+            "6month": 180,
+            "12month": 365,
+            "24month": 730,
+        }
+        value = TRACK_PERIODS.get(
+            period_value.strip().lower(), period_value.strip().lower()
+        )
         end = datetime.now(timezone.utc)
         if value in aliases:
             if value.endswith("month"):
@@ -136,45 +180,80 @@ class Top(Cog):
             else:
                 start = end - timedelta(days=aliases[value])
         else:
-            dates = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\s+(?:to\s+)?(\d{4}-\d{2}-\d{2})", value)
+            dates = re.fullmatch(
+                r"(\d{4}-\d{2}-\d{2})\s+(?:to\s+)?(\d{4}-\d{2}-\d{2})", value
+            )
             if not dates:
-                raise commands.BadArgument("Use hourly, daily, weekly, monthly, quarterly, half-yearly, yearly, biyearly, overall, or YYYY-MM-DD to YYYY-MM-DD.")
+                raise commands.BadArgument(
+                    "Use hourly, daily, weekly, monthly, quarterly, half-yearly, yearly, biyearly, overall, or YYYY-MM-DD to YYYY-MM-DD."
+                )
             try:
                 start = datetime.fromisoformat(dates[1]).replace(tzinfo=timezone.utc)
-                end = datetime.fromisoformat(dates[2]).replace(tzinfo=timezone.utc) + timedelta(days=1)
+                end = datetime.fromisoformat(dates[2]).replace(
+                    tzinfo=timezone.utc
+                ) + timedelta(days=1)
             except ValueError as exc:
                 raise commands.BadArgument("That date range is invalid.") from exc
             if start >= end:
-                raise commands.BadArgument("The start date must be before the end date.")
+                raise commands.BadArgument(
+                    "The start date must be before the end date."
+                )
         counts: dict[str, dict[str, Any]] = {}
         page = 1
         while True:
-            response = await self.bot.lfm_get({"method": "user.getrecenttracks", "user": username, "from": int(start.timestamp()), "to": int(end.timestamp()) - 1, "limit": 200, "page": page})
+            response = await self.bot.lfm_get(
+                {
+                    "method": "user.getrecenttracks",
+                    "user": username,
+                    "from": int(start.timestamp()),
+                    "to": int(end.timestamp()) - 1,
+                    "limit": 200,
+                    "page": page,
+                }
+            )
             recent = response.get("recenttracks", {})
             tracks = recent.get("track", [])
             if isinstance(tracks, dict):
                 tracks = [tracks]
             for track in tracks:
-                if not track.get("date") or _track_value(track.get("artist"), "#text", "name").casefold() != artist.casefold():
+                if (
+                    not track.get("date")
+                    or _track_value(track.get("artist"), "#text", "name").casefold()
+                    != artist.casefold()
+                ):
                     continue
-                if album is not None and _track_value(track.get("album"), "#text", "name").casefold() != album.casefold():
+                if (
+                    album is not None
+                    and _track_value(track.get("album"), "#text", "name").casefold()
+                    != album.casefold()
+                ):
                     continue
                 name = str(track.get("name") or "")
-                entry = counts.setdefault(name.casefold(), {"name": name, "playcount": 0})
+                entry = counts.setdefault(
+                    name.casefold(), {"name": name, "playcount": 0}
+                )
                 entry["playcount"] += 1
             if page >= int(recent.get("@attr", {}).get("totalPages", 1)) or not tracks:
                 break
             page += 1
         return list(counts.values())
 
-    def _track_query_period(self, query: str | None, time_period: str) -> tuple[str | None, str]:
+    def _track_query_period(
+        self, query: str | None, time_period: str
+    ) -> tuple[str | None, str]:
         if query and time_period == "overall":
-            match = re.search(r"\s+(weekly|week|7d|7day|monthly|month|1m|1month|3m|3month|6m|6month|yearly|year|12m|12month|overall|\d{4}-\d{2}-\d{2}\s+(?:to\s+)?\d{4}-\d{2}-\d{2})$", query, re.I)
+            match = re.search(
+                r"\s+(weekly|week|7d|7day|monthly|month|1m|1month|3m|3month|6m|6month|yearly|year|12m|12month|overall|\d{4}-\d{2}-\d{2}\s+(?:to\s+)?\d{4}-\d{2}-\d{2})$",
+                query,
+                re.I,
+            )
             if match:
-                return query[:match.start()].strip(), match[1]
+                return query[: match.start()].strip(), match[1]
         return query, time_period
 
-    def _track_arguments(self, query: str | None, time_period: str, user_id: int) -> tuple[str, str, int]:
+    def _track_arguments(
+        self, query: str | None, time_period: str, user_id: int
+    ) -> tuple[str, str, int]:
         remaining = []
         periods = []
         users = []
@@ -188,10 +267,19 @@ class Top(Cog):
                 remaining.append(token)
         if len(set(users)) > 1 or len(set(periods)) > 1:
             raise commands.BadArgument("Specify one user and one timeframe.")
-        value, selected = self._track_query_period(" ".join(remaining), periods[0] if periods else TRACK_PERIODS.get(time_period.lower(), time_period))
+        value, selected = self._track_query_period(
+            " ".join(remaining),
+            (
+                periods[0]
+                if periods
+                else TRACK_PERIODS.get(time_period.lower(), time_period)
+            ),
+        )
         return value or "", selected, users[0] if users else user_id
 
-    async def _artist_user_tracks(self, username: str, artist: str) -> list[dict[str, Any]]:
+    async def _artist_user_tracks(
+        self, username: str, artist: str
+    ) -> list[dict[str, Any]]:
         # Fetch personal counts directly, rather than enriching the artist's
         # global top 100 one request at a time (which misses less popular songs).
         key = (username.casefold(), artist.casefold())
@@ -200,16 +288,31 @@ class Top(Cog):
         result: list[dict[str, Any]] = []
 
         async def fetch_page(page: int) -> dict[str, Any]:
-            response = await self.bot.lfm_get({"method": "user.gettoptracks", "user": username, "period": "overall", "limit": 1000, "page": page})
+            response = await self.bot.lfm_get(
+                {
+                    "method": "user.gettoptracks",
+                    "user": username,
+                    "period": "overall",
+                    "limit": 1000,
+                    "page": page,
+                }
+            )
             if response.get("error"):
-                raise commands.BadArgument("Last.fm could not load this track chart. Please try again shortly.")
+                raise commands.BadArgument(
+                    "Last.fm could not load this track chart. Please try again shortly."
+                )
             return response.get("toptracks", {})
 
         def collect(data: dict[str, Any]) -> None:
             tracks = data.get("track", [])
             if isinstance(tracks, dict):
                 tracks = [tracks]
-            result.extend(track for track in tracks if _track_value(track.get("artist"), "name", "#text").casefold() == artist.casefold())
+            result.extend(
+                track
+                for track in tracks
+                if _track_value(track.get("artist"), "name", "#text").casefold()
+                == artist.casefold()
+            )
 
         first = await fetch_page(1)
         collect(first)
@@ -219,7 +322,12 @@ class Top(Cog):
         for start in range(2, total_pages + 1, 4):
             if len(result) >= 100:
                 break
-            pages = await asyncio.gather(*(fetch_page(page) for page in range(start, min(start + 4, total_pages + 1))))
+            pages = await asyncio.gather(
+                *(
+                    fetch_page(page)
+                    for page in range(start, min(start + 4, total_pages + 1))
+                )
+            )
             for data in pages:
                 collect(data)
         ranked = _sorted_tracks(result)[:100]
@@ -282,8 +390,16 @@ class Top(Cog):
 
         return list(await asyncio.gather(*(enrich(track) for track in tracks)))
 
-    async def _show_album_tracks(self, ctx: Context, query: str | None, time_period: str = "overall", user: discord.User | None = None) -> None:
-        value, time_period, target_id = self._track_arguments(query, time_period, user.id if user else ctx.author.id)
+    async def _show_album_tracks(
+        self,
+        ctx: Context,
+        query: str | None,
+        time_period: str = "overall",
+        user: discord.User | None = None,
+    ) -> None:
+        value, time_period, target_id = self._track_arguments(
+            query, time_period, user.id if user else ctx.author.id
+        )
         username = self.bot.db_cache.lastfm.get(target_id or ctx.author.id)
         if not username:
             raise commands.BadArgument(
@@ -304,7 +420,13 @@ class Top(Cog):
         tracks = [track for track in tracks if isinstance(track, dict)]
         if not tracks:
             raise commands.BadArgument(f"No tracks were found for **{album_name}**.")
-        tracks = (await self._user_track_playcounts(tracks, artist, username) if time_period == "overall" else await self._range_tracks(username, artist, time_period, str(item.get("name") or album_name)))
+        tracks = (
+            await self._user_track_playcounts(tracks, artist, username)
+            if time_period == "overall"
+            else await self._range_tracks(
+                username, artist, time_period, str(item.get("name") or album_name)
+            )
+        )
         await self._start_track_pages(
             ctx,
             heading=f"{username}'s top tracks for {item.get('name') or album_name} for {artist}",
@@ -312,8 +434,16 @@ class Top(Cog):
             tracks=tracks,
         )
 
-    async def _show_artist_tracks(self, ctx: Context, query: str | None, time_period: str = "overall", user: discord.User | None = None) -> None:
-        value, time_period, target_id = self._track_arguments(query, time_period, user.id if user else ctx.author.id)
+    async def _show_artist_tracks(
+        self,
+        ctx: Context,
+        query: str | None,
+        time_period: str = "overall",
+        user: discord.User | None = None,
+    ) -> None:
+        value, time_period, target_id = self._track_arguments(
+            query, time_period, user.id if user else ctx.author.id
+        )
         username = self.bot.db_cache.lastfm.get(target_id or ctx.author.id)
         if not username:
             raise commands.BadArgument(
@@ -326,7 +456,11 @@ class Top(Cog):
             "artist", value, username=username
         )
         artist_name = str(artist_info.get("name") or artist_name)
-        tracks = (await self._artist_user_tracks(username, artist_name) if time_period == "overall" else await self._range_tracks(username, artist_name, time_period))
+        tracks = (
+            await self._artist_user_tracks(username, artist_name)
+            if time_period == "overall"
+            else await self._range_tracks(username, artist_name, time_period)
+        )
         await self._start_track_pages(
             ctx,
             heading=f"{username}'s top tracks for {artist_name}",
@@ -474,12 +608,29 @@ class Top(Cog):
             "Defaults to your current album."
         )
     )
-    async def album_tracks(self, ctx: Context, time_period: str = "overall", *, query: str | None = None, user: discord.User | None = None) -> None:
+    async def album_tracks(
+        self,
+        ctx: Context,
+        time_period: str = "overall",
+        *,
+        query: str | None = None,
+        user: discord.User | None = None,
+    ) -> None:
         """List an album's tracks sorted by playcount."""
 
         async with ctx.typing():
             if ctx.interaction is None:
-                query = " ".join(part for part in (time_period if time_period != "overall" else "", query) if part) or None
+                query = (
+                    " ".join(
+                        part
+                        for part in (
+                            time_period if time_period != "overall" else "",
+                            query,
+                        )
+                        if part
+                    )
+                    or None
+                )
                 time_period = "overall"
             await self._show_album_tracks(ctx, query, time_period, user)
 
@@ -489,11 +640,28 @@ class Top(Cog):
     @app_commands.describe(
         query="Artist name or Discord user. Defaults to your current artist."
     )
-    async def artist_tracks(self, ctx: Context, time_period: str = "overall", *, query: str | None = None, user: discord.User | None = None) -> None:
+    async def artist_tracks(
+        self,
+        ctx: Context,
+        time_period: str = "overall",
+        *,
+        query: str | None = None,
+        user: discord.User | None = None,
+    ) -> None:
         """List an artist's tracks sorted by playcount."""
 
         async with ctx.typing():
             if ctx.interaction is None:
-                query = " ".join(part for part in (time_period if time_period != "overall" else "", query) if part) or None
+                query = (
+                    " ".join(
+                        part
+                        for part in (
+                            time_period if time_period != "overall" else "",
+                            query,
+                        )
+                        if part
+                    )
+                    or None
+                )
                 time_period = "overall"
             await self._show_artist_tracks(ctx, query, time_period, user)

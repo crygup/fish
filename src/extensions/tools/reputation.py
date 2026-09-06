@@ -205,9 +205,7 @@ class Reputation(Cog):
 
         wanted = value.strip().strip("`")
 
-        def exact(
-            members: Sequence[discord.Member], name: str
-        ) -> list[discord.Member]:
+        def exact(members: Sequence[discord.Member], name: str) -> list[discord.Member]:
             return [member for member in members if self._same_name(member, name)]
 
         matches = exact(guild.members, wanted)

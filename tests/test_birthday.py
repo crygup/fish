@@ -66,7 +66,10 @@ async def test_birthday_timezone_priority(viewer_zone, owner_zone, expected_hour
         {"user_id": 2, "timezone": owner_zone},
     ]
     stamp = await birthday_timestamp(
-        pool, Birthday(8, 18), 1, 2,
+        pool,
+        Birthday(8, 18),
+        1,
+        2,
         now=datetime(2026, 8, 1, tzinfo=timezone.utc),
     )
     assert (stamp.month, stamp.day, stamp.hour) == (8, 18, 0)
@@ -77,7 +80,10 @@ async def test_birthday_uses_local_date_at_year_boundary():
     pool = AsyncMock()
     pool.fetch.return_value = [{"user_id": 1, "timezone": "America/New_York"}]
     stamp = await birthday_timestamp(
-        pool, Birthday(12, 31), 1, 1,
+        pool,
+        Birthday(12, 31),
+        1,
+        1,
         now=datetime(2027, 1, 1, 1, tzinfo=timezone.utc),
     )
     assert stamp.year == 2026

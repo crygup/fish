@@ -1091,9 +1091,9 @@ class Info(Cog):
         if not callable(resolver):
             return None
         try:
-            marriage = await cast(
-                Callable[[int], Awaitable[Any]], resolver
-            )(int(user.id))
+            marriage = await cast(Callable[[int], Awaitable[Any]], resolver)(
+                int(user.id)
+            )
         except Exception:
             logger = getattr(self.bot, "logger", None)
             if logger is not None:
@@ -2101,7 +2101,9 @@ class Info(Cog):
 
     @userinfo.command(name="birthday")
     @app_commands.describe(user="User whose birthday to show. Defaults to yourself.")
-    async def user_birthday(self, ctx: Context, user: discord.User = commands.Author) -> None:
+    async def user_birthday(
+        self, ctx: Context, user: discord.User = commands.Author
+    ) -> None:
         """Show a user's next birthday."""
         command = self.bot.get_command("birthday")
         if command is None:

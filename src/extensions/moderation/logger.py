@@ -810,7 +810,9 @@ class Logger(Cog):
         marker = getattr(self.bot, "new_bot_id", None)
         if marker is not None:
             try:
-                replacement_id = int(cast(Any, marker() if callable(marker) else marker))
+                replacement_id = int(
+                    cast(Any, marker() if callable(marker) else marker)
+                )
             except (TypeError, ValueError):
                 pass
         try:
