@@ -1,12 +1,3 @@
-[tool.pyright]
-reportPrivateUsage = "none"
-typeCheckingMode = "basic"
-strictParameterNoneValue = false
-pythonVersion = "3.13"
-extraPaths = ["src"]
-venvPath = "."
-venv = "venv"
-
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 asyncio_mode = "auto"

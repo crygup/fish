@@ -1,8 +1,16 @@
 {
- "extraPaths": ["src"],
- "exclude": ["backup", "wip"],
- "typeCheckingMode": "basic",
- "pythonVersion": "3.13",
- "venvPath": ".",
- "venv": "venv"
+  "extraPaths": [
+    "src"
+  ],
+  "exclude": [
+    "backup",
+    "wip",
+    "venv",
+    ".venv",
+    "**/__pycache__"
+  ],
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.13",
+  "venvPath": ".",
+  "venv": "venv"
 }
