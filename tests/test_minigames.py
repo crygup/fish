@@ -9,6 +9,7 @@ from extensions.fun import Fun
 from extensions.fun.minigames import (
     COLOR_MEMORIZE_DIFFICULTIES,
     UNSCRAMBLE_WORDS,
+    WORD_BOMB_WORD_LOOKUP,
     WORD_GAME_WORDS,
     WORD_LIST_PATH,
     ColorMemorizeGame,
@@ -26,6 +27,10 @@ def test_minigame_commands_are_registered() -> None:
         command for command in Fun.__cog_commands__ if command.name == "wordbomb"
     )
     assert set(wordbomb.aliases) == {"wb", "word-bomb"}
+    lastletter = next(
+        command for command in Fun.__cog_commands__ if command.name == "lastletter"
+    )
+    assert set(lastletter.aliases) == {"lastl", "last-letter"}
     assert {command.name for command in Fun.color.commands} == {"stats"}
     assert getattr(Fun.color, "app_command", None) is None
     assert {command.name for command in Fun.game.commands} == {
@@ -41,6 +46,7 @@ def test_minigame_commands_are_registered() -> None:
         "higher-or-lower",
         "heads-or-tails",
         "wordbomb",
+        "last-letter",
         "click",
         "race",
         "luckyroll",
@@ -173,6 +179,13 @@ def test_scramble_is_not_the_original_word() -> None:
 
 def test_scramble_uses_the_shared_google_word_list() -> None:
     assert WORD_LIST_PATH.is_file()
+
+
+def test_word_bomb_uses_the_reviewed_short_word_allowlist() -> None:
+    assert "air" in WORD_BOMB_WORD_LOOKUP
+    assert "aa" not in WORD_BOMB_WORD_LOOKUP
+    assert "abc" not in WORD_BOMB_WORD_LOOKUP
+    assert "aaa" not in WORD_BOMB_WORD_LOOKUP
     assert len(WORD_GAME_WORDS) > 9900
     assert WORD_GAME_WORDS[0] == "the"
     assert all(word.isalpha() and word.islower() for word in WORD_GAME_WORDS)

@@ -43,6 +43,7 @@ async def test_full_user_erasure_covers_linked_and_legacy_data() -> None:
         "wordle_stats",
         "streak_game_stats",
         "wordbomb_stats",
+        "lastletter_stats",
         "video_aliases",
         "video_library_blocks",
         "video_library_hides",
@@ -124,9 +125,9 @@ async def test_erasure_covers_birthdays_rings_and_both_sides_of_relationships() 
         "social_marriage_cooldowns",
     ):
         assert f"DELETE FROM {table} WHERE user_id = $1" in statements
-    assert statements.index("DELETE FROM user_racing_emojis WHERE user_id = $1") < statements.index(
-        "DELETE FROM currency_wallets WHERE user_id = $1"
-    )
+    assert statements.index(
+        "DELETE FROM user_racing_emojis WHERE user_id = $1"
+    ) < statements.index("DELETE FROM currency_wallets WHERE user_id = $1")
     for table, predicate in (
         ("social_friend_requests", "requester_id = $1 OR recipient_id = $1"),
         ("social_friendships", "user_low_id = $1 OR user_high_id = $1"),

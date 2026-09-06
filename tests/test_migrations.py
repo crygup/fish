@@ -261,6 +261,14 @@ def test_wordbomb_words_migration_tracks_custom_dictionary_entries() -> None:
     assert "added_by BIGINT" in migration.sql
 
 
+def test_lastletter_migration_tracks_wins_and_losses() -> None:
+    migration = next(item for item in available_migrations() if item.version == 92)
+    assert migration.name == "lastletter_stats"
+    assert "CREATE TABLE IF NOT EXISTS lastletter_stats" in migration.sql
+    assert "wins BIGINT" in migration.sql
+    assert "losses BIGINT" in migration.sql
+
+
 def test_badges_migration_adds_catalog_and_purchase_metadata() -> None:
     migration = next(item for item in available_migrations() if item.version == 63)
     assert migration.name == "badges"

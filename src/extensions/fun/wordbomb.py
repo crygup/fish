@@ -14,9 +14,11 @@ from discord.ext import commands
 from utils.emojis import bomb, red_bomb, skull_bomb
 
 from .minigames import (
+    add_correct_answer_reaction,
     add_word_bomb_words,
     choose_word_bomb_fragment,
     is_valid_word_bomb_guess,
+    is_valid_word_game_word,
 )
 from .wordbomb_stats import award_wordbomb_winner_coins, record_wordbomb_result
 
@@ -196,6 +198,24 @@ class WordBombCommands:
         """Start a Word Bomb lobby."""
 
         await self._start_wordbomb(ctx)
+
+    @cast(Any, commands.command)(name="checkword", hidden=True)
+    async def checkword(self, ctx: Context, *, word: str) -> None:
+        """Check whether a word is accepted by Fishie's word games."""
+
+        normalized = word.strip().casefold()
+        accepted = is_valid_word_game_word(normalized)
+        display = discord.utils.escape_markdown(
+            discord.utils.escape_mentions(word.strip())
+        )
+        if len(display) > 100:
+            display = f"{display[:97]}..."
+        status = "accepted" if accepted else "not accepted"
+        await ctx.send(
+            f"**{display or '(empty)'}** is {status} by the Word Bomb and "
+            "LastLetter word lists.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     def _wordbomb_lobby_embed(self, game: WordBombGame) -> discord.Embed:
         players = "\n".join(
@@ -416,15 +436,16 @@ class WordBombCommands:
                     correct = answer is not None and is_valid_word_bomb_guess(
                         answer.content, fragment
                     )
-                    try:
-                        await prompt.add_reaction("✅" if correct else "💔")
-                    except (discord.HTTPException, discord.NotFound):
-                        pass
-
                     if correct:
+                        await add_correct_answer_reaction(answer, prompt)
                         solved = True
                         game.turn_index = (game.turn_index + 1) % len(game.players)
                         continue
+
+                    try:
+                        await prompt.add_reaction("💔")
+                    except (discord.HTTPException, discord.NotFound):
+                        pass
 
                     player.lives -= 1
                     if player.lives > 0:

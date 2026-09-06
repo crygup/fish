@@ -47,6 +47,7 @@ USER_ID_TABLES = (
     "wordle_stats",
     "streak_game_stats",
     "wordbomb_stats",
+    "lastletter_stats",
     "video_aliases",
     "video_library_blocks",
     "video_library_hides",

@@ -53,6 +53,7 @@ from .crash import (
 )
 from .game_2048 import Game2048, Game2048View, highest_tile
 from .helpers import RPS_ALWAYS_WIN_USER_ID, WTPView, dagpi
+from .lastletter import LastLetterCommands, LastLetterGame
 from .library_uploads import (
     LibraryUploadsPageSource,
     post_media_condition,
@@ -362,6 +363,9 @@ GAMES_HELP_COMMANDS = frozenset(
         "unscramble",
         "color",
         "wordbomb",
+        "lastletter",
+        "lastl",
+        "last-letter",
         "race",
         "luckyroll",
         "slots",
@@ -394,6 +398,7 @@ class Fun(
     SlotsCommands,
     BlackjackCommands,
     WordBombCommands,
+    LastLetterCommands,
 ):
     """Random commands for when you're bored"""
 
@@ -422,6 +427,7 @@ class Fun(
         self._wordle_games: dict[tuple[int, int], WordleGame] = {}
         self._memory_games: dict[int, MemoryGame] = {}
         self._wordbomb_games: dict[int, Any] = {}
+        self._lastletter_games: dict[int, LastLetterGame] = {}
         self._race_games: dict[int, Any] = {}
         self._luckyroll_games: dict[int, Any] = {}
         self._slots_games: dict[int, Any] = {}
@@ -1771,6 +1777,17 @@ class Fun(
     async def game_wordbomb(self, ctx: Context) -> None:
         """Start a Word Bomb lobby."""
         await self._start_wordbomb(ctx)
+
+    @game.command(
+        name="last-letter",
+        aliases=("lastl", "lastletter"),
+        description="Open a LastLetter lobby and invite players.",
+    )
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def game_last_letter(self, ctx: Context) -> None:
+        """Start a LastLetter lobby."""
+        await self._start_lastletter(ctx)
 
     @game.command(name="memory", aliases=("matching",))
     @app_commands.allowed_installs(guilds=True, users=True)
@@ -4629,6 +4646,7 @@ class Fun(
         self.unregister_video_views()
         self._connectfour_controller.close()
         self._stop_wordbomb_games()
+        self._stop_lastletter_games()
         for game in self._color_memorize_games.values():
             if game.animation_task is not None:
                 game.animation_task.cancel()
@@ -4730,6 +4748,7 @@ class Fun(
         self._rock_paper_scissors_games.clear()
         self._wordle_games.clear()
         self._memory_games.clear()
+        self._lastletter_games.clear()
         self._race_games.clear()
         self._luckyroll_games.clear()
         self._slots_games.clear()

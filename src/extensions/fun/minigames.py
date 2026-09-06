@@ -35,6 +35,12 @@ WORD_BOMB_WORD_LIST_PATH = FILES_ROOT / "data" / "wordle.txt"
 # Alphabetic English dictionary sourced from dwyl/english-words.  This is
 # intentionally separate from the frequency-ranked list used by Scramble.
 WORD_BOMB_EXTENDED_WORD_LIST_PATH = FILES_ROOT / "data" / "english-words-alpha.txt"
+# The raw dictionaries intentionally remain available for review, while this
+# checked-in allowlist controls which two- and three-letter entries Word Bomb
+# and LastLetter accept.
+WORD_BOMB_SHORT_WORD_ALLOWLIST_PATH = (
+    FILES_ROOT / "data" / "wordbomb-short-words-valid.txt"
+)
 
 # Keep a small fallback so the game remains usable if a local data file is
 # missing from a development checkout or an older deployment image.
@@ -97,6 +103,34 @@ def _load_word_game_words(path: Path = WORD_LIST_PATH) -> tuple[str, ...]:
     return tuple(words) or _FALLBACK_WORDS
 
 
+def _load_word_bomb_short_word_allowlist(
+    path: Path = WORD_BOMB_SHORT_WORD_ALLOWLIST_PATH,
+) -> frozenset[str]:
+    """Load the reviewed two- and three-letter Word Bomb allowlist."""
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        # Fail closed if the deployment image is missing the reviewed file:
+        # four-letter-and-longer words remain available, but unreviewed short
+        # entries must not silently return to either word game.
+        return frozenset()
+    return frozenset(
+        word
+        for line in lines
+        if (word := line.strip().casefold()) and word.isalpha() and len(word) in (2, 3)
+    )
+
+
+def _filter_word_bomb_short_words(
+    words: Iterable[str],
+    allowlist: frozenset[str],
+) -> tuple[str, ...]:
+    """Keep long words and only reviewed short words for word games."""
+
+    return tuple(word for word in words if len(word) not in (2, 3) or word in allowlist)
+
+
 def _word_difficulty_buckets(words: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
     """Split the shared list into predictable lengths for each difficulty."""
 
@@ -118,14 +152,23 @@ def _word_difficulty_buckets(words: tuple[str, ...]) -> dict[str, tuple[str, ...
 
 WORD_GAME_WORDS = _load_word_game_words()
 UNSCRAMBLE_WORDS = _word_difficulty_buckets(WORD_GAME_WORDS)
+WORD_BOMB_SHORT_WORD_ALLOWLIST = _load_word_bomb_short_word_allowlist()
 
 # Word Bomb accepts both the common Google list and the larger Wordle list.
 # The latter contains thousands of less-common but valid words (including
 # entries such as ``crumb``) that are useful for unusual fragments.
 WORD_BOMB_WORDS = tuple(
-    dict.fromkeys((*WORD_GAME_WORDS, *_load_word_game_words(WORD_BOMB_WORD_LIST_PATH)))
+    dict.fromkeys(
+        _filter_word_bomb_short_words(
+            (*WORD_GAME_WORDS, *_load_word_game_words(WORD_BOMB_WORD_LIST_PATH)),
+            WORD_BOMB_SHORT_WORD_ALLOWLIST,
+        )
+    )
 )
-WORD_BOMB_EXTENDED_WORDS = _load_word_game_words(WORD_BOMB_EXTENDED_WORD_LIST_PATH)
+WORD_BOMB_EXTENDED_WORDS = _filter_word_bomb_short_words(
+    _load_word_game_words(WORD_BOMB_EXTENDED_WORD_LIST_PATH),
+    WORD_BOMB_SHORT_WORD_ALLOWLIST,
+)
 
 # Word Bomb uses short fragments rather than a fixed answer list.  Build the
 # fragments from the words we already trust for the other word games so every
@@ -279,6 +322,87 @@ def is_valid_word_bomb_guess(guess: str, fragment: str) -> bool:
         normalized_fragment in base and base in WORD_BOMB_WORD_LOOKUP
         for base in plural_bases
     )
+
+
+def is_valid_word_game_word(word: str) -> bool:
+    """Return whether a word is accepted by the shared word-game lists.
+
+    Word Bomb and LastLetter use the same bundled and owner-managed lookup.
+    Word Bomb also accepts a small set of regular plural forms when their
+    singular form is present, so the standalone check follows that same rule
+    using the first two letters as a valid Word Bomb fragment.
+    """
+
+    normalized = word.strip().casefold()
+    if not normalized or not normalized.isalpha():
+        return False
+    if normalized in WORD_BOMB_WORD_LOOKUP:
+        return True
+    if len(normalized) < 2:
+        return False
+    return is_valid_word_bomb_guess(normalized, normalized[:2])
+
+
+def short_word_game_words(
+    words: Iterable[str] | None = None,
+) -> tuple[str, ...]:
+    """Return deterministic, unique two- and three-letter game words."""
+
+    source = WORD_BOMB_WORD_LOOKUP if words is None else words
+    return tuple(
+        sorted(
+            {
+                word.strip().casefold()
+                for word in source
+                if len(word.strip()) in (2, 3) and word.strip().isalpha()
+            }
+        )
+    )
+
+
+def is_valid_word_start_guess(guess: str, prefix: str) -> bool:
+    """Check a word-game guess that must begin with *prefix*.
+
+    Word Bomb's custom dictionary is stored in ``WORD_BOMB_WORD_LOOKUP`` by
+    :func:`add_word_bomb_words`. Reusing the canonical validator here keeps
+    LastLetter aligned with both the bundled dictionaries and owner-added
+    words, including the supported plural forms.
+    """
+
+    normalized_guess = guess.strip().casefold()
+    normalized_prefix = prefix.strip().casefold()
+    if (
+        not normalized_guess
+        or not normalized_prefix
+        or not normalized_guess.isalpha()
+        or not normalized_prefix.isalpha()
+        or not normalized_guess.startswith(normalized_prefix)
+    ):
+        return False
+    return is_valid_word_bomb_guess(normalized_guess, normalized_prefix)
+
+
+async def add_correct_answer_reaction(
+    answer: discord.Message | None,
+    prompt: discord.Message,
+) -> None:
+    """React to a correct user's answer, falling back to the bot prompt.
+
+    A missing reaction permission or a deleted message should never abort a
+    running game. The answer is preferred so the confirmation is attached to
+    the player's actual guess; the prompt remains a useful fallback.
+    """
+
+    if answer is not None:
+        try:
+            await answer.add_reaction("✅")
+            return
+        except Exception:
+            pass
+    try:
+        await prompt.add_reaction("✅")
+    except Exception:
+        pass
 
 
 @dataclass

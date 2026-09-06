@@ -446,6 +446,28 @@ class CommandStats(Cog):
         )
         await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
+    @stats.command(name="lastletter", aliases=("lastl", "last-letter"))
+    @app_commands.describe(user="The user whose LastLetter stats you want to see.")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    async def stats_lastletter(
+        self, ctx: Context, user: discord.User = commands.Author
+    ) -> None:
+        """Show LastLetter wins, losses, and the global wins leaderboard."""
+
+        fun_cog: Any = ctx.bot.get_cog("Fun")
+        send_stats = cast(
+            Callable[[Context, discord.User], Awaitable[Any]] | None,
+            getattr(fun_cog, "_send_lastletter_stats", None),
+        )
+        if not callable(send_stats):
+            await ctx.send(
+                "LastLetter statistics are not available right now.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        await send_stats(ctx, user)
+
     @stats.command(name="lightsout", aliases=("lights-out", "lights"))
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)

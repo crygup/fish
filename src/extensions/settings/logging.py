@@ -398,6 +398,7 @@ _DELETE_SPECS: dict[str, tuple[tuple[str, str], ...]] = {
         ("wordle_stats", "user_id"),
         ("streak_game_stats", "user_id"),
         ("wordbomb_stats", "user_id"),
+        ("lastletter_stats", "user_id"),
         ("tictactoe_games", "player_x_id"),
         ("tictactoe_games", "player_o_id"),
         ("connectfour_games", "player_yellow_id"),
@@ -1129,7 +1130,9 @@ class Logging(Cog):
         await ctx.send_help(ctx.command)
 
     @settings_birthday.command(name="set")
-    @app_commands.describe(time="Month and day, optionally a year, such as August 18th or 8/18/1998.")
+    @app_commands.describe(
+        time="Month and day, optionally a year, such as August 18th or 8/18/1998."
+    )
     async def settings_birthday_set(self, ctx: Context, *, time: str) -> None:
         """Set your birthday after confirming the date."""
         command = self.bot.get_command("birthday set")
