@@ -11,6 +11,8 @@ services:
       FISHIE_CONFIG: /run/secrets/config.toml
       FISHIE_CREDENTIAL_KEY_FILE: /run/secrets/credential.key
       FISHIE_USER_BADGES_PATH: /app/data/user_badges.json
+      FISHIE_BURGERS_ROOT: /app/data/burgers
+      FISHIE_BURGERS_CATALOG_PATH: /app/data/burgers_catalog.json
       FISHIE_API_HOST: 127.0.0.1
       # The legacy process stays online only long enough to direct users to
       # the replacement application.  The API is owned by the new process so
@@ -60,6 +62,8 @@ services:
       FISHIE_CONFIG: /run/secrets/config.toml
       FISHIE_CREDENTIAL_KEY_FILE: /run/secrets/credential.key
       FISHIE_USER_BADGES_PATH: /app/data/user_badges.json
+      FISHIE_BURGERS_ROOT: /app/data/burgers
+      FISHIE_BURGERS_CATALOG_PATH: /app/data/burgers_catalog.json
       FISHIE_BOT_INSTANCE: new
       FISHIE_API_ENABLED: "true"
       FISHIE_API_HOST: 127.0.0.1

@@ -40,19 +40,18 @@ Stop everything with:
 docker compose down
 ```
 
-The production Compose file expects an existing PostgreSQL server and the
-credential key file used on the host. Set `FISHIE_UID` and `FISHIE_GID` to the
-account that owns the project files, apply migrations, then start it:
+## Production
 
-```bash
-sudo docker compose -f compose.production.yaml run --rm --no-deps fishie python manage.py migrate
-sudo docker compose -f compose.production.yaml up -d --build fishie
-```
+Production runs through Docker Compose. Both the retiring `fishie` service and
+replacement `fishie-new` service belong to `compose.production.yaml`. Only the
+replacement serves the website API, on loopback port 8001.
 
-The bot and API share one process. The API listens on port `8001` by default
-and `/health/ready` reports whether Discord and PostgreSQL are ready.
+The authoritative deployment guide for the two repositories is
+[website/DEPLOYMENT.md](../website/DEPLOYMENT.md) in the sibling website checkout.
+It covers backups, migrations, both bots, all website services, and Nginx.
+Do not start the retired `fish.service` or `avatar-lookup.service` units.
 
-## Run without Docker
+## Local development without Docker
 
 Create a virtual environment, install the locked requirements, apply the
 migrations, and launch from `src`:

@@ -35,6 +35,8 @@ services:
       FISHIE_API_HOST: 0.0.0.0
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       FISHIE_USER_BADGES_PATH: /app/data/user_badges.json
+      FISHIE_BURGERS_ROOT: /app/data/burgers
+      FISHIE_BURGERS_CATALOG_PATH: /app/data/burgers_catalog.json
     volumes:
       - ./config.toml:/run/secrets/config.toml:ro
       - ./src/files/cookies:/app/src/files/cookies:ro
