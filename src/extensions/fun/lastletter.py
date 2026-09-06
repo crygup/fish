@@ -15,7 +15,10 @@ from discord.ext import commands
 
 from utils import get_or_fetch_user
 
-from .lastletter_stats import record_lastletter_result
+from .lastletter_stats import (
+    award_lastletter_winner_coins,
+    record_lastletter_result,
+)
 from .minigames import (
     add_correct_answer_reaction,
     is_valid_word_start_guess,
@@ -336,6 +339,10 @@ class LastLetterCommands:
         )
         view = LastLetterLobbyView(self, game)
         game.lobby_view = view
+        # Reserve the channel before the first network await.  Otherwise two
+        # commands arriving in the same event-loop turn can both observe an
+        # empty slot and create overlapping lobbies.
+        games[channel_id] = game
         try:
             game.lobby_message = await ctx.send(
                 embed=self._lastletter_lobby_embed(game),
@@ -343,9 +350,10 @@ class LastLetterCommands:
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except Exception:
+            if games.get(channel_id) is game:
+                games.pop(channel_id, None)
             view.stop()
             raise
-        games[channel_id] = game
         game.task = asyncio.create_task(
             self._lastletter_wait_for_lobby(game),
             name=f"lastletter-lobby-{channel_id}",
@@ -615,14 +623,15 @@ class LastLetterCommands:
         winner: LastLetterPlayer | None,
         record_results: bool = True,
     ) -> None:
-        if game.finished and self._lastletter_games.get(game.channel_id) is not game:
+        if game.finished:
             return
         game.finished = True
         if game.lobby_view is not None:
             game.lobby_view.stop()
         if game.letter_view is not None:
             game.letter_view.stop()
-        self._lastletter_games.pop(game.channel_id, None)
+        if self._lastletter_games.get(game.channel_id) is game:
+            self._lastletter_games.pop(game.channel_id, None)
         if winner is None:
             await game.channel.send(
                 "LastLetter ended with no winner.",
@@ -634,12 +643,11 @@ class LastLetterCommands:
         awarded = 0
         if self._currency_tracking_enabled(winner.user_id):
             try:
-                await self.bot.currency.credit(
+                awarded = await award_lastletter_winner_coins(
+                    self.bot.pool,
                     winner.user_id,
                     payout,
-                    "lastletter",
                 )
-                awarded = payout
             except Exception:
                 self.bot.logger.exception("Failed to award LastLetter winner")
         if record_results:

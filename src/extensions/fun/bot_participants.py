@@ -205,12 +205,14 @@ def bot_wagers(
     four, and 10% with five or more.  The player count is the number of human
     participants, so adding virtual opponents does not change the cap.
 
-    The existing lower-bound behavior is retained: a solo lobby starts at
-    ``minimum`` and a multi-human lobby starts at its lowest human bid,
-    clamped to ``minimum``.  If the scaled cap falls below that lower bound,
-    the lower bound wins so that the random range remains valid.  The fallback
-    range only applies defensively when a caller has no humans (the current
-    games always require at least one).
+    The existing lower-bound behavior is retained whenever it fits below the
+    scaled cap: a solo lobby starts at ``minimum`` and a multi-human lobby
+    starts at its lowest human bid, clamped to ``minimum``.  When the scaled
+    cap is below that lower bound, the cap wins.  This is important for large
+    human wagers: the percentage cap must remain an actual cap rather than
+    being defeated by the lowest human bid.  The fallback range only applies
+    defensively when a caller has no humans (the current games always require
+    at least one).
     """
 
     if count <= 0:
@@ -220,7 +222,8 @@ def bot_wagers(
     if bids:
         highest_bid = max(minimum, max(bids))
         low = minimum if len(bids) == 1 else max(minimum, min(bids))
-        high = max(low, _bot_wager_cap(highest_bid, len(bids), minimum))
+        high = _bot_wager_cap(highest_bid, len(bids), minimum)
+        low = min(low, high)
     else:
         low = minimum
         high = max(minimum, int(fallback_maximum))

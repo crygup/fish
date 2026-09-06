@@ -66,6 +66,17 @@ def test_race_bot_wagers_respect_minimum_when_scaled_cap_is_smaller() -> None:
     assert wagers == [RACE_MIN_BID] * 3
 
 
+def test_race_bot_wagers_respect_scaled_cap_for_equal_large_human_bids() -> None:
+    wagers = bot_wagers(
+        [1_000] * 5,
+        3,
+        rng=random.Random(8),
+        minimum=RACE_MIN_BID,
+    )
+
+    assert wagers == [100] * 3
+
+
 class _FakeCurrency:
     def __init__(
         self,

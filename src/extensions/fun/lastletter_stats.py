@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.currency import award_daily_capped_coins
+
+LASTLETTER_DAILY_REWARD_CAP = 5_000
+
 
 async def record_lastletter_result(
     pool: Any,
@@ -30,4 +34,21 @@ async def record_lastletter_result(
         int(user_id),
         wins,
         losses,
+    )
+
+
+async def award_lastletter_winner_coins(pool: Any, user_id: int, amount: int) -> int:
+    """Award LastLetter winnings subject to the game's daily reward cap.
+
+    LastLetter has no wager, so its reward must be bounded independently of
+    the number of lobbies a user starts.  The currency service performs the
+    check and credit atomically, including across multiple bot instances.
+    """
+
+    return await award_daily_capped_coins(
+        pool,
+        int(user_id),
+        int(amount),
+        LASTLETTER_DAILY_REWARD_CAP,
+        "lastletter",
     )

@@ -97,3 +97,19 @@ def test_lucky_roll_bot_wagers_keep_multi_human_lower_bound() -> None:
 
     assert wagers == [600]
     assert rng.calls == [(250, 600)]
+
+
+def test_lucky_roll_bot_wagers_never_exceed_scaled_cap_when_humans_match() -> None:
+    rng = _UpperBoundRng()
+
+    wagers = bot_wagers(
+        [1_000] * 5,
+        2,
+        rng=rng,
+        minimum=LUCKY_ROLL_MIN_BID,
+    )
+
+    # Five human players cap bots at 10% of the highest human wager.  The
+    # lowest human wager must not override that cap when it is larger.
+    assert wagers == [100, 100]
+    assert rng.calls == [(100, 100), (100, 100)]

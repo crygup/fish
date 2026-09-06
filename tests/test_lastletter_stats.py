@@ -28,3 +28,23 @@ async def test_record_lastletter_result_honors_tracking_opt_out() -> None:
     )
 
     pool.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lastletter_winner_reward_uses_daily_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    award = AsyncMock(return_value=5_000)
+    monkeypatch.setattr(lastletter_stats, "award_daily_capped_coins", award)
+    pool = object()
+
+    result = await lastletter_stats.award_lastletter_winner_coins(pool, 42, 9_000)
+
+    assert result == 5_000
+    award.assert_awaited_once_with(
+        pool,
+        42,
+        9_000,
+        lastletter_stats.LASTLETTER_DAILY_REWARD_CAP,
+        "lastletter",
+    )

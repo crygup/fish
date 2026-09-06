@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -7,6 +8,7 @@ from unittest.mock import AsyncMock
 import discord
 import pytest
 
+import extensions.fun.lastletter as lastletter_module
 from extensions.fun import Fun
 from extensions.fun.lastletter import (
     MAX_GUESSES,
@@ -145,9 +147,11 @@ async def test_lastletter_counts_only_matching_prefix_messages_toward_five_attem
 
 
 @pytest.mark.asyncio
-async def test_lastletter_pays_one_thousand_per_original_opponent() -> None:
+async def test_lastletter_pays_one_thousand_per_original_opponent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     channel = SimpleNamespace(send=AsyncMock())
-    currency = SimpleNamespace(credit=AsyncMock())
+    currency = SimpleNamespace()
     pool = SimpleNamespace(execute=AsyncMock())
     db_cache = SimpleNamespace(
         user_game_tracking_enabled=lambda _user_id: True,
@@ -161,6 +165,8 @@ async def test_lastletter_pays_one_thousand_per_original_opponent() -> None:
     cog = cast(Any, object.__new__(Fun))
     cog.bot = bot
     cog._lastletter_games = {}
+    award = AsyncMock(return_value=2_000)
+    monkeypatch.setattr(lastletter_module, "award_lastletter_winner_coins", award)
     players = [LastLetterPlayer(index, str(index)) for index in range(1, 4)]
     game = LastLetterGame(
         ctx=cast(Any, SimpleNamespace()),
@@ -175,5 +181,73 @@ async def test_lastletter_pays_one_thousand_per_original_opponent() -> None:
 
     await cog._finish_lastletter(game, winner=players[0])
 
-    currency.credit.assert_awaited_once_with(1, 2_000, "lastletter")
+    award.assert_awaited_once_with(pool, 1, 2_000)
     assert pool.execute.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_lastletter_reserves_channel_before_lobby_send() -> None:
+    cog = cast(Any, object.__new__(Fun))
+    cog.bot = SimpleNamespace(embedcolor=discord.Colour.blurple())
+    cog._lastletter_games = {}
+    cog._require_currency_tracking = AsyncMock(return_value=True)
+
+    send_started = asyncio.Event()
+    release_send = asyncio.Event()
+
+    async def send_lobby(**_kwargs: Any) -> SimpleNamespace:
+        send_started.set()
+        await release_send.wait()
+        return SimpleNamespace()
+
+    channel = SimpleNamespace(id=123)
+    first_ctx = SimpleNamespace(
+        channel=channel,
+        guild=None,
+        author=SimpleNamespace(id=1, name="one"),
+        send=send_lobby,
+        send_new=AsyncMock(),
+    )
+    second_ctx = SimpleNamespace(
+        channel=channel,
+        guild=None,
+        author=SimpleNamespace(id=2, name="two"),
+        send=AsyncMock(),
+        send_new=AsyncMock(),
+    )
+
+    first_task = asyncio.create_task(cog._start_lastletter(first_ctx))
+    await send_started.wait()
+    await cog._start_lastletter(second_ctx)
+
+    second_ctx.send_new.assert_awaited_once()
+    release_send.set()
+    await first_task
+    cog._stop_lastletter_games()
+
+
+@pytest.mark.asyncio
+async def test_lastletter_finish_does_not_remove_a_replacement_lobby() -> None:
+    cog = cast(Any, object.__new__(Fun))
+    channel = SimpleNamespace(send=AsyncMock())
+    old_game = LastLetterGame(
+        ctx=cast(Any, SimpleNamespace()),
+        channel=channel,
+        channel_id=123,
+        guild_id=None,
+        host_id=1,
+        players=[],
+    )
+    replacement = LastLetterGame(
+        ctx=cast(Any, SimpleNamespace()),
+        channel=channel,
+        channel_id=123,
+        guild_id=None,
+        host_id=2,
+        players=[],
+    )
+    cog._lastletter_games = {123: replacement}
+
+    await cog._finish_lastletter(old_game, winner=None)
+
+    assert cog._lastletter_games[123] is replacement
