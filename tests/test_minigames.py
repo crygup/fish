@@ -11,7 +11,7 @@ from extensions.fun.minigames import (
     UNSCRAMBLE_WORDS,
     WORD_BOMB_WORD_LOOKUP,
     WORD_GAME_WORDS,
-    WORD_LIST_PATH,
+    WORD_GAME_WORD_LIST_PATH,
     ColorMemorizeGame,
     ColorMemorizeView,
     color_memorize_content,
@@ -177,11 +177,11 @@ def test_scramble_is_not_the_original_word() -> None:
     assert scrambled != "photosynthesis"
 
 
-def test_scramble_uses_the_shared_google_word_list() -> None:
-    assert WORD_LIST_PATH.is_file()
+def test_scramble_uses_the_shared_word_game_list() -> None:
+    assert WORD_GAME_WORD_LIST_PATH.is_file()
 
 
-def test_word_bomb_uses_the_reviewed_short_word_allowlist() -> None:
+def test_word_games_use_the_reviewed_short_word_list() -> None:
     assert "air" in WORD_BOMB_WORD_LOOKUP
     assert "aa" not in WORD_BOMB_WORD_LOOKUP
     assert "abc" not in WORD_BOMB_WORD_LOOKUP
@@ -189,6 +189,7 @@ def test_word_bomb_uses_the_reviewed_short_word_allowlist() -> None:
     assert len(WORD_GAME_WORDS) > 9900
     assert WORD_GAME_WORDS[0] == "the"
     assert all(word.isalpha() and word.islower() for word in WORD_GAME_WORDS)
+    assert all(len(word) >= 2 for word in WORD_GAME_WORDS)
 
 
 def test_scramble_difficulty_buckets_use_appropriate_word_lengths() -> None:

@@ -30,17 +30,18 @@ COLOR_MEMORIZE_DIFFICULTIES: dict[str, tuple[int, int]] = {
     "extreme": (5, 9),
     "impossible": (6, 10),
 }
-WORD_LIST_PATH = FILES_ROOT / "data" / "google-10000.txt"
-WORD_BOMB_WORD_LIST_PATH = FILES_ROOT / "data" / "wordle.txt"
-# Alphabetic English dictionary sourced from dwyl/english-words.  This is
-# intentionally separate from the frequency-ranked list used by Scramble.
-WORD_BOMB_EXTENDED_WORD_LIST_PATH = FILES_ROOT / "data" / "english-words-alpha.txt"
-# The raw dictionaries intentionally remain available for review, while this
-# checked-in allowlist controls which two- and three-letter entries Word Bomb
-# and LastLetter accept.
-WORD_BOMB_SHORT_WORD_ALLOWLIST_PATH = (
-    FILES_ROOT / "data" / "wordbomb-short-words-valid.txt"
-)
+# ``word-games.txt`` is the single shared dictionary for Scramble, Word Bomb,
+# LastLetter, and future word games. Its two- and three-letter entries were
+# reviewed before being checked in; longer entries are retained from the
+# larger dictionary. Wordle keeps a separate five-letter answer/guess list.
+WORD_GAME_WORD_LIST_PATH = FILES_ROOT / "data" / "word-games.txt"
+WORDLE_WORD_LIST_PATH = FILES_ROOT / "data" / "wordle.txt"
+
+# Keep the old path names as source-compatible aliases for extensions that
+# import the dictionary location. They point at the canonical files rather
+# than preserving the retired data-file split.
+WORD_LIST_PATH = WORD_GAME_WORD_LIST_PATH
+WORD_BOMB_WORD_LIST_PATH = WORDLE_WORD_LIST_PATH
 
 # Keep a small fallback so the game remains usable if a local data file is
 # missing from a development checkout or an older deployment image.
@@ -103,34 +104,6 @@ def _load_word_game_words(path: Path = WORD_LIST_PATH) -> tuple[str, ...]:
     return tuple(words) or _FALLBACK_WORDS
 
 
-def _load_word_bomb_short_word_allowlist(
-    path: Path = WORD_BOMB_SHORT_WORD_ALLOWLIST_PATH,
-) -> frozenset[str]:
-    """Load the reviewed two- and three-letter Word Bomb allowlist."""
-
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        # Fail closed if the deployment image is missing the reviewed file:
-        # four-letter-and-longer words remain available, but unreviewed short
-        # entries must not silently return to either word game.
-        return frozenset()
-    return frozenset(
-        word
-        for line in lines
-        if (word := line.strip().casefold()) and word.isalpha() and len(word) in (2, 3)
-    )
-
-
-def _filter_word_bomb_short_words(
-    words: Iterable[str],
-    allowlist: frozenset[str],
-) -> tuple[str, ...]:
-    """Keep long words and only reviewed short words for word games."""
-
-    return tuple(word for word in words if len(word) not in (2, 3) or word in allowlist)
-
-
 def _word_difficulty_buckets(words: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
     """Split the shared list into predictable lengths for each difficulty."""
 
@@ -152,23 +125,19 @@ def _word_difficulty_buckets(words: tuple[str, ...]) -> dict[str, tuple[str, ...
 
 WORD_GAME_WORDS = _load_word_game_words()
 UNSCRAMBLE_WORDS = _word_difficulty_buckets(WORD_GAME_WORDS)
-WORD_BOMB_SHORT_WORD_ALLOWLIST = _load_word_bomb_short_word_allowlist()
 
-# Word Bomb accepts both the common Google list and the larger Wordle list.
-# The latter contains thousands of less-common but valid words (including
-# entries such as ``crumb``) that are useful for unusual fragments.
+# Word Bomb uses the frequency-ranked portion of the shared list plus the
+# Wordle dictionary for its full candidate tuples. The rest of the shared
+# dictionary is indexed through one representative candidate per fragment so
+# importing the game does not allocate a tuple containing every rare match.
 WORD_BOMB_WORDS = tuple(
     dict.fromkeys(
-        _filter_word_bomb_short_words(
-            (*WORD_GAME_WORDS, *_load_word_game_words(WORD_BOMB_WORD_LIST_PATH)),
-            WORD_BOMB_SHORT_WORD_ALLOWLIST,
-        )
+        (*WORD_GAME_WORDS[:10_000], *_load_word_game_words(WORDLE_WORD_LIST_PATH))
     )
 )
-WORD_BOMB_EXTENDED_WORDS = _filter_word_bomb_short_words(
-    _load_word_game_words(WORD_BOMB_EXTENDED_WORD_LIST_PATH),
-    WORD_BOMB_SHORT_WORD_ALLOWLIST,
-)
+# Keep this name for callers that use the extended-candidate index; the shared
+# list now contains those entries directly.
+WORD_BOMB_EXTENDED_WORDS = WORD_GAME_WORDS
 
 # Word Bomb uses short fragments rather than a fixed answer list.  Build the
 # fragments from the words we already trust for the other word games so every
@@ -192,7 +161,9 @@ for _word in WORD_BOMB_WORDS:
 # selectable fragments, and one representative candidate per extended
 # fragment. Full candidate tuples remain available for the smaller bundled
 # lists.
-WORD_BOMB_WORD_LOOKUP = set((*WORD_BOMB_WORDS, *WORD_BOMB_EXTENDED_WORDS))
+WORD_BOMB_WORD_LOOKUP = set(
+    (*WORD_GAME_WORDS, *_load_word_game_words(WORDLE_WORD_LIST_PATH))
+)
 WORD_BOMB_FRAGMENT_SETS: dict[int, set[str]] = {
     length: {fragment for fragment in WORD_BOMB_CANDIDATES if len(fragment) == length}
     for length in (2, 3, 4)
@@ -341,23 +312,6 @@ def is_valid_word_game_word(word: str) -> bool:
     if len(normalized) < 2:
         return False
     return is_valid_word_bomb_guess(normalized, normalized[:2])
-
-
-def short_word_game_words(
-    words: Iterable[str] | None = None,
-) -> tuple[str, ...]:
-    """Return deterministic, unique two- and three-letter game words."""
-
-    source = WORD_BOMB_WORD_LOOKUP if words is None else words
-    return tuple(
-        sorted(
-            {
-                word.strip().casefold()
-                for word in source
-                if len(word.strip()) in (2, 3) and word.strip().isalpha()
-            }
-        )
-    )
 
 
 def is_valid_word_start_guess(guess: str, prefix: str) -> bool:

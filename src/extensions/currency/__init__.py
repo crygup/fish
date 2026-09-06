@@ -3424,7 +3424,7 @@ class Currency(Cog):
     def _work_easy_words() -> tuple[str, ...]:
         """Load a small, approachable word pool for the scramble task."""
 
-        path = FILES_ROOT / "data" / "google-10000.txt"
+        path = FILES_ROOT / "data" / "word-games.txt"
         try:
             words = tuple(
                 dict.fromkeys(

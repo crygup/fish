@@ -8,8 +8,8 @@ import pytest
 
 from extensions.fun.minigames import (
     WORD_BOMB_CANDIDATES,
-    WORD_BOMB_EXTENDED_WORDS,
     WORD_BOMB_WORDS,
+    WORD_GAME_WORDS,
     choose_word_bomb_fragment,
     is_valid_word_bomb_guess,
     word_bomb_candidates,
@@ -42,10 +42,11 @@ def test_word_bomb_fragment_and_guess_validation() -> None:
     assert WORD_BOMB_CANDIDATES
 
 
-def test_word_bomb_uses_extended_words_and_plural_forms() -> None:
+def test_word_bomb_uses_shared_words_and_plural_forms() -> None:
     assert "crumb" in WORD_BOMB_WORDS
-    assert len(WORD_BOMB_EXTENDED_WORDS) > 300_000
-    assert "antidisestablishmentarianism" in WORD_BOMB_EXTENDED_WORDS
+    assert len(WORD_GAME_WORDS) > 300_000
+    assert "antidisestablishmentarianism" in WORD_GAME_WORDS
+    assert is_valid_word_bomb_guess("antidisestablishmentarianism", "anti")
     assert is_valid_word_bomb_guess("CrUmB", "MB")
     assert is_valid_word_bomb_guess("crumbs", "mb")
 
