@@ -1,9 +1,12 @@
+# Test doubles supply only the Discord/service fields exercised by each test.
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 
 import extensions.fun.tictactoe as tictactoe
+from extensions.context import Context
 from extensions.fun.tictactoe import (
     TicTacToeController,
     TicTacToeGame,
@@ -34,7 +37,7 @@ def test_completed_game_shows_awarded_coins() -> None:
     )
     game = TicTacToeGame(
         controller=controller,
-        ctx=None,
+        ctx=cast("Context", None),
         players={"X": 1, "O": 2},
         names={1: "player", 2: "Fishie"},
         against_bot=True,
@@ -68,7 +71,7 @@ async def test_bot_win_awards_difficulty_coins_with_a_shared_daily_cap(
     )
     game = TicTacToeGame(
         controller=controller,
-        ctx=None,
+        ctx=cast("Context", None),
         players={"X": 1, "O": 2},
         names={1: "player", 2: "Fishie"},
         against_bot=True,
@@ -101,7 +104,7 @@ async def test_bot_game_coins_require_a_human_win(
     )
     game = TicTacToeGame(
         controller=controller,
-        ctx=None,
+        ctx=cast("Context", None),
         players={"X": 1, "O": 2},
         names={1: "player", 2: "Fishie"},
         against_bot=against_bot,

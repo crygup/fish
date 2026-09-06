@@ -182,7 +182,11 @@ def anilist_media_id(value: str) -> int | None:
 def media_title(media: dict[str, Any]) -> str:
     title = media.get("title")
     if isinstance(title, dict):
-        for key in ("userPreferred", "english", "romaji", "native"):
+        # Notifications are intended for a broad audience.  Prefer AniList's
+        # English title when it is available, while retaining the preferred
+        # (usually romaji) title as a fallback for entries that have not been
+        # translated.
+        for key in ("english", "userPreferred", "romaji", "native"):
             value = title.get(key)
             if value:
                 return str(value).strip()
@@ -241,11 +245,11 @@ def _as_datetime(timestamp: int) -> datetime.datetime:
 def notify_allowed_mentions(
     mention_role_id: object, mention_everyone: object
 ) -> discord.AllowedMentions:
-    """Build a narrowly scoped mention policy for one notification row."""
+    """Allow only the configured role or ``@everyone`` notification mention."""
 
     everyone = bool(mention_everyone)
     roles: list[discord.Role | discord.Object] = []
-    if mention_role_id is not None:
+    if isinstance(mention_role_id, (str, int)):
         try:
             roles.append(discord.Object(id=int(mention_role_id)))
         except (TypeError, ValueError, OverflowError):
@@ -261,7 +265,7 @@ def notify_allowed_mentions(
 def mention_text(mention_role_id: object, mention_everyone: object) -> str | None:
     if bool(mention_everyone):
         return "@everyone"
-    if mention_role_id is not None:
+    if isinstance(mention_role_id, (str, int)):
         try:
             return f"<@&{int(mention_role_id)}>"
         except (TypeError, ValueError, OverflowError):
@@ -340,6 +344,12 @@ class NotifyListView(discord.ui.LayoutView):
 def twitch_list_details(rows: Iterable[Any]) -> str:
     lines: list[str] = []
     for row in rows:
+        follow_id = row.get("id")
+        if follow_id is None:
+            # Rows created by the notify tables always have an ID.  Keep the
+            # fallback readable if an older database adapter omits it rather
+            # than exposing the Python ``None`` representation.
+            follow_id = "?"
         name = _safe_text(row["channel_name"], 80)
         destination = (
             f"<#{row['announce_channel_id']}>"
@@ -352,21 +362,29 @@ def twitch_list_details(rows: Iterable[Any]) -> str:
             if last_live
             else ""
         )
-        lines.append(f"**{name}** · {destination}{when}")
+        mention = mention_text(row.get("mention_role_id"), row.get("mention_everyone"))
+        metadata = f"{destination}{when}"
+        if mention:
+            metadata = f"{destination} · {mention}{when}"
+        lines.append(f"{follow_id} · {name}\n-# *{metadata}*")
     return "\n".join(lines)
 
 
 def anime_list_details(rows: Iterable[Any]) -> str:
     lines: list[str] = []
     for row in rows:
+        follow_id = row.get("id")
+        if follow_id is None:
+            follow_id = "?"
         title = _safe_text(row["title"], 120)
         airing = _timestamp(row.get("next_airing_at") or row.get("release_at"))
         episode = row.get("next_episode")
         if airing:
+            release = discord.utils.format_dt(_as_datetime(airing), "R")
             suffix = (
-                f" · episode {episode} {discord.utils.format_dt(_as_datetime(airing), 'R')}"
+                f" · Episode {episode} · Releases {release}"
                 if episode
-                else f" · {discord.utils.format_dt(_as_datetime(airing), 'R')}"
+                else f" · Releases {release}"
             )
         else:
             suffix = " · no upcoming episode"
@@ -375,7 +393,11 @@ def anime_list_details(rows: Iterable[Any]) -> str:
             if row.get("announce_channel_id")
             else "DM"
         )
-        lines.append(f"**{title}** · {destination}{suffix}")
+        mention = mention_text(row.get("mention_role_id"), row.get("mention_everyone"))
+        metadata = f"{destination}{suffix}"
+        if mention:
+            metadata = f"{destination} · {mention}{suffix}"
+        lines.append(f"{follow_id} · {title}\n-# *{metadata}*")
     return "\n".join(lines)
 
 

@@ -6,7 +6,7 @@ import random
 import re
 import textwrap
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, NamedTuple, Optional, Sequence
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional, Sequence, cast
 
 import asyncpg
 
@@ -354,6 +354,58 @@ class Reminder(Cog):
     def display_emoji(self) -> discord.PartialEmoji:
         return discord.PartialEmoji(name="\N{ALARM CLOCK}")
 
+    @staticmethod
+    def _interaction_requires_author_dm(interaction: discord.Interaction) -> bool:
+        """Return whether a slash reminder cannot be delivered to its source.
+
+        User-installed application commands can be invoked from a private or
+        group DM that Fishie is not a member of.  Discord still delivers the
+        interaction, but the interaction follow-up webhook cannot post back to
+        that channel.  A normal DM with Fishie is messageable and should keep
+        using the interaction channel.
+        """
+
+        if interaction.guild_id is not None:
+            return False
+
+        channel = interaction.channel
+        if channel is None:
+            return True
+
+        # Group DMs are never messageable by an app that is not a participant.
+        if isinstance(channel, discord.GroupChannel):
+            return True
+
+        if isinstance(channel, discord.DMChannel):
+            # Discord may omit recipients in interaction payloads.  In that
+            # case we cannot prove this is Fishie's DM, so use the author's DM
+            # rather than risking an invalid follow-up.
+            recipient = channel.recipient
+            return recipient is None or recipient.id != interaction.user.id
+
+        # Unknown private-channel implementations (or partial channels) are
+        # safest to treat as inaccessible and route through the author's DM.
+        return True
+
+    async def _author_dm(self, author_id: int) -> Optional[discord.DMChannel]:
+        """Resolve the author's DM channel for reminders.
+
+        ``get_user`` is usually populated, but reminders survive restarts, so
+        fall back to ``fetch_user`` before creating the DM channel.
+        """
+
+        user = self.bot.get_user(author_id)
+        if user is None:
+            try:
+                user = await self.bot.fetch_user(author_id)
+            except discord.HTTPException:
+                return None
+
+        try:
+            return await user.create_dm()
+        except discord.HTTPException:
+            return None
+
     def cog_unload(self) -> None:
         if self._task is not None:
             self._task.cancel()
@@ -680,28 +732,126 @@ class Reminder(Cog):
     ):
         """Sets a reminder to remind you of something at a specific time."""
 
+        # A user-installed app can receive a slash command in a private/group
+        # DM where Fishie is not a participant.  The interaction response can
+        # be acknowledged, but its follow-up webhook cannot post there.  Route
+        # both the acknowledgement and eventual reminder to the author's DM in
+        # that case.
+        route_to_dm = self._interaction_requires_author_dm(interaction)
+        author_dm: Optional[discord.DMChannel] = None
+        response_deferred = False
+        if route_to_dm:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+                    response_deferred = True
+            except (discord.HTTPException, discord.InteractionResponded):
+                # We still attempt the author's DM below.  This covers an
+                # interaction that was already acknowledged by a wrapper.
+                response_deferred = False
+            author_dm = await self._author_dm(interaction.user.id)
+
         zone = await self.get_timezone(interaction.user.id)
         timer = await self.create_timer(
             when,
             "reminder",
             interaction.user.id,
-            interaction.channel_id,
+            author_dm.id if author_dm is not None else (interaction.channel_id or 0),
             text,
             created=interaction.created_at,
             message_id=None,
             timezone=zone or "UTC",
         )
         delta = time.human_timedelta(when, source=timer.created_at)
-        await interaction.response.send_message(
-            f"Alright {interaction.user.mention}, in {delta}: {text}"
-        )
+        response = f"Alright {interaction.user.mention}, in {delta}: {text}"
+
+        if not route_to_dm:
+            await interaction.response.send_message(response)
+            return
+
+        delivered = False
+        if author_dm is not None:
+            try:
+                await author_dm.send(response)
+                delivered = True
+            except discord.HTTPException:
+                self.bot.logger.warning(
+                    "Could not send reminder acknowledgement to user DM %s",
+                    interaction.user.id,
+                    exc_info=True,
+                )
+
+        # Remove the temporary deferred response from an inaccessible source
+        # channel once the author's DM acknowledgement has been sent.  If DM
+        # delivery failed, leave a best-effort ephemeral response instead.
+        if delivered and response_deferred:
+            try:
+                await interaction.delete_original_response()
+            except discord.HTTPException:
+                pass
+        elif not delivered:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(response, ephemeral=True)
+            except (discord.HTTPException, discord.InteractionResponded):
+                self.bot.logger.warning(
+                    "Could not acknowledge reminder interaction for user %s",
+                    interaction.user.id,
+                    exc_info=True,
+                )
 
     @reminder_set.error
     async def reminder_set_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ):
         if isinstance(error, time.BadTimeTransform):
-            await interaction.response.send_message(str(error), ephemeral=True)
+            response = str(error)
+            if not self._interaction_requires_author_dm(interaction):
+                await interaction.response.send_message(response, ephemeral=True)
+                return
+
+            # Transformers run before ``reminder_set`` itself, so the normal
+            # callback cannot defer an interaction from a private/group DM.
+            # Acknowledge it best-effort, then put the validation error in the
+            # author's DM just like a successfully-created reminder.
+            deferred = False
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+                    deferred = True
+            except (discord.HTTPException, discord.InteractionResponded):
+                pass
+
+            delivered = False
+            author_dm = await self._author_dm(interaction.user.id)
+            if author_dm is not None:
+                try:
+                    await author_dm.send(response)
+                    delivered = True
+                except discord.HTTPException:
+                    self.bot.logger.warning(
+                        "Could not send reminder validation error to user DM %s",
+                        interaction.user.id,
+                        exc_info=True,
+                    )
+
+            if delivered and deferred:
+                try:
+                    await interaction.delete_original_response()
+                except discord.HTTPException:
+                    pass
+            elif not delivered:
+                try:
+                    if not interaction.response.is_done():
+                        await interaction.response.send_message(
+                            response, ephemeral=True
+                        )
+                except (discord.HTTPException, discord.InteractionResponded):
+                    self.bot.logger.warning(
+                        "Could not acknowledge reminder validation error for user %s",
+                        interaction.user.id,
+                        exc_info=True,
+                    )
 
     @reminder.command(name="delete", aliases=["remove", "cancel"], ignore_extra=False)
     @app_commands.describe(id="ID of the reminder to delete.")
@@ -898,7 +1048,7 @@ class Reminder(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @commands.hybrid_group(
+    @cast(Any, commands.hybrid_group)(
         name="timezone",
         aliases=("time",),
         invoke_without_command=True,
@@ -1016,27 +1166,62 @@ class Reminder(Cog):
             return
         author_id, channel_id, message = timer.args
 
-        try:
-            channel: discord.abc.Messageable = self.bot.get_channel(channel_id) or (
-                await self.bot.fetch_channel(channel_id)
-            )  # type: ignore
-        except discord.HTTPException:
-            return
-
-        message_id = timer.kwargs.get("message_id")
         msg = f"<@{author_id}>, reminder from {timer.human_delta}: {message}"
 
+        # Prefer the original channel so text reminders can reply to the
+        # message that created them.  A slash command invoked in a DM that
+        # does not include Fishie stores the author's DM as its destination;
+        # older timers may still contain the inaccessible source channel, so
+        # gracefully fall back to the author's DM whenever resolution or
+        # delivery fails.
+        channel: discord.abc.Messageable | None = None
         try:
-            if message_id:
-                try:
-                    message = await channel.fetch_message(message_id)
-                    return await message.reply(msg)
-                except discord.HTTPException:
-                    pass
-
-            await channel.send(msg)
+            candidate = self.bot.get_channel(channel_id)
+            if candidate is None:
+                candidate = await self.bot.fetch_channel(channel_id)
+            if isinstance(candidate, discord.abc.Messageable):
+                channel = candidate
         except discord.HTTPException:
+            channel = None
+
+        message_id = timer.kwargs.get("message_id")
+        if channel is not None:
+            try:
+                if message_id:
+                    try:
+                        source_message = await channel.fetch_message(message_id)
+                        await source_message.reply(msg)
+                        return
+                    except discord.HTTPException:
+                        pass
+
+                await channel.send(msg)
+                return
+            except (discord.HTTPException, AttributeError):
+                pass
+
+        # The bot may no longer be able to access the source DM (or the
+        # original guild channel may have disappeared).  Delivering directly
+        # to the author is reliable across restarts and private-channel
+        # contexts.
+        author_dm = await self._author_dm(author_id)
+        if author_dm is None:
+            self.bot.logger.warning(
+                "Could not deliver reminder %s to channel %s or user DM %s",
+                timer.id,
+                channel_id,
+                author_id,
+            )
             return
+        try:
+            await author_dm.send(msg)
+        except discord.HTTPException:
+            self.bot.logger.warning(
+                "Could not deliver reminder %s to user DM %s",
+                timer.id,
+                author_id,
+                exc_info=True,
+            )
 
 
 async def setup(bot):

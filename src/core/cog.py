@@ -31,10 +31,13 @@ def is_operational_guild(value: object | None) -> bool:
         guild_id = getattr(guild, "id", None)
     if guild_id is None:
         guild_id = getattr(value, "id", None)
+    if guild_id is None:
+        return False
     try:
         return int(guild_id) == OPERATIONAL_GUILD_ID
     except (TypeError, ValueError):
         return False
+
 
 if TYPE_CHECKING:
     from .bot import Fishie

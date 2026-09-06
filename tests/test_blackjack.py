@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock
 import discord
 import pytest
 from PIL import Image
+from test_support import not_none, require_type
 
+# Test doubles supply only the Discord/service fields exercised by each test.
+from extensions.context import Context
 from extensions.fun import Fun
 from extensions.fun.blackjack import (
     BLACKJACK_MAX_BID,
@@ -192,7 +195,9 @@ def test_pvp_removes_double_from_public_and_private_controls() -> None:
         for child in view.container.children
         if isinstance(child, discord.ui.ActionRow)
     )
-    assert [child.label for child in action_row.children] == [
+    assert [
+        require_type(child, discord.ui.Button).label for child in action_row.children
+    ] == [
         "Hit",
         "Stand",
         "View cards",
@@ -205,7 +210,9 @@ def test_pvp_removes_double_from_public_and_private_controls() -> None:
         for child in private_view.container.children
         if isinstance(child, discord.ui.ActionRow)
     )
-    assert [child.label for child in private_row.children] == ["Hit", "Stand"]
+    assert [
+        require_type(child, discord.ui.Button).label for child in private_row.children
+    ] == ["Hit", "Stand"]
     assert private_view.double_button is None
 
 
@@ -234,8 +241,8 @@ def test_pvp_board_renders_small_circular_avatar_over_each_hand() -> None:
         x = 18 + 219 + 12 + 219 - avatar_size - 8 + avatar_size // 2
         dealer_y = 18 + 8 + avatar_size // 2
         player_y = dealer_y + 291 + 32
-        assert image.getpixel((x, dealer_y))[:3] == (220, 40, 40)
-        assert image.getpixel((x, player_y))[:3] == (40, 80, 220)
+        assert require_type(image.getpixel((x, dealer_y)), tuple)[:3] == (220, 40, 40)
+        assert require_type(image.getpixel((x, player_y)), tuple)[:3] == (40, 80, 220)
 
 
 def test_pvp_winner_receives_both_stakes_without_double_or_multiplier() -> None:
@@ -289,7 +296,7 @@ def test_blackjack_view_uses_card_gallery_and_three_controls() -> None:
     assert {
         view.hit_button.label,
         view.stand_button.label,
-        view.double_button.label,
+        not_none(view.double_button).label,
     } == {
         "Hit",
         "Stand",
@@ -341,7 +348,9 @@ async def test_blackjack_view_sends_private_cards_ephemerally() -> None:
         response=response,
     )
 
-    await view.send_private_cards(interaction)
+    await view.send_private_cards(
+        cast("discord.Interaction[discord.Client]", interaction)
+    )
 
     response.send_message.assert_awaited_once()
     kwargs = response.send_message.await_args.kwargs
@@ -369,7 +378,9 @@ async def test_blackjack_view_cards_uses_private_components_v2_panel() -> None:
         original_response=AsyncMock(return_value=SimpleNamespace()),
     )
 
-    await view.send_private_cards(interaction)
+    await view.send_private_cards(
+        cast("discord.Interaction[discord.Client]", interaction)
+    )
 
     response.send_message.assert_awaited_once()
     kwargs = response.send_message.await_args.kwargs
@@ -418,7 +429,7 @@ def test_finished_blackjack_view_uses_dealer_total_and_component_separator() -> 
 
 @pytest.mark.asyncio
 async def test_blackjack_rejects_fishie_as_a_pvp_opponent() -> None:
-    class StubUser(discord.abc.User):
+    class StubUser(discord.User):
         def __init__(self, user_id: int, *, bot: bool, name: str) -> None:
             self.id = user_id
             self.bot = bot
@@ -434,7 +445,7 @@ async def test_blackjack_rejects_fishie_as_a_pvp_opponent() -> None:
     command = SimpleNamespace()
     command._start_blackjack = AsyncMock()
 
-    await Fun._blackjack_entry(command, ctx, fishie)
+    await Fun._blackjack_entry(cast("Fun", command), cast("Context", ctx), fishie)
 
     command._start_blackjack.assert_not_awaited()
     ctx.send.assert_awaited_once()

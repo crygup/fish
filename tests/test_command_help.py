@@ -4,16 +4,21 @@ import importlib
 import inspect
 import pkgutil
 from types import SimpleNamespace
+
+# Test doubles supply only the Discord/service fields exercised by each test.
 from typing import cast
 
+import discord
 from discord.ext import commands
 
 import extensions
 from extensions.context import Context
+from extensions.currency import Currency
 from extensions.fun import Fun
 from extensions.help import (
     HelpBackButton,
     HelpLayoutView,
+    _cog_description,
     _command_description,
     _command_flag_lines,
     command_usage,
@@ -52,6 +57,14 @@ def test_every_registered_command_has_a_description() -> None:
         if not (command.help or command.description)
     ]
     assert missing == []
+
+
+def test_category_description_survives_a_description_command_name() -> None:
+    # Currency exposes a text command named ``description``.  The command
+    # must not replace the category's class-docstring description in help.
+    cog = Currency.__new__(Currency)
+
+    assert _cog_description(cog) == "Check your balance, work, buy items and more."
 
 
 def test_generic_parser_arguments_have_custom_help_usage() -> None:
@@ -208,10 +221,7 @@ def test_help_detail_has_back_button_and_restores_category_commands() -> None:
         detail=Images.cube,
     )
 
-    rows = [item for item in view.children if hasattr(item, "children")]
-    assert any(
-        isinstance(child, HelpBackButton) for row in rows for child in row.children
-    )
+    assert any(isinstance(child, HelpBackButton) for child in view.walk_children())
 
     class Response:
         async def edit_message(self, **kwargs):
@@ -220,12 +230,12 @@ def test_help_detail_has_back_button_and_restores_category_commands() -> None:
     interaction = SimpleNamespace(response=Response())
     import asyncio
 
-    asyncio.run(view.back_to_category(interaction))
+    asyncio.run(
+        view.back_to_category(cast("discord.Interaction[discord.Client]", interaction))
+    )
     assert view.detail is None
     assert any(
-        type(child).__name__ == "HelpCommandSelect"
-        for row in view.children
-        for child in row.children
+        type(child).__name__ == "HelpCommandSelect" for child in view.walk_children()
     )
     assert interaction.response.kwargs["allowed_mentions"].replied_user is False
 

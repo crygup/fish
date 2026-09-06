@@ -22,7 +22,7 @@ def to_lower(argument: str):
 
 async def _authorize_server_interaction(
     interaction: discord.Interaction,
-    ctx: GuildContext,
+    ctx: Context,
     guild: discord.Guild,
 ) -> bool:
     """Re-check the author and Manage Server permission for settings controls.
@@ -39,13 +39,11 @@ async def _authorize_server_interaction(
     elif interaction.user.id != ctx.author.id:
         message = "Only the person who opened these server settings can use them."
     else:
-        member = interaction.user
-        if (
-            getattr(getattr(member, "guild", None), "id", None) != guild.id
-            or not hasattr(member, "guild_permissions")
-        ):
-            get_member = getattr(guild, "get_member", None)
-            member = get_member(interaction.user.id) if callable(get_member) else None
+        member: discord.Member | None = (
+            interaction.user if isinstance(interaction.user, discord.Member) else None
+        )
+        if member is None or member.guild.id != guild.id:
+            member = guild.get_member(interaction.user.id)
         allowed = bool(
             member
             and (
@@ -61,7 +59,9 @@ async def _authorize_server_interaction(
         )
         if allowed:
             return True
-        message = "You no longer have Manage Server permission to change these settings."
+        message = (
+            "You no longer have Manage Server permission to change these settings."
+        )
 
     if interaction.response.is_done():
         await interaction.followup.send(

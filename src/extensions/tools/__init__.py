@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import random
 import re
 import time
 from importlib import import_module
@@ -26,7 +27,6 @@ from utils import (
     TenorUrlConverter,
     UrbanPageSource,
     fetch_public_bytes,
-    get_or_fetch_user,
     plural,
     to_image,
     translate,
@@ -194,6 +194,63 @@ class Tools(
         """Separate words with United States flag emojis."""
         await ctx.send(
             re.sub(" ", " \U0001f1fa\U0001f1f8 ", words)[:2000],
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @text.command(name="reverse")
+    async def text_reverse(self, ctx: Context, *, words: str) -> None:
+        """Reverse the supplied text."""
+        await ctx.send(
+            words[::-1][:2000],
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @text.command(name="uwu", aliases=("uwuify", "owo"))
+    async def text_uwu(self, ctx: Context, *, words: str) -> None:
+        """Give the supplied text an uwu-style pronunciation."""
+        # Keep substitutions case-aware and apply them in an order that avoids
+        # transforming the characters introduced by an earlier replacement.
+        transformed = re.sub(r"([rl])", "w", words)
+        transformed = re.sub(r"([RL])", "W", transformed)
+        transformed = re.sub(r"([nN])([aeiouAEIO])", r"\1y\2", transformed)
+        transformed = re.sub(
+            r"ove",
+            lambda match: "uv" if match.group(0).islower() else "UV",
+            transformed,
+            flags=re.IGNORECASE,
+        )
+        await ctx.send(
+            transformed[:2000],
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @text.command(name="random-caps")
+    async def text_random_caps(self, ctx: Context, *, words: str) -> None:
+        """Randomly capitalize letters in the supplied text."""
+        transformed = "".join(
+            character.upper() if random.choice((True, False)) else character.lower()
+            for character in words
+        )
+        await ctx.send(
+            transformed[:2000],
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @text.command(name="title")
+    async def text_title(self, ctx: Context, *, words: str) -> None:
+        """Apply title case to the supplied text."""
+        await ctx.send(
+            words.title()[:2000],
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @text.command(name="swap-words")
+    async def text_swap_words(self, ctx: Context, *, words: str) -> None:
+        """Randomly reorder all words in the supplied text."""
+        split_words = words.split()
+        random.shuffle(split_words)
+        await ctx.send(
+            " ".join(split_words)[:2000],
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -844,11 +901,24 @@ class Tools(
         bonus_text = f"*+{bonus:,} bonus.*" if bonus else "*No XP bonuses active*"
         await ctx.send(f"{name} has {xp:,} XP\n-# {bonus_text}")
 
-    async def lb_name(self, user_id: int) -> discord.User | int:
-        try:
-            return await get_or_fetch_user(self.bot, user_id)
-        except discord.HTTPException:
-            return user_id
+    def _leaderboard_name(self, ctx: Context, user_id: int) -> str:
+        """Resolve a leaderboard name without making a network request.
+
+        Leaderboards used to call ``fetch_user`` for every row that was not
+        already cached.  A page can contain 100 rows, so a cache miss turned
+        an otherwise small database query into a burst of Discord REST calls
+        (and then rate-limit waits).  User/member caches are sufficient for
+        names we have recently seen; an ID is a deterministic fallback for a
+        user that is not cached.
+        """
+
+        resolved = self.bot.get_user(int(user_id))
+        if resolved is None:
+            guild = getattr(ctx, "guild", None)
+            get_member = getattr(guild, "get_member", None)
+            if callable(get_member):
+                resolved = get_member(int(user_id))
+        return str(getattr(resolved, "name", user_id))
 
     @commands.hybrid_group(name="leaderboard", aliases=("lb",), fallback="xp")
     @app_commands.allowed_installs(guilds=True, users=True)
@@ -864,22 +934,12 @@ class Tools(
             if not xp:
                 raise commands.BadArgument("No data found")
 
-            # Most leaderboard users are already in the bot cache.  Resolve
-            # cache misses concurrently, but keep a small limit so a large
-            # leaderboard cannot burst Discord's user-fetch endpoint.
-            fetch_limit = asyncio.Semaphore(8)
-
-            async def resolve(user_id: int) -> discord.User | int:
-                cached = self.bot.get_user(user_id)
-                if cached is not None:
-                    return cached
-                async with fetch_limit:
-                    return await self.lb_name(user_id)
-
-            users = await asyncio.gather(*(resolve(int(row["user_id"])) for row in xp))
             entries = [
-                escape_markdown(f"{user}: {int(row['xp']):,}")
-                for row, user in zip(xp, users)
+                escape_markdown(
+                    f"{self._leaderboard_name(ctx, int(row['user_id']))}: "
+                    f"{int(row['xp']):,}"
+                )
+                for row in xp
             ]
 
         pages = SimplePages(entries=entries, per_page=10, ctx=ctx)
@@ -909,24 +969,12 @@ class Tools(
                 "ORDER BY balance DESC, user_id ASC LIMIT 100"
             )
 
-            async def resolve_name(user_id: int) -> str:
-                member = self.bot.get_user(user_id)
-                if member is None:
-                    try:
-                        member = await get_or_fetch_user(self.bot, user_id)
-                    except discord.HTTPException:
-                        member = None
-                return discord.utils.escape_markdown(
-                    member.name if member is not None else str(user_id)
-                )
-
-            names = await asyncio.gather(
-                *(resolve_name(int(row["user_id"])) for row in rows)
+        lines: list[str] = []
+        for row in rows:
+            name = discord.utils.escape_markdown(
+                self._leaderboard_name(ctx, int(row["user_id"]))
             )
-
-        lines = [
-            f"{name} · {int(row['balance']):,} Coins" for row, name in zip(rows, names)
-        ]
+            lines.append(f"{name} · {int(row['balance']):,} Coins")
         target_name = discord.utils.escape_markdown(user.name)
         if not lines:
             lines = ["No wallets have been recorded yet."]

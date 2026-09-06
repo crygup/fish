@@ -279,7 +279,7 @@ class SlotsCommands:
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
-        stake, stop = await self._resolve_coin_amount(
+        stake, stop = await cast(Any, self)._resolve_coin_amount(
             ctx, amount, default=SLOTS_DEFAULT_BID, minimum=SLOTS_MIN_BID
         )
         if stop or stake is None:

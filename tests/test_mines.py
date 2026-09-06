@@ -4,6 +4,7 @@ import random
 
 import discord
 import pytest
+from test_support import not_none
 
 from extensions.fun.mines import (
     CELL_COUNT,
@@ -84,4 +85,4 @@ def test_revealed_tile_drops_the_blank_label() -> None:
 
     assert view.buttons[safe].label is None
     assert view.buttons[safe].emoji is not None
-    assert view.buttons[safe].emoji.name == "💎"
+    assert not_none(view.buttons[safe].emoji).name == "💎"

@@ -4,7 +4,7 @@ import asyncio
 import ipaddress
 import socket
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import aiohttp
@@ -269,16 +269,35 @@ async def fetch_public_bytes(
     max_bytes: int = MAX_MEDIA_BYTES,
     allowed_content_prefixes: tuple[str, ...] = ("image/", "video/"),
     allowed_hosts: Iterable[str] | None = None,
+    allow_missing_peer_hosts: Iterable[str] | None = None,
+    headers: Mapping[str, str] | None = None,
     max_redirects: int = 5,
 ) -> FetchedBytes:
-    """Fetch a bounded public resource while validating every redirect."""
+    """Fetch a bounded public resource while validating every redirect.
+
+    ``aiohttp`` does not expose transport peer metadata consistently for some
+    public CDNs.  Callers may name those hosts explicitly with
+    ``allow_missing_peer_hosts`` after the normal DNS/public-address validation
+    has succeeded.  A missing peer is never accepted for an unlisted host.
+    """
 
     current = url
+    trusted_missing_peers = {
+        str(host).casefold().rstrip(".") for host in (allow_missing_peer_hosts or ())
+    }
     for _ in range(max_redirects + 1):
         await validate_public_url(current, allowed_hosts=allowed_hosts)
         try:
-            async with session.get(current, allow_redirects=False) as response:
-                validate_connected_peer(response)
+            async with session.get(
+                current,
+                allow_redirects=False,
+                headers=dict(headers) if headers is not None else None,
+            ) as response:
+                current_host = (urlsplit(current).hostname or "").casefold().rstrip(".")
+                validate_connected_peer(
+                    response,
+                    allow_missing_peer=current_host in trusted_missing_peers,
+                )
                 if response.status in REDIRECT_STATUSES:
                     location = response.headers.get("Location")
                     if not location:

@@ -1,11 +1,15 @@
+# Test doubles supply only the Discord/service fields exercised by each test.
 import asyncio
 import socket
+from typing import cast
 
+import aiohttp
 import pytest
 from discord.ext import commands
 
 from utils.network import (
     canonical_media_url,
+    fetch_public_bytes,
     is_public_address,
     refresh_discord_attachment_url,
     validate_connected_peer,
@@ -104,6 +108,55 @@ def test_uses_protocol_transport_when_connection_is_unavailable() -> None:
             raise AssertionError("a public protocol peer should be accepted")
 
     validate_connected_peer(Response())  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_fetch_allows_missing_peer_only_for_trusted_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        status = 200
+        url = "https://cdn.example.test/image.png"
+        headers = {"Content-Type": "image/png"}
+        content_length = 1
+        connection = None
+        _protocol = type("Protocol", (), {"transport": None})()
+
+        class Content:
+            async def read(self, _size: int = -1) -> bytes:
+                return b"x"
+
+            def iter_chunked(self, _size: int):
+                async def chunks():
+                    yield b"x"
+
+                return chunks()
+
+        content = Content()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        def close(self) -> None:
+            pass
+
+    class Session:
+        def get(self, _url: str, **_kwargs: object) -> Response:
+            return Response()
+
+    async def validate(*_args: object, **_kwargs: object) -> str:
+        return "ok"
+
+    monkeypatch.setattr("utils.network.validate_public_url", validate)
+    result = await fetch_public_bytes(
+        cast("aiohttp.ClientSession", Session()),
+        "https://cdn.example.test/image.png",
+        allow_missing_peer_hosts={"cdn.example.test"},
+    )
+    assert result.data == b"x"
 
 
 @pytest.mark.asyncio

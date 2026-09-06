@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import random
 import re
-import types
 from textwrap import dedent
 from typing import (
     TYPE_CHECKING,
@@ -11,7 +10,6 @@ from typing import (
     Mapping,
     Optional,
     TypeAlias,
-    Union,
     cast,
 )
 
@@ -45,7 +43,7 @@ class _GamesHelpCategory:
 
     qualified_name = "Games"
     aliases: list[str] = []
-    description = "Play minigames against Fishie or players."
+    description = "Play minigames against players or solo."
     emoji = discord.PartialEmoji(name="🎮")
     hidden = False
     is_virtual = True
@@ -347,9 +345,7 @@ def _flag_codeblocks(
 
 def make_command_embed(
     ctx: Context,
-    command: Union[
-        commands.Command[Cog, ..., Any], commands.Group[Cog, ..., commands.Command]
-    ],
+    command: commands.Command[Any, ..., Any],
 ):
     bot = ctx.bot
     embed = discord.Embed(
@@ -464,7 +460,7 @@ class LegacyHelpCommand(commands.HelpCommand):
         embed = discord.Embed(
             title=f"{cog.emoji} {cog.qualified_name}",
             color=bot.embedcolor,
-            description=cog.description,
+            description=_cog_description(cog),
         )
         if cog.aliases:
             embed.add_field(
@@ -537,6 +533,22 @@ def _category_help_text(value: object, limit: int = 600) -> str:
     if text and text[-1].isalnum():
         text += "."
     return text
+
+
+def _cog_description(cog: object) -> str:
+    """Return a cog's description without command-name collisions.
+
+    ``commands.Cog`` stores the class docstring in ``__cog_description__``.
+    A cog can also expose a command named ``description``; in that case
+    accessing ``cog.description`` returns the command object instead of the
+    category text.  Prefer the stored value and only fall back to the public
+    attribute for virtual/third-party categories that do not have it.
+    """
+
+    stored = getattr(cog, "__cog_description__", None)
+    if stored is not None:
+        return str(stored)
+    return str(getattr(cog, "description", "") or "")
 
 
 def _required_permissions(command: commands.Command[Any, ..., Any]) -> list[str]:
@@ -616,9 +628,7 @@ class HelpCategorySelect(discord.ui.Select):
                     value=_t(cog.qualified_name),
                     emoji=cog.emoji,
                     description=_t(
-                        _category_help_text(
-                            str(cog.description or "").splitlines()[0], 100
-                        )
+                        _category_help_text(_cog_description(cog).splitlines()[0], 100)
                     ),
                     default=cog is view.selected_cog,
                 )
@@ -825,7 +835,7 @@ class HelpLayoutView(discord.ui.LayoutView):
             f"## {self.selected_cog.emoji} "
             f"{discord.utils.escape_markdown(self.selected_cog.qualified_name)}"
         )
-        description = _category_help_text(self.selected_cog.description, 600)
+        description = _category_help_text(_cog_description(self.selected_cog), 600)
         start = self.page * HELP_PAGE_SIZE
         page_commands = self.commands_list[start : start + HELP_PAGE_SIZE]
         items: list[discord.ui.Item[Any]] = [
@@ -1328,7 +1338,7 @@ class CogHelpDropdown(discord.ui.Select):
                 discord.SelectOption(
                     label=_t(cog.qualified_name),
                     emoji=cog.emoji,
-                    description=_t((cog.description or "").split("\n")[0]),
+                    description=_t(_cog_description(cog).split("\n")[0]),
                     default=cog is selected_cog,
                 )
             )
@@ -1353,7 +1363,7 @@ class CogHelpDropdown(discord.ui.Select):
         embed = discord.Embed(
             title=f"{cog.emoji} {cog.qualified_name}",
             color=bot.embedcolor,
-            description=cog.description,
+            description=_cog_description(cog),
         )
         embed.add_field(
             name="Commands",

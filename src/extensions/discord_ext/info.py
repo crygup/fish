@@ -6,7 +6,7 @@ import random
 import re
 import shlex
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -35,8 +35,6 @@ from utils import (
     ReviewPageSource,
     ReviewSender,
     build_layout_pagination_row,
-    fish_download,
-    fish_edit,
     fish_go_back,
     get_user_badges,
     human_join,
@@ -56,10 +54,11 @@ AVATAR_GRID_RE = re.compile(
     r"^(?P<width>\d{1,2})\s*x\s*(?P<height>\d{1,2})$", re.IGNORECASE
 )
 
-# Saved avatar/name/icon history is intentionally text-only for now. Keep
-# this switch next to the command declarations so re-enabling app-command
-# exposure later is a one-line change (without rewriting the text handlers).
-HISTORY_APP_COMMANDS_ENABLED = False
+# Saved avatar/name/icon history can be exposed in the application-command
+# tree through this single switch. Keeping the switch next to the command
+# declarations makes it straightforward to disable those options again
+# without rewriting the text handlers.
+HISTORY_APP_COMMANDS_ENABLED = True
 
 
 BURPLE = discord.ButtonStyle.blurple
@@ -440,6 +439,7 @@ class UserView(discord.ui.LayoutView):
         avatar_media_url: str = "",
         accent_color: discord.Colour | None = None,
         profile_title: str | None = None,
+        relationship_line: str | None = None,
     ) -> None:
         super().__init__(timeout=120)
         self.ctx = ctx
@@ -452,6 +452,7 @@ class UserView(discord.ui.LayoutView):
         default_accent = getattr(ctx, "embedcolor", ctx.bot.embedcolor)
         self.accent_color = default_accent if accent_color is None else accent_color
         self.profile_title = profile_title
+        self.relationship_line = relationship_line
         self._guild_id = (
             user.guild.id
             if isinstance(user, discord.Member)
@@ -495,7 +496,7 @@ class UserView(discord.ui.LayoutView):
             title = str(self.user)
             if self.server_tag:
                 title += f" ({self.server_tag})"
-            profile_lines = [self.user.mention]
+            profile_lines = [self.relationship_line or self.user.mention]
             if self.profile_title:
                 profile_lines.insert(0, f"-# {self.profile_title}")
             if self.index_body:
@@ -1039,7 +1040,7 @@ class AvatarView(AuthorView):
 
         self.edit.disabled = self.asset.key.isdigit()
 
-    @discord.ui.button(label="Edit", row=0, style=BURPLE, emoji=fish_edit)
+    @discord.ui.button(label="Edit", row=0, style=BURPLE)
     async def edit(self, interaction: discord.Interaction, _):
         if interaction.message is None:
             raise commands.BadArgument("Somehow message was none, try again.")
@@ -1053,7 +1054,6 @@ class AvatarView(AuthorView):
         label="Save",
         row=0,
         style=GREEN,
-        emoji=fish_download,
     )
     async def save(self, interaction: discord.Interaction, _):
         if interaction.message is None:
@@ -1073,6 +1073,73 @@ class AvatarView(AuthorView):
 
 
 class Info(Cog):
+    async def _marriage_profile_line(
+        self, user: Union[discord.Member, discord.User]
+    ) -> str | None:
+        """Return the relationship line shown in a user's profile.
+
+        The social commands live in the Fun cog, so userinfo deliberately
+        uses a small duck-typed hook instead of importing that cog (which
+        would create a circular extension dependency).  A profile should
+        remain usable while the social migration is being rolled out, hence a
+        missing table or unavailable cog simply omits the optional line.
+        """
+
+        get_cog = getattr(self.bot, "get_cog", None)
+        social = get_cog("Fun") if callable(get_cog) else None
+        resolver = getattr(social, "marriage_for", None)
+        if not callable(resolver):
+            return None
+        try:
+            marriage = await cast(
+                Callable[[int], Awaitable[Any]], resolver
+            )(int(user.id))
+        except Exception:
+            logger = getattr(self.bot, "logger", None)
+            if logger is not None:
+                logger.debug(
+                    "Could not load marriage for user %s", user.id, exc_info=True
+                )
+            return None
+        if marriage is None:
+            return None
+        proposer_id = int(getattr(marriage, "proposer_id", 0))
+        recipient_id = int(getattr(marriage, "recipient_id", 0))
+        partner_id = recipient_id if proposer_id == user.id else proposer_id
+        if not partner_id:
+            return None
+        try:
+            ring_rows = await self.bot.pool.fetch(
+                """
+                SELECT user_rings.user_id, ring_catalog.display
+                FROM user_rings
+                JOIN ring_catalog USING (ring_key)
+                WHERE user_rings.user_id = ANY($1::BIGINT[])
+                  AND user_rings.quantity > 0
+                  AND user_rings.equipped_count > 0
+                """,
+                [int(user.id), partner_id],
+            )
+        except Exception:
+            logger = getattr(self.bot, "logger", None)
+            if logger is not None:
+                logger.debug(
+                    "Could not load marriage rings for user %s", user.id, exc_info=True
+                )
+            ring_rows = []
+        rings = {
+            int(row["user_id"]): str(row["display"] or "").strip()
+            for row in ring_rows
+            if row["display"]
+        }
+        left = " ".join(
+            part for part in (user.mention, rings.get(int(user.id), "")) if part
+        )
+        right = " ".join(
+            part for part in (rings.get(partner_id, ""), f"<@{partner_id}>") if part
+        )
+        return f"{left} x {right}"
+
     async def _active_profile_titles(self, user_id: int) -> list[str]:
         """Return the user's active purchased titles for the profile header."""
 
@@ -1401,7 +1468,21 @@ class Info(Cog):
                 f"{discord.utils.format_dt(row['last_seen'], 'R')}"
             )
 
-        footer_lines = [f"-# {' · '.join(footer_details)}", f"-# ID: {user.id}"]
+        identity_footer = f"-# ID: {user.id}"
+        from extensions.fun.birthday import Birthday, birthday_timestamp
+
+        birthday_row = await self.bot.pool.fetchrow(
+            "SELECT month, day FROM user_birthdays WHERE user_id = $1", user.id
+        )
+        if birthday_row is not None:
+            birthday = Birthday(birthday_row["month"], birthday_row["day"])
+            stamp = await birthday_timestamp(
+                self.bot.pool, birthday, ctx.author.id, user.id
+            )
+            identity_footer += f" · Birthday on {birthday.label()} ({discord.utils.format_dt(stamp, 'R')})"
+        footer_lines = [f"-# {' · '.join(footer_details)}", identity_footer]
+
+        marriage_line = await self._marriage_profile_line(user)
 
         avatar_asset = user.display_avatar
         avatar_filename = (
@@ -1422,6 +1503,7 @@ class Info(Cog):
             # profile accent colour of the user being inspected.
             ctx.embed_color,
             profile_title,
+            relationship_line=marriage_line,
         )
         view.message = await ctx.send(
             view=view,
@@ -1844,24 +1926,65 @@ class Info(Cog):
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.describe(
         user="Discord user, mention, ID, or name.",
+        history="Show saved avatars in a grid instead of the current avatar.",
+        list_mode="Show saved avatars as a paginated list.",
+        server="Use this server's avatars instead of global avatars.",
+        size="Grid size such as 6x7, used with history.",
+        edit="Allow deleting entries from your own avatar list.",
     )
+    @app_commands.rename(list_mode="list", size="size")
     async def avatar_app(
         self,
         interaction: discord.Interaction,
         user: discord.User | None = None,
+        history: bool = False,
+        list_mode: bool = False,
+        server: bool = False,
+        size: str | None = None,
+        edit: bool = False,
     ) -> None:
-        """Show a user's current avatar.
-
-        Saved avatar history remains available through the text-only
-        ``avatar``/``avatarhistory`` commands.  It is deliberately omitted
-        from this app command until ``HISTORY_APP_COMMANDS_ENABLED`` is
-        enabled again.
-        """
+        """Show a user's current avatar, history grid, or avatar list."""
+        if not HISTORY_APP_COMMANDS_ENABLED and (
+            history or list_mode or server or size or edit
+        ):
+            await interaction.response.send_message(
+                "Avatar history options are currently unavailable.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if history and list_mode:
+            await interaction.response.send_message(
+                "Choose either history or list, not both.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if edit and not list_mode:
+            await interaction.response.send_message(
+                "Edit mode can only be used with the avatar list.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
         # ``get_context`` is parameterized with the concrete Fishie client,
         # while discord.py exposes an unparameterized client on interactions.
         # The runtime object is still the same bot instance.
         ctx = cast(Context, await self.bot.get_context(cast(Any, interaction)))
-        await self._send_user_avatar(ctx, user or ctx.author)
+        arguments: list[str] = []
+        if user is not None:
+            arguments.append(str(user.id))
+        if history:
+            arguments.append("history")
+        if list_mode:
+            arguments.append("list")
+        if server:
+            arguments.append("server")
+        if size:
+            arguments.append(size)
+        if edit:
+            arguments.append("edit")
+        await self._avatar_dispatch(ctx, arguments)
 
     async def _ensure_avatar_history_consent(self, ctx: Context) -> bool:
         """Ask for saved-avatar consent only when ``avatar`` opens history."""
@@ -1975,6 +2098,15 @@ class Info(Cog):
     ) -> None:
         """Get a user's banner."""
         await self._send_user_banner(ctx, user)
+
+    @userinfo.command(name="birthday")
+    @app_commands.describe(user="User whose birthday to show. Defaults to yourself.")
+    async def user_birthday(self, ctx: Context, user: discord.User = commands.Author) -> None:
+        """Show a user's next birthday."""
+        command = self.bot.get_command("birthday")
+        if command is None:
+            raise commands.BadArgument("Birthday commands are unavailable right now.")
+        await ctx.invoke(cast(Any, command), user=user)
 
     @userinfo.command(name="reviews")
     @app_commands.describe(
@@ -2439,22 +2571,58 @@ class Info(Cog):
     @app_commands.command(name="icon")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.describe(
+        history="Show saved server icons in a grid.",
+        list_mode="Show saved server icons as a paginated list.",
+        size="Grid size such as 6x7, used with history.",
+        edit="Allow deleting entries from the server icon list.",
+    )
+    @app_commands.rename(list_mode="list", size="size")
     async def icon_app(
         self,
         interaction: discord.Interaction,
+        history: bool = False,
+        list_mode: bool = False,
+        size: str | None = None,
+        edit: bool = False,
     ) -> None:
-        """Show the current server icon.
-
-        Saved icon history remains available through the text-only ``icon``
-        command; history/list/edit options are intentionally not exposed to
-        the app-command tree for now.
-        """
+        """Show a server's current icon or its saved icon history."""
+        if not HISTORY_APP_COMMANDS_ENABLED and (history or list_mode or size or edit):
+            await interaction.response.send_message(
+                "Icon history options are currently unavailable.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if history and list_mode:
+            await interaction.response.send_message(
+                "Choose either history or list, not both.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if edit and not list_mode:
+            await interaction.response.send_message(
+                "Edit mode can only be used with the server icon list.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
         ctx = cast(Context, await self.bot.get_context(cast(Any, interaction)))
         if ctx.guild is None:
             raise commands.NoPrivateMessage(
                 "This command can only be used in a server."
             )
-        await self.server_icon(ctx, ctx.guild)
+        arguments: list[str] = []
+        if history:
+            arguments.append("history")
+        if list_mode:
+            arguments.append("list")
+        if size:
+            arguments.append(size)
+        if edit:
+            arguments.append("edit")
+        await self._icon_dispatch(ctx, arguments)
 
     @commands.command(name="serverbanner", aliases=("sbanner",))
     async def server_banner_command(

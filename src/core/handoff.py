@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, cast
 
 import discord
 
@@ -219,20 +219,26 @@ async def send_handoff_notice(
         send = getattr(destination, "send", None)
         if not callable(send):
             return False
+        send_message = cast(Callable[..., Awaitable[Any]], send)
         kwargs: dict[str, Any] = {
             "allowed_mentions": discord.AllowedMentions.none(),
         }
         # Context.send accepts ephemeral for app commands.  A regular
         # Messageable does not, so only include it when explicitly requested.
-        if ephemeral is not None and getattr(destination, "interaction", None) is not None:
+        if (
+            ephemeral is not None
+            and getattr(destination, "interaction", None) is not None
+        ):
             kwargs["ephemeral"] = bool(ephemeral)
-        await send(content, **kwargs)
+        await send_message(content, **kwargs)
         return True
     except (discord.HTTPException, discord.Forbidden, TypeError, ValueError):
         logger = getattr(bot, "logger", None)
         log_exception = getattr(logger, "debug", None)
         if callable(log_exception):
-            log_exception("Could not send replacement-bot handoff notice", exc_info=True)
+            log_exception(
+                "Could not send replacement-bot handoff notice", exc_info=True
+            )
         return False
 
 

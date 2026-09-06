@@ -1,6 +1,15 @@
+# Test doubles supply only the Discord/service fields exercised by each test.
 from types import SimpleNamespace
+from typing import cast
 
+import discord
+
+from extensions.context import Context
 from extensions.fun.pvp import DuelBidView
+
+
+async def _on_ready(*_args: object) -> None:
+    pass
 
 
 def _view() -> DuelBidView:
@@ -11,12 +20,12 @@ def _view() -> DuelBidView:
     challenger = SimpleNamespace(id=1, mention="<@1>", name="challenger")
     opponent = SimpleNamespace(id=2, mention="<@2>", name="opponent")
     return DuelBidView(
-        ctx,
-        challenger,
-        opponent,
+        cast("Context", ctx),
+        cast("discord.User", challenger),
+        cast("discord.User", opponent),
         game_name="Test",
         challenger_bid=100,
-        on_ready=lambda *_args: None,
+        on_ready=_on_ready,
     )
 
 

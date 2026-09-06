@@ -136,11 +136,7 @@ class Honeypot(Cog):
     async def honeypot_on_message(self, message: discord.Message):
         if is_legacy_instance(self.bot):
             return
-        if (
-            not message.guild
-            or is_operational_guild(message)
-            or message.author.bot
-        ):
+        if not message.guild or is_operational_guild(message) or message.author.bot:
             return
         if self.bot.cached_honeypots.get(message.guild.id) != message.channel.id:
             return

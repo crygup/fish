@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import random
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
+from core import Fishie
 from extensions.fun.race import (
     RACE_COLUMNS,
     RACE_ROWS,
@@ -98,7 +100,7 @@ async def test_richer_duplicate_owner_gets_racing_emoji_and_reserves_sea_animal(
         logger=SimpleNamespace(exception=lambda *args, **kwargs: None),
     )
     cog = SeaAnimalRaceCommands.__new__(SeaAnimalRaceCommands)
-    cog.bot = bot
+    cog.bot = cast("Fishie", bot)
     game = RaceGame(
         ctx=None,  # type: ignore[arg-type]
         host_id=1,
@@ -135,7 +137,7 @@ async def test_custom_racing_emoji_renders_and_duplicate_ties_are_deterministic(
         logger=SimpleNamespace(exception=lambda *args, **kwargs: None),
     )
     cog = SeaAnimalRaceCommands.__new__(SeaAnimalRaceCommands)
-    cog.bot = bot
+    cog.bot = cast("Fishie", bot)
     game = RaceGame(
         ctx=None,  # type: ignore[arg-type]
         host_id=1,
@@ -175,7 +177,7 @@ async def test_un_equipped_owned_sea_animal_is_reserved_from_fallback_lanes() ->
         logger=SimpleNamespace(exception=lambda *args, **kwargs: None),
     )
     cog = SeaAnimalRaceCommands.__new__(SeaAnimalRaceCommands)
-    cog.bot = bot
+    cog.bot = cast("Fishie", bot)
     game = RaceGame(
         ctx=None,  # type: ignore[arg-type]
         host_id=1,

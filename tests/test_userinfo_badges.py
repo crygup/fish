@@ -1,9 +1,13 @@
+# Test doubles supply only the Discord/service fields exercised by each test.
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
+from core import Fishie
+from extensions.context import Context
 from extensions.discord_ext.info import UPLOADER_ROLE_ID, Info
 from utils.vars import load_user_badges_document, render_user_badge
 
@@ -40,10 +44,12 @@ async def test_inactive_badge_is_not_restored_from_startup_cache() -> None:
         pool=SimpleNamespace(fetchrow=AsyncMock(return_value=None)),
     )
     cog = object.__new__(Info)
-    cog.bot = bot
+    cog.bot = cast("Fishie", bot)
     cog.has_uploader_badge = AsyncMock(return_value=False)
 
-    entries = await cog.get_badge_entries(user, SimpleNamespace())
+    entries = await cog.get_badge_entries(
+        cast("discord.Member", user), cast("Context", SimpleNamespace())
+    )
 
     assert entries == []
 

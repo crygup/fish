@@ -1,27 +1,42 @@
+# Test doubles supply only the Discord/service fields exercised by each test.
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 import extensions.fun.post as post_module
+from extensions.context import Context
 from extensions.fun.post import PostCommands
 from utils.converters import TenorUrlConverter
 
 
 def test_post_accepts_images_and_gifs_but_not_other_media() -> None:
     assert PostCommands._is_post_attachment(  # type: ignore[arg-type]
-        SimpleNamespace(filename="photo.png", content_type="image/png")
+        cast(
+            "discord.Attachment",
+            SimpleNamespace(filename="photo.png", content_type="image/png"),
+        )
     )
     assert PostCommands._is_post_attachment(  # type: ignore[arg-type]
-        SimpleNamespace(filename="animation.gif", content_type="image/gif")
+        cast(
+            "discord.Attachment",
+            SimpleNamespace(filename="animation.gif", content_type="image/gif"),
+        )
     )
     assert not PostCommands._is_post_attachment(  # type: ignore[arg-type]
-        SimpleNamespace(filename="video.mp4", content_type="video/mp4")
+        cast(
+            "discord.Attachment",
+            SimpleNamespace(filename="video.mp4", content_type="video/mp4"),
+        )
     )
     assert not PostCommands._is_post_attachment(  # type: ignore[arg-type]
-        SimpleNamespace(filename="vector.svg", content_type="image/svg+xml")
+        cast(
+            "discord.Attachment",
+            SimpleNamespace(filename="vector.svg", content_type="image/svg+xml"),
+        )
     )
 
 
@@ -42,13 +57,10 @@ def test_tenor_media1_host_is_accepted_for_original_gifs() -> None:
 
 
 def test_tenor_legacy_media_url_has_current_cdn_variants() -> None:
-    url = (
-        "https://media1.tenor.com/m/qiDqskwrsKgAAAAC/"
-        "take-your-clothes-off-paulie.gif"
-    )
+    url = "https://media1.tenor.com/m/qiDqskwrsKgAAAAC/take-your-clothes-off-paulie.gif"
     variants = TenorUrlConverter.media_url_variants(url)
     assert (
-        "https://media.tenor.com/qiDqskwrsKgAAAAM/" "take-your-clothes-off-paulie.gif"
+        "https://media.tenor.com/qiDqskwrsKgAAAAM/take-your-clothes-off-paulie.gif"
     ) in variants
 
 
@@ -66,7 +78,7 @@ async def test_direct_tenor_media_is_fetched_as_a_post_source() -> None:
     )
 
     result = await cog._download_post_source(
-        SimpleNamespace(),
+        cast("Context", SimpleNamespace()),
         "https://media1.tenor.com/m/qiDqskwrsKgAAAAC/take-your-clothes-off-paulie.gif",
     )
 
@@ -173,7 +185,9 @@ async def test_reply_post_sources_does_not_duplicate_an_attachment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeMessage:
-        pass
+        attachments: list[SimpleNamespace]
+        content: str
+        embeds: list[object]
 
     monkeypatch.setattr(post_module.discord, "Message", FakeMessage)
     monkeypatch.setattr(
@@ -212,7 +226,9 @@ async def test_reply_post_sources_prefers_message_url_over_embed_proxy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeMessage:
-        pass
+        attachments: list[SimpleNamespace]
+        content: str
+        embeds: list[object]
 
     monkeypatch.setattr(post_module.discord, "Message", FakeMessage)
     original = "https://cdn.discordapp.com/attachments/1/picmix.gif"
@@ -246,7 +262,7 @@ async def test_reply_post_sources_prefers_message_url_over_embed_proxy(
 async def test_klipy_static_mp4_is_converted_to_a_gif_for_post_upload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[object, str, dict[str, object]]] = []
 
     class FakeDownloader:
         def __init__(self, ctx: object, url: str, **kwargs: object) -> None:
@@ -263,7 +279,8 @@ async def test_klipy_static_mp4_is_converted_to_a_gif_for_post_upload(
     )
     source_url = "https://static.klipy.com/gifs/bart-simpson-118.mp4"
     path, filename, size, returned_url = await PostCommands()._download_post_source(
-        SimpleNamespace(), source_url  # type: ignore[arg-type]
+        cast("Context", SimpleNamespace()),
+        source_url,  # type: ignore[arg-type]
     )
     try:
         assert path.read_bytes() == b"gif bytes"

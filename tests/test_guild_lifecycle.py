@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+# Test doubles supply only the Discord/service fields exercised by each test.
+from typing import cast
+
 import discord
 
+from core import Fishie
 from extensions.events.guilds import Guilds
 
 
@@ -37,11 +41,16 @@ class _Guild:
 
 def _guilds(*, replacement: bool = True, guilds: list[_Guild] | None = None):
     cog = object.__new__(Guilds)
-    cog.bot = SimpleNamespace(
-        guilds=guilds or [],
-        user=SimpleNamespace(id=Guilds.REPLACEMENT_BOT_ID if replacement else Guilds.LEGACY_BOT_ID),
-        is_new_bot=replacement,
-        is_legacy_bot=not replacement,
+    cog.bot = cast(
+        "Fishie",
+        SimpleNamespace(
+            guilds=guilds or [],
+            user=SimpleNamespace(
+                id=Guilds.REPLACEMENT_BOT_ID if replacement else Guilds.LEGACY_BOT_ID
+            ),
+            is_new_bot=replacement,
+            is_legacy_bot=not replacement,
+        ),
     )
     cog._capacity_baseline_guilds = set()
     cog._capacity_baseline_ready = False
@@ -66,9 +75,9 @@ def test_capacity_does_not_count_partial_guild_twice() -> None:
 def test_legacy_member_makes_guild_permanently_exempt() -> None:
     guild = _Guild(1, [], legacy=True)
     cog = _guilds(guilds=[guild])
-    assert cog._is_capacity_exempt(guild)
+    assert cog._is_capacity_exempt(cast("discord.Guild", guild))
     guild._legacy = False
-    assert cog._is_capacity_exempt(guild)
+    assert cog._is_capacity_exempt(cast("discord.Guild", guild))
 
 
 def test_capacity_baseline_does_not_evict_existing_guilds() -> None:
@@ -86,9 +95,7 @@ def test_capacity_baseline_does_not_evict_existing_guilds() -> None:
 def test_legacy_instance_detects_replacement_on_join(monkeypatch) -> None:
     guild = _Guild(1, [])
     guild.get_member = lambda user_id: (
-        _Member(user_id, bot=True)
-        if user_id == Guilds.REPLACEMENT_BOT_ID
-        else None
+        _Member(user_id, bot=True) if user_id == Guilds.REPLACEMENT_BOT_ID else None
     )
     left = False
 
@@ -96,14 +103,24 @@ def test_legacy_instance_detects_replacement_on_join(monkeypatch) -> None:
         nonlocal left
         left = True
 
-    guild.leave = leave
+    monkeypatch.setattr(guild, "leave", leave, raising=False)
     cog = _guilds(replacement=False, guilds=[])
-    cog.bot.config = {"ids": {"owner_id": 1}}
-    cog.bot.pool = SimpleNamespace(execute=lambda *_args, **_kwargs: None)
-    cog.bot.logger = SimpleNamespace(info=lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cog.bot, "config", {"ids": {"owner_id": 1}}, raising=False)
+    monkeypatch.setattr(
+        cog.bot,
+        "pool",
+        SimpleNamespace(execute=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cog.bot,
+        "logger",
+        SimpleNamespace(info=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
 
     async def run() -> None:
-        await cog.on_guild_join(guild)
+        await cog.on_guild_join(cast("discord.Guild", guild))
 
     asyncio.run(run())
     assert left

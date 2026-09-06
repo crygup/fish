@@ -9,8 +9,12 @@ from unittest.mock import AsyncMock
 import discord
 import pytest
 from discord.ext import commands
+from test_support import require_type
 
 import extensions.voicemaster as voicemaster_module
+
+# Test doubles supply only the Discord/service fields exercised by each test.
+from extensions.context import Context
 from extensions.voicemaster import (
     MAX_QUEUE_SIZE,
     QUEUE_PAGE_SIZE,
@@ -63,8 +67,8 @@ def test_voice_commands_are_text_only_and_grouped_for_app_commands() -> None:
     assert VoiceMaster.restart.aliases == ("rewind", "replay")
     assert isinstance(VoiceMaster.repeat, commands.Command)
     assert VoiceMaster.repeat.aliases == ("loop",)
-    assert isinstance(VoiceMaster.voicemaster, commands.HybridGroup)
-    assert {command.name for command in VoiceMaster.voicemaster.commands} == {
+    group = require_type(VoiceMaster.voicemaster, commands.HybridGroup)
+    assert {command.name for command in group.commands} == {
         "play",
         "pause",
         "restart",
@@ -362,7 +366,7 @@ async def test_spotify_album_builds_ordered_lazy_track_lookups() -> None:
         author=SimpleNamespace(id=1),
     )
     name, tracks, total = await cog._spotify_album_tracks(  # type: ignore[arg-type]
-        ctx,
+        cast("Context", ctx),
         "https://open.spotify.com/album/1234567890123456789012",
     )
 
@@ -417,7 +421,7 @@ async def test_spotify_episode_resolves_to_a_lazy_youtube_lookup(
         }
     )
     track = await cog._track_from_query(  # type: ignore[arg-type]
-        ctx,
+        cast("Context", ctx),
         "https://open.spotify.com/episode/1234567890123456789012",
     )
 
@@ -585,7 +589,7 @@ async def test_idle_album_enqueue_arms_first_track_announcement() -> None:
     )
 
     _player, accepted = await cog._enqueue_many(  # type: ignore[arg-type]
-        ctx,
+        cast("Context", ctx),
         [VoiceTrack("one", "one", "One", 1)],
         announce_first=True,
     )
@@ -644,7 +648,9 @@ async def test_worker_preserves_tracks_when_voice_is_temporarily_disconnected() 
             return False
 
     track = VoiceTrack("one", "one", "One", 1)
-    player = VoicePlayer(guild_id=123, voice=Voice(), queue=deque((track,)))
+    player = VoicePlayer(
+        guild_id=123, voice=cast("discord.VoiceClient", Voice()), queue=deque((track,))
+    )
     cog = object.__new__(VoiceMaster)
 
     await cog._run_player(player)
@@ -1060,7 +1066,7 @@ def test_owner_and_voice_moderation_permissions_are_privileged_djs() -> None:
         guild=guild,
         author=SimpleNamespace(id=10, guild_permissions=SimpleNamespace()),
     )
-    assert cog._is_privileged_dj(owner_ctx)
+    assert cog._is_privileged_dj(cast("Context", owner_ctx))
 
     moderator_ctx = SimpleNamespace(
         guild=SimpleNamespace(owner_id=11),
@@ -1074,7 +1080,7 @@ def test_owner_and_voice_moderation_permissions_are_privileged_djs() -> None:
             ),
         ),
     )
-    assert cog._is_privileged_dj(moderator_ctx)
+    assert cog._is_privileged_dj(cast("Context", moderator_ctx))
 
 
 @pytest.mark.asyncio
@@ -1106,7 +1112,7 @@ async def test_privileged_skip_can_run_from_any_text_channel() -> None:
         ),
     )
 
-    voice = player.voice
+    voice = require_type(player.voice, Voice)
     voice.stopped = False
     await cog._skip_impl(ctx)  # type: ignore[arg-type]
     assert voice.stopped is True
@@ -1126,6 +1132,6 @@ async def test_queue_attachment_is_added_instead_of_showing_the_queue() -> None:
         )
     )
 
-    await cog._queue_impl(ctx, "")
+    await cog._queue_impl(cast("Context", ctx), "")
 
     cog._play_impl.assert_awaited_once_with(ctx, attachment_url, require_control=False)

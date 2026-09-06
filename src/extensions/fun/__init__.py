@@ -33,7 +33,9 @@ from utils import get_or_fetch_user, to_image
 from utils.paths import FILES_ROOT
 
 from .about import About
+from .birthday import BirthdayCommands
 from .blackjack import BlackjackCommands, BlackjackGame, BlackjackView
+from .burger import BurgerCommands
 from .connectfour import (
     ConnectFourChallengeView,
     ConnectFourController,
@@ -92,6 +94,7 @@ from .pvp import (
 from .race import SeaAnimalRaceCommands
 from .reactions import ReactionStats
 from .slots import SlotsCommands
+from .social import SocialCommands
 from .streak_games import (
     GAME_MAX_BID,
     GAME_MIN_BID,
@@ -380,6 +383,9 @@ class Fun(
     UploadCommands,
     PostCommands,
     VideoCommands,
+    BurgerCommands,
+    SocialCommands,
+    BirthdayCommands,
     About,
     Corn,
     ReactionStats,
@@ -389,7 +395,7 @@ class Fun(
     BlackjackCommands,
     WordBombCommands,
 ):
-    """Play minigames against Fishie or players."""
+    """Random commands for when you're bored"""
 
     emoji = discord.PartialEmoji(name="\U0001f604")
 
@@ -453,7 +459,7 @@ class Fun(
         if application_id is None:
             application_id = self.bot.config["ids"]["bot_id"]
         self.invite_url = discord.utils.oauth_url(
-            int(application_id), permissions=self.bot.bot_permissions
+            int(cast(Any, application_id)), permissions=self.bot.bot_permissions
         )
         self._tictactoe_controller = TicTacToeController(self)
         self._connectfour_controller = ConnectFourController(self)
@@ -953,7 +959,7 @@ class Fun(
             arguments.append(user)
         if amount is not None:
             arguments.append(amount)
-        await self.tictactoe(ctx, *arguments)
+        await cast(Any, self.tictactoe)(ctx, *arguments)
 
     @game.command(name="connect-four", aliases=("connect4", "c4", "connect"))
     @app_commands.describe(user="The user to challenge. Omit this to play Fishie.")
@@ -975,7 +981,7 @@ class Fun(
             arguments.append(user)
         if amount is not None:
             arguments.append(amount)
-        await self.connectfour(ctx, *arguments)
+        await cast(Any, self.connectfour)(ctx, *arguments)
 
     @game.command(name="race", aliases=("sea-race", "seaanimalrace"))
     @app_commands.describe(amount=COIN_AMOUNT_DESCRIPTION)
@@ -1729,7 +1735,7 @@ class Fun(
             arguments.append(user)
         if amount is not None:
             arguments.append(amount)
-        await self.heads_or_tails(ctx, *arguments)
+        await cast(Any, self.heads_or_tails)(ctx, *arguments)
 
     @commands.group(name="wordle", aliases=("wdl",), invoke_without_command=True)
     async def wordle(self, ctx: Context) -> None:
@@ -1803,7 +1809,7 @@ class Fun(
             arguments.append(user)
         if amount is not None:
             arguments.append(amount)
-        await self.RPSCommand(ctx, *arguments)
+        await cast(Any, self.RPSCommand)(ctx, *arguments)
 
     @commands.group(
         name="rock-paper-scissors",
@@ -2030,10 +2036,11 @@ class Fun(
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
+        resolved_amount: int
         if parsed_amount == EVERYTHING_AMOUNT:
             wallet = await self.bot.currency.get_wallet(ctx.author.id)
-            amount = int(wallet.balance)
-            if amount < DUEL_MIN_BID:
+            resolved_amount = int(wallet.balance)
+            if resolved_amount < DUEL_MIN_BID:
                 await ctx.send(
                     f"You need at least {DUEL_MIN_BID:,} Coins to bid everything.",
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -2050,21 +2057,21 @@ class Fun(
             ):
                 return
         else:
-            amount = int(parsed_amount)
-        if amount < DUEL_MIN_BID:
+            resolved_amount = int(parsed_amount)
+        if resolved_amount < DUEL_MIN_BID:
             await ctx.send(
                 f"Bids must be at least {DUEL_MIN_BID:,} Coins.",
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
-        if not await view.set_bid_from_command(ctx.author.id, amount):
+        if not await view.set_bid_from_command(ctx.author.id, resolved_amount):
             await ctx.send(
                 "Bids can no longer be changed for that duel.",
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
         await ctx.send(
-            f"Your duel bid is now **{amount:,} Coins**.",
+            f"Your duel bid is now **{resolved_amount:,} Coins**.",
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -3076,7 +3083,8 @@ class Fun(
             return
         wager = None
         if amount is not None:
-            if int(amount) < GAME_MIN_BID:
+            wager_amount = int(cast(Any, amount))
+            if wager_amount < GAME_MIN_BID:
                 await ctx.send(
                     f"Coin wagers must be at least **{GAME_MIN_BID:,} Coins**.",
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -3085,7 +3093,7 @@ class Fun(
             try:
                 wager = await self.bot.currency.open_wager(
                     ctx.author.id,
-                    amount,
+                    wager_amount,
                     source="higher_lower",
                 )
             except InvalidAmount:
@@ -3215,7 +3223,8 @@ class Fun(
             return
         wager = None
         if amount is not None:
-            if int(amount) < GAME_MIN_BID:
+            wager_amount = int(cast(Any, amount))
+            if wager_amount < GAME_MIN_BID:
                 await ctx.send(
                     f"Coin wagers must be at least **{GAME_MIN_BID:,} Coins**.",
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -3224,7 +3233,7 @@ class Fun(
             try:
                 wager = await self.bot.currency.open_wager(
                     ctx.author.id,
-                    amount,
+                    wager_amount,
                     source="heads_tails",
                 )
             except InvalidAmount:
@@ -3362,7 +3371,8 @@ class Fun(
 
         wager = None
         if amount is not None:
-            if int(amount) < GAME_MIN_BID:
+            wager_amount = int(cast(Any, amount))
+            if wager_amount < GAME_MIN_BID:
                 await ctx.send(
                     f"Coin wagers must be at least **{GAME_MIN_BID:,} Coins**.",
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -3371,7 +3381,7 @@ class Fun(
             try:
                 wager = await self.bot.currency.open_wager(
                     ctx.author.id,
-                    amount,
+                    wager_amount,
                     source="rock_paper_scissors",
                 )
             except InvalidAmount:
@@ -4602,11 +4612,13 @@ class Fun(
             return
         self.bot.currency.set_click_reward_flusher(self.flush_click_rewards)
         self.flush_click_cache_loop.start()
+        self.birthday_reward_loop.start()
 
     def cog_unload(self) -> None:
         """Stop background minigame timers when the fun extension reloads."""
         self.bot.currency.set_click_reward_flusher(None)
         self.flush_click_cache_loop.cancel()
+        self.birthday_reward_loop.cancel()
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:

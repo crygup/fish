@@ -1,7 +1,10 @@
+# Test doubles supply only the Discord/service fields exercised by each test.
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 from core.cache import db_cache
@@ -89,8 +92,14 @@ def test_tatsu_interaction_user_id_accepts_discord_payload_shapes() -> None:
         interaction_metadata={"user": {"id": "1127694734270419116"}},
         interaction=None,
     )
-    assert Reputation._interaction_user_id(object_message) == 1127694734270419116
-    assert Reputation._interaction_user_id(mapping_message) == 1127694734270419116
+    assert (
+        Reputation._interaction_user_id(cast("discord.Message", object_message))
+        == 1127694734270419116
+    )
+    assert (
+        Reputation._interaction_user_id(cast("discord.Message", mapping_message))
+        == 1127694734270419116
+    )
 
 
 @pytest.mark.asyncio
@@ -99,7 +108,9 @@ async def test_tatsu_giver_resolution_queries_uncached_username() -> None:
     guild = SimpleNamespace(members=[], query_members=AsyncMock(return_value=[member]))
     reputation = Reputation.__new__(Reputation)
 
-    resolved = await reputation._resolve_tatsu_giver(guild, "giver_name")
+    resolved = await reputation._resolve_tatsu_giver(
+        cast("discord.Guild", guild), "giver_name"
+    )
 
     assert resolved is member
     guild.query_members.assert_awaited_once_with(

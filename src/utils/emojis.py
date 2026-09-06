@@ -135,6 +135,17 @@ sp = PartialEmoji(name="sp", id=1437140700604137554)
 spU = PartialEmoji(name="spU", id=1437140748423270441)
 spP = PartialEmoji(name="SpP", id=1437140625844867244)
 spR2 = PartialEmoji(name="spR2", id=1437149366174486568)
+# Alternate sphere pack used by Mudae's ``$ot`` boards.  Keep these as
+# PartialEmoji values rather than Unicode substitutes so local simulators
+# render the same custom spheres Mudae sends in the live game.
+spB2 = PartialEmoji(name="spB2", id=1437149292530765825)
+spP2 = PartialEmoji(name="spP2", id=1437149276160397404)
+spT2 = PartialEmoji(name="spT2", id=1437149302970650624)
+spG2 = PartialEmoji(name="spG2", id=1437149315024949248)
+spY2 = PartialEmoji(name="spY2", id=1437149336730468392)
+spO2 = PartialEmoji(name="spO2", id=1437149354774495412)
+spL2 = PartialEmoji(name="spL2", id=1437149400685084783)
+spW2 = PartialEmoji(name="spW2", id=1437149377754824724)
 # fmt: on
 
 
@@ -187,6 +198,14 @@ class Emojis:
     spU = spU
     spP = spP
     spR2 = spR2
+    spB2 = spB2
+    spP2 = spP2
+    spT2 = spT2
+    spG2 = spG2
+    spY2 = spY2
+    spO2 = spO2
+    spL2 = spL2
+    spW2 = spW2
     mudae_circle = mudae_circle
     fish_check = fish_check
     fish_downvote = fish_downvote
@@ -283,6 +302,14 @@ emoji_list = [
     spU,
     spP,
     spR2,
+    spB2,
+    spP2,
+    spT2,
+    spG2,
+    spY2,
+    spO2,
+    spL2,
+    spW2,
     mudae_circle,
     fish_check,
     fish_downvote,

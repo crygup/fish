@@ -11,7 +11,16 @@ import asyncio
 import random
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, Literal, Mapping, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Iterable,
+    Literal,
+    Mapping,
+    cast,
+)
 
 import discord
 from discord.ext import commands
@@ -1689,7 +1698,7 @@ class BlackjackCommands:
     bot: Fishie
     _blackjack_games: dict[int, BlackjackGame]
 
-    @commands.command(
+    @cast(Any, commands.command)(
         name="blackjack",
         aliases=("black-jack", "bj"),
         extras={"usage": "[user] [bid]"},

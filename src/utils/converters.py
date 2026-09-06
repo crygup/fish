@@ -859,7 +859,8 @@ class _AccountConverter(commands.Converter[str]):
             if row and row[self.column]:
                 return row[self.column]
             raise commands.BadArgument(
-                f"**{user.display_name}** has no linked {self.site_name} account."
+                f"**{user.display_name}** has no linked {self.site_name} account. "
+                "Use `fish accounts` to connect it."
             )
         except commands.UserNotFound:
             pass
@@ -1009,7 +1010,8 @@ class LetterboxdConverter(_AccountConverter):
             if row and row["letterboxd"]:
                 return row["letterboxd"]
             raise commands.BadArgument(
-                f"**{argument.display_name}** has no linked Letterboxd account."
+                f"**{argument.display_name}** has no linked Letterboxd account. "
+                "Use `fish accounts` to connect it."
             )
         try:
             user = await commands.UserConverter().convert(ctx, argument)
@@ -1021,7 +1023,8 @@ class LetterboxdConverter(_AccountConverter):
         if row and row["letterboxd"]:
             return row["letterboxd"]
         raise commands.BadArgument(
-            f"**{user.display_name}** has no linked Letterboxd account."
+            f"**{user.display_name}** has no linked Letterboxd account. "
+            "Use `fish accounts` to connect it."
         )
 
 
@@ -1042,7 +1045,8 @@ class SteamConverter(_AccountConverter):
             if row and row["steam"]:
                 return row["steam"]
             raise commands.BadArgument(
-                f"**{argument.display_name}** has no linked Steam account."
+                f"**{argument.display_name}** has no linked Steam account. "
+                "Use `fish accounts` to connect it."
             )
 
         # Try to parse as Discord user mention/ID.
@@ -1054,7 +1058,8 @@ class SteamConverter(_AccountConverter):
             if row and row["steam"]:
                 return row["steam"]
             raise commands.BadArgument(
-                f"**{user.display_name}** has no linked Steam account."
+                f"**{user.display_name}** has no linked Steam account. "
+                "Use `fish accounts` to connect it."
             )
         except commands.UserNotFound:
             pass

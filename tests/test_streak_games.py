@@ -18,6 +18,7 @@ from extensions.fun.streak_games import (
     PlayingCard,
     RockPaperScissorsGame,
     RockPaperScissorsWagerView,
+    RPSChoice,
     quarter_size_cards,
 )
 
@@ -61,7 +62,9 @@ def test_higher_or_lower_never_reveals_the_same_rank_twice() -> None:
     # game must still enforce the invariant rather than trusting the RNG.
     rng = FixedChoice([two_clubs, two_hearts])
     game = HigherOrLowerGame(
-        1, deck=(two_clubs, two_hearts, ten), rng=rng  # type: ignore[arg-type]
+        1,
+        deck=(two_clubs, two_hearts, ten),
+        rng=rng,  # type: ignore[arg-type]
     )
 
     game.guess("higher")
@@ -502,7 +505,8 @@ def test_wagered_rock_paper_scissors_preserves_the_guaranteed_winner() -> None:
         ("paper", "rock"),
         ("scissors", "paper"),
     ):
-        assert game.guess(choice) == "win"
+        assert choice in {"rock", "paper", "scissors"}
+        assert game.guess(cast(RPSChoice, choice)) == "win"
         assert game.last_bot_choice == expected_bot_choice
 
     assert game.streak == 3

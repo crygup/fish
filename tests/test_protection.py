@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+
+# Test doubles supply only the Discord/service fields exercised by each test.
+from typing import cast
 from unittest.mock import AsyncMock
 
 import discord
 import pytest
+from discord.ext import commands
 
+from core import Fishie
 from extensions.moderation import Moderation
 from extensions.moderation.protection import (
     INVITE_RE,
@@ -36,7 +41,7 @@ def test_protection_group_is_hybrid_with_requested_aliases_and_commands() -> Non
     command = next(
         item for item in Moderation.__cog_commands__ if item.name == "protection"
     )
-    assert isinstance(command, discord.ext.commands.HybridGroup)
+    assert isinstance(command, commands.HybridGroup)
     assert command.fallback == "info"
     assert {
         "antinuke",
@@ -68,19 +73,22 @@ def test_protection_trigger_and_mode_aliases_are_user_friendly() -> None:
 
 def test_protection_classifies_requested_audit_events() -> None:
     assert Protection._classify_protection_entry(
-        _entry(discord.AuditLogAction.ban)
+        cast("discord.AuditLogEntry", _entry(discord.AuditLogAction.ban))
     ) == ("mass_bans",)
     assert Protection._classify_protection_entry(
-        _entry(discord.AuditLogAction.kick)
+        cast("discord.AuditLogEntry", _entry(discord.AuditLogAction.kick))
     ) == ("mass_kicks",)
     assert Protection._classify_protection_entry(
-        _entry(discord.AuditLogAction.channel_delete)
+        cast("discord.AuditLogEntry", _entry(discord.AuditLogAction.channel_delete))
     ) == ("channel_changes",)
     assert Protection._classify_protection_entry(
-        _entry(
-            discord.AuditLogAction.channel_update,
-            before=SimpleNamespace(name="old"),
-            after=SimpleNamespace(name="new"),
+        cast(
+            "discord.AuditLogEntry",
+            _entry(
+                discord.AuditLogAction.channel_update,
+                before=SimpleNamespace(name="old"),
+                after=SimpleNamespace(name="new"),
+            ),
         )
     ) == ("channel_changes",)
 
@@ -89,16 +97,22 @@ def test_protection_detects_admin_role_creation_and_elevation() -> None:
     regular = discord.Permissions.none()
     administrator = discord.Permissions(administrator=True)
     assert Protection._classify_protection_entry(
-        _entry(
-            discord.AuditLogAction.role_create,
-            target=SimpleNamespace(permissions=administrator),
+        cast(
+            "discord.AuditLogEntry",
+            _entry(
+                discord.AuditLogAction.role_create,
+                target=SimpleNamespace(permissions=administrator),
+            ),
         )
     ) == ("administrator_role",)
     assert Protection._classify_protection_entry(
-        _entry(
-            discord.AuditLogAction.role_update,
-            before=SimpleNamespace(name="role", permissions=regular),
-            after=SimpleNamespace(name="role", permissions=administrator),
+        cast(
+            "discord.AuditLogEntry",
+            _entry(
+                discord.AuditLogAction.role_update,
+                before=SimpleNamespace(name="role", permissions=regular),
+                after=SimpleNamespace(name="role", permissions=administrator),
+            ),
         )
     ) == ("administrator_role",)
 
@@ -106,23 +120,29 @@ def test_protection_detects_admin_role_creation_and_elevation() -> None:
 def test_protection_detects_timeouts_security_and_vanity_changes() -> None:
     timeout = discord.utils.utcnow()
     assert Protection._classify_protection_entry(
-        _entry(
-            discord.AuditLogAction.member_update,
-            before=SimpleNamespace(timed_out_until=None),
-            after=SimpleNamespace(timed_out_until=timeout),
+        cast(
+            "discord.AuditLogEntry",
+            _entry(
+                discord.AuditLogAction.member_update,
+                before=SimpleNamespace(timed_out_until=None),
+                after=SimpleNamespace(timed_out_until=timeout),
+            ),
         )
     ) == ("member_timeouts",)
     assert set(
         Protection._classify_protection_entry(
-            _entry(
-                discord.AuditLogAction.guild_update,
-                before=SimpleNamespace(
-                    verification_level=discord.VerificationLevel.low,
-                    vanity_url_code="old",
-                ),
-                after=SimpleNamespace(
-                    verification_level=discord.VerificationLevel.high,
-                    vanity_url_code="new",
+            cast(
+                "discord.AuditLogEntry",
+                _entry(
+                    discord.AuditLogAction.guild_update,
+                    before=SimpleNamespace(
+                        verification_level=discord.VerificationLevel.low,
+                        vanity_url_code="old",
+                    ),
+                    after=SimpleNamespace(
+                        verification_level=discord.VerificationLevel.high,
+                        vanity_url_code="new",
+                    ),
                 ),
             )
         )
@@ -175,19 +195,29 @@ def test_protection_permission_boundary_allows_only_requested_managers() -> None
             ),
         )
 
-    assert Protection._can_manage_protection(member(1), config, allow_role=True)
     assert Protection._can_manage_protection(
-        member(2, protection_role=True), config, allow_role=True
+        cast("discord.Member", member(1)), config, allow_role=True
     )
     assert Protection._can_manage_protection(
-        member(3, administrator=True, top_role=11), config, allow_role=True
+        cast("discord.Member", member(2, protection_role=True)), config, allow_role=True
+    )
+    assert Protection._can_manage_protection(
+        cast("discord.Member", member(3, administrator=True, top_role=11)),
+        config,
+        allow_role=True,
     )
     assert not Protection._can_manage_protection(
-        member(4, administrator=True, top_role=10), config, allow_role=True
+        cast("discord.Member", member(4, administrator=True, top_role=10)),
+        config,
+        allow_role=True,
     )
-    assert not Protection._can_manage_protection(member(5), config, allow_role=True)
     assert not Protection._can_manage_protection(
-        member(2, protection_role=True), config, allow_role=False
+        cast("discord.Member", member(5)), config, allow_role=True
+    )
+    assert not Protection._can_manage_protection(
+        cast("discord.Member", member(2, protection_role=True)),
+        config,
+        allow_role=False,
     )
 
 
@@ -230,7 +260,9 @@ def test_protection_only_strips_normal_roles_below_fishie() -> None:
     above = _Role(4, 60)
     member = SimpleNamespace(roles=[default, normal, managed, above])
 
-    assert Protection._removable_protection_roles(member, me) == [normal]
+    assert Protection._removable_protection_roles(
+        cast("discord.Member", member), cast("discord.Member", me)
+    ) == [normal]
 
 
 @pytest.mark.asyncio
@@ -259,16 +291,18 @@ async def test_protection_lock_saves_and_strips_roles_before_timeout() -> None:
             return None
 
     protection = object.__new__(Protection)
-    protection.bot = SimpleNamespace(pool=Pool())
+    pool = Pool()
+    protection.bot = cast("Fishie", SimpleNamespace(pool=pool))
     guild = SimpleNamespace(id=5, owner_id=1, me=me)
 
     complete, details = await protection._lock_protection_member(
-        guild, member, "mass_bans"
+        cast("discord.Guild", guild), cast("discord.Member", member), "mass_bans"
     )
 
     assert complete
     assert "Stripped 1 role" in details
     member.remove_roles.assert_awaited_once()
     member.timeout.assert_awaited_once()
-    saved_roles = protection.bot.pool.execute.await_args.args[3]
+    assert pool.execute.await_args is not None
+    saved_roles = pool.execute.await_args.args[3]
     assert saved_roles == [10]

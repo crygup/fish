@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import random
 from io import BytesIO
 from typing import TYPE_CHECKING
 
@@ -13,6 +12,8 @@ from core import Cog, is_operational_guild
 from core.handoff import is_legacy_instance
 from utils import resize_to_limit
 
+from .webhooks import send_tracked_image
+
 if TYPE_CHECKING:
     pass
 
@@ -23,19 +24,15 @@ class Guild(Cog):
         guild: discord.Guild,
         asset: discord.Asset,
     ):
-        webhook = discord.Webhook.from_url(
-            random.choice(self.bot.config["webhooks"]["images"]),
-            session=self.bot.session,
-        )
         try:
             image = await asyncio.to_thread(
                 resize_to_limit, BytesIO(await asset.read()), 8388608
             )
-            message = await webhook.send(
+            message = await send_tracked_image(
+                self.bot,
                 f"{guild.name} | {guild.id} | {guild.member_count:,} | {discord.utils.format_dt(discord.utils.utcnow())}",
-                file=discord.File(image, filename=f"{guild.id}_{asset.key}.png"),
-                wait=True,
-                allowed_mentions=discord.AllowedMentions.none(),
+                image,
+                f"{guild.id}_{asset.key}.png",
             )
         except discord.HTTPException:
             return

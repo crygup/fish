@@ -1,6 +1,8 @@
+# Test doubles supply only the Discord/service fields exercised by each test.
 from types import SimpleNamespace
 from typing import cast
 
+import discord
 import pytest
 
 from extensions.context import Context
@@ -70,6 +72,36 @@ def test_reminder_resolves_abbreviations_case_insensitively(
     reminder._location_resolver = location_resolver
 
     assert reminder.resolve_timezones("est") == [TimeZone("EST", "America/New_York")]
+
+
+def test_reminder_routes_unresolved_private_interactions_to_author_dm() -> None:
+    interaction = SimpleNamespace(
+        guild_id=None,
+        channel=None,
+        user=SimpleNamespace(id=1),
+    )
+
+    assert (
+        Reminder._interaction_requires_author_dm(
+            cast("discord.Interaction[discord.Client]", interaction)
+        )
+        is True
+    )
+
+
+def test_reminder_keeps_guild_interactions_in_the_source_channel() -> None:
+    interaction = SimpleNamespace(
+        guild_id=123,
+        channel=None,
+        user=SimpleNamespace(id=1),
+    )
+
+    assert (
+        Reminder._interaction_requires_author_dm(
+            cast("discord.Interaction[discord.Client]", interaction)
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio

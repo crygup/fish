@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from inspect import isawaitable
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, cast
 
 import discord
 from discord.ext import commands
@@ -127,7 +127,9 @@ async def parse_duel_arguments(
             get_wallet = getattr(currency, "get_wallet", None)
             if not callable(get_wallet):
                 raise commands.BadArgument("Your wallet is unavailable right now.")
-            wallet = await get_wallet(ctx.author.id)
+            wallet = await cast(Callable[[int], Awaitable[Any]], get_wallet)(
+                ctx.author.id
+            )
             amount = int(getattr(wallet, "balance", 0) or 0)
             if amount < DUEL_MIN_BID:
                 raise commands.BadArgument(
@@ -136,7 +138,7 @@ async def parse_duel_arguments(
             prompt = getattr(ctx, "prompt", None)
             if not callable(prompt):
                 raise commands.BadArgument("I couldn't confirm that bid.")
-            confirmed = await prompt(
+            confirmed = await cast(Callable[..., Awaitable[Any]], prompt)(
                 "Are you sure you want to bid everything?",
                 confirm_label="Yes",
                 cancel_label="No",

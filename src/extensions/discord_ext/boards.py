@@ -14,7 +14,7 @@ from utils import AuthorLayoutView
 from utils.converters import TwemojiConverter
 
 if TYPE_CHECKING:
-    from extensions.context import GuildContext
+    from extensions.context import Context, GuildContext
 
 
 BoardType = Literal["starboard", "clownboard"]
@@ -52,7 +52,7 @@ def _board_manager_only():
 
 
 async def _authorize_board_interaction(
-    interaction: discord.Interaction, ctx: GuildContext
+    interaction: discord.Interaction, ctx: Context
 ) -> bool:
     """Re-check board ownership and Manage Server before a settings mutation."""
 
@@ -62,13 +62,11 @@ async def _authorize_board_interaction(
     elif interaction.user.id != ctx.author.id:
         message = "Only the person who opened these board settings can use them."
     else:
-        member = interaction.user
-        if (
-            getattr(getattr(member, "guild", None), "id", None) != guild.id
-            or not hasattr(member, "guild_permissions")
-        ):
-            get_member = getattr(guild, "get_member", None)
-            member = get_member(interaction.user.id) if callable(get_member) else None
+        member: discord.Member | None = (
+            interaction.user if isinstance(interaction.user, discord.Member) else None
+        )
+        if member is None or member.guild.id != guild.id:
+            member = guild.get_member(interaction.user.id)
         if member and (
             getattr(guild, "owner_id", None) == member.id
             or bool(

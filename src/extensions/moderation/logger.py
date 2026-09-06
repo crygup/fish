@@ -253,17 +253,18 @@ async def _authorize_logger_interaction(
     if guild is None or interaction.guild_id != guild.id:
         message = "These logger controls can only be used in their original server."
     elif interaction.user.id != ctx.author.id:
-        message = "Only the person who opened the logger controls can use these buttons."
+        message = (
+            "Only the person who opened the logger controls can use these buttons."
+        )
     else:
         member = interaction.user
-        if (
-            getattr(getattr(member, "guild", None), "id", None) != guild.id
-            or not hasattr(member, "guild_permissions")
-        ):
+        if getattr(
+            getattr(member, "guild", None), "id", None
+        ) != guild.id or not hasattr(member, "guild_permissions"):
             get_member = getattr(guild, "get_member", None)
             member = get_member(interaction.user.id) if callable(get_member) else None
         if member and (
-            getattr(guild, "owner_id", None) == member.id
+            getattr(guild, "owner_id", None) == getattr(member, "id", None)
             or bool(
                 getattr(
                     getattr(member, "guild_permissions", None), "manage_guild", False
@@ -271,7 +272,9 @@ async def _authorize_logger_interaction(
             )
         ):
             return True
-        message = "You no longer have Manage Server permission to change logger settings."
+        message = (
+            "You no longer have Manage Server permission to change logger settings."
+        )
 
     if interaction.response.is_done():
         await interaction.followup.send(
@@ -807,7 +810,7 @@ class Logger(Cog):
         marker = getattr(self.bot, "new_bot_id", None)
         if marker is not None:
             try:
-                replacement_id = int(marker() if callable(marker) else marker)
+                replacement_id = int(cast(Any, marker() if callable(marker) else marker))
             except (TypeError, ValueError):
                 pass
         try:
@@ -830,10 +833,31 @@ class Logger(Cog):
         if session is None:
             return None
         try:
-            webhook = discord.Webhook.from_url(
-                str(url), session=session
-            )
-            fetched = await webhook.fetch()
+            # A webhook URL alone performs an unauthenticated token fetch.
+            # Discord omits the ``user`` field for that endpoint, which made
+            # every replacement-bot restart look like it was still pointing
+            # at a legacy webhook and caused another webhook to be created.
+            # Attach the bot client and its token so the owner is included in
+            # the response.  The token is passed directly to discord.py and
+            # is never included in logs or persisted here.
+            # ``Client.fetch_webhook`` always uses the bot's authenticated
+            # REST client and returns the creator in the webhook payload.  It
+            # also avoids passing the bot token through a partial webhook
+            # object, which can silently fall back to the webhook token when
+            # a client is not fully initialized during startup.
+            partial = discord.Webhook.from_url(str(url), session=session)
+            fetch_webhook = getattr(self.bot, "fetch_webhook", None)
+            if callable(fetch_webhook):
+                fetched = await cast(Any, fetch_webhook)(partial.id)
+            else:
+                bot_token = getattr(getattr(self.bot, "http", None), "token", None)
+                webhook = discord.Webhook.from_url(
+                    str(url),
+                    session=session,
+                    client=self.bot,
+                    bot_token=bot_token or None,
+                )
+                fetched = await webhook.fetch()
         except (
             discord.HTTPException,
             discord.NotFound,
@@ -872,11 +896,7 @@ class Logger(Cog):
         configured_webhooks = (
             config.get("webhooks", {}) if isinstance(config, dict) else {}
         )
-        static_urls = {
-            str(value)
-            for value in configured_webhooks.values()
-            if value
-        }
+        static_urls = {str(value) for value in configured_webhooks.values() if value}
         rebound = 0
         for row in rows:
             guild_id = int(row["guild_id"])
@@ -901,10 +921,24 @@ class Logger(Cog):
             current_id = getattr(self.bot, "active_bot_id", None)
             try:
                 current_id = int(
-                    current_id() if callable(current_id) else current_id
+                    cast(Any, current_id() if callable(current_id) else current_id)
                 )
             except (TypeError, ValueError):
                 current_id = self.REPLACEMENT_BOT_ID
+            # Never create a replacement merely because Discord did not
+            # return ownership metadata.  A transient permission/API failure
+            # previously looked identical to a legacy webhook and left an
+            # orphan behind on every restart.  Missing webhooks are repaired
+            # lazily by ``_replace_missing_logger_webhook`` when an event is
+            # actually emitted.
+            if owner_id is None:
+                self.bot.logger.warning(
+                    "Could not verify owner of logger webhook in guild %s event %s; "
+                    "leaving the configured webhook unchanged",
+                    guild_id,
+                    event,
+                )
+                continue
             if owner_id == current_id:
                 continue
 
@@ -922,6 +956,14 @@ class Logger(Cog):
                 # were fetching the owner.  Re-check the current URL before
                 # creating a second webhook.
                 current_owner = await self._logger_webhook_owner_id(current_url)
+                if current_owner is None:
+                    self.bot.logger.warning(
+                        "Could not verify current logger webhook owner in guild %s "
+                        "event %s; leaving it unchanged",
+                        guild_id,
+                        event,
+                    )
+                    continue
                 if current_owner == current_id:
                     continue
                 try:
@@ -944,9 +986,7 @@ class Logger(Cog):
                     if not updated.endswith(" 1"):
                         await replacement.delete()
                         continue
-                    await self._delete_logger_webhook(
-                        current_url, guild_id, event
-                    )
+                    await self._delete_logger_webhook(current_url, guild_id, event)
                     rebound += 1
                 except (
                     discord.HTTPException,
@@ -964,17 +1004,31 @@ class Logger(Cog):
         return rebound
 
     async def _rebind_logger_webhooks_when_ready(self) -> None:
-        try:
-            await self.bot.wait_until_ready()
-            rebound = await self.rebind_logger_webhooks()
-            if rebound:
-                self.bot.logger.info(
-                    "Rebound %s logger webhook(s) to the replacement bot", rebound
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            self.bot.logger.exception("Logger webhook rebinding failed")
+        # ``cog_load`` can run more than once when an extension is reloaded.
+        # Rebinding is a startup handoff operation, so serialize it and avoid
+        # repeating a completed scan in the same process.
+        lock = getattr(self, "_logger_rebind_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._logger_rebind_lock = lock
+        async with lock:
+            if getattr(self, "_logger_rebind_completed", False):
+                return
+            try:
+                await self.bot.wait_until_ready()
+                rebound = await self.rebind_logger_webhooks()
+                self._logger_rebind_completed = True
+                if rebound:
+                    self.bot.logger.info(
+                        "Rebound %s logger webhook(s) to the replacement bot",
+                        rebound,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Leave the guard unset so a later extension reload can retry
+                # if Discord or the database was temporarily unavailable.
+                self.bot.logger.exception("Logger webhook rebinding failed")
 
     def _queue_channel_position_update(
         self,

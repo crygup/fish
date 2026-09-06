@@ -131,9 +131,10 @@ async def start(
     use_testing_database = selected_instance == "testing"
     api_enabled = _env_bool("FISHIE_API_ENABLED", True)
     api_port = _api_port(selected_instance) if api_enabled else None
-    database_url = os.getenv("DATABASE_URL") or config["databases"][
-        "psql_testing" if use_testing_database else "psql"
-    ]
+    database_url = (
+        os.getenv("DATABASE_URL")
+        or config["databases"]["psql_testing" if use_testing_database else "psql"]
+    )
     token = _token_for_instance(config, selected_instance)
     if not database_url:
         raise RuntimeError("A PostgreSQL URL is required")

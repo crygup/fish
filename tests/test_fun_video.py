@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+
+# Test doubles supply only the Discord/service fields exercised by each test.
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 import extensions.fun.video as video_module
@@ -26,10 +29,16 @@ def _video_cog(pool: object) -> VideoCommands:
 
 def test_video_upload_rejects_gif_media() -> None:
     assert not VideoCommands._is_video(  # type: ignore[arg-type]
-        SimpleNamespace(filename="animation.gif", content_type="video/mp4")
+        cast(
+            "discord.Attachment",
+            SimpleNamespace(filename="animation.gif", content_type="video/mp4"),
+        )
     )
     assert not VideoCommands._is_video(  # type: ignore[arg-type]
-        SimpleNamespace(filename="animation.mp4", content_type="image/gif")
+        cast(
+            "discord.Attachment",
+            SimpleNamespace(filename="animation.mp4", content_type="image/gif"),
+        )
     )
     assert not VideoCommands._is_video_response("video/mp4", "animation.gif")
     assert VideoCommands._is_gif_data(b"GIF89a\x01\x00")

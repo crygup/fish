@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+
+# Test doubles supply only the Discord/service fields exercised by each test.
+from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
 import discord
 
+from core import Fishie
 from core.handoff import (
     HandoffNoticeThrottle,
     guild_install_url,
@@ -101,11 +105,11 @@ def test_legacy_auto_download_only_sends_a_throttled_notice() -> None:
     bot = _bot(legacy=True)
     bot.db_cache = SimpleNamespace(auto_downloads={channel.id})
     event = object.__new__(AutoDownload)
-    event.bot = bot
+    event.bot = cast("Fishie", bot)
 
     async def scenario() -> None:
-        await event.auto_download(message)
-        await event.auto_download(message)
+        await event.auto_download(cast("discord.Message", message))
+        await event.auto_download(cast("discord.Message", message))
 
     asyncio.run(scenario())
     assert len(channel.sent) == 1

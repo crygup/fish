@@ -8,6 +8,8 @@ from typing import Any, cast
 
 import discord
 
+# Test doubles supply only the Discord/service fields exercised by each test.
+from extensions.context import Context
 from extensions.search.letterboxd import (
     FilmsPageSource,
     Letterboxd,
@@ -34,7 +36,7 @@ def _film(index: int) -> _DiaryFilm:
             if index == 0
             else None
         ),
-        year=2020 + index,
+        year=str(2020 + index),
     )
 
 
@@ -95,7 +97,9 @@ def test_films_does_not_fetch_beyond_first_diary_page() -> None:
         async def _films_prepare_page(
             self, ctx: Any, cache: _FilmsCache, page_number: int
         ) -> bool:
-            return await Letterboxd._films_prepare_page(self, ctx, cache, page_number)
+            return await Letterboxd._films_prepare_page(
+                cast("Letterboxd", self), ctx, cache, page_number
+            )
 
         async def _scrape_diary_page(
             self, ctx: Any, username: str, page_number: int
@@ -132,7 +136,9 @@ def test_films_missing_page_is_not_prefetched_or_used_to_change_total() -> None:
         async def _films_prepare_page(
             self, ctx: Any, cache: _FilmsCache, page_number: int
         ) -> bool:
-            return await Letterboxd._films_prepare_page(self, ctx, cache, page_number)
+            return await Letterboxd._films_prepare_page(
+                cast("Letterboxd", self), ctx, cache, page_number
+            )
 
         async def _scrape_diary_page(
             self, ctx: Any, username: str, page_number: int
@@ -264,7 +270,9 @@ def test_films_cache_is_limited_to_the_first_diary_page() -> None:
     async def scenario() -> None:
         cog = CacheLetterboxd()
         cache = await Letterboxd._films_cache_for(
-            cog, SimpleNamespace(session=object()), "fluttershy"
+            cast("Letterboxd", cog),
+            cast("Context", SimpleNamespace(session=object())),
+            "fluttershy",
         )
         assert cache.total == 50
         assert len(cache.pages[1]) == 50
@@ -387,7 +395,7 @@ def test_first_diary_url_does_not_mark_spider_man_as_rewatch() -> None:
         {
             "title": "Spider-Man: Brand New Day (2026)",
             "film_url": (
-                "https://letterboxd.com/fluttershy/film/" "spider-man-brand-new-day/"
+                "https://letterboxd.com/fluttershy/film/spider-man-brand-new-day/"
             ),
         }
     )
@@ -400,7 +408,7 @@ def test_generic_rewatch_icon_marker_does_not_mark_entry_as_rewatch() -> None:
         {
             "title": "Spider-Man: Brand New Day (2026)",
             "film_url": (
-                "https://letterboxd.com/fluttershy/film/" "spider-man-brand-new-day/"
+                "https://letterboxd.com/fluttershy/film/spider-man-brand-new-day/"
             ),
             "rewatch": "icon-rewatch",
         }
@@ -415,8 +423,7 @@ def test_rewatch_control_labels_do_not_mark_entry_as_rewatch() -> None:
             {
                 "title": "Spider-Man: Brand New Day (2026)",
                 "film_url": (
-                    "https://letterboxd.com/fluttershy/film/"
-                    "spider-man-brand-new-day/"
+                    "https://letterboxd.com/fluttershy/film/spider-man-brand-new-day/"
                 ),
                 "rewatch": marker,
             }

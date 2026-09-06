@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Literal
 
@@ -205,7 +205,9 @@ class Reputation(Cog):
 
         wanted = value.strip().strip("`")
 
-        def exact(members: list[discord.Member], name: str) -> list[discord.Member]:
+        def exact(
+            members: Sequence[discord.Member], name: str
+        ) -> list[discord.Member]:
             return [member for member in members if self._same_name(member, name)]
 
         matches = exact(guild.members, wanted)

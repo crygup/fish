@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import random
 from types import SimpleNamespace
+
+# Test doubles supply only the Discord/service fields exercised by each test.
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -10,7 +13,7 @@ from extensions.fun import Fun
 from extensions.fun.crash import CRASH_CASHOUT_ALIASES, CrashGame, CrashView
 
 
-class SafeRng:
+class SafeRng(random.Random):
     def uniform(self, _low: float, _high: float) -> float:
         return 0.12
 
@@ -74,35 +77,46 @@ async def test_crash_message_listener_requires_author_and_game_channel() -> None
     on_finish = AsyncMock()
     view = CrashView(game, on_finish=on_finish)
     assert game.view is view
-    game.message = SimpleNamespace(channel=SimpleNamespace(id=42))
+    game.message = cast(
+        discord.Message, SimpleNamespace(channel=SimpleNamespace(id=42))
+    )
     cog = cast(Any, SimpleNamespace(_crash_games={1: game}))
 
     await Fun.crash_cashout_listener(
         cog,
-        SimpleNamespace(
-            author=SimpleNamespace(id=2, bot=False),
-            content="cashout",
-            channel=SimpleNamespace(id=42),
+        cast(
+            "discord.Message",
+            SimpleNamespace(
+                author=SimpleNamespace(id=2, bot=False),
+                content="cashout",
+                channel=SimpleNamespace(id=42),
+            ),
         ),
     )
     assert game.finished is False
 
     await Fun.crash_cashout_listener(
         cog,
-        SimpleNamespace(
-            author=SimpleNamespace(id=1, bot=False),
-            content="cash out",
-            channel=SimpleNamespace(id=43),
+        cast(
+            "discord.Message",
+            SimpleNamespace(
+                author=SimpleNamespace(id=1, bot=False),
+                content="cash out",
+                channel=SimpleNamespace(id=43),
+            ),
         ),
     )
     assert game.finished is False
 
     await Fun.crash_cashout_listener(
         cog,
-        SimpleNamespace(
-            author=SimpleNamespace(id=1, bot=False),
-            content="  CASH   OUT ",
-            channel=SimpleNamespace(id=42),
+        cast(
+            "discord.Message",
+            SimpleNamespace(
+                author=SimpleNamespace(id=1, bot=False),
+                content="  CASH   OUT ",
+                channel=SimpleNamespace(id=42),
+            ),
         ),
     )
     assert game.cashed_out is True

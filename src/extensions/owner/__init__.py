@@ -23,6 +23,7 @@ from core.currency import (
     InvalidAmount,
     parse_coin_amount,
 )
+from extensions.fun.burger import add_burger_asset, remove_burger_asset
 from extensions.fun.minigames import add_word_bomb_words, normalize_word_bomb_words
 from utils import (
     AllMsgbleChannels,
@@ -731,6 +732,54 @@ class Owner(Cog):
         """Owner-only development and maintenance commands."""
         await ctx.send_help(ctx.command)
 
+    @dev.group(name="burger", invoke_without_command=True)
+    async def dev_burger(self, ctx: Context) -> None:
+        """Manage the anime burger image catalogue."""
+        await ctx.send_help(ctx.command)
+
+    @dev_burger.command(name="add")
+    async def dev_burger_add(
+        self,
+        ctx: Context,
+        image_url: str,
+        source_url: str | None = None,
+    ) -> None:
+        """Download an image and add it to the burger catalogue."""
+
+        try:
+            async with ctx.typing():
+                asset = await add_burger_asset(self.bot, image_url, source_url)
+        except commands.BadArgument:
+            raise
+        except Exception as error:
+            self.bot.logger.exception("Failed to add burger image")
+            detail = str(error).strip()
+            if detail:
+                detail = detail[:300]
+                raise commands.BadArgument(
+                    f"I couldn't add that burger image right now: {detail}"
+                ) from error
+            raise commands.BadArgument(
+                "I couldn't add that burger image right now."
+            ) from error
+        await ctx.send(
+            f"Added burger image **#{asset.id}**.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @dev_burger.command(name="remove")
+    async def dev_burger_remove(self, ctx: Context, asset_id: int) -> None:
+        """Remove one image from the burger catalogue by ID."""
+
+        if asset_id <= 0:
+            raise commands.BadArgument("Burger image IDs must be positive.")
+        if not await remove_burger_asset(asset_id):
+            raise commands.BadArgument(f"No burger image with ID `{asset_id}` exists.")
+        await ctx.send(
+            f"Removed burger image **#{asset_id}**.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     @dev.group(
         name="wordbomb",
         aliases=("wb", "word-bomb"),
@@ -1251,7 +1300,7 @@ class Owner(Cog):
         if application_id is None:
             application_id = self.bot.config["ids"]["bot_id"]
         invite_url = discord.utils.oauth_url(
-            int(application_id), permissions=self.bot.bot_permissions
+            int(cast(Any, application_id)), permissions=self.bot.bot_permissions
         )
         view = GuildRemovalNoticeView(
             guild,

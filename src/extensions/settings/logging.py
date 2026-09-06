@@ -912,13 +912,13 @@ class GuildTrackingSettingsView(AuthorLayoutView):
         elif interaction.user.id != self.guild_ctx.author.id:
             message = "Only the administrator who opened these settings can use them."
         else:
-            member = interaction.user
-            if (
-                getattr(getattr(member, "guild", None), "id", None) != guild.id
-                or not hasattr(member, "guild_permissions")
-            ):
-                get_member = getattr(guild, "get_member", None)
-                member = get_member(interaction.user.id) if callable(get_member) else None
+            member: discord.Member | None = (
+                interaction.user
+                if isinstance(interaction.user, discord.Member)
+                else None
+            )
+            if member is None or member.guild.id != guild.id:
+                member = guild.get_member(interaction.user.id)
             if member and (
                 getattr(guild, "owner_id", None) == member.id
                 or bool(
@@ -930,7 +930,9 @@ class GuildTrackingSettingsView(AuthorLayoutView):
                 )
             ):
                 return True
-            message = "You no longer have Manage Server permission to change server tracking."
+            message = (
+                "You no longer have Manage Server permission to change server tracking."
+            )
         await interaction.response.send_message(
             message,
             ephemeral=True,
@@ -1120,6 +1122,28 @@ class Logging(Cog):
             ephemeral=ctx.interaction is not None,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    @settings.group(name="birthday", invoke_without_command=True)
+    async def settings_birthday(self, ctx: Context) -> None:
+        """Set or clear your birthday."""
+        await ctx.send_help(ctx.command)
+
+    @settings_birthday.command(name="set")
+    @app_commands.describe(time="Month and day, optionally a year, such as August 18th or 8/18/1998.")
+    async def settings_birthday_set(self, ctx: Context, *, time: str) -> None:
+        """Set your birthday after confirming the date."""
+        command = self.bot.get_command("birthday set")
+        if command is None:
+            raise commands.BadArgument("Birthday commands are unavailable right now.")
+        await ctx.invoke(cast(Any, command), time=time)
+
+    @settings_birthday.command(name="clear", aliases=["remove"])
+    async def settings_birthday_clear(self, ctx: Context) -> None:
+        """Remove your saved birthday."""
+        command = self.bot.get_command("birthday clear")
+        if command is None:
+            raise commands.BadArgument("Birthday commands are unavailable right now.")
+        await ctx.invoke(cast(Any, command))
 
     @settings.command(name="wordle")
     @app_commands.allowed_installs(guilds=True, users=True)
@@ -2058,8 +2082,7 @@ class Logging(Cog):
         # The confirmation view can stay open while the administrator's
         # permissions change. Re-check the live member before any destructive
         # database operation rather than relying only on the command decorator.
-        get_member = getattr(ctx.guild, "get_member", None)
-        member = get_member(ctx.author.id) if callable(get_member) else None
+        member = ctx.guild.get_member(ctx.author.id)
         if not member or not (
             getattr(ctx.guild, "owner_id", None) == member.id
             or bool(

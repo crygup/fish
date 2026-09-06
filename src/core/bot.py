@@ -99,12 +99,13 @@ def normalize_bot_instance(
     }
     normalized = aliases.get(normalized, normalized)
     if normalized not in {"legacy", "new", "testing"}:
-        raise ValueError(
-            "FISHIE_BOT_INSTANCE must be one of: legacy, new, testing"
-        )
+        raise ValueError("FISHIE_BOT_INSTANCE must be one of: legacy, new, testing")
     if testing and normalized != "testing":
-        raise ValueError("The --testing flag cannot be combined with a non-testing instance")
+        raise ValueError(
+            "The --testing flag cannot be combined with a non-testing instance"
+        )
     return cast(BotInstance, normalized)
+
 
 SILENT_COMMAND_USERS: dict[str, frozenset[int]] = {
     "crab": frozenset({662378595192274974}),
@@ -645,6 +646,7 @@ class Fishie(commands.Bot):
     _steam_oauth_states: dict[str, dict[str, int | str]]
     _spotify_oauth_states: dict[str, dict[str, int | str]]
     _anilist_oauth_states: dict[str, dict[str, int | str]]
+    _lastfm_oauth_states: dict[str, dict[str, int | str]]
     pokemon: List[str]
     error_logs: discord.Webhook | None
 

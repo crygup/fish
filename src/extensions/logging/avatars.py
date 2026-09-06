@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import random
 from io import BytesIO
 from typing import TYPE_CHECKING, Optional
 
@@ -12,6 +11,8 @@ from discord.ext import commands
 from core import Cog, is_operational_guild
 from core.handoff import is_legacy_instance
 from utils import resize_to_limit
+
+from .webhooks import send_tracked_image
 
 if TYPE_CHECKING:
     pass
@@ -24,23 +25,16 @@ class Avatars(Cog):
         asset: discord.Asset,
         guild_id: Optional[int] = None,
     ):
-        webhook = discord.Webhook.from_url(
-            random.choice(self.bot.config["webhooks"]["images"]),
-            session=self.bot.session,
-        )
         try:
             image = await asyncio.to_thread(
                 resize_to_limit, BytesIO(await asset.read()), 8388608
             )
 
-            message = await webhook.send(
+            message = await send_tracked_image(
+                self.bot,
                 f"{user.mention} | {user} | {user.id} | {discord.utils.format_dt(discord.utils.utcnow())}",
-                file=discord.File(
-                    image,
-                    filename=f"{user.id}_{asset.key}.{['png', 'gif'][asset.is_animated()]}",
-                ),
-                wait=True,
-                allowed_mentions=discord.AllowedMentions.none(),
+                image,
+                f"{user.id}_{asset.key}.{['png', 'gif'][asset.is_animated()]}",
             )
         except discord.HTTPException as e:
             raise commands.BadArgument(str(e))

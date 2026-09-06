@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import datetime
 import re
-from typing import TYPE_CHECKING, Optional
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import discord
 from discord.abc import Messageable
@@ -142,7 +143,9 @@ class Guilds(Cog):
         marker = getattr(self.bot, "new_bot_id", None)
         if marker is not None:
             try:
-                replacement_id = int(marker() if callable(marker) else marker)
+                value = cast(Any, marker)() if callable(marker) else marker
+                if isinstance(value, (str, int)):
+                    replacement_id = int(value)
             except (TypeError, ValueError):
                 pass
         return self._member_present(guild, replacement_id)
@@ -223,9 +226,12 @@ class Guilds(Cog):
         return len(known) + uncached
 
     async def _over_capacity(self, guild: discord.Guild) -> bool:
-        guilds = [
+        configured_guilds = cast(
+            Iterable[discord.Guild], getattr(self.bot, "guilds", ()) or ()
+        )
+        guilds: list[discord.Guild] = [
             item
-            for item in list(getattr(self.bot, "guilds", ()) or ())
+            for item in configured_guilds
             if not is_operational_guild(item)
         ]
         if not is_operational_guild(guild) and guild not in guilds:
@@ -286,9 +292,7 @@ class Guilds(Cog):
         if not channels:
             return None
         channel = discord.utils.find(
-            lambda item: re.search(
-                r"(general|main|chat|lounge)", item.name.casefold()
-            ),
+            lambda item: re.search(r"(general|main|chat|lounge)", item.name.casefold()),
             channels,
         )
         return channel or channels[0]
@@ -360,9 +364,14 @@ class Guilds(Cog):
         if self._is_legacy_bot():
             replacement_id = getattr(self.bot, "new_bot_id", None)
             if callable(replacement_id):
-                replacement_id = replacement_id()
+                replacement_id = cast(Any, replacement_id)()
             try:
-                bot_id = int(replacement_id or self.REPLACEMENT_BOT_ID)
+                candidate = replacement_id or self.REPLACEMENT_BOT_ID
+                bot_id = (
+                    int(candidate)
+                    if isinstance(candidate, (str, int))
+                    else self.REPLACEMENT_BOT_ID
+                )
             except (TypeError, ValueError):
                 bot_id = self.REPLACEMENT_BOT_ID
         else:
@@ -472,9 +481,9 @@ class Guilds(Cog):
         configured = getattr(self.bot, "new_bot_id", None)
         try:
             if configured is not None:
-                replacement_id = int(
-                    configured() if callable(configured) else configured
-                )
+                value = cast(Any, configured)() if callable(configured) else configured
+                if isinstance(value, (str, int)):
+                    replacement_id = int(value)
         except (TypeError, ValueError):
             replacement_id = self.REPLACEMENT_BOT_ID
         if not self._is_legacy_bot() or member.id != replacement_id:
@@ -508,7 +517,8 @@ class Guilds(Cog):
 
         if not self._is_legacy_bot():
             return
-        for guild in list(getattr(self.bot, "guilds", ()) or ()):
+        guilds = cast(Iterable[discord.Guild], getattr(self.bot, "guilds", ()) or ())
+        for guild in guilds:
             guild_id = int(getattr(guild, "id", 0))
             if guild_id in self._legacy_handoff_left:
                 continue

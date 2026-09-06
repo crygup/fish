@@ -7,7 +7,7 @@ import datetime
 import re
 import time
 from collections import deque
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 import discord
@@ -47,11 +47,13 @@ if TYPE_CHECKING:
 # a client cannot turn an autocomplete textbox into an API fan-out.  The
 # entries are intentionally tiny and expire quickly; followed-item/database
 # autocomplete does not use this cache.
-_AUTOCOMPLETE_CACHE: TTLCache[str, tuple[app_commands.Choice[str], ...]] = TTLCache(
-    maxsize=512, ttl=5.0
+_AUTOCOMPLETE_CACHE = cast(
+    TTLCache[str, tuple[app_commands.Choice[str], ...]],
+    TTLCache(maxsize=512, ttl=5.0),
 )
-_AUTOCOMPLETE_CALLS: TTLCache[tuple[int, int | None], deque[float]] = TTLCache(
-    maxsize=2_000, ttl=10.0
+_AUTOCOMPLETE_CALLS = cast(
+    TTLCache[tuple[int, int | None], deque[float]],
+    TTLCache(maxsize=2_000, ttl=10.0),
 )
 _AUTOCOMPLETE_WINDOW = 10.0
 _AUTOCOMPLETE_MAX_CALLS = 20
@@ -109,6 +111,8 @@ def _notify_prefix(ctx: Context) -> str:
 
 def _as_utc_datetime(value: object) -> datetime.datetime | None:
     if value in (None, ""):
+        return None
+    if not isinstance(value, (str, int, float)):
         return None
     try:
         timestamp = int(value)
@@ -236,7 +240,10 @@ class Notify(Cog):
         return events
 
     def _require_server_admin(self, ctx: Context) -> None:
-        if ctx.guild is not None and not ctx.author.guild_permissions.manage_guild:
+        if ctx.guild is not None and (
+            not isinstance(ctx.author, discord.Member)
+            or not ctx.author.guild_permissions.manage_guild
+        ):
             raise commands.MissingPermissions(["manage_guild"])
 
     async def _send(self, ctx: Context, *args: Any, **kwargs: Any) -> discord.Message:
@@ -413,6 +420,81 @@ class Notify(Cog):
         value = value.strip()
         return value[1:].lstrip() if value.startswith("@") else value
 
+    async def _resolve_follow(
+        self, ctx: Context, kind: str, selector: str
+    ) -> Any | None:
+        """Resolve one follow by its notify ID, name, or URL.
+
+        ``notify_*_follows.id`` is the public identifier shown by list and
+        autocomplete.  Numeric selectors therefore try that ID first; anime
+        selectors then fall back to an AniList media ID, while Twitch
+        selectors fall back to the channel login.  All lookups are scoped to
+        the current guild or DM user so an ID from another scope can never be
+        modified accidentally.
+        """
+
+        raw = str(selector or "").strip()
+        if not raw:
+            return None
+        if kind not in {"twitch", "anime"}:
+            raise ValueError(f"Unknown notification kind: {kind}")
+        guild_id, user_id = _scope(ctx)
+        scope_column = "guild_id" if guild_id is not None else "user_id"
+        scope_id = guild_id if guild_id is not None else user_id
+        table = f"notify_{kind}_follows"
+
+        # A follow ID is deliberately checked before any provider-specific ID
+        # (such as AniList's media ID).  This makes the IDs shown by
+        # ``notify list`` unambiguous for every management command.
+        try:
+            follow_id = int(raw)
+        except (TypeError, ValueError, OverflowError):
+            follow_id = 0
+        if 0 < follow_id <= 9_223_372_036_854_775_807:
+            row = await self.bot.pool.fetchrow(
+                f"SELECT * FROM {table} WHERE {scope_column} = $1 AND id = $2",
+                scope_id,
+                follow_id,
+            )
+            if row is not None:
+                return row
+
+        if kind == "twitch":
+            try:
+                name = normalize_twitch_channel(raw)
+            except ValueError:
+                return None
+            return await self.bot.pool.fetchrow(
+                f"SELECT * FROM {table} WHERE {scope_column} = $1 "
+                "AND lower(btrim(channel_name)) = lower(btrim($2)) "
+                "ORDER BY id LIMIT 1",
+                scope_id,
+                name,
+            )
+
+        anime = self._normalize_anime_query(raw)
+        media_id = anilist_media_id(anime)
+        if media_id is None and anime.isdecimal():
+            try:
+                candidate_id = int(anime)
+            except (TypeError, ValueError, OverflowError):
+                candidate_id = 0
+            if 0 < candidate_id <= 2_147_483_647:
+                media_id = candidate_id
+        if media_id is not None:
+            return await self.bot.pool.fetchrow(
+                f"SELECT * FROM {table} WHERE {scope_column} = $1 "
+                "AND anilist_id = $2 ORDER BY id LIMIT 1",
+                scope_id,
+                media_id,
+            )
+        return await self.bot.pool.fetchrow(
+            f"SELECT * FROM {table} WHERE {scope_column} = $1 "
+            "AND lower(btrim(title)) = lower(btrim($2)) ORDER BY id LIMIT 1",
+            scope_id,
+            anime,
+        )
+
     @staticmethod
     def _autocomplete_needle(value: str) -> str:
         """Normalize the text Discord sends while an option is being typed."""
@@ -427,23 +509,17 @@ class Notify(Cog):
         try:
             if interaction.guild is None:
                 rows = await self.bot.pool.fetch(
-                    "SELECT DISTINCT ON (lower(btrim(channel_name))) channel_name "
-                    "FROM notify_twitch_follows WHERE user_id = $1 "
-                    "ORDER BY lower(btrim(channel_name)), channel_name LIMIT 100",
+                    "SELECT id, channel_name FROM notify_twitch_follows "
+                    "WHERE user_id = $1 ORDER BY lower(btrim(channel_name)), id LIMIT 100",
                     interaction.user.id,
                 )
             else:
                 rows = await self.bot.pool.fetch(
                     """
-                    SELECT DISTINCT ON (lower(btrim(channel_name))) channel_name
-                    FROM (
-                        SELECT channel_name FROM notify_twitch_follows
-                        WHERE guild_id = $1
-                        UNION ALL
-                        SELECT channel_name FROM twitch_follows
-                        WHERE guild_id = $1
-                    ) follows
-                    ORDER BY lower(btrim(channel_name)), channel_name LIMIT 100
+                    SELECT id, channel_name
+                    FROM notify_twitch_follows
+                    WHERE guild_id = $1
+                    ORDER BY lower(btrim(channel_name)), id LIMIT 100
                     """,
                     interaction.guild.id,
                 )
@@ -454,9 +530,14 @@ class Notify(Cog):
         choices: list[app_commands.Choice[str]] = []
         for row in rows:
             name = str(row["channel_name"]).strip()
-            if not name or (needle and needle not in name.casefold()):
+            follow_id = str(row["id"])
+            if not name or (
+                needle and needle not in name.casefold() and needle not in follow_id
+            ):
                 continue
-            choices.append(app_commands.Choice(name=f"{name}"[:100], value=name))
+            choices.append(
+                app_commands.Choice(name=f"{follow_id} · {name}"[:100], value=follow_id)
+            )
         return choices[:25]
 
     async def _followed_anime_choices(
@@ -467,16 +548,16 @@ class Notify(Cog):
         try:
             if interaction.guild is None:
                 rows = await self.bot.pool.fetch(
-                    "SELECT DISTINCT ON (anilist_id) title, anilist_id "
-                    "FROM notify_anime_follows WHERE user_id = $1 "
-                    "ORDER BY anilist_id, updated_at DESC NULLS LAST, id DESC LIMIT 100",
+                    "SELECT id, title, anilist_id FROM notify_anime_follows "
+                    "WHERE user_id = $1 "
+                    "ORDER BY lower(btrim(title)), id LIMIT 100",
                     interaction.user.id,
                 )
             else:
                 rows = await self.bot.pool.fetch(
-                    "SELECT DISTINCT ON (anilist_id) title, anilist_id "
-                    "FROM notify_anime_follows WHERE guild_id = $1 "
-                    "ORDER BY anilist_id, updated_at DESC NULLS LAST, id DESC LIMIT 100",
+                    "SELECT id, title, anilist_id FROM notify_anime_follows "
+                    "WHERE guild_id = $1 "
+                    "ORDER BY lower(btrim(title)), id LIMIT 100",
                     interaction.guild.id,
                 )
         except Exception:
@@ -486,10 +567,16 @@ class Notify(Cog):
         choices: list[app_commands.Choice[str]] = []
         for row in rows:
             title = str(row["title"]).strip()
-            if not title or (needle and needle not in title.casefold()):
+            follow_id = str(row["id"])
+            if not title or (
+                needle and needle not in title.casefold() and needle not in follow_id
+            ):
                 continue
-            value = title if len(title) <= 100 else str(row["anilist_id"])
-            choices.append(app_commands.Choice(name=title[:100], value=value))
+            choices.append(
+                app_commands.Choice(
+                    name=f"{follow_id} · {title}"[:100], value=follow_id
+                )
+            )
         return choices[:25]
 
     @staticmethod
@@ -679,16 +766,14 @@ class Notify(Cog):
         _AUTOCOMPLETE_CACHE[cache_key] = tuple(result)
         return result
 
-    @commands.hybrid_group(name="notify", fallback="info", invoke_without_command=True)
+    @commands.hybrid_group(name="notify", fallback="info")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def notify(self, ctx: Context) -> None:
         """Follow Twitch channels and anime releases."""
         await self._send_info(ctx)
 
-    @notify.group(
-        name="add", aliases=("follow",), fallback="info", invoke_without_command=True
-    )
+    @notify.group(name="add", aliases=("follow",), fallback="info")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def notify_add(self, ctx: Context) -> None:
@@ -765,22 +850,22 @@ class Notify(Cog):
                     )
                 # Mention columns are intentionally omitted here so the
                 # database defaults (disabled) always apply to new follows.
-                inserted = await connection.execute(
+                inserted = await connection.fetchrow(
                     "INSERT INTO notify_twitch_follows "
                     "(guild_id, user_id, channel_name, broadcaster_id, announce_channel_id) "
-                    "VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+                    "VALUES ($1, $2, $3, $4, $5) "
+                    "ON CONFLICT DO NOTHING RETURNING id",
                     guild_id,
                     user_id,
                     name,
                     str(twitch_user["id"]),
                     announce_channel_id,
                 )
-                # asyncpg returns ``INSERT 0 0`` when the unique scope key
-                # rejected the row (the ``ON CONFLICT`` path).
-                if inserted.endswith(" 0"):
+                if inserted is None:
                     raise commands.BadArgument(
                         "That Twitch channel is already followed here."
                     )
+                follow_id = int(inserted["id"])
         events = self._events()
         if events is not None and hasattr(
             events, "ensure_twitch_eventsub_subscription"
@@ -788,7 +873,10 @@ class Notify(Cog):
             await events.ensure_twitch_eventsub_subscription(str(twitch_user["id"]))
         await self._send(
             ctx,
-            view=NotifyView("## Twitch notifications", f"Following **{name}**."),
+            view=NotifyView(
+                "## Twitch notifications",
+                f"Following **{name}** (ID: `{follow_id}`).",
+            ),
             allowed_mentions=discord.AllowedMentions.none(),
             ephemeral=ctx.interaction is not None,
         )
@@ -866,6 +954,7 @@ class Notify(Cog):
                         f"{discord.utils.format_dt(successor_airing, 'R')}"
                     )
                 else:
+                    assert successor_release is not None
                     schedule_text = (
                         "with the release date of "
                         f"{discord.utils.format_dt(successor_release)}"
@@ -893,6 +982,7 @@ class Notify(Cog):
                         # The relation node has enough data for a valid follow
                         # even if AniList temporarily omits the ID lookup.
                         media = successor
+                    assert media is not None
                     media_id = int(media.get("id") or successor_id)
                     title = media_title(media) or successor_title
                     next_airing, episode, release = anilist_notification_schedule(
@@ -933,12 +1023,12 @@ class Notify(Cog):
                     )
                 # Mention columns are intentionally omitted so new follows
                 # start with notifications disabled by default.
-                inserted = await connection.execute(
+                inserted = await connection.fetchrow(
                     "INSERT INTO notify_anime_follows "
                     "(guild_id, user_id, anilist_id, title, site_url, banner_url, official_site_url, "
                     "crunchyroll_url, announce_channel_id, release_at, next_airing_at, next_episode, last_checked_at) "
                     "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now()) "
-                    "ON CONFLICT DO NOTHING",
+                    "ON CONFLICT DO NOTHING RETURNING id",
                     guild_id,
                     user_id,
                     media_id,
@@ -966,15 +1056,15 @@ class Notify(Cog):
                     next_airing,
                     episode,
                 )
-                # asyncpg returns ``INSERT 0 0`` when the unique scope key
-                # rejected the row (the ``ON CONFLICT`` path).
-                if inserted.endswith(" 0"):
+                if inserted is None:
                     raise commands.BadArgument("That anime is already followed here.")
+                follow_id = int(inserted["id"])
         await self._send(
             ctx,
             view=NotifyView(
                 "## Anime notifications",
-                f"Following **{discord.utils.escape_markdown(title)}**.",
+                f"Following **{discord.utils.escape_markdown(title)}** "
+                f"(ID: `{follow_id}`).",
             ),
             allowed_mentions=discord.AllowedMentions.none(),
             ephemeral=ctx.interaction is not None,
@@ -1017,7 +1107,6 @@ class Notify(Cog):
         name="remove",
         aliases=("unfollow",),
         fallback="info",
-        invoke_without_command=True,
     )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -1028,29 +1117,22 @@ class Notify(Cog):
     async def _remove_twitch(self, ctx: Context, channel: str) -> None:
         """Stop following a Twitch channel in this scope."""
         self._require_server_admin(ctx)
-        try:
-            name = normalize_twitch_channel(channel)
-        except ValueError as error:
-            raise commands.BadArgument(str(error)) from error
-        guild_id, user_id = _scope(ctx)
-        predicate, scope_id = _scope_predicate(guild_id, user_id)
-        broadcaster_id = await self.bot.pool.fetchval(
-            f"SELECT broadcaster_id FROM notify_twitch_follows WHERE {predicate} "
-            "AND lower(channel_name) = lower($2) LIMIT 1",
-            scope_id,
-            name,
-        )
-        if broadcaster_id is None and guild_id is not None:
-            broadcaster_id = await self.bot.pool.fetchval(
-                "SELECT broadcaster_id FROM twitch_follows "
-                "WHERE guild_id = $1 AND lower(channel_name) = lower($2) LIMIT 1",
-                guild_id,
-                name,
+        row = await self._resolve_follow(ctx, "twitch", channel)
+        if row is None:
+            raise commands.BadArgument(
+                f"You are not following **{discord.utils.escape_markdown(channel)}**."
             )
+        follow_id = int(row["id"])
+        name = str(row["channel_name"])
+        guild_id, user_id = _scope(ctx)
+        broadcaster_id = row.get("broadcaster_id")
+        scope_column = "guild_id" if guild_id is not None else "user_id"
+        scope_id = guild_id if guild_id is not None else user_id
         result = await self.bot.pool.execute(
-            f"DELETE FROM notify_twitch_follows WHERE {predicate} AND lower(channel_name) = lower($2)",
+            f"DELETE FROM notify_twitch_follows WHERE id = $1 AND "
+            f"{scope_column} = $2",
+            follow_id,
             scope_id,
-            name,
         )
         # The legacy text command and ``notify`` intentionally share server
         # follows.  Removing a follow through either surface must remove the
@@ -1092,14 +1174,17 @@ class Notify(Cog):
         await self._send(
             ctx,
             view=NotifyView(
-                "## Twitch notifications", f"No longer following **{name}**."
+                "## Twitch notifications",
+                f"No longer following **{name}** (ID: `{follow_id}`).",
             ),
             allowed_mentions=discord.AllowedMentions.none(),
             ephemeral=ctx.interaction is not None,
         )
 
     @notify_remove.command(name="twitch")
-    @app_commands.describe(channel="Twitch channel name or URL to unfollow.")
+    @app_commands.describe(
+        channel="Follow ID, Twitch channel name, or URL to unfollow."
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def notify_remove_twitch(self, ctx: Context, *, channel: str) -> None:
@@ -1118,45 +1203,43 @@ class Notify(Cog):
     async def _remove_anime(self, ctx: Context, anime: str) -> None:
         """Stop following an AniList anime in this scope."""
         self._require_server_admin(ctx)
-        anime = self._normalize_anime_query(anime)
-        media_id = anilist_media_id(anime)
-        if media_id is None and anime.isdigit():
-            # Long titles cannot fit in an app-command Choice value.  The
-            # autocomplete below uses the stable AniList ID in that case.
-            media_id = int(anime)
-        guild_id, user_id = _scope(ctx)
-        predicate, scope_id = _scope_predicate(guild_id, user_id)
-        if media_id is None:
-            media_id = await self.bot.pool.fetchval(
-                f"SELECT anilist_id FROM notify_anime_follows WHERE {predicate} AND lower(title) = lower($2) LIMIT 1",
-                scope_id,
-                anime.strip(),
+        row = await self._resolve_follow(ctx, "anime", anime)
+        if row is None:
+            raise commands.BadArgument(
+                f"You are not following **{discord.utils.escape_markdown(anime)}**."
             )
-        if not media_id:
-            raise commands.BadArgument(f"You are not following **{anime}**.")
+        follow_id = int(row["id"])
+        title = str(row["title"])
+        guild_id, user_id = _scope(ctx)
+        scope_column = "guild_id" if guild_id is not None else "user_id"
+        scope_id = guild_id if guild_id is not None else user_id
         result = await self.bot.pool.execute(
-            f"DELETE FROM notify_anime_follows WHERE {predicate} AND anilist_id = $2",
+            f"DELETE FROM notify_anime_follows WHERE id = $1 AND "
+            f"{scope_column} = $2",
+            follow_id,
             scope_id,
-            int(media_id),
         )
         try:
             removed = int(str(result).rsplit(" ", 1)[-1])
         except (ValueError, IndexError):
             removed = 0
         if not removed:
-            raise commands.BadArgument(f"You are not following **{anime}**.")
+            raise commands.BadArgument(f"You are not following **{title}**.")
         await self._send(
             ctx,
             view=NotifyView(
                 "## Anime notifications",
-                f"No longer following **{discord.utils.escape_markdown(anime)}**.",
+                f"No longer following **{discord.utils.escape_markdown(title)}** "
+                f"(ID: `{follow_id}`).",
             ),
             allowed_mentions=discord.AllowedMentions.none(),
             ephemeral=ctx.interaction is not None,
         )
 
     @notify_remove.command(name="anime")
-    @app_commands.describe(anime="Anime title or AniList anime URL to unfollow.")
+    @app_commands.describe(
+        anime="Follow ID, anime title, or AniList anime URL to unfollow."
+    )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def notify_remove_anime(self, ctx: Context, *, anime: str) -> None:
@@ -1172,7 +1255,7 @@ class Notify(Cog):
         """Suggest followed anime titles for the current server or DM."""
         return await self._followed_anime_choices(interaction, current)
 
-    @notify.group(name="mention", fallback="info", invoke_without_command=True)
+    @notify.group(name="mention", fallback="info")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def notify_mention(self, ctx: Context) -> None:
@@ -1185,33 +1268,18 @@ class Notify(Cog):
         self._require_server_admin(ctx)
         role_id, everyone, label = _mention_target(ctx, target)
         guild_id, user_id = _scope(ctx)
-        predicate, scope_id = _scope_predicate(guild_id, user_id)
-        if kind == "twitch":
-            try:
-                name = normalize_twitch_channel(entity)
-            except ValueError as error:
-                raise commands.BadArgument(str(error)) from error
-            table = "notify_twitch_follows"
-            where = f"{predicate} AND lower(channel_name) = lower($2)"
-            params = (scope_id, name)
-        else:
-            table = "notify_anime_follows"
-            media_id = anilist_media_id(entity)
-            if media_id is None:
-                media_id = await self.bot.pool.fetchval(
-                    f"SELECT anilist_id FROM {table} WHERE {predicate} AND lower(title) = lower($2) LIMIT 1",
-                    scope_id,
-                    entity.strip(),
-                )
-            if not media_id:
-                raise commands.BadArgument(
-                    f"I could not find a followed anime named **{entity}**."
-                )
-            where = f"{predicate} AND anilist_id = $2"
-            params = (scope_id, int(media_id))
+        row = await self._resolve_follow(ctx, kind, entity)
+        if row is None:
+            raise commands.BadArgument("That notification follow was not found.")
+        table = f"notify_{kind}_follows"
+        follow_id = int(row["id"])
+        scope_column = "guild_id" if guild_id is not None else "user_id"
+        scope_id = guild_id if guild_id is not None else user_id
         result = await self.bot.pool.execute(
-            f"UPDATE {table} SET mention_role_id = $3, mention_everyone = $4, updated_at = now() WHERE {where}",
-            *params,
+            f"UPDATE {table} SET mention_role_id = $3, mention_everyone = $4, "
+            f"updated_at = now() WHERE id = $1 AND {scope_column} = $2",
+            follow_id,
+            scope_id,
             role_id,
             everyone,
         )
@@ -1222,9 +1290,13 @@ class Notify(Cog):
             view=NotifyView(
                 f"## {kind.title()} notifications",
                 (
-                    f"Mention set to {label}."
+                    f"Mention for **{row['channel_name'] if kind == 'twitch' else row['title']}** "
+                    f"(ID: `{follow_id}`) set to {label}."
                     if label
-                    else "Notification mentions cleared."
+                    else (
+                        f"Mentions for **{row['channel_name'] if kind == 'twitch' else row['title']}** "
+                        f"(ID: `{follow_id}`) cleared."
+                    )
                 ),
             ),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -1233,7 +1305,7 @@ class Notify(Cog):
 
     @notify_mention.command(name="twitch")
     @app_commands.describe(
-        channel="Followed Twitch channel.",
+        channel="Follow ID or followed Twitch channel name/URL.",
         mention="Role, @everyone, or omit to clear mentions.",
     )
     async def notify_mention_twitch(
@@ -1257,7 +1329,7 @@ class Notify(Cog):
 
     @notify_mention.command(name="anime")
     @app_commands.describe(
-        anime="Followed anime title or AniList URL.",
+        anime="Follow ID, followed anime title, or AniList URL.",
         mention="Role, @everyone, or omit to clear mentions.",
     )
     async def notify_mention_anime(
@@ -1281,7 +1353,7 @@ class Notify(Cog):
         """Suggest the anime notifications available in the current scope."""
         return await self._followed_anime_choices(interaction, current)
 
-    @notify.group(name="list", fallback="info", invoke_without_command=True)
+    @notify.group(name="list", fallback="info")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def notify_list(self, ctx: Context) -> None:
@@ -1296,37 +1368,22 @@ class Notify(Cog):
         if guild_id is not None:
             rows = await self.bot.pool.fetch(
                 """
-                SELECT DISTINCT ON (lower(btrim(channel_name)))
-                    channel_name, announce_channel_id, last_offline_at, last_live_at
-                FROM (
-                    SELECT channel_name, announce_channel_id, last_offline_at,
-                           last_live_at, 1 AS source
-                    FROM notify_twitch_follows WHERE guild_id = $1
-                    UNION ALL
-                    SELECT channel_name, announce_channel_id, NULL AS last_offline_at,
-                           NULL AS last_live_at, 2 AS source
-                    FROM twitch_follows WHERE guild_id = $1
-                ) follows
-                ORDER BY lower(btrim(channel_name)), source,
-                         last_live_at DESC NULLS LAST,
-                         last_offline_at DESC NULLS LAST
+                SELECT id, channel_name, announce_channel_id, last_offline_at,
+                       last_live_at, mention_role_id, mention_everyone
+                FROM notify_twitch_follows
+                WHERE guild_id = $1
+                ORDER BY lower(btrim(channel_name)), id
                 """,
                 guild_id,
             )
         else:
             rows = await self.bot.pool.fetch(
                 """
-                SELECT channel_name, announce_channel_id, last_offline_at, last_live_at
-                FROM (
-                    SELECT DISTINCT ON (lower(btrim(channel_name)))
-                        channel_name, announce_channel_id, last_offline_at,
-                        last_live_at, updated_at, id
-                    FROM notify_twitch_follows
-                    WHERE user_id = $1
-                    ORDER BY lower(btrim(channel_name)),
-                             updated_at DESC NULLS LAST, id DESC
-                ) follows
-                ORDER BY channel_name
+                SELECT id, channel_name, announce_channel_id, last_offline_at,
+                       last_live_at, mention_role_id, mention_everyone
+                FROM notify_twitch_follows
+                WHERE user_id = $1
+                ORDER BY lower(btrim(channel_name)), id
                 """,
                 user_id,
             )
@@ -1339,17 +1396,11 @@ class Notify(Cog):
         predicate, scope_id = _scope_predicate(guild_id, user_id)
         rows = await self.bot.pool.fetch(
             f"""
-            SELECT title, announce_channel_id, release_at, next_airing_at,
-                   next_episode
-            FROM (
-                SELECT DISTINCT ON (anilist_id)
-                    title, announce_channel_id, release_at, next_airing_at,
-                    next_episode, updated_at, id
-                FROM notify_anime_follows
-                WHERE {predicate}
-                ORDER BY anilist_id, updated_at DESC NULLS LAST, id DESC
-            ) follows
-            ORDER BY title
+            SELECT id, title, announce_channel_id, release_at, next_airing_at,
+                   next_episode, mention_role_id, mention_everyone
+            FROM notify_anime_follows
+            WHERE {predicate}
+            ORDER BY lower(btrim(title)), id
             """,
             scope_id,
         )
@@ -1376,7 +1427,7 @@ class Notify(Cog):
                 (("Twitch", twitch), ("Anime", anime)),
                 mention=(
                     f"Remove a notification with `{_notify_prefix(ctx)}notify "
-                    "remove twitch/anime <name>`."
+                    "remove twitch/anime <id, name, or link>`."
                 ),
             ),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -1413,7 +1464,7 @@ class Notify(Cog):
                 ephemeral=ctx.interaction is not None,
             )
 
-    @notify.group(name="channel", fallback="info", invoke_without_command=True)
+    @notify.group(name="channel", fallback="info")
     @commands.guild_only()
     @commands.has_guild_permissions(manage_guild=True)
     @app_commands.allowed_installs(guilds=True)
@@ -1491,24 +1542,17 @@ class Notify(Cog):
             if candidate_channel is not None:
                 rows = await self.bot.pool.fetch(
                     (
-                        "SELECT channel_name, announce_channel_id, last_live_at, "
-                        "last_offline_at FROM ("
-                        "SELECT DISTINCT ON (lower(btrim(channel_name))) "
-                        "channel_name, announce_channel_id, last_live_at, "
-                        "last_offline_at, updated_at, id "
+                        "SELECT id, channel_name, announce_channel_id, last_live_at, "
+                        "last_offline_at, mention_role_id, mention_everyone "
                         "FROM notify_twitch_follows "
                         "WHERE guild_id = $1 AND announce_channel_id = $2 "
-                        "ORDER BY lower(btrim(channel_name)), "
-                        "updated_at DESC NULLS LAST, id DESC"
-                        ") follows ORDER BY channel_name"
+                        "ORDER BY lower(btrim(channel_name)), id"
                         if kind == "twitch"
-                        else "SELECT title, announce_channel_id, release_at, next_airing_at, "
-                        "next_episode FROM (SELECT DISTINCT ON (anilist_id) "
-                        "title, announce_channel_id, release_at, next_airing_at, "
-                        "next_episode, updated_at, id FROM notify_anime_follows "
+                        else "SELECT id, title, announce_channel_id, release_at, "
+                        "next_airing_at, next_episode, mention_role_id, "
+                        "mention_everyone FROM notify_anime_follows "
                         "WHERE guild_id = $1 AND announce_channel_id = $2 "
-                        "ORDER BY anilist_id, updated_at DESC NULLS LAST, id DESC) follows "
-                        "ORDER BY title"
+                        "ORDER BY lower(btrim(title)), id"
                     ),
                     guild_id,
                     candidate_channel.id,
@@ -1546,36 +1590,14 @@ class Notify(Cog):
                         raise
                     destination = ctx.channel
                     entity = " ".join(values)
-        if kind == "twitch":
-            try:
-                normalized = normalize_twitch_channel(entity)
-            except ValueError as error:
-                raise commands.BadArgument(str(error)) from error
-            row = await self.bot.pool.fetchrow(
-                "SELECT channel_name, broadcaster_id, mention_role_id, mention_everyone FROM notify_twitch_follows WHERE guild_id = $1 AND lower(channel_name) = lower($2) ORDER BY id LIMIT 1",
-                guild_id,
-                normalized,
-            )
-            key = normalized
-        else:
-            media_id = anilist_media_id(entity)
-            if media_id is None:
-                row = await self.bot.pool.fetchrow(
-                    "SELECT anilist_id, title, site_url, banner_url, official_site_url, crunchyroll_url, mention_role_id, mention_everyone, release_at, next_airing_at, next_episode FROM notify_anime_follows WHERE guild_id = $1 AND lower(title) = lower($2) ORDER BY id LIMIT 1",
-                    guild_id,
-                    entity.strip(),
-                )
-            else:
-                row = await self.bot.pool.fetchrow(
-                    "SELECT anilist_id, title, site_url, banner_url, official_site_url, crunchyroll_url, mention_role_id, mention_everyone, release_at, next_airing_at, next_episode FROM notify_anime_follows WHERE guild_id = $1 AND anilist_id = $2 ORDER BY id LIMIT 1",
-                    guild_id,
-                    media_id,
-                )
-            key = row["anilist_id"] if row else None
+        row = await self._resolve_follow(ctx, kind, entity)
         if row is None:
             raise commands.BadArgument("That followed notification could not be found.")
+        follow_id = int(row["id"])
+        display_name = str(row["channel_name"] if kind == "twitch" else row["title"])
         if not await ctx.prompt(
-            f"Send {kind} notifications for **{entity}** to {destination.mention}?",
+            f"Send {kind} notifications for **{display_name}** "
+            f"(ID: `{follow_id}`) to {destination.mention}?",
             ephemeral=ctx.interaction is not None,
         ):
             return
@@ -1583,9 +1605,9 @@ class Notify(Cog):
             result = await self.bot.pool.execute(
                 "UPDATE notify_twitch_follows SET announce_channel_id = $3, "
                 "broadcaster_id = COALESCE($4, broadcaster_id), updated_at = now() "
-                "WHERE guild_id = $1 AND lower(btrim(channel_name)) = lower(btrim($2))",
+                "WHERE id = $1 AND guild_id = $2",
+                follow_id,
                 guild_id,
-                key,
                 destination.id,
                 row["broadcaster_id"],
             )
@@ -1597,16 +1619,16 @@ class Notify(Cog):
                 "broadcaster_id = COALESCE($4, broadcaster_id) "
                 "WHERE guild_id = $1 AND lower(btrim(channel_name)) = lower(btrim($2))",
                 guild_id,
-                key,
+                row["channel_name"],
                 destination.id,
                 row["broadcaster_id"],
             )
         else:
             result = await self.bot.pool.execute(
                 "UPDATE notify_anime_follows SET announce_channel_id = $3, "
-                "updated_at = now() WHERE guild_id = $1 AND anilist_id = $2",
+                "updated_at = now() WHERE id = $1 AND guild_id = $2",
+                follow_id,
                 guild_id,
-                key,
                 destination.id,
             )
         # During the migration window an old installation may still have
@@ -1618,7 +1640,8 @@ class Notify(Cog):
             ctx,
             view=NotifyView(
                 f"## {kind.title()} notifications",
-                f"{entity} will now notify in {destination.mention}.",
+                f"{display_name} (ID: `{follow_id}`) will now notify in "
+                f"{destination.mention}.",
             ),
             allowed_mentions=discord.AllowedMentions.none(),
             ephemeral=ctx.interaction is not None,
@@ -1627,7 +1650,7 @@ class Notify(Cog):
     @notify_channel.command(name="twitch")
     @app_commands.describe(
         channel="Channel name, ID, or mention; can be omitted when using the current channel.",
-        twitch="Followed Twitch channel name.",
+        twitch="Follow ID or followed Twitch channel name/URL.",
     )
     async def notify_channel_twitch(
         self,
@@ -1655,7 +1678,7 @@ class Notify(Cog):
     @notify_channel.command(name="anime")
     @app_commands.describe(
         channel="Channel name, ID, or mention; can be omitted when using the current channel.",
-        anime="Followed anime title.",
+        anime="Follow ID, followed anime title, or AniList URL.",
     )
     async def notify_channel_anime(
         self, ctx: GuildContext, channel: str | None = None, *, anime: str | None = None

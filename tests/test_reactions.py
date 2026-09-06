@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import SimpleNamespace
+
+# Test doubles supply only the Discord/service fields exercised by each test.
 from typing import Any, cast
 from unittest.mock import AsyncMock
+
+import discord
 
 from extensions.events import Events
 from extensions.events.corn import (
@@ -160,14 +164,12 @@ async def test_mudae_corn_and_random_reactions_are_limited_to_configured_guilds(
         guild=SimpleNamespace(id=next(iter(MUDAE_REACTION_GUILD_IDS))),
         add_reaction=AsyncMock(),
     )
-    await event.on_corn_message(allowed_message)
+    await event.on_corn_message(cast("discord.Message", allowed_message))
     allowed_message.add_reaction.assert_awaited_once_with(CORN_EMOJI)
 
     allowed_message.add_reaction.reset_mock()
-    monkeypatch.setattr(
-        "extensions.events.random.choice", lambda _groups: ("6️⃣", "7️⃣")
-    )
-    await event.on_special_reaction_message(allowed_message)
+    monkeypatch.setattr("extensions.events.random.choice", lambda _groups: ("6️⃣", "7️⃣"))
+    await event.on_special_reaction_message(cast("discord.Message", allowed_message))
     assert [call.args[0] for call in allowed_message.add_reaction.await_args_list] == [
         "6️⃣",
         "7️⃣",
@@ -178,8 +180,8 @@ async def test_mudae_corn_and_random_reactions_are_limited_to_configured_guilds(
         guild=SimpleNamespace(id=1),
         add_reaction=AsyncMock(),
     )
-    await event.on_corn_message(blocked_message)
-    await event.on_special_reaction_message(blocked_message)
+    await event.on_corn_message(cast("discord.Message", blocked_message))
+    await event.on_special_reaction_message(cast("discord.Message", blocked_message))
     blocked_message.add_reaction.assert_not_awaited()
 
 

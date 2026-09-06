@@ -1,5 +1,9 @@
+# Test doubles supply only the Discord/service fields exercised by each test.
 from datetime import datetime, timezone
 from io import BytesIO
+from typing import cast
+
+import discord
 
 from extensions.fun.wordle import (
     WordleBoardView,
@@ -81,10 +85,12 @@ def test_message_guess_is_limited_to_owner_and_channel() -> None:
             self.channel = type("Channel", (), {"id": channel_id})()
             self.content = content
 
-    assert message_guess(Message(2, 20, "cigar"), game) is None
-    assert message_guess(Message(1, 21, "cigar"), game) is None
-    assert message_guess(Message(1, 20, "four"), game) is None
-    assert message_guess(Message(1, 20, "cigar"), game) == "cigar"
+    assert message_guess(cast("discord.Message", Message(2, 20, "cigar")), game) is None
+    assert message_guess(cast("discord.Message", Message(1, 21, "cigar")), game) is None
+    assert message_guess(cast("discord.Message", Message(1, 20, "four")), game) is None
+    assert (
+        message_guess(cast("discord.Message", Message(1, 20, "cigar")), game) == "cigar"
+    )
 
 
 def test_wordle_board_is_a_png_stream() -> None:

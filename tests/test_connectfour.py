@@ -1,9 +1,13 @@
+# Test doubles supply only the Discord/service fields exercised by each test.
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 import extensions.fun.connectfour as connectfour
+from extensions.context import Context
 from extensions.fun.connectfour import (
     COLOR_EMOJIS,
     COLS,
@@ -40,7 +44,7 @@ def test_diagonal_win_and_full_board_result() -> None:
     board[2][3] = "red"
     assert has_won(board, "red")
 
-    full = [
+    full: list[list[str | None]] = [
         ["yellow", "yellow", "yellow", "red", "yellow", "red", "yellow"],
         ["red", "yellow", "yellow", "red", "yellow", "red", "yellow"],
         ["red", "red", "red", "yellow", "yellow", "yellow", "red"],
@@ -68,8 +72,8 @@ def test_cursor_skips_full_columns_and_placement_uses_next_available_column() ->
 def test_cursor_occupies_and_can_fill_the_playable_top_row() -> None:
     controller = SimpleNamespace(bot=SimpleNamespace(embedcolor=0x123456))
     game = ConnectFourGame(
-        controller=controller,
-        ctx=None,
+        controller=cast("ConnectFourController", controller),
+        ctx=cast("Context", None),
         players={"yellow": 1, "red": 2},
         names={1: "crygup", 2: "fishie"},
         against_bot=False,
@@ -90,8 +94,8 @@ def test_cursor_occupies_and_can_fill_the_playable_top_row() -> None:
 def test_board_view_places_turn_summary_below_controls() -> None:
     controller = SimpleNamespace(bot=SimpleNamespace(embedcolor=0x123456))
     game = ConnectFourGame(
-        controller=controller,
-        ctx=None,
+        controller=cast("ConnectFourController", controller),
+        ctx=cast("Context", None),
         players={"yellow": 1, "red": 2},
         names={1: "crygup", 2: "fishie"},
         against_bot=False,
@@ -121,8 +125,8 @@ def test_board_view_places_turn_summary_below_controls() -> None:
 def test_pvp_result_shows_the_winner_wager_pool() -> None:
     controller = SimpleNamespace(bot=SimpleNamespace(embedcolor=0x123456))
     game = ConnectFourGame(
-        controller=controller,
-        ctx=None,
+        controller=cast("ConnectFourController", controller),
+        ctx=cast("Context", None),
         players={"yellow": 1, "red": 2},
         names={1: "crygup", 2: "maronely"},
         against_bot=False,
@@ -141,8 +145,8 @@ def test_pvp_result_shows_the_winner_wager_pool() -> None:
 def test_completed_game_shows_awarded_coins() -> None:
     controller = SimpleNamespace(bot=SimpleNamespace(embedcolor=0x123456))
     game = ConnectFourGame(
-        controller=controller,
-        ctx=None,
+        controller=cast("ConnectFourController", controller),
+        ctx=cast("Context", None),
         players={"yellow": 1, "red": 2},
         names={1: "player", 2: "Fishie"},
         against_bot=True,
@@ -162,8 +166,8 @@ def test_completed_game_shows_awarded_coins() -> None:
 def test_game_records_moves_with_player_and_board_coordinates() -> None:
     controller = SimpleNamespace(bot=SimpleNamespace(embedcolor=0x123456))
     game = ConnectFourGame(
-        controller=controller,
-        ctx=None,
+        controller=cast("ConnectFourController", controller),
+        ctx=cast("Context", None),
         players={"yellow": 1, "red": 2},
         names={1: "crygup", 2: "fishie"},
         against_bot=False,
@@ -196,7 +200,7 @@ async def test_bot_win_awards_difficulty_coins_with_a_shared_daily_cap(
     )
     game = ConnectFourGame(
         controller=controller,
-        ctx=None,
+        ctx=cast("Context", None),
         players={"yellow": 1, "red": 2},
         names={1: "player", 2: "Fishie"},
         against_bot=True,
@@ -229,7 +233,7 @@ async def test_bot_game_coins_require_a_human_win(
     )
     game = ConnectFourGame(
         controller=controller,
-        ctx=None,
+        ctx=cast("Context", None),
         players={"yellow": 1, "red": 2},
         names={1: "player", 2: "Fishie"},
         against_bot=against_bot,
@@ -285,7 +289,7 @@ async def test_random_player_can_start_as_red_and_records_its_opening_move(
         AsyncMock(side_effect=lambda function, *args: function(*args)),
     )
 
-    game = await controller.start_bot_game(ctx, "hard")
+    game = await controller.start_bot_game(cast("Context", ctx), "hard")
 
     assert game is not None
     assert game.players == {"red": 2, "yellow": 1}
@@ -319,7 +323,7 @@ async def test_human_can_start_as_red_without_an_automatic_move(
     monkeypatch.setattr(controller, "schedule_timeout", lambda _game: None)
     monkeypatch.setattr(connectfour.random, "getrandbits", lambda _bits: 1)
 
-    game = await controller.start_bot_game(ctx, "hard")
+    game = await controller.start_bot_game(cast("Context", ctx), "hard")
 
     assert game is not None
     assert game.players == {"red": 1, "yellow": 2}
@@ -348,9 +352,9 @@ async def test_other_bot_uses_its_name_but_keeps_fishie_stats_identity(
     monkeypatch.setattr(connectfour.random, "getrandbits", lambda _bits: 1)
 
     game = await controller.start_bot_game(
-        ctx,
+        cast("Context", ctx),
         "normal",
-        opponent=SimpleNamespace(id=99, name="NotSoBot"),
+        opponent=cast("discord.User", SimpleNamespace(id=99, name="NotSoBot")),
     )
 
     assert game is not None
@@ -376,7 +380,9 @@ async def test_player_one_is_randomly_selected_for_player_duels(
     # The second participant is selected as player 1 for this draw.
     monkeypatch.setattr(connectfour.random, "getrandbits", lambda _bits: 0)
 
-    game = await controller.start_user_game(ctx, opponent)
+    game = await controller.start_user_game(
+        cast("Context", ctx), cast("discord.User", opponent)
+    )
 
     assert game is not None
     assert game.players == {"red": 2, "yellow": 1}
@@ -394,7 +400,7 @@ async def test_bot_rematch_rerolls_colors_and_plays_when_fishie_starts(
     controller = ConnectFourController(SimpleNamespace(bot=bot))
     game = ConnectFourGame(
         controller=controller,
-        ctx=None,
+        ctx=cast("Context", None),
         players={"yellow": 1, "red": 2},
         names={1: "player", 2: "fishie"},
         against_bot=True,
@@ -422,7 +428,9 @@ async def test_bot_rematch_rerolls_colors_and_plays_when_fishie_starts(
     )
     interaction = SimpleNamespace(response=response, message=SimpleNamespace())
 
-    await controller.restart_game(game, interaction)
+    await controller.restart_game(
+        game, cast("discord.Interaction[discord.Client]", interaction)
+    )
 
     assert game.players == {"red": 2, "yellow": 1}
     assert game.current_color == "yellow"
@@ -445,7 +453,7 @@ async def test_human_red_win_against_yellow_fishie_awards_coins(
     )
     game = ConnectFourGame(
         controller=controller,
-        ctx=None,
+        ctx=cast("Context", None),
         players={"yellow": 2, "red": 1},
         names={1: "player", 2: "fishie"},
         against_bot=True,
