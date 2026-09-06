@@ -396,6 +396,17 @@ class Tasks(Cog):
         if not subscription:
             return
 
+        # A failed creation can leave a local row without a Twitch ID.  There
+        # is nothing to delete remotely in that state; remove the stale row so
+        # reconciliation can stop retrying an invalid DELETE request.
+        subscription_id = subscription["subscription_id"]
+        if not subscription_id:
+            await self.bot.pool.execute(
+                "DELETE FROM twitch_eventsub_subscriptions WHERE broadcaster_id = $1",
+                broadcaster_id,
+            )
+            return
+
         token = await self._get_twitch_access_token()
         if not token:
             self.bot.logger.warning(
@@ -412,7 +423,7 @@ class Tasks(Cog):
                     "Client-ID": self.bot.config["keys"]["twitch_id"],
                     "Authorization": f"Bearer {token}",
                 },
-                params={"id": subscription["subscription_id"]},
+                params={"id": subscription_id},
             ) as response:
                 if response.status not in (204, 404):
                     self.bot.logger.warning(

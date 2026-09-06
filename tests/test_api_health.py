@@ -10,6 +10,8 @@ from starlette.types import Message, Scope
 
 import api
 from extensions.media_effects.processing import EffectResult
+from web_api import accounts, history, media, webhooks
+from web_api import state as api_state
 
 
 class ASGIResponse:
@@ -86,20 +88,38 @@ def test_rejects_oversized_request_before_route_processing() -> None:
     response = request(
         "POST",
         "/oauth/exchange",
-        headers={"Content-Length": str(api.MAX_REQUEST_BYTES + 1)},
+        headers={"Content-Length": str(api_state.MAX_REQUEST_BYTES + 1)},
         content=b"{}",
+    )
+    assert response.status_code == 413
+
+
+def test_rejects_oversized_chunked_request_without_content_length() -> None:
+    response = request(
+        "POST",
+        "/oauth/exchange",
+        content=b"x" * (api_state.MAX_REQUEST_BYTES + 1),
+    )
+    assert response.status_code == 413
+
+
+def test_rejects_oversized_chunked_twitch_eventsub_payload() -> None:
+    response = request(
+        "POST",
+        "/twitch/eventsub",
+        content=b"x" * (api_state.MAX_WEBHOOK_BYTES + 1),
     )
     assert response.status_code == 413
 
 
 def test_user_history_routes_accept_optional_session_for_private_self_access() -> None:
     for handler in (
-        api.get_user_data,
-        api.get_usernames,
-        api.get_display_names,
-        api.get_discrims,
-        api.get_server_tags,
-        api.get_status_history,
+        history.get_user_data,
+        history.get_usernames,
+        history.get_display_names,
+        history.get_discrims,
+        history.get_server_tags,
+        history.get_status_history,
     ):
         parameters = inspect.signature(handler).parameters
         assert "authorization" in parameters
@@ -107,20 +127,20 @@ def test_user_history_routes_accept_optional_session_for_private_self_access() -
 
 
 def test_activity_is_available_as_an_individual_tracking_opt_out() -> None:
-    assert "activity" in api.VALID_OPTOUTS
-    assert "emoji" in api.VALID_OPTOUTS
-    assert "downloads" in api.VALID_OPTOUTS
-    assert "higher_lower" in api.VALID_OPTOUTS
-    assert "heads_tails" in api.VALID_OPTOUTS
+    assert "activity" in api_state.VALID_OPTOUTS
+    assert "emoji" in api_state.VALID_OPTOUTS
+    assert "downloads" in api_state.VALID_OPTOUTS
+    assert "higher_lower" in api_state.VALID_OPTOUTS
+    assert "heads_tails" in api_state.VALID_OPTOUTS
 
 
 def test_lastfm_state_is_session_bound_and_one_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bot = SimpleNamespace(config={"keys": {"lastfm_secret": "state-secret"}})
-    monkeypatch.setattr(api, "bot_ref", bot)
+    monkeypatch.setattr(api_state, "bot_ref", bot)
 
-    state = api._lastfm_state(
+    state = accounts._lastfm_state(
         42,
         "website",
         session_id="session-a",
@@ -130,20 +150,20 @@ def test_lastfm_state_is_session_bound_and_one_time(
     # A callback with the wrong browser credentials must not consume the state
     # and prevent the legitimate redirect from completing.
     with pytest.raises(HTTPException) as error:
-        api._decode_lastfm_state(
+        accounts._decode_lastfm_state(
             state,
             session_id="session-b",
             browser_nonce="browser-a",
         )
     assert error.value.status_code == 400
 
-    assert api._decode_lastfm_state(
+    assert accounts._decode_lastfm_state(
         state,
         session_id="session-a",
         browser_nonce="browser-a",
     ) == (42, "website", None, None)
     with pytest.raises(HTTPException) as error:
-        api._decode_lastfm_state(
+        accounts._decode_lastfm_state(
             state,
             session_id="session-a",
             browser_nonce="browser-a",
@@ -167,9 +187,9 @@ def test_account_oauth_states_are_browser_bound_and_one_time(
     provider: str,
 ) -> None:
     bot = SimpleNamespace(config={"keys": {"spotify_id": "client-id"}})
-    monkeypatch.setattr(api, "bot_ref", bot)
-    create_state = getattr(api, state_factory)
-    decode_state = getattr(api, decoder)
+    monkeypatch.setattr(api_state, "bot_ref", bot)
+    create_state = getattr(accounts, state_factory)
+    decode_state = getattr(accounts, decoder)
     state = prefix + create_state(
         42,
         "website",
@@ -183,18 +203,21 @@ def test_account_oauth_states_are_browser_bound_and_one_time(
     assert error.value.status_code == 400
     assert provider in str(error.value.detail)
 
-    assert decode_state(
-        state, session_id="session-a", browser_nonce="browser-a"
-    ) == (42, "website", None, None)
+    assert decode_state(state, session_id="session-a", browser_nonce="browser-a") == (
+        42,
+        "website",
+        None,
+        None,
+    )
     with pytest.raises(HTTPException) as error:
         decode_state(state, session_id="session-a", browser_nonce="browser-a")
     assert error.value.status_code == 400
 
 
 def test_twitch_eventsub_non_notification_message_ids_are_replay_protected() -> None:
-    api._twitch_eventsub_replays.clear()
-    assert asyncio.run(api._claim_twitch_eventsub_message("event-1"))
-    assert not asyncio.run(api._claim_twitch_eventsub_message("event-1"))
+    api_state._twitch_eventsub_replays.clear()
+    assert asyncio.run(webhooks._claim_twitch_eventsub_message("event-1"))
+    assert not asyncio.run(webhooks._claim_twitch_eventsub_message("event-1"))
 
 
 @pytest.mark.asyncio
@@ -224,12 +247,12 @@ async def test_history_user_resolution_negative_result_is_cached(
         get_user=lambda _user_id: None,
         fetch_user=missing_user,
     )
-    monkeypatch.setattr(api, "bot_ref", bot)
-    monkeypatch.setattr(api, "_check_pool", lambda: Pool())
-    api._discord_user_negative_cache.clear()
+    monkeypatch.setattr(api_state, "bot_ref", bot)
+    monkeypatch.setattr(api_state, "_check_pool", lambda: Pool())
+    api_state._discord_user_negative_cache.clear()
 
-    await api._history_visible_to(987654321, None, None)
-    await api._history_visible_to(987654321, None, None)
+    await history._history_visible_to(987654321, None, None)
+    await history._history_visible_to(987654321, None, None)
     assert calls == 1
 
 
@@ -245,10 +268,10 @@ async def test_private_history_only_allows_the_matching_session(
                 return 42
             raise AssertionError(sql)
 
-    monkeypatch.setattr(api, "_check_pool", lambda: Pool())
-    await api._history_visible_to(42, None, "session")
+    monkeypatch.setattr(api_state, "_check_pool", lambda: Pool())
+    await history._history_visible_to(42, None, "session")
     with pytest.raises(HTTPException) as error:
-        await api._history_visible_to(99, None, "session")
+        await history._history_visible_to(99, None, "session")
     assert error.value.status_code == 403
 
 
@@ -259,8 +282,8 @@ async def test_public_history_does_not_require_authentication(monkeypatch) -> No
             assert "history_public" in sql
             return True
 
-    monkeypatch.setattr(api, "_check_pool", lambda: Pool())
-    await api._history_visible_to(42, None, None)
+    monkeypatch.setattr(api_state, "_check_pool", lambda: Pool())
+    await history._history_visible_to(42, None, None)
 
 
 def test_youtube_websub_verification_requires_token_and_caps_lease(
@@ -280,7 +303,7 @@ def test_youtube_websub_verification_requires_token_and_caps_lease(
             return "INSERT 0 1"
 
     monkeypatch.setattr(
-        api,
+        api_state,
         "bot_ref",
         SimpleNamespace(
             config={"keys": {"youtube_websub_secret": secret}},
@@ -290,7 +313,7 @@ def test_youtube_websub_verification_requires_token_and_caps_lease(
     query = {
         "hub.mode": "subscribe",
         "hub.topic": (
-            "https://www.youtube.com/feeds/videos.xml" f"?channel_id={channel_id}"
+            f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
         ),
         "hub.challenge": "challenge",
         "hub.lease_seconds": "999999999",
@@ -298,7 +321,7 @@ def test_youtube_websub_verification_requires_token_and_caps_lease(
     denied = request("GET", "/youtube/websub?" + urlencode(query))
     assert denied.status_code == 403
 
-    query["hub.verify_token"] = api.youtube_websub_verify_token(
+    query["hub.verify_token"] = webhooks.youtube_websub_verify_token(
         secret,
         channel_id,
     )
@@ -312,7 +335,7 @@ def test_media_route_has_its_own_larger_body_limit() -> None:
     response = request(
         "POST",
         "/media/effects/invert",
-        headers={"Content-Length": str(api.MAX_REQUEST_BYTES + 1)},
+        headers={"Content-Length": str(api_state.MAX_REQUEST_BYTES + 1)},
         content=b"x",
     )
     assert response.status_code != 413
@@ -325,9 +348,9 @@ def test_media_route_requires_key_and_returns_processed_file(monkeypatch) -> Non
         assert options == {"size": 12}
         return EffectResult(b"finished", "pixelate.png")
 
-    monkeypatch.setattr(api, "render_image_effect", fake_render)
+    monkeypatch.setattr(media, "render_image_effect", fake_render)
     monkeypatch.setattr(
-        api,
+        api_state,
         "bot_ref",
         SimpleNamespace(
             config={"keys": {"media_api": "test-key"}},
@@ -374,7 +397,7 @@ def test_media_catalog_includes_new_image_effects() -> None:
 
 def test_audio_effect_catalog_requires_key(monkeypatch) -> None:
     monkeypatch.setattr(
-        api,
+        api_state,
         "bot_ref",
         SimpleNamespace(config={"keys": {"media_api": "test-key"}}),
     )
@@ -395,7 +418,7 @@ def test_audio_effect_catalog_requires_key(monkeypatch) -> None:
 
 def test_audio_overlay_requires_secondary_media(monkeypatch) -> None:
     monkeypatch.setattr(
-        api,
+        api_state,
         "bot_ref",
         SimpleNamespace(
             config={"keys": {"media_api": "test-key"}},
@@ -429,11 +452,11 @@ def test_combine_api_fetches_and_uses_secondary_media(monkeypatch) -> None:
         }
         return EffectResult(b"combined", "combine.png")
 
-    monkeypatch.setattr(api, "refresh_discord_attachment_url", fake_refresh)
-    monkeypatch.setattr(api, "fetch_public_bytes", fake_fetch)
-    monkeypatch.setattr(api, "render_combine_effect", fake_combine)
+    monkeypatch.setattr(media, "refresh_discord_attachment_url", fake_refresh)
+    monkeypatch.setattr(media, "fetch_public_bytes", fake_fetch)
+    monkeypatch.setattr(media, "render_combine_effect", fake_combine)
     monkeypatch.setattr(
-        api,
+        api_state,
         "bot_ref",
         SimpleNamespace(
             config={"keys": {"media_api": "test-key"}},
@@ -481,11 +504,11 @@ def test_overlay_api_fetches_and_uses_secondary_media(monkeypatch) -> None:
         }
         return EffectResult(b"overlaid", "overlay-video.mp4")
 
-    monkeypatch.setattr(api, "refresh_discord_attachment_url", fake_refresh)
-    monkeypatch.setattr(api, "fetch_public_bytes", fake_fetch)
-    monkeypatch.setattr(api, "render_overlay_effect", fake_overlay)
+    monkeypatch.setattr(media, "refresh_discord_attachment_url", fake_refresh)
+    monkeypatch.setattr(media, "fetch_public_bytes", fake_fetch)
+    monkeypatch.setattr(media, "render_overlay_effect", fake_overlay)
     monkeypatch.setattr(
-        api,
+        api_state,
         "bot_ref",
         SimpleNamespace(
             config={"keys": {"media_api": "test-key"}},
@@ -523,9 +546,9 @@ def test_media_route_clamps_numeric_options_and_reports_it(monkeypatch) -> None:
         assert options == {"size": 128}
         return EffectResult(b"finished", "pixelate.png")
 
-    monkeypatch.setattr(api, "render_image_effect", fake_render)
+    monkeypatch.setattr(media, "render_image_effect", fake_render)
     monkeypatch.setattr(
-        api,
+        api_state,
         "bot_ref",
         SimpleNamespace(
             config={"keys": {"media_api": "test-key"}},
