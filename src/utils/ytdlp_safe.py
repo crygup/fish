@@ -67,6 +67,11 @@ def _is_pot_provider_url(url: str) -> bool:
         port = parsed.port
     except ValueError:
         return False
+    # Credentials must never be accepted by the provider exception.  The
+    # configured provider URL rejects them too, but a user-controlled URL can
+    # otherwise compare equal by hostname and port and bypass that check.
+    if parsed.username is not None or parsed.password is not None:
+        return False
     hostname = (parsed.hostname or "").casefold().rstrip(".")
     return (
         parsed.scheme.casefold(),
@@ -83,14 +88,14 @@ def _is_pot_provider_host(hostname: object, port: object = None) -> bool:
     return port is None or str(port) == str(_POT_PROVIDER[2])
 
 
-def _guard_url(url: str) -> str:
+def _guard_url(url: str, *, allow_provider: bool = False) -> str:
     try:
         parsed = urllib.parse.urlsplit(url)
     except ValueError as error:
         raise urllib.error.URLError("Invalid URL") from error
     if parsed.scheme.casefold() not in {"http", "https"}:
         raise urllib.error.URLError("Only public HTTP(S) URLs are allowed")
-    if _is_pot_provider_url(url):
+    if allow_provider and _is_pot_provider_url(url):
         return url
     try:
         return validate_public_url_sync(url)
@@ -120,15 +125,20 @@ def _guard_session_request(original: Callable[..., Any]) -> Callable[..., Any]:
 
     def guarded(self: Any, method: str, url: str, *args: Any, **kwargs: Any) -> Any:
         allow_redirects = kwargs.get("allow_redirects", True)
+        current = str(url)
+        allow_provider = _is_pot_provider_url(current)
         if allow_redirects is False:
-            _guard_url(str(url))
+            _guard_url(current, allow_provider=allow_provider)
             return original(self, method, url, *args, **kwargs)
 
         kwargs["allow_redirects"] = False
-        current = str(url)
         response = None
         for _ in range(_MAX_REDIRECTS + 1):
-            _guard_url(current)
+            # A provider exception is scoped to a request chain that started
+            # at the configured provider.  In particular, a public URL may
+            # not redirect into the private provider service.
+            allow_provider = _is_pot_provider_url(current)
+            _guard_url(current, allow_provider=allow_provider)
             response = original(self, method, current, *args, **kwargs)
             if getattr(response, "status_code", 0) not in _REDIRECT_STATUSES:
                 return response
@@ -137,7 +147,7 @@ def _guard_session_request(original: Callable[..., Any]) -> Callable[..., Any]:
                 return response
             try:
                 next_url = urllib.parse.urljoin(current, location)
-                _guard_url(next_url)
+                _guard_url(next_url, allow_provider=allow_provider)
             except (TypeError, ValueError, urllib.error.URLError):
                 response.close()
                 raise
@@ -166,7 +176,8 @@ def _install_guards() -> None:
         def guarded_urlopen(self: Any, request: Any) -> Any:
             url = request if isinstance(request, str) else getattr(request, "url", "")
             if url:
-                _guard_url(str(url))
+                url = str(url)
+                _guard_url(url, allow_provider=_is_pot_provider_url(url))
             return original_urlopen(self, request)
 
         YoutubeDL.urlopen = guarded_urlopen  # type: ignore[method-assign]
@@ -184,7 +195,15 @@ def _install_guards() -> None:
             headers: Any,
             newurl: str,
         ) -> Any:
-            _guard_url(str(newurl))
+            get_full_url = getattr(request, "get_full_url", None)
+            if callable(get_full_url):
+                source_url = str(get_full_url())
+            else:
+                source_url = str(getattr(request, "full_url", ""))
+            _guard_url(
+                str(newurl),
+                allow_provider=_is_pot_provider_url(source_url),
+            )
             return original_redirect(self, request, fp, code, msg, headers, newurl)
 
         RedirectHandler.redirect_request = guarded_redirect  # type: ignore[method-assign]
