@@ -268,6 +268,53 @@ class YouTubeNotifications:
             "thumbnail": _best_thumbnail(snippet.get("thumbnails")),
         }
 
+    async def search_youtube_channels(self, query: str) -> list[dict[str, Any]]:
+        """Search YouTube channels by name for the notify add autocomplete."""
+
+        key = self._youtube_api_key()
+        if not key:
+            return []
+        try:
+            async with self.bot.session.get(
+                "https://www.googleapis.com/youtube/v3/search",
+                params={
+                    "part": "snippet",
+                    "type": "channel",
+                    "q": query,
+                    "maxResults": 25,
+                    "key": key,
+                },
+            ) as response:
+                data = await response.json(content_type=None)
+        except Exception as error:
+            self.bot.logger.warning("Could not search YouTube channels: %s", error)
+            return []
+        items = data.get("items") if isinstance(data, dict) else None
+        if response.status != 200 or not isinstance(items, list):
+            return []
+        results: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            channel_id = item.get("id", {}).get("channelId") if isinstance(item.get("id"), dict) else None
+            snippet = item.get("snippet")
+            if not isinstance(channel_id, str) or not isinstance(snippet, dict):
+                continue
+            if channel_id in seen:
+                continue
+            seen.add(channel_id)
+            title = str(snippet.get("title") or channel_id)
+            results.append(
+                {
+                    "id": channel_id,
+                    "name": title,
+                    "handle": f"@{snippet.get('channelTitle') or title}",
+                    "thumbnail": _best_thumbnail(snippet.get("thumbnails")),
+                }
+            )
+        return results
+
     async def get_youtube_video(self, video_id: str) -> dict[str, Any] | None:
         key = self._youtube_api_key()
         if not key:
@@ -481,8 +528,9 @@ class YouTubeNotifications:
         payload: dict[str, Any],
     ) -> None:
         rows = await self.bot.pool.fetch(
-            "SELECT guild_id, youtube_channel_id, channel_name, channel_handle, "
-            "announce_channel_id, message_template, event_types "
+            "SELECT id, guild_id, user_id, youtube_channel_id, channel_name, "
+            "channel_handle, announce_channel_id, message_template, event_types, "
+            "mention_role_id, mention_everyone "
             "FROM youtube_follows WHERE youtube_channel_id = $1 "
             "AND $2 = ANY(event_types)",
             channel_id,
@@ -502,16 +550,58 @@ class YouTubeNotifications:
                 f"YouTube delivery failed for {failed} announcement destination(s)"
             )
 
+    @staticmethod
+    def _youtube_owner(row: Any) -> tuple[str, int]:
+        """Return the delivery-owner column and value for a follow row."""
+
+        if row.get("guild_id") is not None:
+            return "guild_id", int(row["guild_id"])
+        return "user_id", int(row["user_id"])
+
+    async def _youtube_destination(self, row: Any) -> Any | None:
+        """Resolve a YouTube follow's channel or DM destination."""
+
+        channel_id = row.get("announce_channel_id")
+        if channel_id:
+            channel = self.bot.get_channel(int(channel_id))
+            if channel is None:
+                try:
+                    channel = await self.bot.fetch_channel(int(channel_id))
+                except Exception as error:
+                    self.bot.logger.warning(
+                        "Could not find YouTube announcement channel %s: %s",
+                        channel_id,
+                        error,
+                    )
+            return channel
+        user_id = row.get("user_id")
+        if not user_id:
+            return None
+        user = self.bot.get_user(int(user_id))
+        if user is None:
+            try:
+                user = await self.bot.fetch_user(int(user_id))
+            except Exception as error:
+                self.bot.logger.warning(
+                    "Could not resolve YouTube notify DM user %s: %s", user_id, error
+                )
+        return user
+
     async def _announce_youtube_once(
         self, row: Any, item_id: str, event_type: str, payload: dict[str, Any]
     ) -> bool:
+        owner_col, owner_val = self._youtube_owner(row)
+        conflict = (
+            f"({owner_col}, youtube_channel_id, item_id, event_type) "
+            f"WHERE {owner_col} IS NOT NULL"
+        )
         claimed = await self.bot.pool.fetchval(
-            """
+            f"""
             INSERT INTO youtube_announcement_deliveries
-                (guild_id, youtube_channel_id, item_id, event_type, payload,
+                ({owner_col}, youtube_channel_id, item_id, event_type, payload,
                  status, attempts)
             VALUES ($1, $2, $3, $4, $5::jsonb, 'processing', 1)
-            ON CONFLICT (guild_id, youtube_channel_id, item_id, event_type) DO UPDATE
+            ON CONFLICT {conflict} DO UPDATE
             SET status = 'processing',
                 attempts = youtube_announcement_deliveries.attempts + 1,
                 payload = EXCLUDED.payload, updated_at = now()
@@ -522,7 +612,7 @@ class YouTubeNotifications:
                    AND youtube_announcement_deliveries.attempts < 10)
             RETURNING item_id
             """,
-            row["guild_id"],
+            owner_val,
             row["youtube_channel_id"],
             item_id,
             event_type,
@@ -530,60 +620,44 @@ class YouTubeNotifications:
         )
         if claimed is None:
             status = await self.bot.pool.fetchval(
-                "SELECT status FROM youtube_announcement_deliveries "
-                "WHERE guild_id = $1 AND youtube_channel_id = $2 "
+                f"SELECT status FROM youtube_announcement_deliveries "
+                f"WHERE {owner_col} = $1 AND youtube_channel_id = $2 "
                 "AND item_id = $3 AND event_type = $4",
-                row["guild_id"],
+                owner_val,
                 row["youtube_channel_id"],
                 item_id,
                 event_type,
             )
             return status == "done"
         announced = await self._announce_youtube(row, item_id, event_type, payload)
-        await self.bot.pool.execute(
-            "UPDATE youtube_announcement_deliveries SET status = $5, "
-            "updated_at = now(), last_error = $6 "
-            "WHERE guild_id = $1 AND youtube_channel_id = $2 "
+        dead = await self.bot.pool.fetchval(
+            f"SELECT attempts >= 10 FROM youtube_announcement_deliveries "
+            f"WHERE {owner_col} = $1 AND youtube_channel_id = $2 "
             "AND item_id = $3 AND event_type = $4",
-            row["guild_id"],
+            owner_val,
             row["youtube_channel_id"],
             item_id,
             event_type,
-            (
-                "done"
-                if announced
-                else (
-                    "dead"
-                    if await self.bot.pool.fetchval(
-                        "SELECT attempts >= 10 FROM youtube_announcement_deliveries "
-                        "WHERE guild_id = $1 AND youtube_channel_id = $2 "
-                        "AND item_id = $3 AND event_type = $4",
-                        row["guild_id"],
-                        row["youtube_channel_id"],
-                        item_id,
-                        event_type,
-                    )
-                    else "pending"
-                )
-            ),
+        )
+        await self.bot.pool.execute(
+            f"UPDATE youtube_announcement_deliveries SET status = $5, "
+            "updated_at = now(), last_error = $6 "
+            f"WHERE {owner_col} = $1 AND youtube_channel_id = $2 "
+            "AND item_id = $3 AND event_type = $4",
+            owner_val,
+            row["youtube_channel_id"],
+            item_id,
+            event_type,
+            "done" if announced else ("dead" if dead else "pending"),
             None if announced else "Discord delivery failed",
         )
         return announced
-
     async def _announce_youtube(
         self, row: Any, item_id: str, event_type: str, payload: dict[str, Any]
     ) -> bool:
-        channel = self.bot.get_channel(row["announce_channel_id"])
-        if channel is None:
-            try:
-                channel = await self.bot.fetch_channel(row["announce_channel_id"])
-            except Exception as error:
-                self.bot.logger.warning(
-                    "Could not find YouTube announcement channel %s: %s",
-                    row["announce_channel_id"],
-                    error,
-                )
-                return False
+        destination = await self._youtube_destination(row)
+        if destination is None:
+            return False
         label = {
             "video": "New video",
             "live": "Live now",
@@ -650,23 +724,34 @@ class YouTubeNotifications:
                 )
             )
         )
+        mention_role_id = row.get("mention_role_id")
+        mention_everyone = bool(row.get("mention_everyone"))
+        from extensions.settings.notify import mention_text
+
+        mention = mention_text(mention_role_id, mention_everyone)
+        if mention:
+            children.extend(
+                (discord.ui.Separator(), discord.ui.TextDisplay(f"-# {mention}"))
+            )
         view = type("YouTubeAnnouncementView", (discord.ui.LayoutView,), {})(
             timeout=None
         )
         view.add_item(discord.ui.Container(*children, accent_color=self.bot.embedcolor))
+        from extensions.settings.notify import notify_allowed_mentions
+
         try:
-            await cast(Any, channel).send(
+            await cast(Any, destination).send(
                 view=view,
-                allowed_mentions=discord.AllowedMentions(
-                    everyone=True, users=True, roles=True, replied_user=False
+                allowed_mentions=notify_allowed_mentions(
+                    mention_role_id, mention_everyone
                 ),
             )
         except Exception as error:
             self.bot.logger.warning(
-                "Could not announce YouTube %s %s in guild %s: %s",
+                "Could not announce YouTube %s %s to %s: %s",
                 event_type,
                 item_id,
-                row["guild_id"],
+                row.get("guild_id") or row.get("user_id"),
                 error,
             )
             return False

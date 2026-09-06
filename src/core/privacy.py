@@ -31,6 +31,7 @@ USER_ID_TABLES = (
     "mudae_wishes",
     "notify_twitch_follows",
     "notify_anime_follows",
+    "youtube_follows",
     "phone_consent",
     "download_stats",
     "download_events",
