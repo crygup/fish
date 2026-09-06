@@ -4,11 +4,15 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
+
+# Test doubles supply only the Discord/service fields exercised by each test.
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 from discord.ext import commands
+from test_support import invoke_command, not_none, require_type
 
 from core.currency import (
     MAX_WAGER_PAYOUT,
@@ -25,11 +29,13 @@ from extensions.currency import (
     PURCHASABLE_BADGES,
     PURCHASABLE_COLORS,
     PURCHASABLE_TITLES,
+    RING_OFFERS,
     BadgeShopView,
     ColorShopView,
     Currency,
     LotteryShopView,
     RacingEmojiShopView,
+    RingShopView,
     ShopLandingView,
     TitleOffer,
     TitleShopView,
@@ -155,6 +161,36 @@ class WagerMemoryConnection(MemoryConnection):
             row.update(status=status, payout=payout)
             return row.copy()
         return await super().fetchrow(query, *args)
+
+
+class RingMemoryConnection(MemoryConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.wallets[42] = 300_000
+        self.rings: dict[tuple[int, str], int] = {}
+
+    async def fetchrow(self, query: str, *args: Any):
+        normalized = " ".join(query.split())
+        if "FROM ring_catalog" in normalized:
+            return {"ring_key": str(args[0]), "price": 100_000, "enabled": True}
+        if normalized.startswith("UPDATE currency_wallets"):
+            user_id, amount = int(args[0]), int(args[1])
+            self.wallets[user_id] -= amount
+            return {"user_id": user_id, "balance": self.wallets[user_id]}
+        return await super().fetchrow(query, *args)
+
+    async def execute(self, query: str, *args: Any) -> str:
+        normalized = " ".join(query.split())
+        if normalized.startswith("INSERT INTO user_rings"):
+            key = (int(args[0]), str(args[1]))
+            self.rings[key] = self.rings.get(key, 0) + 1
+            return "OK"
+        if normalized.startswith("INSERT INTO currency_transactions"):
+            # ``ring_purchase`` is a SQL literal; the third argument is its
+            # reference key rather than the source column.
+            self.transactions.append((int(args[0]), int(args[1]), "ring_purchase"))
+            return "OK"
+        return await super().execute(query, *args)
 
 
 class ClaimMemoryConnection(MemoryConnection):
@@ -451,13 +487,13 @@ def test_title_shop_is_separate_and_sorted_by_price() -> None:
         "greater_less",
         "less_three",
     }
-    assert Currency._title_offer("fishie").price == 500_000_000
+    assert not_none(Currency._title_offer("fishie")).price == 500_000_000
     view = TitleShopView()
     assert isinstance(view, discord.ui.LayoutView)
     container = view.children[0]
     displays = [
         child.content
-        for child in container.children
+        for child in require_type(container, discord.ui.Container).children
         if isinstance(child, discord.ui.TextDisplay)
     ]
     assert displays[0] == "## Title shop\nSpend Coins to add a title to your profile."
@@ -467,19 +503,19 @@ def test_title_shop_is_separate_and_sorted_by_price() -> None:
 
 
 def test_title_shop_resolves_display_names_and_categories() -> None:
-    assert Currency._title_offer("Magician's Red").key == "magicians_red"
-    assert Currency._title_offer("light-rod").price == 25_000_000
-    assert Currency._title_offer("Soft & Wet").key == "soft_wet"
+    assert not_none(Currency._title_offer("Magician's Red")).key == "magicians_red"
+    assert not_none(Currency._title_offer("light-rod")).price == 25_000_000
+    assert not_none(Currency._title_offer("Soft & Wet")).key == "soft_wet"
     assert {offer.category for offer in PURCHASABLE_TITLES} == {
         "Misc titles",
         "JoJo Stands",
         "Sins",
         "Emoticons",
     }
-    assert Currency._title_offer(">_<").key == "greater_less"
-    assert Currency._title_offer(">_>").key == "underscore_greater"
-    assert Currency._title_offer("<3").key == "less_three"
-    assert Currency._title_offer(":3").key == "colon_three"
+    assert not_none(Currency._title_offer(">_<")).key == "greater_less"
+    assert not_none(Currency._title_offer(">_>")).key == "underscore_greater"
+    assert not_none(Currency._title_offer("<3")).key == "less_three"
+    assert not_none(Currency._title_offer(":3")).key == "colon_three"
 
 
 def test_title_shop_pages_keep_fullest_page_first() -> None:
@@ -510,7 +546,7 @@ def test_title_shop_escapes_emoticon_names_but_not_selectors() -> None:
     container = view.children[0]
     displays = [
         child.content
-        for child in container.children
+        for child in require_type(container, discord.ui.Container).children
         if isinstance(child, discord.ui.TextDisplay)
     ]
 
@@ -533,20 +569,128 @@ def test_base_shop_explains_purchase_and_has_category_selector() -> None:
     ]
     assert displays[0] == "## Coin shop"
     assert displays[1] == (
-        "Spend Coins on profile badges, titles, colors, and lottery tickets.\n\n"
+        "Spend Coins on profile badges, titles, colors, rings, and lottery tickets.\n\n"
         "Buy items with `fish purchase <category> <item>`\n\n"
         "Choose a category below to browse the available items."
     )
     assert isinstance(view.children[1], discord.ui.ActionRow)
-    selector = view.children[1].children[0]
-    assert isinstance(selector, discord.ui.Select)
-    assert [option.value for option in selector.options] == [
-        "badges",
-        "titles",
-        "colors",
-        "lottery",
-        "racing-emoji",
+
+
+def test_ring_shop_catalog_and_selectors() -> None:
+    import discord
+
+    assert [(offer.key, offer.price) for offer in RING_OFFERS] == [
+        ("runalds", 100_000),
+        ("kjaros", 100_000),
+        ("singularity", 75_000),
+        ("basic", 50_000),
     ]
+    assert not_none(Currency._ring_offer("Basic")).key == "basic"
+    assert not_none(Currency._ring_offer("1545461490948116622")).key == "runalds"
+    assert (
+        not_none(Currency._ring_offer("<:Kjaros:1545461494613938320>")).key == "kjaros"
+    )
+
+    view = RingShopView()
+    assert isinstance(view, discord.ui.LayoutView)
+    container = view.children[0]
+    text = "\n".join(
+        child.content
+        for child in require_type(container, discord.ui.Container).children
+        if isinstance(child, discord.ui.TextDisplay)
+    )
+    assert "💍 Basic (`basic`) · **50,000 Coins**" in text
+    assert "<:Runalds:1545461490948116622> Runalds" in text
+
+
+async def test_ring_purchases_are_stackable() -> None:
+    pool = MemoryPool()
+    pool.connection = RingMemoryConnection()
+    service = CurrencyService(pool)
+
+    first = await service.purchase_ring(42, "runalds", 100_000)
+    second = await service.purchase_ring(42, "runalds", 100_000)
+
+    assert first.balance == 200_000
+    assert second.balance == 100_000
+    assert pool.connection.rings[(42, "runalds")] == 2
+    assert [transaction[2] for transaction in pool.connection.transactions] == [
+        "ring_purchase",
+        "ring_purchase",
+    ]
+
+
+async def test_ring_inventory_displays_quantity_and_equipped_state() -> None:
+    cog = Currency.__new__(Currency)
+    cog.bot = cast(
+        Any,
+        SimpleNamespace(
+            currency=SimpleNamespace(
+                get_lottery_ticket_count=AsyncMock(return_value=0),
+                owned_titles=AsyncMock(return_value=[]),
+                owned_colors=AsyncMock(return_value=[]),
+                owned_racing_emojis=AsyncMock(return_value=[]),
+                owned_rings=AsyncMock(
+                    return_value=[
+                        {
+                            "ring_key": "runalds",
+                            "display_name": "Runalds",
+                            "display": "<:Runalds:1545461490948116622>",
+                            "quantity": 2,
+                            "equipped_count": 1,
+                        }
+                    ]
+                ),
+            ),
+            badges=SimpleNamespace(owned=AsyncMock(return_value=[])),
+        ),
+    )
+
+    entries = await cog._inventory_entries(42)
+
+    assert entries == [
+        (
+            "Rings",
+            "<:Runalds:1545461490948116622> **Runalds** · 2 · equipped",
+        )
+    ]
+
+
+async def test_ring_equip_requires_marriage() -> None:
+    cog = Currency.__new__(Currency)
+    equip = AsyncMock()
+    owned = AsyncMock(
+        return_value=[
+            {
+                "ring_key": "basic",
+                "display_name": "Basic",
+                "display": "💍",
+                "quantity": 1,
+                "equipped_count": 0,
+            }
+        ]
+    )
+    is_married = AsyncMock(return_value=False)
+    fun = SimpleNamespace(is_married=is_married)
+    cog.bot = cast(
+        Any,
+        SimpleNamespace(
+            get_cog=lambda name: fun if name == "Fun" else None,
+            currency=SimpleNamespace(owned_rings=owned, equip_ring=equip),
+        ),
+    )
+    ctx = cast(
+        Any,
+        SimpleNamespace(author=SimpleNamespace(id=42), send=AsyncMock()),
+    )
+
+    with pytest.raises(commands.BadArgument, match="must be married"):
+        await cog._equip_ring(ctx, "basic")
+    equip.assert_not_awaited()
+
+    is_married.return_value = True
+    await cog._equip_ring(ctx, "basic")
+    equip.assert_awaited_once_with(42, "basic")
 
 
 def test_shop_prefix_can_render_slash_commands() -> None:
@@ -614,7 +758,7 @@ def test_color_shop_contains_presets_and_custom_price_order() -> None:
     container = view.children[0]
     displays = [
         child.content
-        for child in container.children
+        for child in require_type(container, discord.ui.Container).children
         if isinstance(child, discord.ui.TextDisplay)
     ]
     assert displays[0] == "## Color shop\nSpend Coins to add a profile color."
@@ -700,12 +844,12 @@ async def test_israel_flag_purchase_charges_wallet_without_granting_badge() -> N
         ),
     )
 
-    await Currency.purchase_badge.callback(cog, ctx, "flag", "🇮🇱")
+    await invoke_command(Currency.purchase_badge, cog, ctx, "flag", "🇮🇱")
 
     debit.assert_awaited_once()
-    assert debit.await_args.args[:3] == (42, 10_000, "badge_purchase")
+    assert not_none(debit.await_args).args[:3] == (42, 10_000, "badge_purchase")
     purchase.assert_not_awaited()
-    assert send.await_args.args[0] == "no"
+    assert not_none(send.await_args).args[0] == "no"
 
 
 async def test_sell_badge_rejects_stat_badges() -> None:
@@ -726,7 +870,7 @@ async def test_sell_badge_rejects_stat_badges() -> None:
     ctx = cast(Any, SimpleNamespace(author=SimpleNamespace(id=42)))
 
     with pytest.raises(commands.BadArgument, match="purchasable badge"):
-        await Currency.sell_badge.callback(cog, ctx, badge="richest")
+        await invoke_command(Currency.sell_badge, cog, ctx, badge="richest")
     service.sell_badge.assert_not_awaited()
 
 
@@ -758,7 +902,7 @@ async def test_work_click_records_each_click_once() -> None:
         await view._click(interaction())
 
     assert on_click.await_count == 10
-    assert on_complete.await_args.args == (True,)
+    assert not_none(on_complete.await_args).args == (True,)
     assert view.clicks == 10
 
 
@@ -810,23 +954,24 @@ async def test_work_math_accepts_subtraction_and_retries_wrong_answers(
     view = ctx.send.await_args.kwargs["view"]
     assert isinstance(view, WorkMathView)
     assert view.question.startswith("Solve **20 − 7**")
-    await view.submit_message(wrong)
+    await view.submit_message(cast("discord.Message", wrong))
     assert not view.finished
-    await view.submit_message(correct)
+    await view.submit_message(cast("discord.Message", correct))
     bot.currency.credit.assert_awaited_once()
     wrong.reply.assert_not_awaited()
     assert view.finished
 
 
 async def test_work_math_modal_wrong_answer_is_ephemeral_only() -> None:
-    import discord
 
     complete = AsyncMock()
     view = WorkMathView(42, "Solve **2 + 2** within 60 seconds.", 4, complete)
     response = SimpleNamespace(send_message=AsyncMock())
     interaction = SimpleNamespace(response=response)
 
-    await view.submit_interaction(interaction, "3")
+    await view.submit_interaction(
+        cast("discord.Interaction[discord.Client]", interaction), "3"
+    )
 
     response.send_message.assert_awaited_once()
     assert response.send_message.await_args.args == ("Incorrect!",)
@@ -854,7 +999,7 @@ async def test_work_math_timeout_keeps_equation_and_reveals_answer() -> None:
         author=SimpleNamespace(id=42),
         content="fish work",
     )
-    await view.submit_message(command_message)
+    await view.submit_message(cast("discord.Message", command_message))
     assert not view.finished
 
     await view.on_timeout()

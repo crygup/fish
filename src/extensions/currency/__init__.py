@@ -36,6 +36,8 @@ from core.currency import (
     LotteryStatus,
     RacingEmojiAlreadyOwned,
     RacingEmojiNotOwned,
+    RingEquipped,
+    RingNotOwned,
     TitleAlreadyOwned,
     TitleNotOwned,
     claim_period_start,
@@ -194,6 +196,7 @@ _EARNINGS_GROUP_ORDER = (
     "pvp:rps",
     "claims",
     "reputation",
+    "supporters",
     "gifts",
     "shop",
     "other",
@@ -236,9 +239,13 @@ def _earnings_group_for_source(source: str) -> tuple[str, str]:
         return "claims", "Daily and weekly claims"
     if raw.startswith("reputation_"):
         return "reputation", "Reputation"
+    if raw == "fishie_supporter":
+        return "supporters", "Fishie Supporter"
+    if raw == "birthday":
+        return "birthday", "Birthday rewards"
     if raw in {"give", "give_sent", "give_received"} or raw.startswith("give_"):
         return "gifts", "Gifts"
-    if raw.startswith(("badge_", "title_", "color_", "racing_")):
+    if raw.startswith(("badge_", "title_", "color_", "racing_", "ring_")):
         return "shop", "Shop purchases and sales"
     return "other", "Other"
 
@@ -295,6 +302,10 @@ def _earnings_source_detail_label(source: str) -> str:
         return raw.removeprefix("claim_").replace("_", " ").title()
     if raw.startswith("reputation_"):
         return raw.removeprefix("reputation_").replace("_", " ").title()
+    if raw == "fishie_supporter":
+        return "Fishie Supporter"
+    if raw == "birthday":
+        return "Birthday reward"
     if raw in {"give", "give_sent", "give_received"}:
         return {
             "give": "Gifts",
@@ -498,7 +509,7 @@ class EarningsView(discord.ui.LayoutView):
 
 
 class ShopCategorySelect(discord.ui.Select):
-    """Switch between the badge, title, colour, lottery, and racing shops."""
+    """Switch between the available Coins shop categories."""
 
     def __init__(
         self,
@@ -547,6 +558,12 @@ class ShopCategorySelect(discord.ui.Select):
                 value="racing-emoji",
                 description="Choose an emoji for Sea Animal Race.",
                 default=selected == "racing-emoji",
+            ),
+            discord.SelectOption(
+                label="Rings",
+                value="rings",
+                description="Browse rings used for marriage.",
+                default=selected == "rings",
             ),
         ]
         super().__init__(
@@ -599,6 +616,11 @@ class ShopCategorySelect(discord.ui.Select):
                 owned_titles=self.owned_titles,
                 owned_colors=self.owned_colors,
                 owned_racing=self.owned_racing,
+            )
+        elif category == "rings":
+            view = RingShopView(
+                accent_color=self.accent_color,
+                command_prefix=self.command_prefix,
             )
         else:  # pragma: no cover - Discord only sends configured option values.
             await interaction.response.send_message(
@@ -688,6 +710,29 @@ class TitleOffer:
     @property
     def command_selector(self) -> str:
         return self.selector or self.key
+
+
+@dataclass(frozen=True, slots=True)
+class RingOffer:
+    """A stackable ring sold by the Coins shop."""
+
+    key: str
+    name: str
+    emoji: str
+    price: int
+
+
+RING_OFFERS: tuple[RingOffer, ...] = (
+    RingOffer("runalds", "Runalds", "<:Runalds:1545461490948116622>", 100_000),
+    RingOffer("kjaros", "Kjaros", "<:Kjaros:1545461494613938320>", 100_000),
+    RingOffer(
+        "singularity",
+        "Singularity",
+        "<:Singularity:1545461498271367199>",
+        75_000,
+    ),
+    RingOffer("basic", "Basic", "💍", 50_000),
+)
 
 
 class TitleShopView(discord.ui.LayoutView):
@@ -1287,6 +1332,48 @@ class RacingEmojiShopView(discord.ui.LayoutView):
         )
 
 
+class RingShopView(discord.ui.LayoutView):
+    """Components V2 presentation of the stackable ring catalog."""
+
+    def __init__(
+        self,
+        *,
+        accent_color: discord.Colour | int | None = None,
+        command_prefix: str = "fish ",
+    ) -> None:
+        super().__init__(timeout=600)
+        lines = [
+            f"{offer.emoji} {offer.name} (`{offer.key}`) · "
+            f"**{offer.price:,} Coins**"
+            for offer in sorted(RING_OFFERS, key=lambda item: -item.price)
+        ]
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "## Ring shop\n"
+                    "Purchase rings to propose to another Fishie user. "
+                    "You can own more than one of each ring."
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay("\n".join(lines)),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"Purchase one with `{command_prefix}purchase ring <ring>`."
+                ),
+                accent_color=accent_color,
+            )
+        )
+        self.add_item(
+            discord.ui.ActionRow(
+                ShopCategorySelect(
+                    accent_color=accent_color,
+                    selected="rings",
+                    command_prefix=command_prefix,
+                )
+            )
+        )
+
+
 class ShopLandingView(discord.ui.LayoutView):
     """Landing page shown by the base ``shop`` command."""
 
@@ -1305,7 +1392,7 @@ class ShopLandingView(discord.ui.LayoutView):
             discord.ui.Container(
                 discord.ui.TextDisplay("## Coin shop"),
                 discord.ui.TextDisplay(
-                    "Spend Coins on profile badges, titles, colors, and lottery tickets.\n\n"
+                    "Spend Coins on profile badges, titles, colors, rings, and lottery tickets.\n\n"
                     f"Buy items with `{command_prefix}purchase <category> <item>`\n\n"
                     "Choose a category below to browse the available items."
                 ),
@@ -1454,8 +1541,11 @@ class LotteryView(discord.ui.LayoutView):
         # before doing any wallet or lottery work.
         await interaction.response.defer()
         try:
-            amount = int(raw_amount.strip())
-        except (TypeError, ValueError):
+            parsed_amount = parse_coin_amount(raw_amount)
+            if parsed_amount == EVERYTHING_AMOUNT:
+                raise CoinAmountError("Enter a ticket count.")
+            amount = int(parsed_amount)
+        except (CoinAmountError, TypeError, ValueError):
             await interaction.followup.send(
                 "Enter a whole number of tickets.",
                 ephemeral=True,
@@ -1513,11 +1603,17 @@ class InventoryView(discord.ui.LayoutView):
         ctx: Context,
         entries: list[tuple[str, str]],
         *,
+        display_user: discord.abc.User | None = None,
         accent_color: discord.Colour | int | None = None,
     ) -> None:
         super().__init__(timeout=300)
         self.ctx = ctx
         self.entries = entries
+        # ``ctx.author`` is the viewer (and the only person allowed to use
+        # the paginator), while ``display_user`` is the inventory owner.  Keep
+        # those roles separate so users can inspect somebody else's inventory
+        # without handing control of the view to that person.
+        self.display_user = display_user or ctx.author
         self.page = 0
         self.message: discord.Message | None = None
         self.accent_color = accent_color
@@ -1534,11 +1630,11 @@ class InventoryView(discord.ui.LayoutView):
         page_entries = self.entries[start : start + self.PAGE_SIZE]
         lines = [
             "## "
-            f"{discord.utils.escape_mentions(discord.utils.escape_markdown(self.ctx.author.display_name))}"
+            f"{discord.utils.escape_mentions(discord.utils.escape_markdown(self.display_user.display_name))}"
             "'s inventory"
         ]
         if not page_entries:
-            lines.append("Your inventory is empty.")
+            lines.append("This inventory is empty.")
         else:
             last_category: str | None = None
             for index, (category, text) in enumerate(page_entries):
@@ -1941,7 +2037,7 @@ def _shop_badge_owned(offer: BadgeOffer, owned: frozenset[str]) -> bool:
 
 
 class Currency(Cog):
-    """Fishie's currency system! Gamble away!"""
+    """Check your balance, work, buy items and more."""
 
     emoji = discord.PartialEmoji(name="🪙")
 
@@ -2257,10 +2353,15 @@ class Currency(Cog):
         await cast(Callable[..., Awaitable[Any]], setter)(ctx, badge_order)
 
     @profile.command(name="inventory", aliases=("inv",))
-    async def profile_inventory(self, ctx: Context) -> None:
-        """Browse your profile inventory."""
+    @app_commands.describe(user="User whose inventory to view (defaults to yourself).")
+    async def profile_inventory(
+        self,
+        ctx: Context,
+        user: discord.User = commands.Author,
+    ) -> None:
+        """Browse a user's profile inventory."""
 
-        await self._send_inventory(ctx)
+        await self._send_inventory(ctx, user)
 
     @profile.group(name="equip", fallback="help")
     async def profile_equip(self, ctx: Context) -> None:
@@ -2293,6 +2394,13 @@ class Currency(Cog):
         """Equip one of your purchased racing emojis."""
 
         await self._equip_racing_emoji(ctx, emoji)
+
+    @profile_equip.command(name="ring")
+    @app_commands.describe(ring="Ring ID, name, or emoji to equip.")
+    async def profile_equip_ring(self, ctx: Context, *, ring: str) -> None:
+        """Equip one of your rings after getting married."""
+
+        await self._equip_ring(ctx, ring)
 
     @profile.group(name="unequip", fallback="help")
     async def profile_unequip(self, ctx: Context) -> None:
@@ -2626,6 +2734,59 @@ class Currency(Cog):
         )
 
     @staticmethod
+    def _ring_offer(selector: str) -> RingOffer | None:
+        """Resolve a ring by key, display name, emoji, or custom emoji ID."""
+
+        raw = str(selector).strip()
+        if not raw:
+            return None
+        partial = discord.PartialEmoji.from_str(raw)
+        emoji_id = int(partial.id) if partial.id is not None else None
+        folded = re.sub(r"[\s_-]+", "-", raw.casefold()).strip(":-")
+        compact = re.sub(r"[^a-z0-9]+", "", raw.casefold())
+        for offer in RING_OFFERS:
+            offer_partial = discord.PartialEmoji.from_str(offer.emoji)
+            if emoji_id is not None and offer_partial.id == emoji_id:
+                return offer
+            if raw.isdecimal() and offer_partial.id == int(raw):
+                return offer
+            for candidate in (offer.key, offer.name, offer.emoji):
+                candidate_folded = re.sub(r"[\s_-]+", "-", candidate.casefold()).strip(
+                    ":-"
+                )
+                candidate_compact = re.sub(r"[^a-z0-9]+", "", candidate.casefold())
+                if folded == candidate_folded or (
+                    compact and candidate_compact == compact
+                ):
+                    return offer
+        return None
+
+    async def _owned_ring(self, user_id: int, selector: str) -> Any:
+        """Resolve one ring stack from a user's inventory."""
+
+        offer = self._ring_offer(selector)
+        rows = await self.bot.currency.owned_rings(int(user_id))
+        for row in rows:
+            if (
+                offer is not None
+                and str(self._badge_result_value(row, "ring_key", "")) == offer.key
+            ):
+                return row
+        raise commands.BadArgument("You do not own that ring.")
+
+    async def _user_is_married(self, user_id: int) -> bool:
+        """Ask the social feature whether a user may equip a ring."""
+
+        social = self.bot.get_cog("Fun")
+        checker = getattr(social, "is_married", None)
+        if not callable(checker):
+            raise commands.CommandError(
+                "Marriage information is temporarily unavailable. Please try again later."
+            )
+        check = cast(Callable[[int], Awaitable[bool]], checker)
+        return bool(await check(int(user_id)))
+
+    @staticmethod
     def _shop_prefix(ctx: Context) -> str:
         """Return a command prefix suitable for text and slash invocations."""
 
@@ -2706,10 +2867,11 @@ class Currency(Cog):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
+        resolved_amount: int
         if parsed_amount == EVERYTHING_AMOUNT:
             try:
                 wallet = await self.bot.currency.get_wallet(ctx.author.id)
-                amount = int(wallet.balance)
+                resolved_amount = int(wallet.balance)
             except Exception:
                 self.bot.logger.exception("Failed to resolve an everything transfer")
                 await ctx.send(
@@ -2717,7 +2879,7 @@ class Currency(Cog):
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 return
-            if amount <= 0:
+            if resolved_amount <= 0:
                 await ctx.send(
                     "Your wallet is empty, so there are no Coins to give.",
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -2734,8 +2896,8 @@ class Currency(Cog):
             ):
                 return
         else:
-            amount = int(parsed_amount)
-        if amount <= 0:
+            resolved_amount = int(parsed_amount)
+        if resolved_amount <= 0:
             await ctx.send(
                 "You must give at least 1 Coin.",
                 allowed_mentions=discord.AllowedMentions.none(),
@@ -2745,7 +2907,7 @@ class Currency(Cog):
             result = await self.bot.currency.transfer(
                 ctx.author.id,
                 user.id,
-                amount,
+                resolved_amount,
                 source="give",
                 reference_key=(
                     f"give:{ctx.author.id}:{user.id}:"
@@ -2770,7 +2932,7 @@ class Currency(Cog):
             return
         name = discord.utils.escape_markdown(user.name)
         await ctx.send(
-            f"You gave **{name}** **{amount:,} Coins**.\n"
+            f"You gave **{name}** **{resolved_amount:,} Coins**.\n"
             f"-# Wallet balance: {result.sender.balance:,} Coins",
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -2898,19 +3060,51 @@ class Currency(Cog):
                     else ""
                 )
                 entries.append(("Racing Emoji", f"{display}{suffix}"))
+
+        owned_rings = getattr(self.bot.currency, "owned_rings", None)
+        if callable(owned_rings):
+            fetch_rings = cast(Callable[[int], Awaitable[Any]], owned_rings)
+            for ring in await fetch_rings(int(user_id)):
+                quantity = int(self._badge_result_value(ring, "quantity", 0) or 0)
+                if quantity <= 0:
+                    continue
+                display = str(self._badge_result_value(ring, "display", "💍"))
+                name = discord.utils.escape_markdown(
+                    str(self._badge_result_value(ring, "display_name", "Ring"))
+                )
+                equipped = int(self._badge_result_value(ring, "equipped_count", 0) or 0)
+                suffix = " · equipped" if equipped else ""
+                entries.append(
+                    (
+                        "Rings",
+                        f"{display} **{name}** · {quantity:,}{suffix}",
+                    )
+                )
         return entries
 
     @commands.command(name="inventory", aliases=("inv",))
-    async def inventory(self, ctx: Context) -> None:
-        """Browse your profile badges, titles, and colours."""
+    async def inventory(
+        self,
+        ctx: Context,
+        user: discord.User = commands.Author,
+    ) -> None:
+        """Browse a user's profile badges, titles, and colours."""
 
-        await self._send_inventory(ctx)
+        await self._send_inventory(ctx, user)
 
-    async def _send_inventory(self, ctx: Context) -> None:
-        """Render the inventory view used by the standalone/profile commands."""
+    async def _send_inventory(
+        self, ctx: Context, user: discord.abc.User | None = None
+    ) -> None:
+        """Render the inventory view used by standalone/profile commands."""
 
-        entries = await self._inventory_entries(ctx.author.id)
-        view = InventoryView(ctx, entries, accent_color=ctx.embedcolor)
+        inventory_user = user or ctx.author
+        entries = await self._inventory_entries(inventory_user.id)
+        view = InventoryView(
+            ctx,
+            entries,
+            display_user=inventory_user,
+            accent_color=ctx.embedcolor,
+        )
         view.message = await ctx.send(
             view=view, allowed_mentions=discord.AllowedMentions.none()
         )
@@ -3699,6 +3893,18 @@ class Currency(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    @shop.command(name="rings", aliases=("ring",))
+    async def shop_rings(self, ctx: Context) -> None:
+        """Show rings that can be purchased with Coins."""
+
+        await ctx.send(
+            view=RingShopView(
+                accent_color=ctx.embedcolor,
+                command_prefix=self._shop_prefix(ctx),
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     @commands.hybrid_group(name="purchase", aliases=("buy",), fallback="help")
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -3709,6 +3915,7 @@ class Currency(Cog):
             "Use `fish purchase badge <badge>`, `fish purchase title <title>`, "
             "`fish purchase color <color>`, or "
             "`fish purchase racing-emoji <emoji>`, or "
+            "`fish purchase ring <ring>`, or "
             "`fish purchase ticket <amount>`. ",
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -3747,6 +3954,39 @@ class Currency(Cog):
             f"**{len(tickets) * LOTTERY_TICKET_PRICE:,} Coins**.\n"
             f"-# *Prize pool: {result.prize_pool:,} Coins · "
             f"Wallet balance: {result.wallet_balance:,} Coins*",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @purchase.command(name="ring", aliases=("rings",))
+    @app_commands.describe(ring="Ring ID, name, or emoji to purchase.")
+    async def purchase_ring(self, ctx: Context, *, ring: str) -> None:
+        """Purchase one ring; duplicate purchases increase its quantity."""
+
+        offer = self._ring_offer(ring)
+        if offer is None:
+            raise commands.BadArgument(
+                "That ring is not in the shop. Use `fish shop rings` to see "
+                "the available rings."
+            )
+        try:
+            wallet = await self.bot.currency.purchase_ring(
+                ctx.author.id,
+                offer.key,
+                offer.price,
+            )
+        except InsufficientFunds as error:
+            raise commands.BadArgument(
+                f"You need **{error.required:,} Coins**, but only have "
+                f"**{error.balance:,} Coins**."
+            ) from error
+        except RingNotOwned as error:
+            raise commands.BadArgument(
+                "That ring is not currently available."
+            ) from error
+        await ctx.send(
+            f"Purchased {offer.emoji} **{offer.name}** for "
+            f"**{offer.price:,} Coins**.\n"
+            f"-# Wallet balance: {wallet.balance:,} Coins",
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -4586,6 +4826,30 @@ class Currency(Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    @equip.command(name="ring")
+    async def equip_ring(self, ctx: Context, *, ring: str) -> None:
+        """Equip one of your rings after getting married."""
+
+        await self._equip_ring(ctx, ring)
+
+    async def _equip_ring(self, ctx: Context, ring: str) -> None:
+        if not await self._user_is_married(ctx.author.id):
+            raise commands.BadArgument("You must be married before equipping a ring.")
+        owned = await self._owned_ring(ctx.author.id, ring)
+        ring_key = str(self._badge_result_value(owned, "ring_key", ""))
+        try:
+            await self.bot.currency.equip_ring(ctx.author.id, ring_key)
+        except RingNotOwned as error:
+            raise commands.BadArgument("You do not own that ring.") from error
+        display = str(self._badge_result_value(owned, "display", "💍"))
+        name = discord.utils.escape_markdown(
+            str(self._badge_result_value(owned, "display_name", ring_key))
+        )
+        await ctx.send(
+            f"Equipped {display} **{name}**.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     @commands.group(name="unequip", invoke_without_command=True)
     async def unequip(self, ctx: Context) -> None:
         """Unequip a profile item."""
@@ -4799,6 +5063,30 @@ class Currency(Cog):
         await ctx.send(
             f"Sold the **{discord.utils.escape_markdown(display)}** title for "
             f"**{refund:,} Coins**.\n"
+            f"-# Wallet balance: {wallet_balance:,} Coins",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @sell.command(name="ring", aliases=("rings",))
+    @app_commands.describe(ring="The ring name, emoji, or ID to sell.")
+    async def sell_ring(self, ctx: Context, *, ring: str) -> None:
+        """Sell one owned ring for half its purchase price."""
+
+        row = await self._owned_ring(ctx.author.id, ring)
+        ring_key = str(self._badge_result_value(row, "ring_key", ""))
+        try:
+            result = await self.bot.currency.sell_ring(ctx.author.id, ring_key)
+        except RingEquipped as error:
+            raise commands.BadArgument(
+                "You cannot sell a ring while it is equipped through a marriage."
+            ) from error
+        except RingNotOwned as error:
+            raise commands.BadArgument("You do not own that ring.") from error
+        display = str(self._badge_result_value(result, "display", ring))
+        refund = int(self._badge_result_value(result, "refund_amount", 0) or 0)
+        wallet_balance = int(self._badge_result_value(result, "wallet_balance", 0) or 0)
+        await ctx.send(
+            f"Sold {display} ring for **{refund:,} Coins**.\n"
             f"-# Wallet balance: {wallet_balance:,} Coins",
             allowed_mentions=discord.AllowedMentions.none(),
         )

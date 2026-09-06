@@ -213,6 +213,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     auto_reactions_channel BIGINT,
     pinboard BIGINT,
     mudae_auto_scrape_series BOOLEAN NOT NULL DEFAULT FALSE,
+    mudae_recent_claims BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (guild_id)
 );
 
@@ -571,6 +572,131 @@ SET display_name = EXCLUDED.display_name,
     price = EXCLUDED.price,
     enabled = TRUE;
 
+CREATE TABLE IF NOT EXISTS ring_catalog (
+    ring_key TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    emoji_name TEXT NOT NULL,
+    emoji_id BIGINT,
+    unicode BOOLEAN NOT NULL DEFAULT TRUE,
+    animated BOOLEAN NOT NULL DEFAULT FALSE,
+    display TEXT NOT NULL,
+    price BIGINT NOT NULL CHECK (price > 0),
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS user_rings (
+    user_id BIGINT NOT NULL REFERENCES currency_wallets(user_id),
+    ring_key TEXT NOT NULL REFERENCES ring_catalog(ring_key),
+    quantity BIGINT NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+    equipped_count BIGINT NOT NULL DEFAULT 0
+        CHECK (
+            equipped_count IN (0, 1)
+            AND equipped_count <= quantity
+        ),
+    purchased_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, ring_key)
+);
+
+CREATE INDEX IF NOT EXISTS user_rings_inventory_idx
+    ON user_rings (user_id, updated_at DESC)
+    WHERE quantity > 0;
+
+CREATE UNIQUE INDEX IF NOT EXISTS user_rings_one_equipped_idx
+    ON user_rings (user_id)
+    WHERE equipped_count > 0;
+
+INSERT INTO ring_catalog(
+    ring_key, display_name, emoji_name, emoji_id, unicode, animated,
+    display, price, enabled
+)
+VALUES
+    ('basic', 'Basic', '💍', NULL, TRUE, FALSE, '💍', 50000, TRUE),
+    ('runalds', 'Runalds', 'Runalds', 1545461490948116622, FALSE, FALSE,
+        '<:Runalds:1545461490948116622>', 100000, TRUE),
+    ('kjaros', 'Kjaros', 'Kjaros', 1545461494613938320, FALSE, FALSE,
+        '<:Kjaros:1545461494613938320>', 100000, TRUE),
+    ('singularity', 'Singularity', 'Singularity', 1545461498271367199, FALSE, FALSE,
+        '<:Singularity:1545461498271367199>', 75000, TRUE)
+ON CONFLICT (ring_key) DO UPDATE SET
+    display_name = EXCLUDED.display_name,
+    emoji_name = EXCLUDED.emoji_name,
+    emoji_id = EXCLUDED.emoji_id,
+    unicode = EXCLUDED.unicode,
+    animated = EXCLUDED.animated,
+    display = EXCLUDED.display,
+    price = EXCLUDED.price,
+    enabled = EXCLUDED.enabled;
+
+-- Fishie friends, follows, and marriages.  These are kept in the bootstrap
+-- schema as well as migration 0089 so a fresh database and an upgraded one
+-- expose the same relationship model.
+CREATE TABLE IF NOT EXISTS social_user_settings (
+    user_id BIGINT PRIMARY KEY,
+    friend_requests_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS social_friend_requests (
+    requester_id BIGINT NOT NULL,
+    recipient_id BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (requester_id, recipient_id),
+    CHECK (requester_id <> recipient_id)
+);
+
+CREATE INDEX IF NOT EXISTS social_friend_requests_recipient_idx
+    ON social_friend_requests (recipient_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS social_friendships (
+    user_low_id BIGINT NOT NULL,
+    user_high_id BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_low_id, user_high_id),
+    CHECK (user_low_id < user_high_id)
+);
+
+CREATE INDEX IF NOT EXISTS social_friendships_high_idx
+    ON social_friendships (user_high_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS social_follows (
+    follower_id BIGINT NOT NULL,
+    followed_id BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (follower_id, followed_id),
+    CHECK (follower_id <> followed_id)
+);
+
+CREATE INDEX IF NOT EXISTS social_follows_followed_idx
+    ON social_follows (followed_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS social_marriages (
+    id BIGSERIAL PRIMARY KEY,
+    proposer_id BIGINT NOT NULL,
+    recipient_id BIGINT NOT NULL,
+    ring_key TEXT NOT NULL REFERENCES ring_catalog(ring_key),
+    married_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    CHECK (proposer_id <> recipient_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_marriage_members (
+    user_id BIGINT PRIMARY KEY,
+    marriage_id BIGINT NOT NULL REFERENCES social_marriages(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS social_marriage_members_marriage_idx
+    ON social_marriage_members (marriage_id);
+
+CREATE TABLE IF NOT EXISTS social_marriage_cooldowns (
+    user_id BIGINT PRIMARY KEY,
+    available_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS social_marriage_cooldowns_available_idx
+    ON social_marriage_cooldowns (available_at);
+
 CREATE TABLE IF NOT EXISTS currency_transactions (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES currency_wallets(user_id)
@@ -889,6 +1015,30 @@ CREATE INDEX IF NOT EXISTS mudae_series_bundle_idx
 
 CREATE INDEX IF NOT EXISTS mudae_series_name_idx
     ON mudae_series (normalized_name);
+
+-- Claims detected when an unclaimed Mudae character card is edited after a
+-- user claims it.  The claimant may be unknown when a member cannot be
+-- resolved from the guild cache; user id 1 is the conventional fallback.
+CREATE TABLE IF NOT EXISTS mudae_recent_claims (
+    id BIGSERIAL PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    message_id BIGINT NOT NULL,
+    character_name TEXT NOT NULL CHECK (length(btrim(character_name)) > 0),
+    claiming_username TEXT NOT NULL DEFAULT 'Unknown',
+    claiming_user_id BIGINT NOT NULL DEFAULT 1,
+    claimed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    event_key TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS mudae_recent_claims_guild_time_idx
+    ON mudae_recent_claims (guild_id, claimed_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS mudae_recent_claims_claimant_idx
+    ON mudae_recent_claims (guild_id, claiming_user_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS mudae_recent_claims_event_idx
+    ON mudae_recent_claims (guild_id, message_id, event_key);
 
 CREATE TABLE IF NOT EXISTS phone_consent (
     user_id BIGINT PRIMARY KEY,

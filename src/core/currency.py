@@ -251,6 +251,14 @@ class RacingEmojiNotOwned(CurrencyError):
     """Raised when a user selects a racing emoji they do not own."""
 
 
+class RingNotOwned(CurrencyError):
+    """Raised when a user selects a ring they do not own."""
+
+
+class RingEquipped(CurrencyError):
+    """Raised when a user tries to sell a currently equipped ring."""
+
+
 class BalanceOverflow(CurrencyError):
     """Raised rather than allowing a wallet to overflow PostgreSQL BIGINT."""
 
@@ -418,6 +426,41 @@ class RacingEmojiSale:
             return self.refund_amount
         if key == "wallet_balance":
             return self.wallet_balance
+        raise KeyError(key)
+
+
+@dataclass(frozen=True, slots=True)
+class RingTransfer:
+    """One ring unit transferred between two inventories."""
+
+    sender_id: int
+    recipient_id: int
+    ring_key: str
+    recipient_quantity: int
+    recipient_equipped_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class RingSale:
+    """Result of selling one owned ring unit."""
+
+    ring_key: str
+    display: str
+    refund_amount: int
+    wallet_balance: int
+    remaining_quantity: int
+
+    def __getitem__(self, key: str) -> Any:
+        if key == "ring_key":
+            return self.ring_key
+        if key == "display":
+            return self.display
+        if key == "refund_amount":
+            return self.refund_amount
+        if key == "wallet_balance":
+            return self.wallet_balance
+        if key in {"remaining_quantity", "quantity"}:
+            return self.remaining_quantity
         raise KeyError(key)
 
 
@@ -1003,40 +1046,98 @@ class CurrencyService:
         The transaction ledger is the source of truth here rather than the
         wallet balance: purchases, wagers, refunds, claims, and game rewards
         can all change a balance, and grouping by ``source`` lets the command
-        explain where those changes came from.
+        explain where those changes came from.  Wager stakes are escrowed
+        before a game starts, so they are deliberately omitted from the
+        earnings view until the wager settles.  A settled wager contributes
+        only its net result (payout minus stake): a 100-Coin stake that pays
+        150 is +50 earned, while a losing 100-Coin stake is 100 lost.  This
+        keeps the earnings view from presenting the same stake as both a loss
+        and part of a later payout.
+
+        Race and Lucky Roll use their older debit/credit pair rather than the
+        durable ``currency_wagers`` table.  Their wager, refund, and win rows
+        are therefore folded into one net result per game as well.
         """
 
         user_id = int(user_id)
         await self._flush_click_rewards(user_id)
-        totals = await self.pool.fetchrow(
-            """
-            SELECT
-                COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0) AS earned,
-                COALESCE(SUM(-amount) FILTER (WHERE amount < 0), 0) AS lost
-            FROM currency_transactions
-            WHERE user_id = $1
-            """,
-            user_id,
-        )
         rows = await self.pool.fetch(
             """
+            WITH direct_game_net AS (
+                SELECT
+                    CASE
+                        WHEN source LIKE 'sea_animal_race_%'
+                            THEN 'sea_animal_race_net'
+                        WHEN source LIKE 'luckyroll_%'
+                            THEN 'luckyroll_net'
+                    END AS source,
+                    COALESCE(SUM(amount), 0) AS net
+                FROM currency_transactions
+                WHERE user_id = $1
+                  AND (
+                      source LIKE 'sea_animal_race_%'
+                      OR source LIKE 'luckyroll_%'
+                  )
+                GROUP BY 1
+            ),
+            direct_game AS (
+                SELECT
+                    source,
+                    GREATEST(net, 0)::BIGINT AS earned,
+                    GREATEST(-net, 0)::BIGINT AS lost
+                FROM direct_game_net
+            ),
+            settled_wagers AS (
+                SELECT
+                    'wager_cashout:' || source AS source,
+                    COALESCE(SUM(GREATEST(payout - stake, 0)), 0)::BIGINT
+                        AS earned,
+                    COALESCE(SUM(GREATEST(stake - payout, 0)), 0)::BIGINT
+                        AS lost
+                FROM currency_wagers
+                WHERE user_id = $1
+                  AND status <> 'open'
+                GROUP BY source
+            ),
+            regular AS (
+                SELECT
+                    source,
+                    COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0)::BIGINT
+                        AS earned,
+                    COALESCE(SUM(-amount) FILTER (WHERE amount < 0), 0)::BIGINT
+                        AS lost
+                FROM currency_transactions
+                WHERE user_id = $1
+                  AND source NOT LIKE 'wager_stake:%'
+                  AND source NOT LIKE 'wager_cashout:%'
+                  AND source NOT LIKE 'sea_animal_race_%'
+                  AND source NOT LIKE 'luckyroll_%'
+                GROUP BY source
+            ),
+            combined AS (
+                SELECT source, earned, lost FROM regular
+                UNION ALL
+                SELECT source, earned, lost FROM settled_wagers
+                UNION ALL
+                SELECT source, earned, lost FROM direct_game
+            )
             SELECT
                 source,
-                COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0) AS earned,
-                COALESCE(SUM(-amount) FILTER (WHERE amount < 0), 0) AS lost
-            FROM currency_transactions
-            WHERE user_id = $1
+                SUM(earned)::BIGINT AS earned,
+                SUM(lost)::BIGINT AS lost
+            FROM combined
             GROUP BY source
-            ORDER BY (COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0)
-                      + COALESCE(SUM(-amount) FILTER (WHERE amount < 0), 0)) DESC,
-                     source ASC
+            HAVING SUM(earned) <> 0 OR SUM(lost) <> 0
+            ORDER BY (SUM(earned) + SUM(lost)) DESC, source ASC
             """,
             user_id,
         )
+        earned = sum(int(row["earned"] or 0) for row in rows)
+        lost = sum(int(row["lost"] or 0) for row in rows)
         return CurrencyEarnings(
             user_id=user_id,
-            earned=int(totals["earned"] or 0) if totals is not None else 0,
-            lost=int(totals["lost"] or 0) if totals is not None else 0,
+            earned=earned,
+            lost=lost,
             sources=tuple(
                 CurrencyEarningSource(
                     source=str(row["source"]),
@@ -1046,6 +1147,50 @@ class CurrencyService:
                 for row in rows
             ),
         )
+
+    async def award_birthday(self, user_id: int) -> bool:
+        """Credit a birthday once per calendar year elapsed, atomically."""
+        await self._flush_click_rewards(int(user_id))
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                wallet = await self._locked_wallet(connection, int(user_id))
+                # The wallet lock serializes awards across both bot instances.
+                eligible = await connection.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM user_birthdays b
+                        LEFT JOIN birthday_rewards r USING (user_id)
+                        WHERE b.user_id = $1
+                          AND b.month = EXTRACT(MONTH FROM now() AT TIME ZONE 'UTC')
+                          AND b.day = EXTRACT(DAY FROM now() AT TIME ZONE 'UTC')
+                          AND (r.last_awarded_on IS NULL OR
+                               r.last_awarded_on + INTERVAL '1 year' <=
+                               (now() AT TIME ZONE 'UTC')::date)
+                    )
+                    """,
+                    user_id,
+                )
+                if not eligible:
+                    return False
+                if 50_000 > MAX_COIN_BALANCE - wallet.balance:
+                    raise BalanceOverflow("This credit would exceed the wallet limit.")
+                await connection.execute(
+                    "UPDATE currency_wallets SET balance = balance + 50000, updated_at = now() WHERE user_id = $1",
+                    user_id,
+                )
+                await connection.execute(
+                    "INSERT INTO currency_transactions (user_id, amount, source) VALUES ($1, 50000, 'birthday')",
+                    user_id,
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO birthday_rewards (user_id, last_awarded_on)
+                    VALUES ($1, (now() AT TIME ZONE 'UTC')::date)
+                    ON CONFLICT (user_id) DO UPDATE SET last_awarded_on = EXCLUDED.last_awarded_on
+                    """,
+                    user_id,
+                )
+                return True
 
     async def credit(
         self,
@@ -1843,6 +1988,332 @@ class CurrencyService:
                     not has_equipped,
                 )
                 return _wallet(wallet_row)
+
+    async def ring_catalog(self, *, enabled_only: bool = False) -> list[Any]:
+        """Return rings in the shop catalog, ordered by price then name."""
+
+        where = "WHERE enabled" if enabled_only else ""
+        return list(await self.pool.fetch(f"""
+                SELECT ring_key, display_name, emoji_name, emoji_id, unicode,
+                       animated, display, price, enabled, created_at
+                FROM ring_catalog
+                {where}
+                ORDER BY price DESC, display_name ASC
+                """))
+
+    async def purchase_ring(self, user_id: int, ring_key: str, price: int) -> Wallet:
+        """Debit Coins and add one unit to a stackable ring inventory."""
+
+        await self._flush_click_rewards(int(user_id))
+        ring_key = str(ring_key).strip()
+        if not ring_key:
+            raise RingNotOwned(ring_key)
+        if int(price) <= 0:
+            raise InvalidAmount("A ring price must be positive.")
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                catalog = await connection.fetchrow(
+                    """
+                    SELECT ring_key, price, enabled
+                    FROM ring_catalog
+                    WHERE ring_key = $1
+                    FOR SHARE
+                    """,
+                    ring_key,
+                )
+                if catalog is None or not bool(catalog["enabled"]):
+                    raise RingNotOwned(ring_key)
+                catalog_price = int(catalog["price"])
+                if catalog_price != int(price):
+                    # Never trust a stale command-side price when debiting a
+                    # wallet. The database catalog is authoritative.
+                    price = catalog_price
+                wallet = await self._locked_wallet(connection, int(user_id))
+                if wallet.balance < int(price):
+                    raise InsufficientFunds(wallet.balance, int(price))
+                wallet_row = await connection.fetchrow(
+                    """
+                    UPDATE currency_wallets
+                    SET balance = balance - $2, updated_at = now()
+                    WHERE user_id = $1
+                    RETURNING user_id, balance
+                    """,
+                    int(user_id),
+                    int(price),
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO currency_transactions(
+                        user_id, amount, source, reference_key
+                    ) VALUES ($1, $2, 'ring_purchase', $3)
+                    """,
+                    int(user_id),
+                    -int(price),
+                    f"ring:{int(user_id)}:{ring_key}:{secrets.token_hex(12)}",
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO user_rings(
+                        user_id, ring_key, quantity, equipped_count
+                    ) VALUES ($1, $2, 1, 0)
+                    ON CONFLICT (user_id, ring_key) DO UPDATE SET
+                        quantity = user_rings.quantity + 1,
+                        updated_at = now()
+                    """,
+                    int(user_id),
+                    ring_key,
+                )
+                return _wallet(wallet_row)
+
+    async def owned_rings(self, user_id: int) -> list[Any]:
+        """Return a user's positive ring stacks with catalog metadata."""
+
+        return list(
+            await self.pool.fetch(
+                """
+                SELECT rings.user_id, rings.ring_key, rings.quantity,
+                       rings.equipped_count, rings.purchased_at, rings.updated_at,
+                       catalog.display_name, catalog.emoji_name, catalog.emoji_id,
+                       catalog.unicode, catalog.animated, catalog.display,
+                       catalog.price, catalog.enabled
+                FROM user_rings AS rings
+                JOIN ring_catalog AS catalog USING (ring_key)
+                WHERE rings.user_id = $1 AND rings.quantity > 0
+                ORDER BY rings.updated_at DESC, catalog.display_name ASC
+                """,
+                int(user_id),
+            )
+        )
+
+    async def sell_ring(self, user_id: int, ring_key: str) -> RingSale:
+        """Sell one owned ring unit for half its purchase price.
+
+        A ring that is currently equipped cannot be sold.  This also covers
+        the ring automatically equipped for a marriage, which must remain in
+        the user's inventory until the marriage ends.
+        """
+
+        await self._flush_click_rewards(int(user_id))
+        ring_key = str(ring_key).strip()
+        if not ring_key:
+            raise RingNotOwned(ring_key)
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                ring = await connection.fetchrow(
+                    """
+                    SELECT rings.ring_key, catalog.display, rings.quantity,
+                           rings.equipped_count, catalog.price
+                    FROM user_rings AS rings
+                    JOIN ring_catalog AS catalog USING (ring_key)
+                    WHERE rings.user_id = $1 AND rings.ring_key = $2
+                      AND rings.quantity > 0
+                    FOR UPDATE
+                    """,
+                    int(user_id),
+                    ring_key,
+                )
+                if ring is None:
+                    raise RingNotOwned(ring_key)
+                if int(ring["equipped_count"] or 0) > 0:
+                    raise RingEquipped(ring_key)
+                refund_amount = int(ring["price"]) // 2
+                updated = await connection.fetchrow(
+                    """
+                    UPDATE user_rings
+                    SET quantity = quantity - 1, updated_at = now()
+                    WHERE user_id = $1 AND ring_key = $2
+                      AND quantity > 0 AND equipped_count = 0
+                    RETURNING ring_key, quantity
+                    """,
+                    int(user_id),
+                    ring_key,
+                )
+                if updated is None:  # pragma: no cover - row is locked above.
+                    raise RingEquipped(ring_key)
+                wallet = await self._locked_wallet(connection, int(user_id))
+                if refund_amount > MAX_COIN_BALANCE - wallet.balance:
+                    raise BalanceOverflow("This refund would exceed the wallet limit.")
+                wallet_row = await connection.fetchrow(
+                    """
+                    UPDATE currency_wallets
+                    SET balance = balance + $2, updated_at = now()
+                    WHERE user_id = $1
+                    RETURNING user_id, balance
+                    """,
+                    int(user_id),
+                    refund_amount,
+                )
+                if wallet_row is None:  # pragma: no cover - locked row exists.
+                    raise BalanceOverflow("This refund could not be applied.")
+                await connection.execute(
+                    """
+                    INSERT INTO currency_transactions(
+                        user_id, amount, source, reference_key
+                    ) VALUES ($1, $2, 'ring_sale', $3)
+                    """,
+                    int(user_id),
+                    refund_amount,
+                    f"ring-sale:{int(user_id)}:{ring_key}:{secrets.token_hex(12)}",
+                )
+                return RingSale(
+                    ring_key=str(updated["ring_key"]),
+                    display=str(ring["display"]),
+                    refund_amount=refund_amount,
+                    wallet_balance=int(wallet_row["balance"]),
+                    remaining_quantity=int(updated["quantity"]),
+                )
+
+    async def equip_ring(self, user_id: int, ring_key: str) -> Any:
+        """Equip one unit of an owned ring stack.
+
+        Marriage eligibility is a social rule and is deliberately checked at
+        the command/service boundary before this inventory mutation. Keeping
+        this operation generic lets proposal acceptance equip the transferred
+        ring in the same transaction as the marriage update.
+        """
+
+        await self._flush_click_rewards(int(user_id))
+        ring_key = str(ring_key).strip()
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                owned = await connection.fetchrow(
+                    """
+                    SELECT quantity
+                    FROM user_rings
+                    WHERE user_id = $1 AND ring_key = $2 AND quantity > 0
+                    FOR UPDATE
+                    """,
+                    int(user_id),
+                    ring_key,
+                )
+                if owned is None:
+                    raise RingNotOwned(ring_key)
+                await connection.execute(
+                    """
+                    UPDATE user_rings
+                    SET equipped_count = 0, updated_at = now()
+                    WHERE user_id = $1 AND equipped_count > 0
+                    """,
+                    int(user_id),
+                )
+                equipped = await connection.fetchrow(
+                    """
+                    UPDATE user_rings
+                    SET equipped_count = 1, updated_at = now()
+                    WHERE user_id = $1 AND ring_key = $2 AND quantity > 0
+                    RETURNING user_id, ring_key, quantity, equipped_count,
+                              purchased_at, updated_at
+                    """,
+                    int(user_id),
+                    ring_key,
+                )
+                if equipped is None:  # pragma: no cover - row is locked above.
+                    raise RingNotOwned(ring_key)
+                return equipped
+
+    async def unequip_ring(self, user_id: int) -> bool:
+        """Unequip a user's current ring without changing ownership."""
+
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    UPDATE user_rings
+                    SET equipped_count = 0, updated_at = now()
+                    WHERE user_id = $1 AND equipped_count > 0
+                    RETURNING ring_key
+                    """,
+                    int(user_id),
+                )
+                return row is not None
+
+    async def transfer_ring(
+        self,
+        sender_id: int,
+        recipient_id: int,
+        ring_key: str,
+        *,
+        equip_recipient: bool = True,
+    ) -> RingTransfer:
+        """Atomically transfer one ring unit, optionally equipping it.
+
+        Proposal acceptance uses this after confirming that the sender owns at
+        least two rings overall. The database locks inventories in stable user
+        order so simultaneous proposals cannot duplicate a ring.
+        """
+
+        sender_id = int(sender_id)
+        recipient_id = int(recipient_id)
+        ring_key = str(ring_key).strip()
+        if sender_id == recipient_id or not ring_key:
+            raise RingNotOwned(ring_key)
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                # Wallet rows are guaranteed before inserting a recipient's
+                # first inventory row. Locking in ID order prevents deadlocks.
+                for user_id in sorted((sender_id, recipient_id)):
+                    await self._locked_wallet(connection, user_id)
+                sender = await connection.fetchrow(
+                    """
+                    SELECT quantity, equipped_count
+                    FROM user_rings
+                    WHERE user_id = $1 AND ring_key = $2 AND quantity > 0
+                    FOR UPDATE
+                    """,
+                    sender_id,
+                    ring_key,
+                )
+                if sender is None:
+                    raise RingNotOwned(ring_key)
+                new_sender_quantity = int(sender["quantity"]) - 1
+                new_sender_equipped = min(
+                    int(sender["equipped_count"]), new_sender_quantity
+                )
+                await connection.execute(
+                    """
+                    UPDATE user_rings
+                    SET quantity = $3, equipped_count = $4, updated_at = now()
+                    WHERE user_id = $1 AND ring_key = $2
+                    """,
+                    sender_id,
+                    ring_key,
+                    new_sender_quantity,
+                    new_sender_equipped,
+                )
+                if equip_recipient:
+                    await connection.execute(
+                        """
+                        UPDATE user_rings
+                        SET equipped_count = 0, updated_at = now()
+                        WHERE user_id = $1 AND equipped_count > 0
+                        """,
+                        recipient_id,
+                    )
+                recipient = await connection.fetchrow(
+                    """
+                    INSERT INTO user_rings(
+                        user_id, ring_key, quantity, equipped_count
+                    ) VALUES ($1, $2, 1, $3)
+                    ON CONFLICT (user_id, ring_key) DO UPDATE SET
+                        quantity = user_rings.quantity + 1,
+                        equipped_count = CASE
+                            WHEN $3 > 0 THEN 1
+                            ELSE user_rings.equipped_count
+                        END,
+                        updated_at = now()
+                    RETURNING quantity, equipped_count
+                    """,
+                    recipient_id,
+                    ring_key,
+                    1 if equip_recipient else 0,
+                )
+                return RingTransfer(
+                    sender_id=sender_id,
+                    recipient_id=recipient_id,
+                    ring_key=ring_key,
+                    recipient_quantity=int(recipient["quantity"]),
+                    recipient_equipped_count=int(recipient["equipped_count"]),
+                )
 
     async def owned_racing_emojis(self, user_id: int) -> list[Any]:
         """Return all active racing emojis owned by a user."""
