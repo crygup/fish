@@ -1,82 +1,15 @@
-# Fishie setup
+# Fishie
 
-This repository keeps the bot source in `src`, database migrations in
-`migrations`, and the Docker setup in the repository root.
+A Discord bot with media tools, music, games, and notifications.
 
-Copy `examples/config.toml` to `config.toml` and fill in the values you plan to
-use.
+## Setup
 
-Most third-party keys are optional until you use their related commands:
-
-- Last.fm keys come from [Last.fm API accounts](https://www.last.fm/api/account/create)
-- Spotify keys come from the [Spotify developer dashboard](https://developer.spotify.com/dashboard)
-- AniList keys come from the developer section in AniList settings
-- Twitch keys come from the [Twitch developer console](https://dev.twitch.tv/console)
-- Google keys come from the [Google Cloud console](https://console.cloud.google.com/)
-- Steam keys come from the [Steam Web API key page](https://steamcommunity.com/dev/apikey)
-
-Create `.env` from `.env.example`.
-
-## Run with Docker
-
-The regular Compose file starts PostgreSQL, applies migrations, and then starts
-Fishie:
+1. Copy `examples/config.toml` to `config.toml` and `.env.example` to `.env`.
+2. Fill in the bot token, database settings, and credential key. Add API keys for the features you use.
+3. Start the bot:
 
 ```bash
 docker compose up -d --build
-docker compose ps
-docker compose logs -f fishie
 ```
 
-Restart the bot with:
-
-```bash
-docker compose restart fishie
-```
-
-Stop everything with:
-
-```bash
-docker compose down
-```
-
-## Production
-
-Production runs through Docker Compose. Both the retiring `fishie` service and
-replacement `fishie-new` service belong to `compose.production.yaml`. Only the
-replacement serves the website API, on loopback port 8001.
-
-The authoritative deployment guide for the two repositories is
-[website/DEPLOYMENT.md](../website/DEPLOYMENT.md) in the sibling website checkout.
-It covers backups, migrations, both bots, all website services, and Nginx.
-Do not start the retired `fish.service` or `avatar-lookup.service` units.
-
-## YouTube voice playback
-
-The Compose files start a local `bgutil` proof-of-origin token provider for
-yt-dlp.  It is bound to loopback in production and is only used for YouTube
-requests.  The bot also needs a current Netscape-format export at
-`src/files/cookies/youtube-cookies.txt`; that ignored file is mounted into the
-containers and must never be committed.
-
-When YouTube reports “Sign in to confirm you’re not a bot”, open a fresh
-private browsing window, sign in, visit `https://www.youtube.com/robots.txt`,
-export the `youtube.com` cookies from that same tab, replace the mounted file,
-and restart the Fishie container.  YouTube rotates account cookies from normal
-open tabs, so reusing an old export will keep the same error.
-
-## Local development without Docker
-
-Create a virtual environment, install the locked requirements, apply the
-migrations, and launch from `src`:
-
-```bash
-python3.13 -m venv venv
-venv/bin/python -m pip install -r requirements.txt
-cd src
-../venv/bin/python manage.py migrate
-../venv/bin/python launcher.py
-```
-
-FFmpeg, Chromium dependencies for Playwright, PostgreSQL, `config.toml`, and the
-credential key must already be available when running this way.
+Docker sets up the database automatically. View logs with `docker compose logs -f fishie`.

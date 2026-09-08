@@ -111,7 +111,7 @@ async def media_effect_catalog():
         "effects": sorted(api_state.MEDIA_API_EFFECTS),
         "max_bytes": api_state.MAX_MEDIA_API_BYTES,
         "authentication": "X-API-Key",
-        "documentation": "docs/media-effects-api.md in the Fish repository",
+        "documentation": "wip/docs/media-effects-api.md in the Fish repository",
     }
 
 
