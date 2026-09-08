@@ -20,6 +20,7 @@ from utils import (
     youtube,
 )
 from utils.credentials import decrypt_credential
+from utils.google import google_json
 
 from .charts import Charts, search_spotify, search_spotify_data
 from .lyrics import Lyrics
@@ -581,7 +582,7 @@ class Lastfm(Lyrics, Top, Charts, Topster):
         artist: str | None = None,
     ) -> str | None:
         keys = self.bot.config["keys"].get("google", [])
-        if not isinstance(keys, list) or not keys:
+        if not isinstance(keys, (list, tuple)) or not keys:
             return None
 
         youtube_type = {"track": "video", "album": "playlist", "artist": "channel"}[
@@ -592,19 +593,17 @@ class Lastfm(Lyrics, Top, Charts, Topster):
         ]
         query = f"{artist} {title}" if artist else title
         try:
-            async with ctx.session.get(
+            data = await google_json(
+                ctx.session,
                 "https://www.googleapis.com/youtube/v3/search",
+                keys=keys,
                 params={
                     "q": query,
-                    "key": random.choice(keys),
                     "part": "snippet",
                     "type": youtube_type,
                     "maxResults": 1,
                 },
-            ) as response:
-                if response.status != 200:
-                    return None
-                data = await response.json(content_type=None)
+            )
         except Exception:
             return None
 

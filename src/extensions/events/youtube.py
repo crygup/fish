@@ -4,13 +4,14 @@ import asyncio
 import hashlib
 import hmac
 import json
-import random
 import re
 from datetime import datetime, timezone
 from typing import Any, cast
 from urllib.parse import urlsplit
 
 import discord
+
+from utils.google import google_json
 
 YOUTUBE_WEBSUB_CALLBACK = "https://api.crygup.com/fishie/youtube/websub"
 YOUTUBE_HUB_URL = "https://pubsubhubbub.appspot.com/subscribe"
@@ -185,14 +186,13 @@ def _iso_duration_seconds(value: str) -> int | None:
 class YouTubeNotifications:
     bot: Any
 
-    def _youtube_api_key(self) -> str | None:
+    def _youtube_api_keys(self) -> list[str]:
         values = self.bot.config.get("keys", {}).get("google")
         if isinstance(values, str):
-            return values or None
-        if isinstance(values, list):
-            usable = [str(value) for value in values if value]
-            return random.choice(usable) if usable else None
-        return None
+            return [values] if values else []
+        if isinstance(values, (list, tuple)):
+            return [str(value) for value in values if value]
+        return []
 
     def _youtube_websub_secret(self) -> str | None:
         keys = self.bot.config.get("keys", {})
@@ -227,11 +227,11 @@ class YouTubeNotifications:
         else:
             handle = f"@{raw}"
 
-        key = self._youtube_api_key()
-        if not key:
+        keys = self._youtube_api_keys()
+        if not keys:
             self.bot.logger.warning("YouTube notifications require a Google API key")
             return None
-        params: dict[str, str] = {"part": "snippet", "key": key}
+        params: dict[str, str] = {"part": "snippet"}
         if channel_id and YOUTUBE_CHANNEL_ID_RE.fullmatch(channel_id):
             params["id"] = channel_id
         elif handle and YOUTUBE_HANDLE_RE.fullmatch(handle):
@@ -239,18 +239,18 @@ class YouTubeNotifications:
         else:
             return None
         try:
-            async with self.bot.session.get(
-                "https://www.googleapis.com/youtube/v3/channels", params=params
-            ) as response:
-                data = await response.json(content_type=None)
+            data = await google_json(
+                self.bot.session,
+                "https://www.googleapis.com/youtube/v3/channels",
+                keys=keys,
+                params=params,
+            )
         except Exception as error:
             self.bot.logger.warning("Could not resolve YouTube channel: %s", error)
             return None
         items = data.get("items") if isinstance(data, dict) else None
-        if response.status != 200 or not isinstance(items, list) or not items:
-            self.bot.logger.warning(
-                "YouTube channel lookup failed with status %s", response.status
-            )
+        if not isinstance(items, list) or not items:
+            self.bot.logger.warning("YouTube channel lookup returned no results")
             return None
         item = items[0]
         if not isinstance(item, dict) or not item.get("id"):
@@ -269,26 +269,26 @@ class YouTubeNotifications:
         }
 
     async def get_youtube_video(self, video_id: str) -> dict[str, Any] | None:
-        key = self._youtube_api_key()
-        if not key:
+        keys = self._youtube_api_keys()
+        if not keys:
             return None
         try:
-            async with self.bot.session.get(
+            data = await google_json(
+                self.bot.session,
                 "https://www.googleapis.com/youtube/v3/videos",
+                keys=keys,
                 params={
                     "part": "snippet,contentDetails,liveStreamingDetails",
                     "id": video_id,
-                    "key": key,
                 },
-            ) as response:
-                data = await response.json(content_type=None)
+            )
         except Exception as error:
             self.bot.logger.warning(
                 "Could not fetch YouTube video %s: %s", video_id, error
             )
             return None
         items = data.get("items") if isinstance(data, dict) else None
-        if response.status != 200 or not isinstance(items, list) or not items:
+        if not isinstance(items, list) or not items:
             return None
         item = items[0]
         return item if isinstance(item, dict) else None

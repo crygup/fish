@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import random
 from typing import TYPE_CHECKING, Any, Dict, List
 from urllib.parse import urlsplit
 
@@ -14,8 +13,8 @@ from utils import (
     GoogleImageData,
     LayoutPager,
     Pager,
-    response_checker,
 )
+from utils.google import google_json
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -148,7 +147,6 @@ class Google(Cog):
         params = {
             "cx": self.bot.config["keys"]["google_id"],
             "q": query,
-            "key": random.choice(self.bot.config["keys"]["google"]),
             "safe": (
                 "off"
                 if isinstance(
@@ -164,30 +162,33 @@ class Google(Cog):
         }
         await ctx.typing()
 
-        async with self.bot.session.get(url, params=params) as r:
-            response_checker(r)
-            data = await r.json()
+        data = await google_json(
+            self.bot.session,
+            url,
+            keys=self.bot.config["keys"]["google"],
+            params=params,
+        )
 
-            embed = discord.Embed(color=discord.Colour.pink())
-            embed.set_footer(
-                text=f"About {data['searchInformation']['formattedTotalResults']} results ({data['searchInformation']['formattedSearchTime']} seconds)"
-            )
+        embed = discord.Embed(color=discord.Colour.pink())
+        embed.set_footer(
+            text=f"About {data['searchInformation']['formattedTotalResults']} results ({data['searchInformation']['formattedSearchTime']} seconds)"
+        )
 
-            embed.title = f"Google Search - {query}"[:256]
+        embed.title = f"Google Search - {query}"[:256]
 
-            text = ""
-            items = data["items"]
+        text = ""
+        items = data["items"]
 
-            added = 0
-            for item in items:
-                if added == 5:
-                    break
-                try:
-                    text += f"[{item['title']}]({item['link']})\n{item['snippet']}\n\n"
-                    added += 1
-                except KeyError:
-                    continue
-            embed.description = text
+        added = 0
+        for item in items:
+            if added == 5:
+                break
+            try:
+                text += f"[{item['title']}]({item['link']})\n{item['snippet']}\n\n"
+                added += 1
+            except KeyError:
+                continue
+        embed.description = text
 
         await ctx.send(embed=embed)
 
@@ -205,7 +206,6 @@ class Google(Cog):
         params = {
             "cx": self.bot.config["keys"]["google_id"],
             "q": query,
-            "key": random.choice(self.bot.config["keys"]["google"]),
             "searchType": "image",
             "num": 10,
             "safe": (
@@ -228,9 +228,12 @@ class Google(Cog):
             request_params = dict(params)
             if start > 1:
                 request_params["start"] = start
-            async with self.bot.session.get(url, params=request_params) as response:
-                response_checker(response)
-                data = await response.json()
+            data = await google_json(
+                self.bot.session,
+                url,
+                keys=self.bot.config["keys"]["google"],
+                params=request_params,
+            )
             return data.get("items") or []
 
         items = await fetch_items(1)
@@ -285,20 +288,22 @@ class Google(Cog):
         url = "https://www.googleapis.com/youtube/v3/search"
         params = {
             "q": query,
-            "key": random.choice(self.bot.config["keys"]["google"]),
             "part": "snippet",
             "type": type,
             "maxResults": 25,
         }
 
         await ctx.typing()
-        async with self.bot.session.get(url, params=params) as r:
-            response_checker(r)
-            data = await r.json()
-            try:
-                url = f"https://www.youtube.com/{link_converter[type]}{data['items'][0]['id'][id_converter[type]]}"
-            except (IndexError, KeyError):
-                raise commands.BadArgument("Couldn't find any results.")
+        data = await google_json(
+            self.bot.session,
+            url,
+            keys=self.bot.config["keys"]["google"],
+            params=params,
+        )
+        try:
+            url = f"https://www.youtube.com/{link_converter[type]}{data['items'][0]['id'][id_converter[type]]}"
+        except (IndexError, KeyError):
+            raise commands.BadArgument("Couldn't find any results.")
 
         videos = data["items"]
         view = YoutubeView(ctx, videos, type)
