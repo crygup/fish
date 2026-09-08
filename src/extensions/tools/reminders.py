@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional, Sequence, cast
 
 import asyncpg
+from cachetools import TTLCache
 
 # TODO: replace with ZoneInfo when upgrading to 3.9
 import dateutil.tz
@@ -20,7 +21,7 @@ from typing_extensions import Annotated
 
 from core import Cog
 from core.handoff import is_legacy_instance
-from utils import FieldPageSource, Pager, cache, formats, fuzzy, time
+from utils import FieldPageSource, Pager, formats, fuzzy, time
 from utils.timezone_locations import OfflineLocationResolver
 
 if TYPE_CHECKING:
@@ -304,6 +305,7 @@ class Reminder(Cog):
     )
 
     def __init__(self, bot: Fishie):
+        self._timezone_cache = TTLCache[int, Optional[str]](maxsize=128, ttl=300)
         self.bot: Fishie = bot
         self._have_data = asyncio.Event()
         self._current_timer: Optional[Timer] = None
@@ -410,11 +412,14 @@ class Reminder(Cog):
         if self._task is not None:
             self._task.cancel()
 
-    @cache.cache()
     async def get_timezone(self, user_id: int, /) -> Optional[str]:
+        if user_id in self._timezone_cache:
+            return self._timezone_cache[user_id]
         query = "SELECT timezone from user_settings WHERE user_id = $1;"
         record = await self.bot.pool.fetchrow(query, user_id)
-        return record["timezone"] if record else None
+        zone = record["timezone"] if record else None
+        self._timezone_cache[user_id] = zone
+        return zone
 
     async def get_tzinfo(self, user_id: int, /) -> datetime.tzinfo:
         tz = await self.get_timezone(user_id)
@@ -1093,7 +1098,7 @@ class Reminder(Cog):
             tz.key,
         )
 
-        self.get_timezone.invalidate(self, ctx.author.id)
+        self._timezone_cache.pop(ctx.author.id, None)
         await ctx.send(
             f"Your timezone has been set to {tz.key}.",
             ephemeral=True,
@@ -1155,7 +1160,7 @@ class Reminder(Cog):
         await ctx.bot.pool.execute(
             "UPDATE user_settings SET timezone = 'UTC' WHERE user_id=$1", ctx.author.id
         )
-        self.get_timezone.invalidate(self, ctx.author.id)
+        self._timezone_cache.pop(ctx.author.id, None)
         await ctx.send(
             "Your timezone has been cleared and reset to UTC.", ephemeral=True
         )

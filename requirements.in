@@ -14,10 +14,8 @@ emoji==2.15.0
 fastapi==0.139.2
 geonamescache==3.0.2
 jishaku==2.7.5
-lru-dict==1.4.1
 numpy==2.5.1
 opencv-python-headless==4.11.0.86
-pandas==3.0.3
 PyNaCl==1.5.0
 parsedatetime==2.6
 pillow==12.3.0

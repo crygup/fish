@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import math
 import re
 import sys
 import textwrap
-from io import BytesIO
+from io import BytesIO, StringIO
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -23,7 +24,6 @@ from typing import (
 import aiohttp
 import asyncpg
 import discord
-import pandas as pd
 from aiohttp import ClientResponse
 from discord.ext import commands
 from PIL import Image, ImageSequence
@@ -253,6 +253,8 @@ def format_status(member: discord.Member) -> str:
 
 
 async def update_pokemon(bot: Fishie):
+    from .network import read_bounded_response
+
     url = "https://raw.githubusercontent.com/poketwo/data/master/csv/pokemon.csv"
     manual_pokemon = await bot.pool.fetch("""SELECT name FROM added_pokemon""")
     manual = [str(record["name"]).lower() for record in manual_pokemon]
@@ -261,11 +263,14 @@ async def update_pokemon(bot: Fishie):
             url, timeout=aiohttp.ClientTimeout(total=15)
         ) as response:
             response_checker(response)
-            payload = await response.read()
-            if len(payload) > 10 * 1024 * 1024:
-                raise RuntimeError("Pokémon catalog response was too large")
-        data = await asyncio.to_thread(pd.read_csv, BytesIO(payload))
-        pokemon = [str(p).lower() for p in data["name.en"]]
+            payload = await read_bounded_response(response, 10 * 1024 * 1024)
+        pokemon = await asyncio.to_thread(
+            lambda: [
+                row["name.en"].lower()
+                for row in csv.DictReader(StringIO(payload.decode("utf-8-sig")))
+                if row["name.en"]
+            ]
+        )
     except Exception:
         bot.logger.exception("Could not refresh Pokémon catalog; using cached data")
         pokemon = list(getattr(bot, "pokemon", ()))
