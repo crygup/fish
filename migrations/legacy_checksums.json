@@ -1,0 +1,369 @@
+{
+  "squashed_checksums": [
+    "c01b91a29b94122786bc551f4e9b0133230d33d209194323826997abc4a0f119"
+  ],
+  "baseline_checksums": [
+    "2481f2c4fe02098b7f26680a81148ec2b56836c49807b0a9f4d82687b0ba3ac4",
+    "dd81e242a8452f35f288b7a751230f869f5ab7713fe4757e4df9ba43c8f7f65e",
+    "f6ab37135016c8eb65f2c8b1f0a1593b33c48163b3000872e7ce474003e59aed",
+    "f81c85e95368b86b20acefdaee12d6f3a78ce203e1eeeb0ac9d202d3605144a7"
+  ],
+  "migrations": {
+    "1": {
+      "name": "baseline",
+      "checksum": "1004893d847316e799d3bd2626194dca3a32544dbc8d1538ca1e0a3ef2340d6d"
+    },
+    "2": {
+      "name": "hardening",
+      "checksum": "7daa0eb11d7761d3927506c6aac860b4a84f1fba699b470bf6dddcf1449a184f"
+    },
+    "3": {
+      "name": "reminder_timestamps",
+      "checksum": "d8bc741b4c2b4b449ac96e2fdf7744cc7011ebde87543f0fe2cae5cdbebcdb94"
+    },
+    "4": {
+      "name": "integrity_constraints",
+      "checksum": "b5efd00905bce94085a119e624e1ee4246007eba1cf954949969bebf97986046"
+    },
+    "5": {
+      "name": "stats_indexes",
+      "checksum": "6018a24ec12a71ccdf0d0486b53abf43fe93142eb5f7fb67de3c5dd8b4bb7145"
+    },
+    "6": {
+      "name": "guild_join_added_by",
+      "checksum": "43bef8d5a0b6736367fe5fbd0dc05aef29e93beae833a7b98f1e9c94416914e9"
+    },
+    "7": {
+      "name": "server_tag_history",
+      "checksum": "108c6d633347ca5c674295e18e55c992993b8ee8fbcaa7f4fe244b523003407c"
+    },
+    "8": {
+      "name": "status_history",
+      "checksum": "21b891c1789f16a7b05735a0efc04e194da39b12b749480cc533fa78e9d394af"
+    },
+    "9": {
+      "name": "restart_message",
+      "checksum": "d01a17704e288f789ed734914338790f20f54b892e0cdedad4218ded3c685c8c"
+    },
+    "10": {
+      "name": "user_privacy_settings",
+      "checksum": "451d685f0c8c5016cc8c26c3d4148d214802d889aa04afcd4a5ccdce54fe143e"
+    },
+    "11": {
+      "name": "youtube_notifications",
+      "checksum": "4f16a5a66b71b629502180c52a0d4e4fda0d8b6dea5e11381e18036128ec94c2"
+    },
+    "12": {
+      "name": "tags_emoji_stats",
+      "checksum": "166ce0911ad3a7420a1287f2267bdc55d5eacea3ad4fe5bbaa83dc081c07d26d"
+    },
+    "13": {
+      "name": "repair_legacy_tags",
+      "checksum": "b299f3c06ee20c80c9ff3bcd06320d7dbba952a424b819a9b6eec46bc54dfa55"
+    },
+    "14": {
+      "name": "download_stats",
+      "checksum": "da8017cdcb143df3758352461b62786b00ad370012cc465576990d0317746b18"
+    },
+    "15": {
+      "name": "download_source",
+      "checksum": "31b5036f098474fc3be38738a01549fa02b8e9e7aa5df24f5dfefb8a75f96176"
+    },
+    "16": {
+      "name": "tictactoe",
+      "checksum": "e0c1b45fcc2adbc351b254fe7beac012696001b637341f8934e911a0d1f66d1c"
+    },
+    "17": {
+      "name": "snipe_settings",
+      "checksum": "6ba94b699368fd76ea304c64cbfadcd58295cbe2e9294f909c1d1dc1b27099d7"
+    },
+    "18": {
+      "name": "minigame_stats",
+      "checksum": "4e8432d7a89fd40cae3f475a59ee1178cd993cad7736d804c9e3838a87320142"
+    },
+    "19": {
+      "name": "download_events",
+      "checksum": "87b2de39bd4f7f74e97ee12d6048a80e92428674b5452f61823b5031464546af"
+    },
+    "20": {
+      "name": "clicks",
+      "checksum": "4419ca9938bf599797525157f9c48d3934e30eff2d7c625b228d0885142bdc2c"
+    },
+    "21": {
+      "name": "custom_roles",
+      "checksum": "30e0f7125a34154fc80e2e775c67e1c4bc31230175e2d900d17111ff976389fb"
+    },
+    "22": {
+      "name": "channel_locks",
+      "checksum": "0d18841d20be8bace6a2e77370e498faa9df7c5675578a1f5ca97e96fd29095a"
+    },
+    "23": {
+      "name": "video_library",
+      "checksum": "49e04b14030acefd56303de32b62563d531d6f5f7f74892cc458b8a3c5ea0e0d"
+    },
+    "24": {
+      "name": "reaction_logs",
+      "checksum": "3c6e8f8e806e5e96ac8326639933ca5845b75ef1e579381e939a01dd57033dc8"
+    },
+    "28": {
+      "name": "connectfour",
+      "checksum": "d21a203851ff6eeb6295cf3b6f74bf3c9c50405343cff6a9eddb22a494c4a2a1"
+    },
+    "29": {
+      "name": "solo_minigames",
+      "checksum": "c1040131fe5dc536aa99f26c3fb7522442c5ca1f32e4cdb030eb85b48c9b1f64"
+    },
+    "30": {
+      "name": "connectfour_moves",
+      "checksum": "1c30e6b3569a0bc6523f58f4a71cffaa78ed6ce9bfd67d8313232b585e095b9a"
+    },
+    "31": {
+      "name": "2048_moves",
+      "checksum": "5f3c0948cbebcffe5f32b603fda8f7e5468a3277b2a22eeb9481547b155616da"
+    },
+    "32": {
+      "name": "lightsout",
+      "checksum": "9537220b95bc94ec9532726405b36d74ce6d9edffced70cba73af0bafb5a60c4"
+    },
+    "33": {
+      "name": "streak_games",
+      "checksum": "ecad91ab57645cc6119bab4bae2729861e6e05ad1411d47895b0ce97770dd232"
+    },
+    "34": {
+      "name": "private_history_defaults",
+      "checksum": "4408f4ab59ff4a676704064b6d3cf4bea99eb12cddfcb921ff4d96049dc725d5"
+    },
+    "35": {
+      "name": "settings_scoped_privacy",
+      "checksum": "cb0d13df11898f9c250b372d1dd5a769301fec6b2c08830ccf5b73cd82560f4a"
+    },
+    "36": {
+      "name": "game_history_public_default",
+      "checksum": "08b55ee4dd36a07346dce3c81a8c892de48224a2df6629dcc020f65d5a672cad"
+    },
+    "37": {
+      "name": "tracking_consent",
+      "checksum": "9214b2d07e37e33dea2f5741f25b1e8191290a7a6e95f23a5cda336debf0636f"
+    },
+    "38": {
+      "name": "tracking_consent_backfill",
+      "checksum": "becccaa23c546881f269abb2ad3a2154c3a1cf389c8077236825741de628bb25"
+    },
+    "39": {
+      "name": "tracking_history_public_backfill",
+      "checksum": "7fd278ef4d84d52faa1518ba7e86bf39589aacbe46bb44055a06ca6e67dd6a42"
+    },
+    "40": {
+      "name": "owner_controls",
+      "checksum": "08261917f92b04aaaa7033899b18d2a957fa41cbb5e73799629b7c694fdde1c5"
+    },
+    "41": {
+      "name": "video_library_preferences",
+      "checksum": "3f27fd56d141657c99f6cf4bfb5c451d2ae3b282fad44851ea96c771f7448dc0"
+    },
+    "42": {
+      "name": "post_library",
+      "checksum": "c83aff923809db42a2b44a85f45008f3f7147ffd37c6762ccabe0fa4a8485b9c"
+    },
+    "43": {
+      "name": "library_ids",
+      "checksum": "58059e973220f507697e7939f9a219535d65e77a1c906f015a03f1c0211edb9a"
+    },
+    "44": {
+      "name": "reputation",
+      "checksum": "b95c5801d5a1ab4720cbf2ce59c2c6f2582d833efed45853fdc48c4ce46bd2c3"
+    },
+    "45": {
+      "name": "library_source_urls",
+      "checksum": "0ed866130db81892e0671286bf09c617b08bb5d1845bbad6ae92958d9c7b7a41"
+    },
+    "46": {
+      "name": "server_media_settings",
+      "checksum": "ae602630b4c6dcd7101e5592833bc57f5a6dffcd42dbb99630f8b08e5b1e4455"
+    },
+    "47": {
+      "name": "automation_channel_targets",
+      "checksum": "4e7df1b7caf8daadbab99e6c6bb46270e38a1fb6202a71311d6bb8dcde6a012b"
+    },
+    "48": {
+      "name": "user_badges",
+      "checksum": "053cb8de56aa55f8bc5654d82e5ccc4af192772533050a982328b3d3304c5127"
+    },
+    "49": {
+      "name": "honeypot_message",
+      "checksum": "56805eb1ac7bfb175081d06c869979a4f1ee9033f3348159f4f916cc3f7e86cd"
+    },
+    "50": {
+      "name": "auto_reaction_channels",
+      "checksum": "84e046ea388b5b7a04de91eea8b61a1310edb4deeb391f972675fb4604379123"
+    },
+    "51": {
+      "name": "hourly_post_intervals",
+      "checksum": "0d3e356e65af3686438786c34ba43f3982eded32543e591925106f144514ed29"
+    },
+    "52": {
+      "name": "message_boards",
+      "checksum": "d8ecbc876ec4689d754981091ed012db0f83d8499e435d667a42888c8f8726f1"
+    },
+    "53": {
+      "name": "multiple_user_badges",
+      "checksum": "74c455bf3fa67b425091703c763d6b5448f06d20dce7a95fea74350bba737fa6"
+    },
+    "54": {
+      "name": "message_xp_leaderboard_index",
+      "checksum": "30d2c82d79af6a295c7f7f0335271ea1b970614a3aa837302499e2e3a7f14ce9"
+    },
+    "55": {
+      "name": "guild_protection",
+      "checksum": "405fcd9b33af6c6d7291107a42b717cec546bce3053b05b3a028013224dfca58"
+    },
+    "56": {
+      "name": "guild_protection_locks",
+      "checksum": "7e7427840ed9dda9009d9920a40ae23a7a4f3c2c9999f054614b4779c6e77eed"
+    },
+    "57": {
+      "name": "currency",
+      "checksum": "62c56ddeacd3f4d1a923d99ac4b05db556a579084d7ca76100f8961887a8759f"
+    },
+    "58": {
+      "name": "rock_paper_scissors_streaks",
+      "checksum": "b0566bd1af8b7732e6b52176cee17d0cb1878464cc97bcc3df76fa0319ddefd2"
+    },
+    "59": {
+      "name": "currency_claim_streaks",
+      "checksum": "9c3fe7f0198f8d3e48a6ffe6c8187f673662cfaf4aaaeea82dcb9ea1c9137830"
+    },
+    "60": {
+      "name": "mudae_wishes",
+      "checksum": "d729fe7f8305d0ece81d9a8886aaf5dfbbbda9772fc5b6b7bf0691ef73ccd0b8"
+    },
+    "61": {
+      "name": "wordbomb_stats",
+      "checksum": "7b70192c476c40cfd955758e01a8192ebe982782ef4e406c74c59e461b35883e"
+    },
+    "62": {
+      "name": "wordbomb_words",
+      "checksum": "ff8f4152797db90d5562f74523afb33fa7961f542c04007d994ffa29c6722d08"
+    },
+    "63": {
+      "name": "badges",
+      "checksum": "ad323daf0aa421795c3e6af895d7c35fae823b19960bb8b0c9fb1947247ecfe5"
+    },
+    "64": {
+      "name": "badge_orders",
+      "checksum": "c033c2fc2852c193dd6f3490d6286eae37e4d8692bcac38612047bd61b30b599"
+    },
+    "65": {
+      "name": "wager_stake_limit",
+      "checksum": "9477b1dc3ebaff1f62478e0d049c32300c9dc50a8f41ed9bb0819f1d274bb2dd"
+    },
+    "66": {
+      "name": "currency_gambling_stats",
+      "checksum": "84bfa89d2ddce923f022c96a6fbcb79d0e53054da8aaded695a3fa1893353716"
+    },
+    "67": {
+      "name": "badge_shop_expansion",
+      "checksum": "684f7e76b94cf35542a7fc5a5b6cb8d1c1ba8260d2ababbb7a17596a688ccfb1"
+    },
+    "68": {
+      "name": "titles",
+      "checksum": "b0f8c76d9c656c4fc268caeb348790f4dad40e35ca02d8441763be6c14b43bc8"
+    },
+    "69": {
+      "name": "title_equipping",
+      "checksum": "525fc2d72ce4fcc817df806e35a1a5ec15b17a89dc02bfdd95f4f958526b998c"
+    },
+    "70": {
+      "name": "currency_colors",
+      "checksum": "78b37e8a4f2c1e8d52bc0686fdf45b396fccfe1964724d37a88bbbc25835e3e7"
+    },
+    "71": {
+      "name": "streak_game_payouts",
+      "checksum": "136201d8dadf071acbbde133e80cb9f7a189992699a46311d0e9ab14c9afff91"
+    },
+    "72": {
+      "name": "sea_animal_race",
+      "checksum": "d56680df8f3a549a3e21e67a1037b1366be6f31ac31462397cf19613cf9b6177"
+    },
+    "73": {
+      "name": "lucky_roll",
+      "checksum": "628e7afb396edf2d42b980d99a5a1efc71964d7a3d978fd427708ce9d56303db"
+    },
+    "74": {
+      "name": "racing_emojis",
+      "checksum": "9f57486ee4d77977e01029d9a8ae1260b887a6f9380896fc2c0b2723ab107fea"
+    },
+    "75": {
+      "name": "tracking_settings_restructure",
+      "checksum": "ca5141f2d7a3e1a8e6326a69513e5293528585ecc8232a57479d334c4c3ced4d"
+    },
+    "76": {
+      "name": "slots_wager_limit",
+      "checksum": "0f0a5c05375d9b4d6535d2a0bd7f75da13eb65051808be889e5870668ce4ec0c"
+    },
+    "77": {
+      "name": "profile_descriptions",
+      "checksum": "e1940f3074653539fb9e847756b63c01f6a3a5e3b7efad2a5f958db78c36510d"
+    },
+    "78": {
+      "name": "game_wager_limit",
+      "checksum": "c60664234540c42105e133692ec7af04a688dfbe62437e4cf8bb7814ea2f4415"
+    },
+    "79": {
+      "name": "wager_stake_limit",
+      "checksum": "f2168f83fcd00652fe8448ca619b32f31df192f056fec3d84305b78c756cf277"
+    },
+    "80": {
+      "name": "lottery",
+      "checksum": "2057e5fcbd6062bbae322d9c83f7d860e3958ed9aa1acb6678f6395009ca12a8"
+    },
+    "81": {
+      "name": "unbounded_wager_stakes",
+      "checksum": "bb49c8f589a81c2084078e53227d50c1cf5c334a374422574f590474a380d59c"
+    },
+    "82": {
+      "name": "normalize_legacy_game_rewards",
+      "checksum": "04395b50184d4de3822fa341ffbbb55c2696568a628b73b4694ce67a820cb641"
+    },
+    "83": {
+      "name": "notify_subscriptions",
+      "checksum": "10f9f051ab0b4e8ea813e4489d5bdb5f1117f89322e911a5d90ddf22bdf27956"
+    },
+    "84": {
+      "name": "notify_one_follow_per_scope",
+      "checksum": "445d2b85a57b2184bdc84bacd3d6106e96624ff33f6ea4a39d860133c015de1e"
+    },
+    "85": {
+      "name": "mudae_series_metadata",
+      "checksum": "ec1c52c9032e0ec8f179ac34ad274aa3fd9f964afa341800111810969a01f19e"
+    },
+    "86": {
+      "name": "title_shop_expansion",
+      "checksum": "73b21512469b0ea9ffe0f9838e34801857dbffa6bdb41b16c420a19a414e05d7"
+    },
+    "87": {
+      "name": "mudae_recent_claims",
+      "checksum": "4aa0b64f232d41a419c2793c6017e3f38893953c75fda032387de2781fa891a0"
+    },
+    "88": {
+      "name": "rings",
+      "checksum": "f2ad4583dd13370d4058de5cc867229c566392fe2cc1a0dc17e775f1940d8d34"
+    },
+    "89": {
+      "name": "social_relationships",
+      "checksum": "4df42fec82c90d8687ebb440a8eaef28dbd2a2a2015f81c1745c4cc37ceb9c78"
+    },
+    "90": {
+      "name": "user_birthdays",
+      "checksum": "50ea4d35af3fecdbba2a16266432aa1814d5f66e3db56f0b1fe2d65c90ae9f4d"
+    },
+    "91": {
+      "name": "birthday_rewards",
+      "checksum": "c60d7db97a0f45093d0493344b29aee769924767682316e0b3978127ec46cb5e"
+    },
+    "92": {
+      "name": "lastletter_stats",
+      "checksum": "8554382006125a9281e093fe3c591b611395c630c42e352e05d6eb567f5e62d2"
+    }
+  }
+}

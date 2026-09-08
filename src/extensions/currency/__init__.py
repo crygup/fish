@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import random
 import re
 import unicodedata
@@ -19,6 +18,7 @@ from discord.ext import commands, tasks
 
 from core import Cog
 from core.badges import BadgeAlreadyOwned, BadgeNotFound, refresh_stat_badges
+from core.catalogs import sync_shop_catalog
 from core.currency import (
     COIN_AMOUNT_DESCRIPTION,
     EVERYTHING_AMOUNT,
@@ -50,6 +50,7 @@ from extensions.fun.wordle import get_wordle_settings, new_wordle_game
 from utils.formats import plural
 from utils.paths import FILES_ROOT
 from utils.racing_emoji import classify_racing_emoji
+from utils.shop_catalog import SHOP_CATALOG
 
 from .profile_card import (
     ProfileCardData,
@@ -720,19 +721,10 @@ class RingOffer:
     name: str
     emoji: str
     price: int
+    enabled: bool = True
 
 
-RING_OFFERS: tuple[RingOffer, ...] = (
-    RingOffer("runalds", "Runalds", "<:Runalds:1545461490948116622>", 100_000),
-    RingOffer("kjaros", "Kjaros", "<:Kjaros:1545461494613938320>", 100_000),
-    RingOffer(
-        "singularity",
-        "Singularity",
-        "<:Singularity:1545461498271367199>",
-        75_000,
-    ),
-    RingOffer("basic", "Basic", "💍", 50_000),
-)
+RING_OFFERS = tuple(RingOffer(**item) for item in SHOP_CATALOG["rings"])
 
 
 class TitleShopView(discord.ui.LayoutView):
@@ -967,6 +959,7 @@ class ColorOffer:
     description: str
     hex_value: str | None = None
     selector: str | None = None
+    enabled: bool = True
 
     @property
     def command_selector(self) -> str:
@@ -983,48 +976,19 @@ class RacingEmojiCategory:
     samples: tuple[str, ...]
 
 
-RACING_EMOJI_CATEGORIES: tuple[RacingEmojiCategory, ...] = (
+RACING_EMOJI_CATEGORIES = tuple(
     RacingEmojiCategory(
-        "sea",
-        "Sea animals",
-        50_000,
-        ("🐙", "🦑", "🪼", "🦐", "🦞", "🦀", "🐡", "🐠", "🐟", "🐬"),
-    ),
-    RacingEmojiCategory(
-        "face",
-        "Human/face",
-        15_000,
-        ("😀", "😃", "😄", "😁", "😆", "😅", "😂", "🙂", "🙃", "😉"),
-    ),
-    RacingEmojiCategory(
-        "heart",
-        "Hearts",
-        20_000,
-        ("❤️", "🩷", "🧡", "💛", "💚", "💙", "🩵", "💜", "🖤", "🤍"),
-    ),
-    RacingEmojiCategory(
-        "animal",
-        "Other animals",
-        25_000,
-        ("🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯"),
-    ),
-    RacingEmojiCategory(
-        "food",
-        "Food",
-        15_000,
-        ("🍎", "🍌", "🍕", "🍔", "🍟", "🌮", "🍣", "🍩", "🍪", "🍉"),
-    ),
-    RacingEmojiCategory(
-        "misc",
-        "Miscellaneous",
-        10_000,
-        ("⭐", "🔥", "✨", "🌈", "⚡", "🎵", "🎲", "🚀", "🎯", "👑"),
-    ),
+        item["key"], item["label"], item["price"], tuple(item["samples"])
+    )
+    for item in SHOP_CATALOG["racing_emoji"]
+    if item["key"] != "custom"
 )
 RACING_EMOJI_CATEGORY_BY_KEY = {
     category.key: category for category in RACING_EMOJI_CATEGORIES
 }
-RACING_EMOJI_CUSTOM_PRICE = 1_000_000
+RACING_EMOJI_CUSTOM_PRICE = next(
+    item["price"] for item in SHOP_CATALOG["racing_emoji"] if item["key"] == "custom"
+)
 RACING_EMOJI_BLOCKED_MARKERS = frozenset(
     {
         "square",
@@ -1212,7 +1176,9 @@ class ColorShopView(discord.ui.LayoutView):
         owned_racing: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__(timeout=600)
-        offers = sorted(PURCHASABLE_COLORS, key=lambda offer: -offer.price)
+        offers = sorted(
+            _color_catalog_offers(enabled_only=True), key=lambda offer: -offer.price
+        )
         lines: list[str] = []
         for offer in offers:
             suffix = f" · `{offer.hex_value}`" if offer.hex_value else ""
@@ -1345,7 +1311,9 @@ class RingShopView(discord.ui.LayoutView):
         lines = [
             f"{offer.emoji} {offer.name} (`{offer.key}`) · "
             f"**{offer.price:,} Coins**"
-            for offer in sorted(RING_OFFERS, key=lambda item: -item.price)
+            for offer in sorted(
+                _ring_catalog_offers(enabled_only=True), key=lambda item: -item.price
+            )
         ]
         self.add_item(
             discord.ui.Container(
@@ -1718,82 +1686,11 @@ class InventoryView(discord.ui.LayoutView):
                 pass
 
 
-PURCHASABLE_BADGES: tuple[BadgeOffer, ...]
-PURCHASABLE_TITLES: tuple[TitleOffer, ...]
+PURCHASABLE_BADGES = tuple(BadgeOffer(**item) for item in SHOP_CATALOG["badges"])
+PURCHASABLE_TITLES = tuple(TitleOffer(**item) for item in SHOP_CATALOG["titles"])
 
 
-def _load_shop_catalog() -> tuple[tuple[BadgeOffer, ...], tuple[TitleOffer, ...]]:
-    """Load built-in shop seeds from the editable JSON catalog."""
-
-    path = FILES_ROOT / "data" / "shop_catalog.json"
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"Unable to load shop catalog {path}") from error
-    if not isinstance(document, Mapping):
-        raise RuntimeError(f"Shop catalog {path} must contain a JSON object")
-
-    badges: list[BadgeOffer] = []
-    for entry in document.get("badges", []):
-        if not isinstance(entry, Mapping):
-            continue
-        key = str(entry.get("key", "")).strip()
-        emoji = str(entry.get("emoji", ""))
-        description = str(entry.get("description", "")).strip()
-        if not key or not description:
-            continue
-        try:
-            price = int(entry.get("price", 0))
-        except (TypeError, ValueError):
-            continue
-        kind = str(entry.get("kind", "emoji"))
-        if kind not in {"emoji", "custom_emoji", "flag"} or price <= 0:
-            continue
-        selector = entry.get("selector")
-        badges.append(
-            BadgeOffer(
-                key=key,
-                emoji=emoji,
-                price=price,
-                description=description,
-                kind=cast(Literal["emoji", "custom_emoji", "flag"], kind),
-                selector=str(selector) if selector is not None else None,
-                enabled=bool(entry.get("enabled", True)),
-            )
-        )
-
-    titles: list[TitleOffer] = []
-    for entry in document.get("titles", []):
-        if not isinstance(entry, Mapping):
-            continue
-        key = str(entry.get("key", "")).strip()
-        description = str(entry.get("description", "")).strip()
-        if not key or not description:
-            continue
-        try:
-            price = int(entry.get("price", 0))
-        except (TypeError, ValueError):
-            continue
-        if price <= 0:
-            continue
-        selector = entry.get("selector")
-        category = str(entry.get("category", "Misc titles")).strip() or "Misc titles"
-        titles.append(
-            TitleOffer(
-                key=key,
-                price=price,
-                description=description,
-                selector=str(selector) if selector is not None else None,
-                category=category,
-                enabled=bool(entry.get("enabled", True)),
-            )
-        )
-    return tuple(badges), tuple(titles)
-
-
-PURCHASABLE_BADGES, PURCHASABLE_TITLES = _load_shop_catalog()
-
-TITLE_SHOP_CATEGORY_ORDER: tuple[str, ...] = ("Misc titles", "JoJo Stands", "Sins")
+TITLE_SHOP_CATEGORY_ORDER: tuple[str, ...] = tuple(SHOP_CATALOG["title_categories"])
 
 # Catalog tuples are only the built-in seed data.  Once the currency cog has
 # loaded, these caches contain every catalog row (including rows added by an
@@ -1803,6 +1700,20 @@ TITLE_SHOP_CATEGORY_ORDER: tuple[str, ...] = ("Misc titles", "JoJo Stands", "Sin
 # refresh.
 _TITLE_CATALOG_CACHE: tuple[TitleOffer, ...] | None = None
 _BADGE_CATALOG_CACHE: tuple[BadgeOffer, ...] | None = None
+_COLOR_CATALOG_CACHE: tuple[ColorOffer, ...] | None = None
+_RING_CATALOG_CACHE: tuple[RingOffer, ...] | None = None
+
+
+def _color_catalog_offers(*, enabled_only: bool = False) -> tuple[ColorOffer, ...]:
+    offers = (
+        _COLOR_CATALOG_CACHE if _COLOR_CATALOG_CACHE is not None else PURCHASABLE_COLORS
+    )
+    return tuple(offer for offer in offers if offer.enabled) if enabled_only else offers
+
+
+def _ring_catalog_offers(*, enabled_only: bool = False) -> tuple[RingOffer, ...]:
+    offers = _RING_CATALOG_CACHE if _RING_CATALOG_CACHE is not None else RING_OFFERS
+    return tuple(offer for offer in offers if offer.enabled) if enabled_only else offers
 
 
 def _title_catalog_offers(*, enabled_only: bool = False) -> tuple[TitleOffer, ...]:
@@ -1834,19 +1745,7 @@ def _catalog_row_value(row: Any, key: str, default: Any = None) -> Any:
         return getattr(row, key, default)
 
 
-PURCHASABLE_COLORS: tuple[ColorOffer, ...] = (
-    ColorOffer("custom", 25_000, "Custom", selector="custom"),
-    ColorOffer("white", 10_000, "White", "#FFFFFF"),
-    ColorOffer("black", 10_000, "Black", "#000000"),
-    ColorOffer("red", 5_000, "Red", "#FF0000"),
-    ColorOffer("orange", 5_000, "Orange", "#FFA500"),
-    ColorOffer("yellow", 5_000, "Yellow", "#FFD700"),
-    ColorOffer("green", 5_000, "Green", "#00FF00"),
-    ColorOffer("blue", 5_000, "Blue", "#0000FF"),
-    ColorOffer("purple", 5_000, "Purple", "#800080"),
-    ColorOffer("pink", 5_000, "Pink", "#FF69B4"),
-    ColorOffer("gray", 5_000, "Gray", "#808080", selector="grey"),
-)
+PURCHASABLE_COLORS = tuple(ColorOffer(**item) for item in SHOP_CATALOG["colors"])
 
 _BADGE_OFFER_ALIASES = {
     "fish": "fish",
@@ -2063,7 +1962,7 @@ class Currency(Cog):
         lookups, while shop views filter them out.
         """
 
-        global _BADGE_CATALOG_CACHE, _TITLE_CATALOG_CACHE
+        global _BADGE_CATALOG_CACHE, _TITLE_CATALOG_CACHE, _COLOR_CATALOG_CACHE, _RING_CATALOG_CACHE
 
         title_rows = await self.bot.pool.fetch("""
             SELECT title_key, display_name, price, category, enabled
@@ -2172,11 +2071,40 @@ class Currency(Cog):
                 )
             )
 
-        # Keep the built-in fallback if a partially migrated database has no
-        # rows yet.  A fully migrated database may legitimately have every
-        # offer disabled, so do not use truthiness here.
+        color_seeds = {offer.key: offer for offer in PURCHASABLE_COLORS}
+        colors = tuple(
+            ColorOffer(
+                key=row["color_key"],
+                description=row["display_name"],
+                price=row["price"],
+                hex_value=None if row["color_key"] == "custom" else row["hex_value"],
+                selector=(
+                    color_seeds[row["color_key"]].selector
+                    if row["color_key"] in color_seeds
+                    else None
+                ),
+                enabled=row["enabled"],
+            )
+            for row in await self.bot.pool.fetch(
+                "SELECT * FROM color_catalog ORDER BY color_key"
+            )
+        )
+        rings = tuple(
+            RingOffer(
+                row["ring_key"],
+                row["display_name"],
+                row["display"],
+                row["price"],
+                row["enabled"],
+            )
+            for row in await self.bot.pool.fetch(
+                "SELECT * FROM ring_catalog ORDER BY ring_key"
+            )
+        )
         _TITLE_CATALOG_CACHE = tuple(titles)
         _BADGE_CATALOG_CACHE = tuple(badges)
+        _COLOR_CATALOG_CACHE = colors
+        _RING_CATALOG_CACHE = rings
 
     async def sync_catalogs(self) -> None:
         """Seed built-in offers, then cache all database catalog rows.
@@ -2190,52 +2118,7 @@ class Currency(Cog):
         """
 
         async with self.bot.pool.acquire() as connection:
-            async with connection.transaction():
-                for offer in PURCHASABLE_TITLES:
-                    await connection.execute(
-                        """
-                        INSERT INTO title_catalog(
-                            title_key, display_name, price, category, enabled
-                        )
-                        VALUES ($1, $2, $3, $4, $5)
-                        ON CONFLICT (title_key) DO UPDATE SET
-                            display_name = EXCLUDED.display_name,
-                            price = EXCLUDED.price,
-                            category = EXCLUDED.category
-                        """,
-                        offer.key,
-                        offer.description,
-                        int(offer.price),
-                        offer.category,
-                        bool(offer.enabled),
-                    )
-                for offer in PURCHASABLE_BADGES:
-                    catalog_key = f"purchase:{offer.key}"
-                    emoji_name = offer.emoji if offer.kind != "custom_emoji" else ""
-                    await connection.execute(
-                        """
-                        INSERT INTO badge_catalog(
-                            badge_key, category, display_name, emoji_name,
-                            emoji_id, is_custom, unicode, animated, price, enabled
-                        )
-                        VALUES ($1, 'purchase', $2, $3, NULL, $4, $5, FALSE, $6, $7)
-                        ON CONFLICT (badge_key) DO UPDATE SET
-                            category = EXCLUDED.category,
-                            display_name = EXCLUDED.display_name,
-                            emoji_name = EXCLUDED.emoji_name,
-                            is_custom = EXCLUDED.is_custom,
-                            unicode = EXCLUDED.unicode,
-                            price = EXCLUDED.price,
-                            enabled = badge_catalog.enabled
-                        """,
-                        catalog_key,
-                        offer.description,
-                        emoji_name,
-                        offer.kind == "custom_emoji",
-                        offer.kind != "custom_emoji",
-                        int(offer.price),
-                        bool(offer.enabled),
-                    )
+            await sync_shop_catalog(connection)
         await self.refresh_catalog_cache()
 
     async def set_title_catalog_enabled(self, title_key: str, enabled: bool) -> bool:
@@ -2744,7 +2627,7 @@ class Currency(Cog):
         emoji_id = int(partial.id) if partial.id is not None else None
         folded = re.sub(r"[\s_-]+", "-", raw.casefold()).strip(":-")
         compact = re.sub(r"[^a-z0-9]+", "", raw.casefold())
-        for offer in RING_OFFERS:
+        for offer in _ring_catalog_offers():
             offer_partial = discord.PartialEmoji.from_str(offer.emoji)
             if emoji_id is not None and offer_partial.id == emoji_id:
                 return offer
@@ -4061,10 +3944,16 @@ class Currency(Cog):
     def _color_offer(selector: str) -> ColorOffer | None:
         normalized = selector.strip()
         normalized_key = re.sub(r"[\s_-]+", "-", normalized.casefold()).strip(":-")
-        key = _COLOR_OFFER_ALIASES.get(normalized_key)
-        if key is None:
-            return None
-        return next((offer for offer in PURCHASABLE_COLORS if offer.key == key), None)
+        key = _COLOR_OFFER_ALIASES.get(normalized_key, normalized_key)
+        return next(
+            (
+                offer
+                for offer in _color_catalog_offers()
+                if key
+                in (offer.key, offer.command_selector, offer.description.casefold())
+            ),
+            None,
+        )
 
     @staticmethod
     def _racing_emoji_info(
@@ -4646,6 +4535,8 @@ class Currency(Cog):
             offer = self._color_offer("custom")
         if offer is None:  # pragma: no cover - custom is a static offer.
             raise commands.BadArgument("Custom colours are temporarily unavailable.")
+        if not offer.enabled:
+            raise commands.BadArgument("That colour is not currently available.")
 
         if offer.key == "custom":
             custom_hex = parsed_direct or hex_value
@@ -4689,6 +4580,8 @@ class Currency(Cog):
             ) from error
         except ColorAlreadyOwned as error:
             raise commands.BadArgument("You already own that colour.") from error
+        except InvalidAmount as error:
+            raise commands.BadArgument(str(error)) from error
         await self._refresh_color_cache(ctx.author.id)
         balance = self._badge_result_value(wallet, "balance")
         balance_text = (

@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from utils.shop_catalog import SHOP_CATALOG
+
 from .currency import InsufficientFunds
 
 MAX_BADGE_PRICE = 9_000_000_000_000_000_000
@@ -72,21 +74,10 @@ class StatBadge:
     value: int
 
 
-STAT_BADGE_KEYS = frozenset(
-    {
-        "stat:corn_receiver",
-        "stat:connectfour_hard_winner",
-        "stat:command_user",
-        "stat:richest",
-    }
-)
+STAT_BADGE_DEFINITIONS = {item["key"]: item for item in SHOP_CATALOG["stat_badges"]}
 STAT_BADGE_PREFIX = "stat:"
-STAT_BADGE_EMOJIS = {
-    "corn_receiver": "🌽",
-    "connectfour_hard_winner": "4️⃣",
-    "command_user": "🏅",
-    "richest": "💰",
-}
+STAT_BADGE_KEYS = frozenset(STAT_BADGE_PREFIX + key for key in STAT_BADGE_DEFINITIONS)
+STAT_BADGE_EMOJIS = {key: item["emoji"] for key, item in STAT_BADGE_DEFINITIONS.items()}
 
 
 def _row_value(row: Mapping[str, Any] | Any, key: str, default: Any = None) -> Any:
@@ -156,7 +147,9 @@ def command_badge_leaders(
                 user_id=user_id,
                 badge_key="stat:command_user",
                 emoji_name=STAT_BADGE_EMOJIS["command_user"],
-                text=f"#1 {command} user",
+                text=STAT_BADGE_DEFINITIONS["command_user"]["text_template"].format(
+                    command=command
+                ),
                 value=total,
             )
         )
@@ -646,7 +639,7 @@ async def collect_stat_badges(
             user_id=user_id,
             badge_key="stat:corn_receiver",
             emoji_name=STAT_BADGE_EMOJIS["corn_receiver"],
-            text="#1 Corn receiver",
+            text=STAT_BADGE_DEFINITIONS["corn_receiver"]["description"],
             value=corn_total,
         )
         for user_id in corn_leaders
@@ -670,7 +663,7 @@ async def collect_stat_badges(
             user_id=user_id,
             badge_key="stat:connectfour_hard_winner",
             emoji_name=STAT_BADGE_EMOJIS["connectfour_hard_winner"],
-            text="#1 Connect4 Hard Mode Winner",
+            text=STAT_BADGE_DEFINITIONS["connectfour_hard_winner"]["description"],
             value=connect_total,
         )
         for user_id in connect_leaders
@@ -693,7 +686,7 @@ async def collect_stat_badges(
             user_id=user_id,
             badge_key="stat:richest",
             emoji_name=STAT_BADGE_EMOJIS["richest"],
-            text="Richest",
+            text=STAT_BADGE_DEFINITIONS["richest"]["description"],
             value=richest_total,
         )
         for user_id in richest_leaders

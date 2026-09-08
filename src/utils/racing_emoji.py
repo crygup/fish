@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import emoji as emoji_lib
+
+from .shop_catalog import SHOP_CATALOG
 
 RacingEmojiCategory = Literal[
     "custom",
@@ -31,23 +33,13 @@ RacingEmojiCategory = Literal[
 ]
 
 RACING_EMOJI_PRICES: Final[dict[RacingEmojiCategory, int]] = {
-    "custom": 100_000,
-    "sea_animal": 50_000,
-    "human_face": 15_000,
-    "heart": 20_000,
-    "animal": 25_000,
-    "food": 15_000,
-    "misc": 10_000,
+    cast(RacingEmojiCategory, item["classifier"]): item["price"]
+    for item in SHOP_CATALOG["racing_emoji"]
 }
 
 RACING_EMOJI_CATEGORY_NAMES: Final[dict[RacingEmojiCategory, str]] = {
-    "custom": "Custom",
-    "sea_animal": "Sea animals",
-    "human_face": "Human/face",
-    "heart": "Hearts",
-    "animal": "Animals",
-    "food": "Food",
-    "misc": "Miscellaneous",
+    cast(RacingEmojiCategory, item["classifier"]): item["label"]
+    for item in SHOP_CATALOG["racing_emoji"]
 }
 
 # Keep this in sync with the default race animals.  A purchased Unicode sea

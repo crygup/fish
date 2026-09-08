@@ -1080,5 +1080,270 @@
       "category": "Emoticons",
       "enabled": true
     }
+  ],
+  "colors": [
+    {
+      "key": "custom",
+      "price": 25000,
+      "description": "Custom",
+      "hex_value": null,
+      "selector": "custom",
+      "enabled": true
+    },
+    {
+      "key": "white",
+      "price": 10000,
+      "description": "White",
+      "hex_value": "#FFFFFF",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "black",
+      "price": 10000,
+      "description": "Black",
+      "hex_value": "#000000",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "red",
+      "price": 5000,
+      "description": "Red",
+      "hex_value": "#FF0000",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "orange",
+      "price": 5000,
+      "description": "Orange",
+      "hex_value": "#FFA500",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "yellow",
+      "price": 5000,
+      "description": "Yellow",
+      "hex_value": "#FFD700",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "green",
+      "price": 5000,
+      "description": "Green",
+      "hex_value": "#00FF00",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "blue",
+      "price": 5000,
+      "description": "Blue",
+      "hex_value": "#0000FF",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "purple",
+      "price": 5000,
+      "description": "Purple",
+      "hex_value": "#800080",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "pink",
+      "price": 5000,
+      "description": "Pink",
+      "hex_value": "#FF69B4",
+      "selector": null,
+      "enabled": true
+    },
+    {
+      "key": "gray",
+      "price": 5000,
+      "description": "Gray",
+      "hex_value": "#808080",
+      "selector": "grey",
+      "enabled": true
+    }
+  ],
+  "rings": [
+    {
+      "key": "runalds",
+      "name": "Runalds",
+      "emoji": "<:Runalds:1545461490948116622>",
+      "price": 100000,
+      "enabled": true
+    },
+    {
+      "key": "kjaros",
+      "name": "Kjaros",
+      "emoji": "<:Kjaros:1545461494613938320>",
+      "price": 100000,
+      "enabled": true
+    },
+    {
+      "key": "singularity",
+      "name": "Singularity",
+      "emoji": "<:Singularity:1545461498271367199>",
+      "price": 75000,
+      "enabled": true
+    },
+    {
+      "key": "basic",
+      "name": "Basic",
+      "emoji": "💍",
+      "price": 50000,
+      "enabled": true
+    }
+  ],
+  "stat_badges": [
+    {
+      "key": "corn_receiver",
+      "description": "#1 Corn receiver",
+      "emoji": "🌽"
+    },
+    {
+      "key": "connectfour_hard_winner",
+      "description": "#1 Connect4 Hard Mode Winner",
+      "emoji": "4️⃣"
+    },
+    {
+      "key": "command_user",
+      "description": "#1 command user",
+      "emoji": "🏅",
+      "text_template": "#1 {command} user"
+    },
+    {
+      "key": "richest",
+      "description": "Richest",
+      "emoji": "💰"
+    }
+  ],
+  "racing_emoji": [
+    {
+      "key": "sea",
+      "label": "Sea animals",
+      "price": 50000,
+      "samples": [
+        "🐙",
+        "🦑",
+        "🪼",
+        "🦐",
+        "🦞",
+        "🦀",
+        "🐡",
+        "🐠",
+        "🐟",
+        "🐬"
+      ],
+      "classifier": "sea_animal"
+    },
+    {
+      "key": "face",
+      "label": "Human/face",
+      "price": 15000,
+      "samples": [
+        "😀",
+        "😃",
+        "😄",
+        "😁",
+        "😆",
+        "😅",
+        "😂",
+        "🙂",
+        "🙃",
+        "😉"
+      ],
+      "classifier": "human_face"
+    },
+    {
+      "key": "heart",
+      "label": "Hearts",
+      "price": 20000,
+      "samples": [
+        "❤️",
+        "🩷",
+        "🧡",
+        "💛",
+        "💚",
+        "💙",
+        "🩵",
+        "💜",
+        "🖤",
+        "🤍"
+      ],
+      "classifier": "heart"
+    },
+    {
+      "key": "animal",
+      "label": "Other animals",
+      "price": 25000,
+      "samples": [
+        "🐶",
+        "🐱",
+        "🐭",
+        "🐹",
+        "🐰",
+        "🦊",
+        "🐻",
+        "🐼",
+        "🐨",
+        "🐯"
+      ],
+      "classifier": "animal"
+    },
+    {
+      "key": "food",
+      "label": "Food",
+      "price": 15000,
+      "samples": [
+        "🍎",
+        "🍌",
+        "🍕",
+        "🍔",
+        "🍟",
+        "🌮",
+        "🍣",
+        "🍩",
+        "🍪",
+        "🍉"
+      ],
+      "classifier": "food"
+    },
+    {
+      "key": "misc",
+      "label": "Miscellaneous",
+      "price": 10000,
+      "samples": [
+        "⭐",
+        "🔥",
+        "✨",
+        "🌈",
+        "⚡",
+        "🎵",
+        "🎲",
+        "🚀",
+        "🎯",
+        "👑"
+      ],
+      "classifier": "misc"
+    },
+    {
+      "key": "custom",
+      "classifier": "custom",
+      "label": "Custom",
+      "price": 1000000,
+      "samples": []
+    }
+  ],
+  "title_categories": [
+    "Misc titles",
+    "JoJo Stands",
+    "Sins"
   ]
 }

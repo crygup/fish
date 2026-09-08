@@ -1,28 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-import logging
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .catalogs import sync_shop_catalog
+
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_LOCK_ID = 0x464953484945  # "FISHIE"
-BASELINE_VERSION = 1
-# Migration 1 is the bootstrap schema.  The schema file has historically
-# grown alongside numbered migrations, so existing installations may still
-# carry the checksum from the last published bootstrap schema.  Keep that
-# one known legacy value explicitly rather than accepting any syntactically
-# valid checksum, which would hide an operator or database tampering.
-LEGACY_BASELINE_CHECKSUMS = frozenset(
-    {
-        "f81c85e95368b86b20acefdaee12d6f3a78ce203e1eeeb0ac9d202d3605144a7",
-        "f6ab37135016c8eb65f2c8b1f0a1593b33c48163b3000872e7ce474003e59aed",
-        "2481f2c4fe02098b7f26680a81148ec2b56836c49807b0a9f4d82687b0ba3ac4",
-        "dd81e242a8452f35f288b7a751230f869f5ab7713fe4757e4df9ba43c8f7f65e",
-    }
-)
-logger = logging.getLogger(__name__)
+BASELINE_VERSION = 92
 
 
 @dataclass(frozen=True)
@@ -40,28 +28,33 @@ class Migration:
         return hashlib.sha256(self.sql.encode()).hexdigest()
 
 
-def _legacy_baseline_record(record: Any, migration: Migration) -> bool:
-    """Return whether a baseline checksum can be retained for compatibility.
-
-    ``schema.sql`` is the bootstrap schema and intentionally grows as new
-    numbered migrations are added.  Existing installations therefore retain
-    the hash that was recorded when their baseline was first applied.  Only a
-    properly formed baseline record receives this compatibility treatment.
-    Any other checksum mismatch is still a hard migration error.
-    """
-
-    checksum = record.get("checksum") if hasattr(record, "get") else None
-    name = record.get("name") if hasattr(record, "get") else None
-    return (
-        migration.version == BASELINE_VERSION
-        and name == migration.name
-        and isinstance(checksum, str)
-        and checksum in LEGACY_BASELINE_CHECKSUMS
-    )
+def _legacy_baseline(records: dict[int, Any]) -> bool:
+    """Accept only a complete, verified pre-squash installation."""
+    record = records.get(BASELINE_VERSION)
+    if record is not None and record["name"] == "baseline":
+        return False
+    if not records:
+        return False
+    manifest = json.loads((ROOT / "migrations/legacy_checksums.json").read_text())
+    for version, expected in manifest["migrations"].items():
+        record = records.get(int(version))
+        if record is None:
+            raise RuntimeError(
+                f"Legacy migration {version} is missing; upgrade with the "
+                "pre-squash release through migration 92 before adopting this schema"
+            )
+        accepted = {expected["checksum"]}
+        if version == "1":
+            accepted.update(manifest["baseline_checksums"])
+        if record["name"] != expected["name"] or record["checksum"] not in accepted:
+            raise RuntimeError(
+                f"Legacy migration {version} checksum or name has changed"
+            )
+    return True
 
 
 def available_migrations() -> tuple[Migration, ...]:
-    migrations = [Migration(1, "baseline", ROOT / "schema.sql")]
+    migrations = [Migration(BASELINE_VERSION, "baseline", ROOT / "schema.sql")]
     for path in sorted((ROOT / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql")):
         version_text, _, name = path.stem.partition("_")
         migrations.append(Migration(int(version_text), name, path))
@@ -69,6 +62,14 @@ def available_migrations() -> tuple[Migration, ...]:
     if versions != sorted(set(versions)):
         raise RuntimeError("Migration versions must be unique and increasing")
     return tuple(migrations)
+
+
+def _previous_squash(record: Any, migration: Migration) -> bool:
+    """Recognize the structurally identical baseline before catalog extraction."""
+    if migration.version != BASELINE_VERSION or record["name"] != "baseline":
+        return False
+    manifest = json.loads((ROOT / "migrations/legacy_checksums.json").read_text())
+    return record["checksum"] in manifest.get("squashed_checksums", [])
 
 
 async def migrate(connection: Any) -> list[Migration]:
@@ -91,17 +92,38 @@ async def migrate(connection: Any) -> list[Migration]:
                 "SELECT version, name, checksum FROM schema_migrations"
             )
         }
+        if _legacy_baseline(existing):
+            baseline = available_migrations()[0]
+            # Adopt without rerunning DDL. Keep historical ledger rows for audit;
+            # catalog definitions are synchronized separately below.
+            async with connection.transaction():
+                await connection.execute(
+                    "UPDATE schema_migrations SET name = $2, checksum = $3 "
+                    "WHERE version = $1",
+                    baseline.version,
+                    baseline.name,
+                    baseline.checksum,
+                )
+            existing[baseline.version] = {
+                "name": baseline.name,
+                "checksum": baseline.checksum,
+            }
+            applied.append(baseline)
         for migration in available_migrations():
             record = existing.get(migration.version)
             if record:
-                if record["checksum"] != migration.checksum:
-                    if _legacy_baseline_record(record, migration):
-                        logger.warning(
-                            "Retaining legacy baseline checksum for migration %s; "
-                            "numbered migrations remain authoritative",
-                            migration.version,
-                        )
-                        continue
+                if _previous_squash(record, migration):
+                    await connection.execute(
+                        "UPDATE schema_migrations SET checksum = $2 WHERE version = $1",
+                        migration.version,
+                        migration.checksum,
+                    )
+                    applied.append(migration)
+                    continue
+                if (
+                    record["checksum"] != migration.checksum
+                    or record["name"] != migration.name
+                ):
                     raise RuntimeError(
                         f"Applied migration {migration.version} checksum has changed"
                     )
@@ -131,6 +153,7 @@ async def migrate(connection: Any) -> list[Migration]:
                         migration.checksum,
                     )
             applied.append(migration)
+        await sync_shop_catalog(connection)
         return applied
     finally:
         await connection.execute("SELECT pg_advisory_unlock($1)", MIGRATION_LOCK_ID)
@@ -150,22 +173,19 @@ async def check_migrations(connection: Any) -> None:
             "SELECT version, name, checksum FROM schema_migrations"
         )
     }
+    legacy = _legacy_baseline(records)
     for migration in available_migrations():
+        if legacy and migration.version == BASELINE_VERSION:
+            continue
         record = records.get(migration.version)
         if record is None:
             raise RuntimeError(
                 f"Database migration {migration.version} is pending; "
                 "run `python src/manage.py migrate`"
             )
-        if record["checksum"] != migration.checksum and not _legacy_baseline_record(
-            record, migration
-        ):
+        if _previous_squash(record, migration):
+            continue
+        if record["checksum"] != migration.checksum or record["name"] != migration.name:
             raise RuntimeError(
                 f"Database migration {migration.version} differs from the applied version"
-            )
-        if record["checksum"] != migration.checksum:
-            logger.warning(
-                "Database retains a legacy baseline checksum for migration %s; "
-                "numbered migrations remain authoritative",
-                migration.version,
             )

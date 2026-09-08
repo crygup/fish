@@ -1629,6 +1629,18 @@ class CurrencyService:
             raise InvalidAmount("A colour price must be positive.")
         async with self.pool.acquire() as connection:
             async with connection.transaction():
+                offer = await connection.fetchrow(
+                    "SELECT enabled, price, hex_value FROM color_catalog WHERE color_key = $1 FOR SHARE",
+                    color_key,
+                )
+                if offer is None or not offer["enabled"]:
+                    raise InvalidAmount("That colour is not currently available.")
+                if offer["price"] != price:
+                    raise InvalidAmount(
+                        "That colour's price changed. Please try again."
+                    )
+                if color_key != "custom":
+                    hex_value = offer["hex_value"]
                 wallet = await self._locked_wallet(connection, int(user_id))
                 existing = await connection.fetchrow(
                     """
