@@ -595,8 +595,8 @@ async def get_twitch_follows(
 ):
     guild = await _managed_guild(guild_id, authorization, session_id)
     rows = await api_state._check_pool().fetch(
-        "SELECT channel_name, announce_channel_id, message_template, broadcaster_id "
-        "FROM twitch_follows WHERE guild_id = $1 ORDER BY channel_name",
+        "SELECT id, channel_name, announce_channel_id, mention_role_id, mention_everyone, broadcaster_id "
+        "FROM notify_twitch_follows WHERE guild_id = $1 ORDER BY channel_name",
         guild_id,
     )
     channels = {str(channel.id): channel.name for channel in guild.text_channels}
@@ -608,7 +608,20 @@ async def get_twitch_follows(
                 "announce_channel_name": channels.get(
                     str(row["announce_channel_id"]), "Unknown channel"
                 ),
-                "message_template": row["message_template"],
+                "id": str(row["id"]),
+                "mention_role_id": (
+                    str(row["mention_role_id"]) if row["mention_role_id"] else None
+                ),
+                "mention_everyone": row["mention_everyone"],
+                "message_template": (
+                    "@everyone"
+                    if row["mention_everyone"]
+                    else (
+                        f"<@&{row['mention_role_id']}>"
+                        if row["mention_role_id"]
+                        else None
+                    )
+                ),
                 "broadcaster_id": row["broadcaster_id"],
             }
             for row in rows
@@ -644,11 +657,29 @@ async def set_twitch_follow(
     announce_channel = await _resolve_guild_text_channel(guild, announce_channel_id)
     if announce_channel is None:
         raise HTTPException(400, "Announcement channel must belong to this server")
-    message_template = payload.get("message_template")
-    if message_template is not None:
-        message_template = str(message_template).strip() or None
-        if message_template and len(message_template) > 2000:
-            raise HTTPException(400, "The Twitch message cannot exceed 2000 characters")
+    # The old dashboard field is accepted only as a role mention, not a template.
+    mention = str(payload.get("message_template") or "").strip()
+    role_id = payload.get("mention_role_id")
+    everyone = payload.get("mention_everyone", False)
+    if not isinstance(everyone, bool):
+        raise HTTPException(400, "mention_everyone must be true or false")
+    if mention:
+        match = re.fullmatch(r"<@&(\d+)>", mention)
+        if mention == "@everyone":
+            everyone = True
+        elif match:
+            role_id = match.group(1)
+        else:
+            raise HTTPException(
+                400, "Use a role mention or @everyone, not a custom message"
+            )
+    if role_id is not None:
+        try:
+            role_id = int(role_id)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Invalid role ID")
+        if guild.get_role(role_id) is None or role_id == guild.id or everyone:
+            raise HTTPException(400, "Choose one role from this server or @everyone")
 
     events: Any = api_state.bot_ref.get_cog("Events") if api_state.bot_ref else None
     if events is None or not hasattr(events, "_get_twitch_user"):
@@ -658,39 +689,31 @@ async def set_twitch_follow(
         raise HTTPException(404, "Twitch channel not found")
     broadcaster_id = str(twitch_user["id"])
     pool = api_state._check_pool()
-    async with pool.acquire() as connection:
-        async with connection.transaction():
-            await connection.execute(
-                "SELECT pg_advisory_xact_lock(hashtext($1))",
-                f"fishie:twitch:{guild_id}",
-            )
-            existing = await connection.fetchval(
-                "SELECT 1 FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
-                guild_id,
-                channel_name,
-            )
-            if not existing:
-                count = await connection.fetchval(
-                    "SELECT COUNT(*) FROM twitch_follows WHERE guild_id = $1", guild_id
-                )
-                if count >= 3:
-                    raise HTTPException(
-                        400, "You can follow up to 3 Twitch channels per server"
-                    )
-            await connection.execute(
-                """INSERT INTO twitch_follows
-                   (guild_id, channel_name, announce_channel_id, broadcaster_id, message_template)
-                   VALUES ($1, $2, $3, $4, $5)
-                   ON CONFLICT (guild_id, channel_name) DO UPDATE SET
-                     announce_channel_id = EXCLUDED.announce_channel_id,
-                     broadcaster_id = EXCLUDED.broadcaster_id,
-                     message_template = EXCLUDED.message_template""",
-                guild_id,
-                channel_name,
-                announce_channel_id,
-                broadcaster_id,
-                message_template,
-            )
+    from extensions.settings.notify import save_twitch_follow
+
+    try:
+        follow = await save_twitch_follow(
+            pool,
+            guild_id=guild_id,
+            user_id=None,
+            name=channel_name,
+            broadcaster_id=broadcaster_id,
+            channel_id=announce_channel_id,
+            update_existing=True,
+        )
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    if any(
+        key in payload
+        for key in ("message_template", "mention_role_id", "mention_everyone")
+    ):
+        await pool.execute(
+            "UPDATE notify_twitch_follows SET mention_role_id = $2, mention_everyone = $3, "
+            "updated_at = now() WHERE id = $1",
+            follow["id"],
+            role_id,
+            everyone,
+        )
     try:
         await events.ensure_twitch_eventsub_subscription(broadcaster_id)
     except Exception as error:
@@ -711,12 +734,12 @@ async def delete_twitch_follow(
     channel_name = channel_name.strip().lstrip("@").lower()
     pool = api_state._check_pool()
     broadcaster_id = await pool.fetchval(
-        "SELECT broadcaster_id FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
+        "SELECT broadcaster_id FROM notify_twitch_follows WHERE guild_id = $1 AND lower(btrim(channel_name)) = $2",
         guild_id,
         channel_name,
     )
     result = await pool.execute(
-        "DELETE FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
+        "DELETE FROM notify_twitch_follows WHERE guild_id = $1 AND lower(btrim(channel_name)) = $2",
         guild_id,
         channel_name,
     )
@@ -1058,7 +1081,7 @@ async def delete_guild_data(
         guild_id,
     )
     broadcasters = await pool.fetch(
-        "SELECT DISTINCT broadcaster_id FROM twitch_follows "
+        "SELECT DISTINCT broadcaster_id FROM notify_twitch_follows "
         "WHERE guild_id = $1 AND broadcaster_id IS NOT NULL",
         guild_id,
     )

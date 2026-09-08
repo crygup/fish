@@ -337,18 +337,8 @@ class Twitch(Cog):
     async def twitch_follows(self, ctx: GuildContext):
         """Show the Twitch channels followed by this server."""
         rows = await self.bot.pool.fetch(
-            """
-            SELECT DISTINCT ON (lower(btrim(channel_name)))
-                channel_name, announce_channel_id
-            FROM (
-                SELECT channel_name, announce_channel_id, 1 AS source
-                FROM notify_twitch_follows WHERE guild_id = $1
-                UNION ALL
-                SELECT channel_name, announce_channel_id, 2 AS source
-                FROM twitch_follows WHERE guild_id = $1
-            ) follows
-            ORDER BY lower(btrim(channel_name)), source, channel_name
-            """,
+            "SELECT channel_name, announce_channel_id FROM notify_twitch_follows "
+            "WHERE guild_id = $1 ORDER BY channel_name",
             ctx.guild.id,
         )
         if not rows:
@@ -393,77 +383,20 @@ class Twitch(Cog):
                 "Choose a text channel for Twitch announcements."
             )
 
-        async with self.bot.pool.acquire() as connection:
-            async with connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1))",
-                    f"fishie:twitch:{ctx.guild.id}",
-                )
-                existing = await connection.fetchval(
-                    "SELECT 1 FROM twitch_follows "
-                    "WHERE guild_id = $1 AND channel_name = $2",
-                    ctx.guild.id,
-                    channel_name,
-                )
-                if not existing:
-                    count = await connection.fetchval(
-                        """
-                        SELECT COUNT(DISTINCT lower(channel_name))
-                        FROM (
-                            SELECT channel_name FROM twitch_follows WHERE guild_id = $1
-                            UNION ALL
-                            SELECT channel_name FROM notify_twitch_follows WHERE guild_id = $1
-                        ) follows
-                        """,
-                        ctx.guild.id,
-                    )
-                    if count >= 10:
-                        raise commands.BadArgument(
-                            "You can follow up to 10 Twitch channels per server."
-                        )
-                await connection.execute(
-                    """INSERT INTO twitch_follows
-                       (guild_id, channel_name, announce_channel_id, broadcaster_id)
-                       VALUES ($1, $2, $3, $4)
-                       ON CONFLICT (guild_id, channel_name) DO UPDATE
-                       SET announce_channel_id = EXCLUDED.announce_channel_id,
-                           broadcaster_id = EXCLUDED.broadcaster_id""",
-                    ctx.guild.id,
-                    channel_name,
-                    target.id,
-                    broadcaster_id,
-                )
+        from extensions.settings.notify import save_twitch_follow
 
-                # Keep the new notification store in sync with the legacy
-                # text command. There is one notify row per followed Twitch
-                # channel and guild, so moving the legacy follow updates that
-                # row's destination instead of creating another subscription.
-                mirrored = await connection.execute(
-                    """
-                    UPDATE notify_twitch_follows
-                    SET announce_channel_id = $3,
-                        broadcaster_id = $4,
-                        updated_at = now()
-                    WHERE guild_id = $1 AND lower(btrim(channel_name)) = lower(btrim($2))
-                    """,
-                    ctx.guild.id,
-                    channel_name,
-                    target.id,
-                    broadcaster_id,
-                )
-                if mirrored == "UPDATE 0":
-                    await connection.execute(
-                        """
-                        INSERT INTO notify_twitch_follows
-                            (guild_id, channel_name, broadcaster_id, announce_channel_id)
-                        VALUES ($1, $2, $3, $4)
-                        ON CONFLICT DO NOTHING
-                        """,
-                        ctx.guild.id,
-                        channel_name,
-                        broadcaster_id,
-                        target.id,
-                    )
+        try:
+            await save_twitch_follow(
+                self.bot.pool,
+                guild_id=ctx.guild.id,
+                user_id=None,
+                name=channel_name,
+                broadcaster_id=broadcaster_id,
+                channel_id=target.id,
+                update_existing=True,
+            )
+        except ValueError as error:
+            raise commands.BadArgument(str(error)) from error
 
         try:
             await events.ensure_twitch_eventsub_subscription(broadcaster_id)
@@ -488,8 +421,7 @@ class Twitch(Cog):
         """Set or clear the role/@everyone mention for Twitch alerts."""
         channel_name = self._normalise_channel(channel_name)
         exists = await self.bot.pool.fetchval(
-            "SELECT 1 FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2 "
-            "UNION ALL SELECT 1 FROM notify_twitch_follows "
+            "SELECT 1 FROM notify_twitch_follows "
             "WHERE guild_id = $1 AND lower(channel_name) = lower($2) LIMIT 1",
             ctx.guild.id,
             channel_name,
@@ -530,15 +462,8 @@ class Twitch(Cog):
         """Stop following a Twitch channel in this server."""
         channel_name = self._normalise_channel(channel_name)
         broadcaster_id = await self.bot.pool.fetchval(
-            "SELECT broadcaster_id FROM twitch_follows "
-            "WHERE guild_id = $1 AND channel_name = $2 "
-            "UNION ALL SELECT broadcaster_id FROM notify_twitch_follows "
+            "SELECT broadcaster_id FROM notify_twitch_follows "
             "WHERE guild_id = $1 AND lower(channel_name) = lower($2) LIMIT 1",
-            ctx.guild.id,
-            channel_name,
-        )
-        result = await self.bot.pool.execute(
-            "DELETE FROM twitch_follows WHERE guild_id = $1 AND channel_name = $2",
             ctx.guild.id,
             channel_name,
         )
@@ -547,7 +472,7 @@ class Twitch(Cog):
             ctx.guild.id,
             channel_name,
         )
-        if result == "DELETE 0" and notify_result == "DELETE 0":
+        if notify_result == "DELETE 0":
             raise commands.BadArgument(
                 f"This server is not following **{channel_name}**."
             )

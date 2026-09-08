@@ -24,16 +24,31 @@ class Response:
 @pytest.mark.asyncio
 async def test_twitch_recovery_removes_failed_subscription_and_adopts_enabled():
     def subscription(id, status, broadcaster="123"):
-        return dict(id=id, status=status, type="stream.online", version="1",
-                    condition={"broadcaster_user_id": broadcaster},
-                    transport={"method": "webhook", "callback": TWITCH_EVENTSUB_CALLBACK})
+        return dict(
+            id=id,
+            status=status,
+            type="stream.online",
+            version="1",
+            condition={"broadcaster_user_id": broadcaster},
+            transport={"method": "webhook", "callback": TWITCH_EVENTSUB_CALLBACK},
+        )
 
     active = subscription("active", "enabled")
     session = SimpleNamespace(
-        get=Mock(return_value=Response(200, {"data": [
-            subscription("unrelated", "notification_failures_exceeded", "456"),
-            subscription("dead", "notification_failures_exceeded"), active,
-        ]})),
+        get=Mock(
+            return_value=Response(
+                200,
+                {
+                    "data": [
+                        subscription(
+                            "unrelated", "notification_failures_exceeded", "456"
+                        ),
+                        subscription("dead", "notification_failures_exceeded"),
+                        active,
+                    ]
+                },
+            )
+        ),
         delete=Mock(return_value=Response(204)),
     )
     cog = object.__new__(Tasks)
@@ -42,10 +57,17 @@ async def test_twitch_recovery_removes_failed_subscription_and_adopts_enabled():
     assert session.delete.call_count == 1
     assert session.delete.call_args.kwargs["params"] == {"id": "dead"}
 
-    session.get.return_value = Response(200, {"data": [subscription("dead", "authorization_revoked")]})
+    session.get.return_value = Response(
+        200, {"data": [subscription("dead", "authorization_revoked")]}
+    )
     assert await cog._find_twitch_eventsub_subscription("token", "123") is None
-    session.get.return_value = Response(200, {"data": [subscription("pending", "webhook_callback_verification_pending")]})
-    assert (await cog._find_twitch_eventsub_subscription("token", "123"))["id"] == "pending"
+    session.get.return_value = Response(
+        200,
+        {"data": [subscription("pending", "webhook_callback_verification_pending")]},
+    )
+    assert (await cog._find_twitch_eventsub_subscription("token", "123"))[
+        "id"
+    ] == "pending"
     assert session.delete.call_count == 2
 
 

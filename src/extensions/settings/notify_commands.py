@@ -800,83 +800,31 @@ class Notify(Cog):
                 f"Could not find a Twitch channel named **{name}**."
             )
         guild_id, user_id = _scope(ctx)
-        predicate, scope_id = _scope_predicate(guild_id, user_id)
-        announce_channel_id = int(ctx.channel.id) if guild_id is not None else None
-        async with self.bot.pool.acquire() as connection:
-            async with connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1))",
-                    f"notify:twitch:{scope_id}",
-                )
-                existing = await connection.fetchval(
-                    f"SELECT id FROM notify_twitch_follows WHERE {predicate} "
-                    "AND lower(btrim(channel_name)) = lower(btrim($2))",
-                    scope_id,
-                    name,
-                )
-                if existing is None and guild_id is not None:
-                    # The legacy ``twitch`` command shares server follows
-                    # with ``notify``.  Treat a legacy row as an existing
-                    # follow even if an old installation has not mirrored it
-                    # yet; this prevents a second subscription for the same
-                    # Twitch channel.
-                    existing = await connection.fetchval(
-                        "SELECT 1 FROM twitch_follows "
-                        "WHERE guild_id = $1 AND lower(btrim(channel_name)) = lower(btrim($2))",
-                        guild_id,
-                        name,
-                    )
-                if existing is not None:
-                    raise commands.BadArgument(
-                        "That Twitch channel is already followed here."
-                    )
-                if guild_id is not None:
-                    count = await connection.fetchval(
-                        """
-                        SELECT COUNT(DISTINCT lower(channel_name))
-                        FROM (
-                            SELECT channel_name FROM notify_twitch_follows
-                            WHERE guild_id = $1
-                            UNION ALL
-                            SELECT channel_name FROM twitch_follows
-                            WHERE guild_id = $1
-                        ) follows
-                        """,
-                        guild_id,
-                    )
-                else:
-                    count = await connection.fetchval(
-                        "SELECT COUNT(DISTINCT lower(channel_name)) "
-                        "FROM notify_twitch_follows WHERE user_id = $1",
-                        user_id,
-                    )
-                if int(count or 0) >= 10:
-                    raise commands.BadArgument(
-                        "You can follow up to 10 Twitch channels per server or DM."
-                    )
-                # Mention columns are intentionally omitted here so the
-                # database defaults (disabled) always apply to new follows.
-                inserted = await connection.fetchrow(
-                    "INSERT INTO notify_twitch_follows "
-                    "(guild_id, user_id, channel_name, broadcaster_id, announce_channel_id) "
-                    "VALUES ($1, $2, $3, $4, $5) "
-                    "ON CONFLICT DO NOTHING RETURNING id",
-                    guild_id,
-                    user_id,
-                    name,
-                    str(twitch_user["id"]),
-                    announce_channel_id,
-                )
-                if inserted is None:
-                    raise commands.BadArgument(
-                        "That Twitch channel is already followed here."
-                    )
-                follow_id = int(inserted["id"])
+        from .notify import save_twitch_follow
+
+        try:
+            inserted = await save_twitch_follow(
+                self.bot.pool,
+                guild_id=guild_id,
+                user_id=user_id,
+                name=name,
+                broadcaster_id=str(twitch_user["id"]),
+                channel_id=int(ctx.channel.id) if guild_id is not None else None,
+            )
+        except ValueError as error:
+            raise commands.BadArgument(str(error)) from error
+
         events = self._events()
         if events is not None and hasattr(
             events, "ensure_twitch_eventsub_subscription"
         ):
-            await events.ensure_twitch_eventsub_subscription(str(twitch_user["id"]))
+            try:
+                await events.ensure_twitch_eventsub_subscription(str(twitch_user["id"]))
+            except Exception:
+                self.bot.logger.exception(
+                    "Twitch follow saved; subscription sync will retry"
+                )
+        follow_id = int(inserted["id"])
         await self._send(
             ctx,
             view=NotifyView(
@@ -1140,26 +1088,7 @@ class Notify(Cog):
             follow_id,
             scope_id,
         )
-        # The legacy text command and ``notify`` intentionally share server
-        # follows.  Removing a follow through either surface must remove the
-        # corresponding legacy row as well, otherwise it would continue to
-        # generate notifications after the user unfollowed it.
-        legacy_result = "DELETE 0"
-        if guild_id is not None:
-            legacy_result = await self.bot.pool.execute(
-                "DELETE FROM twitch_follows WHERE guild_id = $1 "
-                "AND lower(channel_name) = lower($2)",
-                guild_id,
-                name,
-            )
-        try:
-            removed = int(str(result).rsplit(" ", 1)[-1])
-        except (ValueError, IndexError):
-            removed = 0
-        try:
-            removed += int(str(legacy_result).rsplit(" ", 1)[-1])
-        except (ValueError, IndexError):
-            pass
+        removed = result != "DELETE 0"
         if not removed:
             raise commands.BadArgument(f"You are not following **{name}**.")
         if broadcaster_id:
@@ -1614,18 +1543,6 @@ class Notify(Cog):
                 "WHERE id = $1 AND guild_id = $2",
                 follow_id,
                 guild_id,
-                destination.id,
-                row["broadcaster_id"],
-            )
-            # Legacy ``twitch`` follows share the same subscription.  Keep
-            # their destination in sync so moving a notify follow cannot
-            # result in an alert in both the old and new channel.
-            await self.bot.pool.execute(
-                "UPDATE twitch_follows SET announce_channel_id = $3, "
-                "broadcaster_id = COALESCE($4, broadcaster_id) "
-                "WHERE guild_id = $1 AND lower(btrim(channel_name)) = lower(btrim($2))",
-                guild_id,
-                row["channel_name"],
                 destination.id,
                 row["broadcaster_id"],
             )

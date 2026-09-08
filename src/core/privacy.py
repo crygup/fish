@@ -91,8 +91,6 @@ GUILD_ID_TABLES = (
     "command_config",
     "plonks",
     "highlights",
-    "twitch_follows",
-    "twitch_announcement_deliveries",
     "notify_twitch_follows",
     "notify_anime_follows",
     "youtube_follows",
@@ -138,6 +136,8 @@ def _count(result: str) -> int:
 
 async def erase_user(connection: Any, user_id: int) -> int:
     """Remove all rows that identify a Discord user in one transaction."""
+
+    deleted = 0
     # Serialize with birthday awards before deleting the user's wallet/history.
     subject = birthday_reward_subject(user_id)
     await connection.execute("SELECT pg_advisory_xact_lock(hashtext($1))", subject)
@@ -150,8 +150,6 @@ async def erase_user(connection: Any, user_id: int) -> int:
         user_id,
         subject,
     )
-
-    deleted = 0
     # Deleting a marriage also removes both membership rows through its FK.
     # Remove either side of relationships, including rows owned by another user.
     for table, predicate in (

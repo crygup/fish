@@ -379,7 +379,8 @@ class Tasks(Cog):
                     and transport.get("callback") == TWITCH_EVENTSUB_CALLBACK
                 ):
                     if subscription.get("status") in {
-                        "enabled", "webhook_callback_verification_pending"
+                        "enabled",
+                        "webhook_callback_verification_pending",
                     }:
                         return subscription
                     # A revoked/failed subscription cannot deliver events and
@@ -418,11 +419,7 @@ class Tasks(Cog):
             "WHERE status = 'dead' AND updated_at < now() - interval '30 days'"
         )
         rows = await self.bot.pool.fetch("""
-            SELECT DISTINCT channel_name, broadcaster_id FROM twitch_follows
-            UNION
-            SELECT DISTINCT channel_name, broadcaster_id
-            FROM notify_twitch_follows
-            WHERE broadcaster_id IS NOT NULL
+            SELECT DISTINCT channel_name, broadcaster_id FROM notify_twitch_follows
             """)
         known_ids: set[str] = set()
         for row in rows:
@@ -436,16 +433,6 @@ class Tasks(Cog):
                     )
                     continue
                 broadcaster_id = str(user["id"])
-                await self.bot.pool.execute(
-                    "UPDATE twitch_follows SET broadcaster_id = $2 "
-                    "WHERE channel_name = $1 AND broadcaster_id IS NULL",
-                    row["channel_name"],
-                    broadcaster_id,
-                )
-                # Notify follows are stored separately from the legacy
-                # Twitch table.  Update those rows too, otherwise an
-                # unresolved ``notify`` follow would be looked up on every
-                # sync and never receive an EventSub subscription.
                 await self.bot.pool.execute(
                     "UPDATE notify_twitch_follows SET broadcaster_id = $2, "
                     "updated_at = now() "
@@ -465,10 +452,6 @@ class Tasks(Cog):
         orphaned = await self.bot.pool.fetch(
             "SELECT broadcaster_id FROM twitch_eventsub_subscriptions "
             "WHERE NOT EXISTS ("
-            "SELECT 1 FROM twitch_follows "
-            "WHERE twitch_follows.broadcaster_id = "
-            "twitch_eventsub_subscriptions.broadcaster_id"
-            ") AND NOT EXISTS ("
             "SELECT 1 FROM notify_twitch_follows "
             "WHERE notify_twitch_follows.broadcaster_id = "
             "twitch_eventsub_subscriptions.broadcaster_id"
@@ -479,9 +462,7 @@ class Tasks(Cog):
 
     async def remove_twitch_eventsub_subscription(self, broadcaster_id: str) -> None:
         remaining = await self.bot.pool.fetchval(
-            "SELECT 1 FROM twitch_follows WHERE broadcaster_id = $1 "
-            "UNION ALL SELECT 1 FROM notify_twitch_follows "
-            "WHERE broadcaster_id = $1 LIMIT 1",
+            "SELECT 1 FROM notify_twitch_follows " "WHERE broadcaster_id = $1 LIMIT 1",
             broadcaster_id,
         )
         if remaining:
@@ -557,11 +538,6 @@ class Tasks(Cog):
 
         if event_type == "stream.offline":
             await self.bot.pool.execute(
-                "UPDATE twitch_follows SET last_stream_id = NULL "
-                "WHERE broadcaster_id = $1",
-                broadcaster_id,
-            )
-            await self.bot.pool.execute(
                 "UPDATE notify_twitch_follows SET last_stream_id = NULL, "
                 "last_offline_at = now(), updated_at = now() "
                 "WHERE broadcaster_id = $1",
@@ -572,34 +548,11 @@ class Tasks(Cog):
             return
 
         rows = await self.bot.pool.fetch(
-            "SELECT guild_id, channel_name, announce_channel_id, message_template, "
-            "last_stream_id FROM twitch_follows WHERE broadcaster_id = $1",
+            "SELECT * FROM notify_twitch_follows WHERE broadcaster_id = $1",
             broadcaster_id,
         )
         rows = [row for row in rows if not is_operational_guild(row.get("guild_id"))]
-        notify_rows = await self.bot.pool.fetch(
-            """
-            SELECT n.*
-            FROM notify_twitch_follows AS n
-            WHERE n.broadcaster_id = $1
-              AND NOT EXISTS (
-                  SELECT 1 FROM twitch_follows AS legacy
-                  WHERE n.guild_id IS NOT NULL
-                    AND legacy.guild_id = n.guild_id
-                    AND lower(legacy.channel_name) = lower(n.channel_name)
-                    AND COALESCE(legacy.announce_channel_id, 0)
-                        = COALESCE(n.announce_channel_id, 0)
-              )
-            """,
-            broadcaster_id,
-        )
-        notify_rows = [
-            row for row in notify_rows if not is_operational_guild(row.get("guild_id"))
-        ]
-        if not rows and not notify_rows:
-            self.bot.logger.warning(
-                "No Twitch follow matched broadcaster %s", broadcaster_id
-            )
+        if not rows:
             return
 
         stream = await self._get_twitch_stream(broadcaster_id) or {
@@ -613,281 +566,52 @@ class Tasks(Cog):
         stream["id"] = str(event.get("id") or stream.get("id"))
         for row in rows:
             await self._announce_twitch_stream_once(row, stream)
-        for row in notify_rows:
-            stream_id = str(stream.get("id") or "")
-            if not stream_id or not await self._claim_notify_twitch(row, stream_id):
-                continue
-            if await self._announce_notify_twitch(row, stream):
-                await self._finish_notify_twitch(row, stream_id)
-            else:
-                await self._release_notify_twitch(row, stream_id)
 
     async def _announce_twitch_stream_once(
         self, row: Any, stream: dict[str, Any]
     ) -> bool:
-        """Durably claim a stream notification without holding a DB lock on I/O."""
+        """Use the same durable delivery claim for guild and DM follows."""
         stream_id = str(stream.get("id") or "")
-        if not stream_id:
-            self.bot.logger.warning(
-                "Twitch stream event for %s did not include a stream ID",
-                row["channel_name"],
-            )
+        if not stream_id or row.get("last_stream_id") == stream_id:
             return False
-
         claimed = await self.bot.pool.fetchval(
-            """
-            INSERT INTO twitch_announcement_deliveries
-                (guild_id, channel_name, stream_id, stream_payload, status, attempts)
-            VALUES ($1, $2, $3, $4::jsonb, 'processing', 1)
-            ON CONFLICT (guild_id, channel_name, stream_id) DO UPDATE
+            """INSERT INTO twitch_announcement_deliveries
+                (follow_id, stream_id, stream_payload, status, attempts)
+            VALUES ($1, $2, $3::jsonb, 'processing', 1)
+            ON CONFLICT (follow_id, stream_id) DO UPDATE
             SET status = 'processing', attempts = twitch_announcement_deliveries.attempts + 1,
-                stream_payload = EXCLUDED.stream_payload, updated_at = now()
-            WHERE (twitch_announcement_deliveries.status = 'pending'
-                   AND twitch_announcement_deliveries.attempts < 10)
-               OR (twitch_announcement_deliveries.status = 'processing'
-                   AND twitch_announcement_deliveries.updated_at < now() - interval '5 minutes'
-                   AND twitch_announcement_deliveries.attempts < 10)
-            RETURNING stream_id
-            """,
-            row["guild_id"],
-            row["channel_name"],
+                updated_at = now()
+            WHERE twitch_announcement_deliveries.attempts < 10 AND
+                (twitch_announcement_deliveries.status = 'pending' OR
+                 (twitch_announcement_deliveries.status = 'processing' AND
+                  twitch_announcement_deliveries.updated_at < now() - interval '5 minutes'))
+            RETURNING follow_id""",
+            row["id"],
             stream_id,
             stream,
         )
         if claimed is None:
             return False
-
-        announced = await self._announce_twitch_stream(row, stream)
-        if announced:
-            async with self.bot.pool.acquire() as connection:
-                async with connection.transaction():
+        announced = await self._announce_notify_twitch(row, stream)
+        async with self.bot.pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    """UPDATE twitch_announcement_deliveries
+                    SET status = CASE WHEN $3 THEN 'done' WHEN attempts >= 10 THEN 'dead' ELSE 'pending' END,
+                        updated_at = now(), last_error = CASE WHEN $3 THEN NULL ELSE 'Discord delivery failed' END
+                    WHERE follow_id = $1 AND stream_id = $2""",
+                    row["id"],
+                    stream_id,
+                    announced,
+                )
+                if announced:
                     await connection.execute(
-                        "UPDATE twitch_announcement_deliveries SET status = 'done', "
-                        "updated_at = now(), last_error = NULL "
-                        "WHERE guild_id = $1 AND channel_name = $2 AND stream_id = $3",
-                        row["guild_id"],
-                        row["channel_name"],
+                        "UPDATE notify_twitch_follows SET last_stream_id = $2, last_live_at = now(), "
+                        "updated_at = now() WHERE id = $1",
+                        row["id"],
                         stream_id,
                     )
-                    await connection.execute(
-                        "UPDATE twitch_follows SET last_stream_id = $3 "
-                        "WHERE guild_id = $1 AND channel_name = $2",
-                        row["guild_id"],
-                        row["channel_name"],
-                        stream_id,
-                    )
-                    await connection.execute(
-                        "UPDATE notify_twitch_follows SET last_stream_id = $3, "
-                        "last_live_at = now(), updated_at = now() "
-                        "WHERE guild_id = $1 AND lower(channel_name) = lower($2) "
-                        "AND COALESCE(announce_channel_id, 0::bigint) = "
-                        "COALESCE($4::bigint, 0::bigint)",
-                        row["guild_id"],
-                        row["channel_name"],
-                        stream_id,
-                        row["announce_channel_id"],
-                    )
-            return True
-
-        await self.bot.pool.execute(
-            "UPDATE twitch_announcement_deliveries "
-            "SET status = CASE WHEN attempts >= 10 THEN 'dead' ELSE 'pending' END, "
-            "updated_at = now(), last_error = 'Discord delivery failed' "
-            "WHERE guild_id = $1 AND channel_name = $2 AND stream_id = $3",
-            row["guild_id"],
-            row["channel_name"],
-            stream_id,
-        )
-        return False
-
-    async def _announce_twitch_stream(self, row, stream: dict[str, Any]) -> bool:
-        from extensions.settings.notify import mention_text, notify_allowed_mentions
-
-        channel = self.bot.get_channel(row["announce_channel_id"])
-        if channel is None:
-            try:
-                channel = await self.bot.fetch_channel(row["announce_channel_id"])
-            except Exception as error:
-                self.bot.logger.warning(
-                    "Could not find Twitch announcement channel %s: %s",
-                    row["announce_channel_id"],
-                    error,
-                )
-                return False
-
-        login = str(stream.get("user_login", row["channel_name"]))
-        display_name = str(stream.get("user_name", login))
-        title = discord.utils.escape_mentions(
-            discord.utils.escape_markdown(str(stream.get("title") or ""))
-        )
-        game = discord.utils.escape_mentions(
-            discord.utils.escape_markdown(str(stream.get("game_name") or ""))
-        )
-        url = f"https://www.twitch.tv/{login}"
-        channel_info = await self._get_twitch_user(login) or {}
-        media_urls: list[str] = []
-        for media_url in (
-            channel_info.get("profile_image_url"),
-            stream.get("thumbnail_url"),
-            channel_info.get("offline_image_url"),
-        ):
-            if not media_url:
-                continue
-            media_url = (
-                str(media_url).replace("{width}", "1280").replace("{height}", "720")
-            )
-            if media_url not in media_urls:
-                media_urls.append(media_url)
-                break
-
-        safe_display_name = discord.utils.escape_mentions(
-            discord.utils.escape_markdown(display_name)
-        )
-        safe_title = title or f"{safe_display_name} is live on Twitch!"
-        stream_text = f"### [{safe_title}](https://www.twitch.tv/{login})"
-        if game:
-            stream_text += f"\n**Playing:** {game}"
-
-        children: list[discord.ui.Item] = [discord.ui.TextDisplay(stream_text)]
-        if media_urls:
-            children.append(
-                discord.ui.MediaGallery(
-                    *(discord.MediaGalleryItem(url) for url in media_urls)
-                )
-            )
-        children.append(
-            discord.ui.ActionRow(
-                discord.ui.Button(
-                    label="Watch on Twitch",
-                    style=discord.ButtonStyle.link,
-                    url=url,
-                )
-            )
-        )
-
-        # ``notify mention`` stores the mention separately from the legacy
-        # Twitch follow row.  Read it at delivery time so changes take effect
-        # without restarting the worker.
-        mention_role_id: object = None
-        mention_everyone = False
-        try:
-            mention_row = await self.bot.pool.fetchrow(
-                "SELECT mention_role_id, mention_everyone FROM notify_twitch_follows "
-                "WHERE guild_id = $1 AND lower(channel_name) = lower($2) "
-                "AND COALESCE(announce_channel_id, 0::bigint) = "
-                "COALESCE($3::bigint, 0::bigint) "
-                "ORDER BY id LIMIT 1",
-                row["guild_id"],
-                row["channel_name"],
-                row["announce_channel_id"],
-            )
-        except Exception:
-            mention_row = None
-        if mention_row:
-            mention_role_id = mention_row.get("mention_role_id")
-            mention_everyone = bool(mention_row.get("mention_everyone"))
-        mention = mention_text(mention_role_id, mention_everyone)
-        if mention:
-            children.extend(
-                (discord.ui.Separator(), discord.ui.TextDisplay(f"-# {mention}"))
-            )
-
-        container = discord.ui.Container(*children, accent_color=self.bot.embedcolor)
-        view_type = type("TwitchAnnouncementView", (discord.ui.LayoutView,), {})
-        view = view_type(timeout=None)
-        view.add_item(container)
-        send_kwargs: dict[str, Any] = {
-            "view": view,
-            "allowed_mentions": notify_allowed_mentions(
-                mention_role_id, mention_everyone
-            ),
-        }
-
-        try:
-            await cast(Any, channel).send(**send_kwargs)
-        except Exception as error:
-            self.bot.logger.warning(
-                "Could not announce Twitch stream %s in guild %s: %s",
-                login,
-                row["guild_id"],
-                error,
-            )
-            return False
-        self.bot.logger.info(
-            "Announced Twitch stream %s in guild %s", login, row["guild_id"]
-        )
-        return True
-
-    async def check_twitch_streams(self) -> None:
-        rows = await self.bot.pool.fetch(
-            "SELECT guild_id, channel_name, announce_channel_id, message_template, "
-            "last_stream_id "
-            "FROM twitch_follows"
-        )
-        rows = [row for row in rows if not is_operational_guild(row.get("guild_id"))]
-        if not rows:
-            return
-
-        token = await self._get_twitch_access_token()
-        if not token:
-            return
-
-        headers = {
-            "Client-ID": self.bot.config["keys"]["twitch_id"],
-            "Authorization": f"Bearer {token}",
-        }
-        live_streams: dict[str, dict[str, Any]] = {}
-        for offset in range(0, len(rows), 100):
-            batch = rows[offset : offset + 100]
-            params = [("user_login", row["channel_name"]) for row in batch]
-            try:
-                async with self.bot.session.get(
-                    "https://api.twitch.tv/helix/streams",
-                    headers=headers,
-                    params=params,
-                ) as response:
-                    if response.status == 401:
-                        self._twitch_access_token = None
-                        self._twitch_token_expires_at = 0
-                        return
-                    data = await response.json(content_type=None)
-            except Exception as error:
-                self.bot.logger.warning("Could not check Twitch streams: %s", error)
-                return
-
-            if response.status != 200 or not isinstance(data, dict):
-                self.bot.logger.warning(
-                    "Twitch streams request failed with status %s", response.status
-                )
-                return
-
-            streams = data.get("data")
-            if not isinstance(streams, list):
-                self.bot.logger.warning(
-                    "Twitch streams response did not contain a data list"
-                )
-                return
-
-            live_streams.update(
-                {
-                    str(stream.get("user_login", "")).lower(): stream
-                    for stream in streams
-                    if isinstance(stream, dict) and stream.get("user_login")
-                }
-            )
-        for row in rows:
-            stream = live_streams.get(row["channel_name"])
-            if stream is None:
-                if row["last_stream_id"] is not None:
-                    await self.bot.pool.execute(
-                        "UPDATE twitch_follows SET last_stream_id = NULL "
-                        "WHERE guild_id = $1 AND channel_name = $2",
-                        row["guild_id"],
-                        row["channel_name"],
-                    )
-                continue
-
-            await self._announce_twitch_stream_once(row, stream)
+        return announced
 
     async def _notify_destination(self, row: Any) -> Any | None:
         """Resolve a notify row's channel or DM destination."""
@@ -980,66 +704,9 @@ class Tasks(Cog):
             return False
         return True
 
-    async def _claim_notify_twitch(self, row: Any, stream_id: str) -> bool:
-        """Claim a stream notification before sending it.
-
-        EventSub delivery and the polling fallback run concurrently.  An
-        atomic claim prevents both workers from announcing the same stream
-        when they observe it at the same time.
-        """
-
-        claimed = await self.bot.pool.fetchval(
-            """
-            UPDATE notify_twitch_follows
-            SET last_stream_id = $2, updated_at = now()
-            WHERE id = $1
-              AND (last_stream_id IS NULL OR last_stream_id <> $2)
-            RETURNING id
-            """,
-            row["id"],
-            stream_id,
-        )
-        return claimed is not None
-
-    async def _finish_notify_twitch(self, row: Any, stream_id: str) -> None:
-        await self.bot.pool.execute(
-            "UPDATE notify_twitch_follows SET last_live_at = now(), updated_at = now() "
-            "WHERE id = $1 AND last_stream_id = $2",
-            row["id"],
-            stream_id,
-        )
-
-    async def _release_notify_twitch(self, row: Any, stream_id: str) -> None:
-        """Release a failed claim so a later poll/event can retry delivery."""
-
-        await self.bot.pool.execute(
-            "UPDATE notify_twitch_follows SET last_stream_id = NULL, updated_at = now() "
-            "WHERE id = $1 AND last_stream_id = $2",
-            row["id"],
-            stream_id,
-        )
-
     async def check_notify_twitch(self) -> None:
-        """Poll Twitch follows created by ``notify``.
-
-        Legacy ``twitch follow`` rows are deliberately excluded because the
-        existing EventSub/reconciliation worker already announces them.  The
-        command layer mirrors legacy rows into the new table, so this avoids
-        duplicate messages while allowing DM and multi-destination follows.
-        """
-
-        rows = await self.bot.pool.fetch("""
-            SELECT n.*
-            FROM notify_twitch_follows AS n
-            WHERE NOT EXISTS (
-                SELECT 1 FROM twitch_follows AS legacy
-                WHERE n.guild_id IS NOT NULL
-                  AND legacy.guild_id = n.guild_id
-                  AND lower(legacy.channel_name) = lower(n.channel_name)
-                  AND COALESCE(legacy.announce_channel_id, 0)
-                      = COALESCE(n.announce_channel_id, 0)
-            )
-            """)
+        """Poll each broadcaster once for all guild and DM subscriptions."""
+        rows = await self.bot.pool.fetch("SELECT * FROM notify_twitch_follows")
         rows = [row for row in rows if not is_operational_guild(row.get("guild_id"))]
         if not rows:
             return
@@ -1108,13 +775,7 @@ class Tasks(Cog):
                         row["id"],
                     )
                 continue
-            stream_id = str(stream.get("id") or "")
-            if not stream_id or not await self._claim_notify_twitch(row, stream_id):
-                continue
-            if await self._announce_notify_twitch(row, stream):
-                await self._finish_notify_twitch(row, stream_id)
-            else:
-                await self._release_notify_twitch(row, stream_id)
+            await self._announce_twitch_stream_once(row, stream)
 
     async def _anilist_media_batch(self, ids: list[int]) -> dict[int, dict[str, Any]]:
         from extensions.settings.notify import ANILIST_NOTIFY_BATCH_QUERY
@@ -1611,7 +1272,6 @@ class Tasks(Cog):
         self.delete_videos_task.cancel()
         self.status_history_cleanup_task.cancel()
         self.twitch_eventsub_sync_task.cancel()
-        self.twitch_reconciliation_task.cancel()
         self.twitch_event_inbox_task.cancel()
         self.notify_twitch_task.cancel()
         self.notify_anime_task.cancel()
@@ -1637,7 +1297,6 @@ class Tasks(Cog):
         self.delete_videos_task.start()
         self.status_history_cleanup_task.start()
         self.twitch_eventsub_sync_task.start()
-        self.twitch_reconciliation_task.start()
         self.twitch_event_inbox_task.start()
         self.notify_twitch_task.start()
         self.notify_anime_task.start()
@@ -1659,17 +1318,6 @@ class Tasks(Cog):
 
     @twitch_eventsub_sync_task.before_loop
     async def before_twitch_eventsub_sync_task(self):
-        await self.bot.wait_until_ready()
-
-    @tasks.loop(minutes=30.0)
-    async def twitch_reconciliation_task(self):
-        try:
-            await self.check_twitch_streams()
-        except Exception as error:
-            self.bot.logger.warning("Twitch stream reconciliation failed: %s", error)
-
-    @twitch_reconciliation_task.before_loop
-    async def before_twitch_reconciliation_task(self):
         await self.bot.wait_until_ready()
 
     @tasks.loop(seconds=30.0)

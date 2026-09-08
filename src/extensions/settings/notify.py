@@ -14,6 +14,66 @@ from typing import Any
 
 import discord
 
+
+async def save_twitch_follow(
+    pool: Any,
+    *,
+    guild_id: int | None,
+    user_id: int | None,
+    name: str,
+    broadcaster_id: str,
+    channel_id: int | None,
+    update_existing: bool = False,
+) -> Any:
+    """One store, scope lock and limit for dashboard, notify and text commands."""
+    if (guild_id is None) == (user_id is None):
+        raise ValueError("Choose a server or DM notification scope.")
+    name = normalize_twitch_channel(name)
+    column, owner = (
+        ("guild_id", guild_id) if guild_id is not None else ("user_id", user_id)
+    )
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))",
+                f"notify:twitch:{owner}",
+            )
+            existing = await connection.fetchval(
+                f"SELECT id FROM notify_twitch_follows WHERE {column} = $1 "
+                "AND lower(btrim(channel_name)) = $2",
+                owner,
+                name,
+            )
+            if existing is not None:
+                if not update_existing:
+                    raise ValueError("That Twitch channel is already followed here.")
+                return await connection.fetchrow(
+                    "UPDATE notify_twitch_follows SET announce_channel_id = $2, "
+                    "broadcaster_id = $3, updated_at = now() WHERE id = $1 RETURNING *",
+                    existing,
+                    channel_id,
+                    broadcaster_id,
+                )
+            count = await connection.fetchval(
+                f"SELECT COUNT(*) FROM notify_twitch_follows WHERE {column} = $1",
+                owner,
+            )
+            if count >= 10:
+                raise ValueError(
+                    "You can follow up to 10 Twitch channels per server or DM."
+                )
+            return await connection.fetchrow(
+                "INSERT INTO notify_twitch_follows "
+                "(guild_id, user_id, channel_name, broadcaster_id, announce_channel_id) "
+                "VALUES ($1, $2, $3, $4, $5) RETURNING *",
+                guild_id,
+                user_id,
+                name,
+                broadcaster_id,
+                channel_id,
+            )
+
+
 from utils.anilist import (
     anilist_airing_datetime,
     anilist_datetime,
