@@ -78,6 +78,19 @@ def is_public_address(address: str) -> bool:
 _is_public_address = is_public_address
 
 
+def public_socket(address_info: tuple) -> socket.socket:
+    """Check the actual destination before opening a media connection."""
+    family, kind, protocol, _, address = address_info
+    if not is_public_address(address[0]):
+        raise OSError("Private and local network addresses are not allowed.")
+    return socket.socket(family, kind, protocol)
+
+
+class PublicTCPConnector(aiohttp.TCPConnector):
+    def __init__(self) -> None:
+        super().__init__(socket_factory=public_socket)
+
+
 def validate_public_url_sync(url: str) -> str:
     """Synchronously validate a network URL before a third-party fetch.
 
@@ -281,6 +294,25 @@ async def fetch_public_bytes(
     has succeeded.  A missing peer is never accepted for an unlisted host.
     """
 
+    # Other integrations may supply their own session. Never rely on a DNS
+    # preflight followed by an unchecked connection, even in that case.
+    if isinstance(session, aiohttp.ClientSession) and not isinstance(
+        session.connector, PublicTCPConnector
+    ):
+        async with aiohttp.ClientSession(
+            connector=PublicTCPConnector(),
+            timeout=session.timeout,
+        ) as public_session:
+            return await fetch_public_bytes(
+                public_session,
+                url,
+                max_bytes=max_bytes,
+                allowed_content_prefixes=allowed_content_prefixes,
+                allowed_hosts=allowed_hosts,
+                allow_missing_peer_hosts=allow_missing_peer_hosts,
+                headers=headers,
+                max_redirects=max_redirects,
+            )
     current = url
     trusted_missing_peers = {
         str(host).casefold().rstrip(".") for host in (allow_missing_peer_hosts or ())

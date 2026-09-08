@@ -206,11 +206,16 @@ async def upload_temporary_media(
         else:
             payload = _file_chunks(data)  # type: ignore[arg-type]
         try:
-            async with bot.session.post(
+            # Only this configured internal uploader may reach the local host.
+            # User-provided media URLs use the public-only connector instead.
+            async with aiohttp.ClientSession(
+                timeout=timeout
+            ) as upload_session, upload_session.post(
                 f"{upload_url}/uploads",
                 data=payload,
                 headers=headers,
                 timeout=timeout,
+                allow_redirects=False,
             ) as response:
                 if response.status != 201:
                     detail = (await response.text())[:300]

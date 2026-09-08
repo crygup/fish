@@ -119,8 +119,15 @@ SILENT_COMMAND_USERS: dict[str, frozenset[int]] = {
 ERROR_COMPONENT_CHUNK = 2_200
 ERROR_INVOCATION_LIMIT = 700
 _ERROR_URL_QUERY_RE = re.compile(r"(?i)(https?://[^\s<>\"']+)\?[^\s<>\"']*")
+_ERROR_WEBHOOK_RE = re.compile(
+    r"(?i)(https?://(?:[\w-]+\.)?discord(?:app)?\.com/api/"
+    r"(?:v\d+/)?webhooks/\d+/)[^\s/<>\"'?#]+"
+)
 _ERROR_AUTH_RE = re.compile(
-    r"(?i)(\b(?:authorization|x-api-key|api[_-]?key|token|secret|password)\s*[:=]\s*(?:bearer\s+)?)\S+"
+    r"(?i)(\b(?:authorization|x-api-key|api[_-]?key|(?:access[_-]?|refresh[_-]?)?token|"
+    r"(?:client[_-]?)?secret|password)[\"']?\s*[:=,]\s*)"
+    r"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|"
+    r"(?:bearer\s+|bot\s+|basic\s+)?[^\s,;<>\"'}\)]+)"
 )
 
 
@@ -138,6 +145,7 @@ def _error_code_block(value: str) -> str:
 def _redact_error_text(value: object, redact: Callable[[str], str]) -> str:
     """Remove configured secrets and common bearer data from diagnostics."""
     text = redact(str(value))
+    text = _ERROR_WEBHOOK_RE.sub(r"\1[REDACTED]", text)
     text = _ERROR_URL_QUERY_RE.sub(r"\1?[REDACTED]", text)
     return _ERROR_AUTH_RE.sub(r"\1[REDACTED]", text)
 
@@ -182,7 +190,7 @@ def _interaction_invocation(
             if nested:
                 parts.append(f"{name} {nested}")
             elif "value" in option:
-                parts.append(f"{name}={option['value']}")
+                parts.append(f"{name}=[REDACTED]")
             else:
                 parts.append(name)
         return " ".join(parts)
@@ -192,7 +200,7 @@ def _interaction_invocation(
     invocation = f"/{name}" + (f" {options}" if options else "")
     custom_id = data.get("custom_id")
     if custom_id:
-        invocation += f" [component: {custom_id}]"
+        invocation += " [component]"
     return invocation
 
 
@@ -1089,22 +1097,9 @@ class Fishie(commands.Bot):
     _secrets: set[str] | None = None
 
     def _build_secrets(self) -> set[str]:
-        """Return every leaf string value from the config, for redaction."""
-        secrets: set[str] = set()
+        from utils.credentials import configured_secrets
 
-        def walk(obj: object) -> None:
-            if isinstance(obj, str):
-                if len(obj) > 3:
-                    secrets.add(obj)
-            elif isinstance(obj, dict):
-                for v in obj.values():
-                    walk(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    walk(item)
-
-        walk(self.config)
-        return secrets
+        return configured_secrets(self.config)
 
     def redact(self, text: str) -> str:
         if self._secrets is None:
@@ -1136,8 +1131,8 @@ class Fishie(commands.Bot):
         subject: object | None = None
         invocation: str | None = None
 
-        if message is not None and getattr(message, "content", None):
-            invocation = str(message.content)
+        if message is not None:
+            invocation = str(command or "Text command")
 
         if interaction is not None:
             author = author or getattr(interaction, "user", None)
@@ -1159,8 +1154,6 @@ class Fishie(commands.Bot):
         for argument in event_args:
             if isinstance(argument, discord.Message):
                 author = author or argument.author
-                if invocation is None:
-                    invocation = argument.content or None
                 continue
             if isinstance(argument, discord.Interaction):
                 author = author or argument.user
@@ -1309,8 +1302,10 @@ class Fishie(commands.Bot):
 
         self.logger.info(f"Event {event} errored")
 
-        traceback.print_exception(
-            type(error), error, error.__traceback__, file=sys.stderr
+        self.logger.error(
+            "Event %s failed",
+            event,
+            exc_info=(type(error), error, error.__traceback__),
         )
 
         await self.log_error(

@@ -10,6 +10,21 @@ KEY_ENV = "FISHIE_CREDENTIAL_KEY"
 KEY_FILE_ENV = "FISHIE_CREDENTIAL_KEY_FILE"
 
 
+def configured_secrets(config: object) -> set[str]:
+    values: set[str] = set()
+    pending = [config]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str) and len(item) > 3:
+            values.add(item)
+        elif isinstance(item, dict):
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    return values
+
+
+
 def _credential_key() -> str:
     if key := os.environ.get(KEY_ENV):
         return key

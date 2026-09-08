@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import datetime
-import sys
-import traceback
+import secrets
 from typing import TYPE_CHECKING
 
 import discord
@@ -49,25 +48,23 @@ class CommandErrors(Cog):
         if isinstance(error, ignored_errors):
             return
 
-        message = getattr(ctx, "message", None)
-        content = getattr(message, "content", "")
-        ctx.bot.logger.info(
-            f'Command {command.name} errored by {ctx.author}. Full content: "{content}"'
+        error_id = secrets.token_hex(4)
+        ctx.bot.logger.error(
+            "Command %s failed (reference %s)",
+            command.qualified_name,
+            error_id,
+            exc_info=(type(error), error, error.__traceback__),
         )
-        traceback.print_exception(
-            type(error), error, error.__traceback__, file=sys.stderr
-        )
-
-        # if isinstance(error, commands.HybridCommandError):
-        #     await ctx.send(
-        #         "Something went wrong while processing this command, try again?"
-        #     )
-        #     await self.bot.log_error(error)
-        #     return
 
         try:
             if isinstance(error, commands.CommandOnCooldown):
                 error_str = self._cooldown_message(error.retry_after)
+            elif isinstance(
+                error, (commands.CommandInvokeError, commands.HybridCommandError)
+            ):
+                error_str = (
+                    f"Something went wrong. Please try again. Reference: `{error_id}`."
+                )
             else:
                 error_str = self.bot.redact(str(error))
             await ctx.send(

@@ -15,7 +15,17 @@ from utils.network import (
     validate_connected_peer,
     validate_public_url,
     validate_public_url_sync,
+    public_socket,
 )
+
+
+def test_media_socket_rejects_rebound_ip_before_socket_creation(monkeypatch):
+    def unexpected_socket(*args):
+        raise AssertionError("An unsafe socket must not be opened")
+
+    monkeypatch.setattr("utils.network.socket.socket", unexpected_socket)
+    with pytest.raises(OSError, match="Private"):
+        public_socket((socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80)))
 
 
 @pytest.mark.asyncio

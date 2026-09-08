@@ -5,6 +5,8 @@ import os
 import sys
 import tomllib
 from pathlib import Path
+from collections.abc import Callable
+from typing import Any
 
 import aiohttp
 import uvicorn
@@ -13,6 +15,7 @@ from discord import gateway
 from api import app as api_app
 from api import init as api_init
 from core import BotInstance, Fishie, normalize_bot_instance
+from core.bot import _redact_error_text
 from utils import (
     Config,
     base_header,
@@ -21,8 +24,19 @@ from utils import (
     validate_credential_key,
 )
 from utils.paths import REPOSITORY_ROOT
+from utils.network import PublicTCPConnector
+from utils.credentials import configured_secrets
 
 gateway.DiscordWebSocket.identify = identify_mobile
+
+
+class RedactingFormatter(logging.Formatter):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.redact: Callable[[str], str] = lambda text: text
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _redact_error_text(super().format(record), self.redact)
 
 
 def _env_bool(name: str, default: bool = True) -> bool:
@@ -115,7 +129,7 @@ async def start(
         logging.StreamHandler(sys.stdout),
     ]
 
-    formatter = logging.Formatter(
+    formatter = RedactingFormatter(
         "[{asctime}] [{levelname:<8}] {name}: {message}", "%Y-%m-%d %H:%M:%S", style="{"
     )
 
@@ -123,10 +137,21 @@ async def start(
     for handler in handlers:
         handler.setFormatter(formatter)
         logger.addHandler(handler)
+    logger.propagate = False
+    logging.getLogger().handlers = handlers
 
     config_path = os.getenv("FISHIE_CONFIG", str(REPOSITORY_ROOT / "config.toml"))
     with open(config_path, "rb") as fileObj:
         config: Config = Config(**tomllib.load(fileObj))
+
+    secrets = sorted(configured_secrets(config), key=len, reverse=True)
+
+    def redact_config(text: str) -> str:
+        for secret in secrets:
+            text = text.replace(secret, "[REDACTED]")
+        return text
+
+    formatter.redact = redact_config
 
     use_testing_database = selected_instance == "testing"
     api_enabled = _env_bool("FISHIE_API_ENABLED", True)
@@ -158,7 +183,9 @@ async def start(
 
     timeout = aiohttp.ClientTimeout(total=30)
     async with (
-        aiohttp.ClientSession(headers=base_header, timeout=timeout) as session,
+        aiohttp.ClientSession(
+            headers=base_header, timeout=timeout, connector=PublicTCPConnector()
+        ) as session,
         Fishie(
             config=config,
             logger=logger,
@@ -168,6 +195,7 @@ async def start(
             instance=selected_instance,
         ) as bot,
     ):
+        formatter.redact = bot.redact
         api_server: uvicorn.Server | None = None
         api_task: asyncio.Task[object] | None = None
         if api_enabled:
