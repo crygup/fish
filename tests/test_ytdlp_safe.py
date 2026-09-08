@@ -32,7 +32,7 @@ def test_provider_exception_is_scoped_to_trusted_provider_requests(
     )
     with pytest.raises(URLError):
         ytdlp_safe._guard_url(
-            f"http://user@provider:4416/get_pot",
+            "http://user@provider:4416/get_pot",
             allow_provider=True,
         )
 

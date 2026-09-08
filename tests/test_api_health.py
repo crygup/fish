@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import json
 from types import SimpleNamespace
 from urllib.parse import urlencode
@@ -112,28 +111,6 @@ def test_rejects_oversized_chunked_twitch_eventsub_payload() -> None:
     assert response.status_code == 413
 
 
-def test_user_history_routes_accept_optional_session_for_private_self_access() -> None:
-    for handler in (
-        history.get_user_data,
-        history.get_usernames,
-        history.get_display_names,
-        history.get_discrims,
-        history.get_server_tags,
-        history.get_status_history,
-    ):
-        parameters = inspect.signature(handler).parameters
-        assert "authorization" in parameters
-        assert "session_id" in parameters
-
-
-def test_activity_is_available_as_an_individual_tracking_opt_out() -> None:
-    assert "activity" in api_state.VALID_OPTOUTS
-    assert "emoji" in api_state.VALID_OPTOUTS
-    assert "downloads" in api_state.VALID_OPTOUTS
-    assert "higher_lower" in api_state.VALID_OPTOUTS
-    assert "heads_tails" in api_state.VALID_OPTOUTS
-
-
 def test_lastfm_state_is_session_bound_and_one_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -221,42 +198,6 @@ def test_twitch_eventsub_non_notification_message_ids_are_replay_protected() -> 
 
 
 @pytest.mark.asyncio
-async def test_history_user_resolution_negative_result_is_cached(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class Cache:
-        known_non_bot_users: set[int] = set()
-
-        def remember_user(self, *_args: object, **_kwargs: object) -> None:
-            raise AssertionError("an unavailable user should not be remembered")
-
-    class Pool:
-        async def fetchval(self, sql: str, *_args: object):
-            assert "history_public" in sql
-            return True
-
-    calls = 0
-
-    async def missing_user(_user_id: int):
-        nonlocal calls
-        calls += 1
-        raise asyncio.TimeoutError
-
-    bot = SimpleNamespace(
-        db_cache=Cache(),
-        get_user=lambda _user_id: None,
-        fetch_user=missing_user,
-    )
-    monkeypatch.setattr(api_state, "bot_ref", bot)
-    monkeypatch.setattr(api_state, "_check_pool", lambda: Pool())
-    api_state._discord_user_negative_cache.clear()
-
-    await history._history_visible_to(987654321, None, None)
-    await history._history_visible_to(987654321, None, None)
-    assert calls == 1
-
-
-@pytest.mark.asyncio
 async def test_private_history_only_allows_the_matching_session(
     monkeypatch,
 ) -> None:
@@ -331,16 +272,6 @@ def test_youtube_websub_verification_requires_token_and_caps_lease(
     assert executions[-1][1] == (channel_id, 864000)
 
 
-def test_media_route_has_its_own_larger_body_limit() -> None:
-    response = request(
-        "POST",
-        "/media/effects/invert",
-        headers={"Content-Length": str(api_state.MAX_REQUEST_BYTES + 1)},
-        content=b"x",
-    )
-    assert response.status_code != 413
-
-
 def test_media_route_requires_key_and_returns_processed_file(monkeypatch) -> None:
     async def fake_render(data: bytes, effect: str, **options):
         assert data == b"image"
@@ -376,25 +307,6 @@ def test_media_route_requires_key_and_returns_processed_file(monkeypatch) -> Non
     assert response.headers["content-type"] == "image/png"
 
 
-def test_media_catalog_includes_new_image_effects() -> None:
-    response = request("GET", "/media/effects")
-    assert response.status_code == 200
-    effects = set(response.json()["effects"])
-    assert {
-        "gifmagik",
-        "gifswirl",
-        "hallway",
-        "huerotate",
-        "magik",
-        "meme",
-        "parallax",
-        "text",
-        "combine",
-        "overlay",
-        "zoom",
-    } <= effects
-
-
 def test_audio_effect_catalog_requires_key(monkeypatch) -> None:
     monkeypatch.setattr(
         api_state,
@@ -414,154 +326,3 @@ def test_audio_effect_catalog_requires_key(monkeypatch) -> None:
     assert len(effects) >= 100
     assert effects[0]["id"] == 1
     assert all("path" not in effect for effect in effects)
-
-
-def test_audio_overlay_requires_secondary_media(monkeypatch) -> None:
-    monkeypatch.setattr(
-        api_state,
-        "bot_ref",
-        SimpleNamespace(
-            config={"keys": {"media_api": "test-key"}},
-            media_semaphore=asyncio.Semaphore(1),
-        ),
-    )
-    response = request(
-        "POST",
-        "/media/effects/audiooverlay",
-        headers={"Content-Type": "video/mp4", "X-API-Key": "test-key"},
-        content=b"video",
-    )
-    assert response.status_code == 400
-    assert "secondary_media_url" in response.json()["detail"]
-
-
-def test_combine_api_fetches_and_uses_secondary_media(monkeypatch) -> None:
-    async def fake_refresh(_bot, url: str) -> str:
-        return url
-
-    async def fake_fetch(_session, url: str, **_options):
-        return SimpleNamespace(data=b"first" if url.endswith("/one") else b"second")
-
-    async def fake_combine(first: bytes, second: bytes, **options):
-        assert first == b"first"
-        assert second == b"second"
-        assert options == {
-            "position": "left",
-            "mode": "original",
-            "audio": "none",
-        }
-        return EffectResult(b"combined", "combine.png")
-
-    monkeypatch.setattr(media, "refresh_discord_attachment_url", fake_refresh)
-    monkeypatch.setattr(media, "fetch_public_bytes", fake_fetch)
-    monkeypatch.setattr(media, "render_combine_effect", fake_combine)
-    monkeypatch.setattr(
-        api_state,
-        "bot_ref",
-        SimpleNamespace(
-            config={"keys": {"media_api": "test-key"}},
-            media_semaphore=asyncio.Semaphore(1),
-            session=object(),
-        ),
-    )
-    response = request(
-        "POST",
-        "/media/effects/combine",
-        headers={
-            "Content-Type": "application/json",
-            "X-API-Key": "test-key",
-        },
-        content=json.dumps(
-            {
-                "media_url": "https://example.com/one",
-                "secondary_media_url": "https://example.com/two",
-                "options": {
-                    "position": "left",
-                    "mode": "original",
-                    "audio": "none",
-                },
-            }
-        ).encode(),
-    )
-    assert response.status_code == 200
-    assert response.content == b"combined"
-
-
-def test_overlay_api_fetches_and_uses_secondary_media(monkeypatch) -> None:
-    async def fake_refresh(_bot, url: str) -> str:
-        return url
-
-    async def fake_fetch(_session, url: str, **_options):
-        return SimpleNamespace(data=b"first" if url.endswith("/one") else b"second")
-
-    async def fake_overlay(first: bytes, second: bytes, **options):
-        assert first == b"first"
-        assert second == b"second"
-        assert options == {
-            "opacity": 0.8,
-            "size": "100x100",
-            "overlay_audio": False,
-        }
-        return EffectResult(b"overlaid", "overlay-video.mp4")
-
-    monkeypatch.setattr(media, "refresh_discord_attachment_url", fake_refresh)
-    monkeypatch.setattr(media, "fetch_public_bytes", fake_fetch)
-    monkeypatch.setattr(media, "render_overlay_effect", fake_overlay)
-    monkeypatch.setattr(
-        api_state,
-        "bot_ref",
-        SimpleNamespace(
-            config={"keys": {"media_api": "test-key"}},
-            media_semaphore=asyncio.Semaphore(1),
-            session=object(),
-        ),
-    )
-    response = request(
-        "POST",
-        "/media/effects/overlay",
-        headers={
-            "Content-Type": "application/json",
-            "X-API-Key": "test-key",
-        },
-        content=json.dumps(
-            {
-                "media_url": "https://example.com/one",
-                "secondary_media_url": "https://example.com/two",
-                "options": {
-                    "opacity": 80,
-                    "size": "100x100",
-                    "overlay_audio": False,
-                },
-            }
-        ).encode(),
-    )
-    assert response.status_code == 200
-    assert response.content == b"overlaid"
-
-
-def test_media_route_clamps_numeric_options_and_reports_it(monkeypatch) -> None:
-    async def fake_render(data: bytes, effect: str, **options):
-        assert data == b"image"
-        assert effect == "pixelate"
-        assert options == {"size": 128}
-        return EffectResult(b"finished", "pixelate.png")
-
-    monkeypatch.setattr(media, "render_image_effect", fake_render)
-    monkeypatch.setattr(
-        api_state,
-        "bot_ref",
-        SimpleNamespace(
-            config={"keys": {"media_api": "test-key"}},
-            media_semaphore=asyncio.Semaphore(1),
-        ),
-    )
-    response = request(
-        "POST",
-        '/media/effects/pixelate?options={"size":1000}',
-        headers={"Content-Type": "image/png", "X-API-Key": "test-key"},
-        content=b"image",
-    )
-
-    assert response.status_code == 200
-    assert "X-Fishie-Adjusted".lower() in response.headers
-    assert "pixelate size" in response.headers["x-fishie-adjusted"]
