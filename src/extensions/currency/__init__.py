@@ -974,11 +974,16 @@ class RacingEmojiCategory:
     label: str
     price: int
     samples: tuple[str, ...]
+    enabled: bool = True
 
 
 RACING_EMOJI_CATEGORIES = tuple(
     RacingEmojiCategory(
-        item["key"], item["label"], item["price"], tuple(item["samples"])
+        item["key"],
+        item["label"],
+        item["price"],
+        tuple(item["samples"]),
+        item.get("enabled", True),
     )
     for item in SHOP_CATALOG["racing_emoji"]
     if item["key"] != "custom"
@@ -1247,9 +1252,15 @@ class RacingEmojiShopView(discord.ui.LayoutView):
             ),
         ]
         # Keep the shop consistent with the other purchase pages: expensive
+        if not next(
+            item.get("enabled", True)
+            for item in SHOP_CATALOG["racing_emoji"]
+            if item["key"] == "custom"
+        ):
+            del content[1:]
         # categories come first, with a stable alphabetical tie-breaker.
         for category in sorted(
-            RACING_EMOJI_CATEGORIES,
+            (category for category in RACING_EMOJI_CATEGORIES if category.enabled),
             key=lambda category: (-category.price, category.label.casefold()),
         ):
             samples = " ".join(category.samples[:10])
@@ -3955,9 +3966,8 @@ class Currency(Cog):
             None,
         )
 
-    @staticmethod
     def _racing_emoji_info(
-        selector: str, guild: discord.Guild | None
+        self, selector: str, guild: discord.Guild | None
     ) -> tuple[str, str, int | None, bool, bool, str, int]:
         """Resolve and price a Unicode or current-server custom emoji.
 
@@ -3972,14 +3982,18 @@ class Currency(Cog):
             raise commands.BadArgument("Provide a Unicode or custom emoji.")
         partial = discord.PartialEmoji.from_str(raw)
         if partial.id is not None:
-            if guild is None:
+            if not next(
+                item.get("enabled", True)
+                for item in SHOP_CATALOG["racing_emoji"]
+                if item["key"] == "custom"
+            ):
                 raise commands.BadArgument(
-                    "Custom racing emojis must be purchased in a server where Fishie is present."
+                    "Custom racing emojis are not currently for sale."
                 )
-            source = guild.get_emoji(int(partial.id))
-            if source is None:
+            source = self.bot.get_emoji(int(partial.id))
+            if source is None or not source.is_usable():
                 raise commands.BadArgument(
-                    "That custom emoji must come from this server."
+                    "Fishie must be in that emoji's server and have permission to use it."
                 )
             return (
                 f"custom:{int(partial.id)}",
@@ -3997,6 +4011,10 @@ class Currency(Cog):
         if len(tokens) != 1 or tokens[0].get("emoji") != candidate:
             raise commands.BadArgument("That is not a valid single emoji.")
         category = _racing_emoji_category(candidate)
+        if not category.enabled:
+            raise commands.BadArgument(
+                "That racing emoji category is not currently for sale."
+            )
         return (
             candidate,
             candidate,

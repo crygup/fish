@@ -1,8 +1,8 @@
 """Built-in shop definitions, loaded once for command rendering.
 
-Prices and labels sync at startup/migrate. Existing database ``enabled`` flags
-and rows absent from JSON are preserved, so retiring an item never removes
-ownership. Restart after editing this file's JSON source.
+Prices, labels and availability sync at startup/migrate for JSON-managed rows.
+Removed seeds are retired without deleting ownership. Database-only offers
+remain independent. Restart after editing this file's JSON source.
 """
 
 from __future__ import annotations

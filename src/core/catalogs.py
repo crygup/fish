@@ -11,12 +11,42 @@ async def sync_shop_catalog(connection: Any) -> None:
     # A transaction also prevents a partial catalog update if validation/SQL fails.
     document = load_shop_catalog()
     async with connection.transaction():
+        for table, column, keys in (
+            (
+                "title_catalog",
+                "title_key",
+                [item["key"] for item in document["titles"]],
+            ),
+            (
+                "badge_catalog",
+                "badge_key",
+                [
+                    f"{category}:{item['key']}"
+                    for section, category in (
+                        ("badges", "purchase"),
+                        ("stat_badges", "stat"),
+                    )
+                    for item in document[section]
+                ],
+            ),
+            (
+                "color_catalog",
+                "color_key",
+                [item["key"] for item in document["colors"]],
+            ),
+            ("ring_catalog", "ring_key", [item["key"] for item in document["rings"]]),
+        ):
+            await connection.execute(
+                f"UPDATE {table} SET enabled = false WHERE catalog_managed AND NOT ({column} = ANY($1::text[]))",
+                keys,
+            )
         for item in document["titles"]:
             await connection.execute(
-                """INSERT INTO title_catalog(title_key, display_name, price, category, enabled)
-                VALUES ($1, $2, $3, $4, $5)
+                """INSERT INTO title_catalog(title_key, display_name, price, category, enabled, catalog_managed)
+                VALUES ($1, $2, $3, $4, $5, true)
                 ON CONFLICT (title_key) DO UPDATE SET display_name = EXCLUDED.display_name,
-                    price = EXCLUDED.price, category = EXCLUDED.category""",
+                    price = EXCLUDED.price, category = EXCLUDED.category,
+                    enabled = EXCLUDED.enabled, catalog_managed = true""",
                 item["key"],
                 item["description"],
                 item["price"],
@@ -29,13 +59,13 @@ async def sync_shop_catalog(connection: Any) -> None:
                 emoji = discord.PartialEmoji.from_str(item.get("emoji", ""))
                 await connection.execute(
                     """INSERT INTO badge_catalog(badge_key, category, display_name,
-                        emoji_name, emoji_id, is_custom, unicode, animated, price, enabled)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        emoji_name, emoji_id, is_custom, unicode, animated, price, enabled, catalog_managed)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true)
                     ON CONFLICT (badge_key) DO UPDATE SET category = EXCLUDED.category,
                         display_name = EXCLUDED.display_name, emoji_name = EXCLUDED.emoji_name,
                         emoji_id = EXCLUDED.emoji_id, is_custom = EXCLUDED.is_custom,
                         unicode = EXCLUDED.unicode, animated = EXCLUDED.animated,
-                        price = EXCLUDED.price""",
+                        price = EXCLUDED.price, enabled = EXCLUDED.enabled, catalog_managed = true""",
                     f"{category}:{item['key']}",
                     category,
                     item["description"],
@@ -49,10 +79,11 @@ async def sync_shop_catalog(connection: Any) -> None:
                 )
         for item in document["colors"]:
             await connection.execute(
-                """INSERT INTO color_catalog(color_key, display_name, hex_value, price, enabled)
-                VALUES ($1, $2, $3, $4, $5)
+                """INSERT INTO color_catalog(color_key, display_name, hex_value, price, enabled, catalog_managed)
+                VALUES ($1, $2, $3, $4, $5, true)
                 ON CONFLICT (color_key) DO UPDATE SET display_name = EXCLUDED.display_name,
-                    hex_value = EXCLUDED.hex_value, price = EXCLUDED.price""",
+                    hex_value = EXCLUDED.hex_value, price = EXCLUDED.price,
+                    enabled = EXCLUDED.enabled, catalog_managed = true""",
                 item["key"],
                 item["description"],
                 item.get("hex_value") or "#000000",
@@ -63,12 +94,13 @@ async def sync_shop_catalog(connection: Any) -> None:
             emoji = discord.PartialEmoji.from_str(item["emoji"])
             await connection.execute(
                 """INSERT INTO ring_catalog(ring_key, display_name, emoji_name, emoji_id,
-                    unicode, animated, display, price, enabled)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    unicode, animated, display, price, enabled, catalog_managed)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
                 ON CONFLICT (ring_key) DO UPDATE SET display_name = EXCLUDED.display_name,
                     emoji_name = EXCLUDED.emoji_name, emoji_id = EXCLUDED.emoji_id,
                     unicode = EXCLUDED.unicode, animated = EXCLUDED.animated,
-                    display = EXCLUDED.display, price = EXCLUDED.price""",
+                    display = EXCLUDED.display, price = EXCLUDED.price,
+                    enabled = EXCLUDED.enabled, catalog_managed = true""",
                 item["key"],
                 item["name"],
                 emoji.name,
