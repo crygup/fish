@@ -20,6 +20,7 @@ from utils.anilist import (
     anilist_temporarily_unavailable,
 )
 from utils.downloads import is_discord_media_url
+from utils.credentials import decrypt_credential
 from utils.paths import DOWNLOADS_ROOT
 
 
@@ -780,8 +781,28 @@ class Tasks(Cog):
     async def _anilist_media_batch(self, ids: list[int]) -> dict[int, dict[str, Any]]:
         from extensions.settings.notify import ANILIST_NOTIFY_BATCH_QUERY
 
-        if not ids:
+        if not ids or time.monotonic() < getattr(self, "_anilist_outage_retry_at", 0.0):
             return {}
+        headers = None
+        auth_user_id = self.bot.config.get("keys", {}).get("anilist_background_user_id")
+        if auth_user_id:
+            try:
+                token = decrypt_credential(
+                    await self.bot.pool.fetchval(
+                        "SELECT anilist_access_token FROM accounts WHERE user_id = $1",
+                        int(auth_user_id),
+                    )
+                )
+            except Exception:
+                token = None
+            if not token:
+                self.bot.logger.warning(
+                    "AniList background account is unavailable; reconnect through accounts. "
+                    "Keeping cached schedules and retrying in 10 minutes"
+                )
+                self._anilist_outage_retry_at = time.monotonic() + 600
+                return {}
+            headers = {"Authorization": f"Bearer {token}"}
         result: dict[int, dict[str, Any]] = {}
         # AniList limits a Page response to 50 entries.  Split larger sets so
         # every stale follow is refreshed once per day rather than leaving
@@ -791,6 +812,7 @@ class Tasks(Cog):
             try:
                 async with self.bot.session.post(
                     "https://graphql.anilist.co",
+                    headers=headers,
                     json={
                         "query": ANILIST_NOTIFY_BATCH_QUERY,
                         "variables": {"ids": batch},
@@ -805,15 +827,24 @@ class Tasks(Cog):
                     offset + len(batch),
                     error,
                 )
-                continue
-            if anilist_temporarily_unavailable(response.status, payload):
-                retry_at = getattr(self, "_anilist_outage_retry_at", 0.0)
-                if time.monotonic() >= retry_at:
-                    self.bot.logger.warning(
-                        "AniList is temporarily unavailable; keeping cached schedules"
-                    )
-                    self._anilist_outage_retry_at = time.monotonic() + 600
-                continue
+                self._anilist_outage_retry_at = time.monotonic() + 600
+                break
+            if response.status == 401:
+                self.bot.logger.warning(
+                    "AniList background authentication was rejected; reconnect through accounts. "
+                    "Keeping cached schedules and retrying in 10 minutes"
+                )
+                self._anilist_outage_retry_at = time.monotonic() + 600
+                break
+            if (
+                anilist_temporarily_unavailable(response.status, payload)
+                or response.status == 429
+            ):
+                self.bot.logger.warning(
+                    "AniList is unavailable; keeping cached schedules for 10 minutes"
+                )
+                self._anilist_outage_retry_at = time.monotonic() + 600
+                break
             if response.status != 200 or not isinstance(payload, dict):
                 self.bot.logger.warning(
                     "AniList notify refresh failed with status %s for batch %s-%s",
@@ -903,6 +934,7 @@ class Tasks(Cog):
         if not rows:
             return
         now = datetime.datetime.now(datetime.timezone.utc)
+        await self._deliver_due_anime(rows, now)
         stale_ids = {
             int(row["anilist_id"])
             for row in rows
@@ -948,8 +980,12 @@ class Tasks(Cog):
             )
 
         rows = await self.bot.pool.fetch("SELECT * FROM notify_anime_follows")
-        rows = [row for row in rows if not is_operational_guild(row.get("guild_id"))]
+        await self._deliver_due_anime(rows, now)
+
+    async def _deliver_due_anime(self, rows: Any, now: datetime.datetime) -> None:
         for row in rows:
+            if is_operational_guild(row.get("guild_id")):
+                continue
             due_airing = row.get("next_airing_at")
             due_release = row.get("release_at")
             if due_airing is None and due_release is not None:

@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 
 import pytest
 
@@ -72,8 +72,56 @@ async def test_twitch_recovery_removes_failed_subscription_and_adopts_enabled():
 
 
 def test_anilist_outages_are_distinct_from_missing_results_and_bad_credentials():
-    assert anilist_temporarily_unavailable(503, {"errors": [{"message": "Unavailable"}]})
+    assert anilist_temporarily_unavailable(
+        503, {"errors": [{"message": "Unavailable"}]}
+    )
     assert anilist_temporarily_unavailable(502, None)
-    assert anilist_temporarily_unavailable(403, {"errors": [{"message": "API temporarily disabled"}]})
-    assert not anilist_temporarily_unavailable(403, {"errors": [{"message": "Forbidden"}]})
-    assert not anilist_temporarily_unavailable(404, {"errors": [{"message": "Not found"}]})
+    assert anilist_temporarily_unavailable(
+        403, {"errors": [{"message": "API temporarily disabled"}]}
+    )
+    assert not anilist_temporarily_unavailable(
+        403, {"errors": [{"message": "Forbidden"}]}
+    )
+    assert not anilist_temporarily_unavailable(
+        404, {"errors": [{"message": "Not found"}]}
+    )
+
+
+@pytest.mark.asyncio
+async def test_anilist_outage_stops_batches_and_backs_off():
+    session = SimpleNamespace(post=Mock(return_value=Response(503, {})))
+    cog = object.__new__(Tasks)
+    cog.bot = SimpleNamespace(session=session, logger=Mock(), config={})
+    assert await cog._anilist_media_batch(list(range(120))) == {}
+    assert await cog._anilist_media_batch([1]) == {}
+    assert session.post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_anilist_background_account_authentication_and_backoff():
+    session = SimpleNamespace(
+        post=Mock(
+            return_value=Response(200, {"data": {"Page": {"media": [{"id": 1}]}}})
+        )
+    )
+    pool = SimpleNamespace(fetchval=AsyncMock(return_value="dummy-token"))
+    cog = object.__new__(Tasks)
+    cog.bot = SimpleNamespace(
+        session=session,
+        pool=pool,
+        logger=Mock(),
+        config={"keys": {"anilist_background_user_id": 123}},
+    )
+    assert await cog._anilist_media_batch([1]) == {1: {"id": 1}}
+    assert session.post.call_args.kwargs["headers"] == {
+        "Authorization": "Bearer dummy-token"
+    }
+    assert pool.fetchval.call_args.args[1] == 123
+    session.post.return_value = Response(401, {})
+    assert await cog._anilist_media_batch([1]) == {}
+    assert await cog._anilist_media_batch([1]) == {}
+    assert session.post.call_count == 2
+    cog._anilist_outage_retry_at = 0
+    pool.fetchval.return_value = None
+    assert await cog._anilist_media_batch([1]) == {}
+    assert session.post.call_count == 2

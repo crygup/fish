@@ -21,6 +21,8 @@ spotify_id = ""
 spotify_secret = ""
 anilist_id = ""
 anilist_secret = ""
+# Optional consenting Discord account whose linked token authenticates schedule refreshes.
+anilist_background_user_id = 0
 twitch_id = ""
 twitch_secret = ""
 twitch_eventsub_secret = ""

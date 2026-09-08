@@ -7,6 +7,15 @@ import pytest
 from utils.google import google_json
 
 
+@pytest.fixture(autouse=True)
+def clear_key_cooldowns():
+    from utils.google import _KEY_COOLDOWNS
+
+    _KEY_COOLDOWNS.clear()
+    yield
+    _KEY_COOLDOWNS.clear()
+
+
 class _Response:
     def __init__(self, status: int, data: dict[str, Any]) -> None:
         self.status = status
@@ -51,3 +60,9 @@ async def test_google_json_tries_another_key_after_rate_limit(
 
     assert result == {"items": ["ok"]}
     assert session.keys == ["exhausted", "working"]
+    await google_json(
+        cast(Any, session),
+        "https://www.googleapis.com/test",
+        keys=["exhausted", "working"],
+    )
+    assert session.keys == ["exhausted", "working", "working"]
