@@ -16,6 +16,10 @@ from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
+from utils.anilist import (
+    ANILIST_TEMPORARY_OUTAGE_MESSAGE,
+    anilist_temporarily_unavailable,
+)
 
 from .notify import (
     ANILIST_AUTOCOMPLETE_QUERY,
@@ -385,8 +389,10 @@ class Notify(Cog):
                     timeout=aiohttp.ClientTimeout(total=20),
                 ) as response:
                     payload = await response.json(content_type=None)
-            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
-                return None
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
+                raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE) from error
+            if anilist_temporarily_unavailable(response.status, payload):
+                raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE)
             if response.status != 200 or not isinstance(payload, dict):
                 return None
             data = payload.get("data")

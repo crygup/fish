@@ -15,7 +15,10 @@ from discord.ext import commands, tasks
 
 from core import Cog, is_operational_guild
 from core.handoff import is_legacy_instance
-from utils.anilist import anilist_notification_schedule
+from utils.anilist import (
+    anilist_notification_schedule,
+    anilist_temporarily_unavailable,
+)
 from utils.downloads import is_discord_media_url
 from utils.paths import DOWNLOADS_ROOT
 
@@ -248,6 +251,21 @@ class Tasks(Cog):
         if claimed is None:
             return True
 
+        # The database can lose the remote ID during a restart or hand-off.
+        # Reconcile first so an already-enabled Twitch subscription is adopted
+        # instead of being submitted a second time and reported as a 409.
+        existing = await self._find_twitch_eventsub_subscription(token, broadcaster_id)
+        if existing is not None:
+            await self.bot.pool.execute(
+                "UPDATE twitch_eventsub_subscriptions "
+                "SET subscription_id = $2, status = $3, updated_at = now() "
+                "WHERE broadcaster_id = $1",
+                broadcaster_id,
+                existing["id"],
+                existing.get("status", "enabled"),
+            )
+            return True
+
         payload = {
             "type": "stream.online",
             "version": "1",
@@ -283,6 +301,20 @@ class Tasks(Cog):
 
         subscriptions = data.get("data") if isinstance(data, dict) else None
         if response.status not in (200, 202) or not subscriptions:
+            if response.status == 409:
+                existing = await self._find_twitch_eventsub_subscription(
+                    token, broadcaster_id
+                )
+                if existing is not None:
+                    await self.bot.pool.execute(
+                        "UPDATE twitch_eventsub_subscriptions "
+                        "SET subscription_id = $2, status = $3, updated_at = now() "
+                        "WHERE broadcaster_id = $1",
+                        broadcaster_id,
+                        existing["id"],
+                        existing.get("status", "enabled"),
+                    )
+                    return True
             await self.bot.pool.execute(
                 "UPDATE twitch_eventsub_subscriptions SET status = 'failed', "
                 "updated_at = now() WHERE broadcaster_id = $1",
@@ -307,6 +339,73 @@ class Tasks(Cog):
             subscription.get("status", "enabled"),
         )
         return True
+
+    async def _find_twitch_eventsub_subscription(
+        self, token: str, broadcaster_id: str
+    ) -> dict[str, Any] | None:
+        """Find an existing stream.online webhook subscription for a channel."""
+
+        cursor: str | None = None
+        while True:
+            params: dict[str, str | int] = {"type": "stream.online", "first": 100}
+            if cursor:
+                params["after"] = cursor
+            try:
+                async with self.bot.session.get(
+                    "https://api.twitch.tv/helix/eventsub/subscriptions",
+                    headers={
+                        "Client-ID": self.bot.config["keys"]["twitch_id"],
+                        "Authorization": f"Bearer {token}",
+                    },
+                    params=params,
+                ) as response:
+                    data = await response.json(content_type=None)
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+                return None
+            if response.status != 200 or not isinstance(data, dict):
+                return None
+            for subscription in data.get("data", []):
+                if not isinstance(subscription, dict) or not subscription.get("id"):
+                    continue
+                transport = subscription.get("transport")
+                condition = subscription.get("condition")
+                if not isinstance(transport, dict) or not isinstance(condition, dict):
+                    continue
+                if (
+                    subscription.get("type") == "stream.online"
+                    and subscription.get("version") == "1"
+                    and condition.get("broadcaster_user_id") == broadcaster_id
+                    and transport.get("method") == "webhook"
+                    and transport.get("callback") == TWITCH_EVENTSUB_CALLBACK
+                ):
+                    if subscription.get("status") in {
+                        "enabled", "webhook_callback_verification_pending"
+                    }:
+                        return subscription
+                    # A revoked/failed subscription cannot deliver events and
+                    # can conflict with its replacement until it is removed.
+                    try:
+                        async with self.bot.session.delete(
+                            "https://api.twitch.tv/helix/eventsub/subscriptions",
+                            headers={
+                                "Client-ID": self.bot.config["keys"]["twitch_id"],
+                                "Authorization": f"Bearer {token}",
+                            },
+                            params={"id": subscription["id"]},
+                        ) as deletion:
+                            if deletion.status not in (204, 404):
+                                return None
+                    except (aiohttp.ClientError, asyncio.TimeoutError):
+                        return None
+            pagination = data.get("pagination")
+            cursor = (
+                str(pagination.get("cursor"))
+                if isinstance(pagination, dict) and pagination.get("cursor")
+                else None
+            )
+            if not cursor:
+                break
+        return None
 
     async def sync_twitch_eventsub_subscriptions(self) -> None:
         await self.bot.pool.execute(
@@ -1045,6 +1144,14 @@ class Tasks(Cog):
                     offset + len(batch),
                     error,
                 )
+                continue
+            if anilist_temporarily_unavailable(response.status, payload):
+                retry_at = getattr(self, "_anilist_outage_retry_at", 0.0)
+                if time.monotonic() >= retry_at:
+                    self.bot.logger.warning(
+                        "AniList is temporarily unavailable; keeping cached schedules"
+                    )
+                    self._anilist_outage_retry_at = time.monotonic() + 600
                 continue
             if response.status != 200 or not isinstance(payload, dict):
                 self.bot.logger.warning(

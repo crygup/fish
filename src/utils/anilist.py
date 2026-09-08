@@ -9,6 +9,27 @@ import unicodedata
 from collections.abc import Iterable
 from typing import Any
 
+ANILIST_TEMPORARY_OUTAGE_MESSAGE = (
+    "AniList is currently unavailable. Please try again in 10 minutes."
+)
+
+
+def anilist_temporarily_unavailable(status: int, payload: object) -> bool:
+    """Recognize service outages separately from bad input or missing results."""
+
+    if 500 <= status <= 599:
+        return True
+    if status != 403 or not isinstance(payload, dict):
+        return False
+    errors = payload.get("errors")
+    if not isinstance(errors, list):
+        return False
+    return any(
+        isinstance(error, dict)
+        and "temporarily disabled" in str(error.get("message") or "").casefold()
+        for error in errors
+    )
+
 
 def normalize_anilist_title(value: object) -> str:
     """Normalize an AniList title for comparisons.
@@ -253,10 +274,12 @@ def latest_anilist_successor(media: dict[str, Any]) -> dict[str, Any] | None:
 
 
 __all__ = [
+    "ANILIST_TEMPORARY_OUTAGE_MESSAGE",
     "anilist_airing_datetime",
     "anilist_datetime",
     "anilist_media_titles",
     "anilist_notification_schedule",
+    "anilist_temporarily_unavailable",
     "ANILIST_NOTIFICATION_STATUSES",
     "anilist_search_variants",
     "anilist_successors",

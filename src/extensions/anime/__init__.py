@@ -17,8 +17,10 @@ from PIL import Image
 from core import Cog
 from utils import to_thread
 from utils.anilist import (
+    ANILIST_TEMPORARY_OUTAGE_MESSAGE,
     anilist_media_titles,
     anilist_search_variants,
+    anilist_temporarily_unavailable,
     normalize_anilist_title,
     select_anilist_media,
 )
@@ -3161,11 +3163,12 @@ class Anime(Cog):
                     payload = await response.json(content_type=None)
                 except (ValueError, TypeError, aiohttp.ContentTypeError):
                     payload = None
-                return response.status, payload
+                status = response.status
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
-            raise commands.BadArgument(
-                "AniList is temporarily unavailable. Please try again shortly."
-            ) from error
+            raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE) from error
+        if anilist_temporarily_unavailable(status, payload):
+            raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE)
+        return status, payload
 
     async def _lookup_media(self, ctx: Context, search: str, media_type: str):
         search = " ".join(search.strip().split())
@@ -3201,9 +3204,7 @@ class Anime(Cog):
                     "with `fish accounts`."
                 )
             if response_status >= 500:
-                raise commands.BadArgument(
-                    "AniList is temporarily unavailable. Please try again shortly."
-                )
+                raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE)
             if response_status != 200:
                 detail = (
                     f" ({discord.utils.escape_markdown(error_message)})"
@@ -3287,9 +3288,7 @@ class Anime(Cog):
                 "with `fish accounts`."
             )
         if response_status >= 500:
-            raise commands.BadArgument(
-                "AniList is temporarily unavailable. Please try again shortly."
-            )
+            raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE)
         if response_status != 200 or error_message:
             detail = (
                 f" ({discord.utils.escape_markdown(error_message)})"
@@ -3339,9 +3338,7 @@ class Anime(Cog):
                 "with `fish accounts`."
             )
         if response_status >= 500:
-            raise commands.BadArgument(
-                "AniList is temporarily unavailable. Please try again shortly."
-            )
+            raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE)
         if response_status != 200 or error_message:
             detail = (
                 f" ({discord.utils.escape_markdown(error_message)})"
@@ -3541,9 +3538,7 @@ class Anime(Cog):
                 "with `fish accounts`."
             )
         if response_status >= 500:
-            raise commands.BadArgument(
-                "AniList is temporarily unavailable. Please try again shortly."
-            )
+            raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE)
         if response_status != 200 or error_message:
             detail = (
                 f" ({discord.utils.escape_markdown(error_message)})"
@@ -3645,9 +3640,7 @@ class Anime(Cog):
                 "AniList is currently rate limited. Please try again in a minute."
             )
         if response_status >= 500:
-            raise commands.BadArgument(
-                "AniList is temporarily unavailable. Please try again shortly."
-            )
+            raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE)
         if response_status != 200:
             detail = (
                 f" ({discord.utils.escape_markdown(error_message)})"
@@ -3770,6 +3763,8 @@ class Anime(Cog):
         payload_data = payload.get("data") if isinstance(payload, dict) else None
         profile = payload_data.get("User") if isinstance(payload_data, dict) else None
         error_message = _graphql_error(payload)
+        if anilist_temporarily_unavailable(response.status, payload):
+            raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE)
         if response.status == 429:
             raise commands.BadArgument(
                 "AniList is currently rate limited. Please try again in a minute."
@@ -3780,9 +3775,7 @@ class Anime(Cog):
                 "with `fish accounts`."
             )
         if response.status >= 500:
-            raise commands.BadArgument(
-                "AniList is temporarily unavailable. Please try again shortly."
-            )
+            raise commands.BadArgument(ANILIST_TEMPORARY_OUTAGE_MESSAGE)
         if response.status != 200:
             detail = (
                 f" ({discord.utils.escape_markdown(error_message)})"
