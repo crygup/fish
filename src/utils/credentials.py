@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import hmac
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -23,6 +25,14 @@ def configured_secrets(config: object) -> set[str]:
             pending.extend(item)
     return values
 
+
+def birthday_reward_subject(user_id: int) -> str:
+    """Domain-separated identifier, never a reversible Discord ID."""
+    return hmac.new(
+        _credential_key().encode("ascii"),
+        f"fishie:birthday-reward:{int(user_id)}".encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _credential_key() -> str:

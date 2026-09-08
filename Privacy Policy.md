@@ -1,6 +1,6 @@
 # Privacy Policy for Fishie
 
-Effective date: July 20, 2026
+Effective date: September 8, 2026
 
 This policy explains the data Fishie stores when the Discord bot and its dashboard are used. It should be read together with the Terms of Service.
 
@@ -35,6 +35,11 @@ Fishie sends data to Discord and, when a corresponding feature is used, may comm
 Dashboard and OAuth state records expire automatically. Completed webhook inbox records and temporary media files are removed by cleanup jobs. Other history and configuration remains until it is deleted, the relevant guild removes it, or an operator applies a documented retention policy. Backups may retain deleted data until they age out and are protected from normal application access.
 
 ## Choices, access, and deletion
+
+Deleting an account does not reset birthday reward eligibility. An HMAC-derived
+pseudonymous identifier and reward eligibility timestamp are retained only until
+the one-year cooldown expires, then removed by the reward scheduler. This marker
+contains no birthday, raw Discord ID, wallet balance, or transaction history.
 
 The dashboard and bot settings provide per-category opt-outs for supported history including avatars, names, nicknames, primary server tags, joins, status, XP, commands, Pokémon solves, and corn reactions. Reaction history is separate and disabled by default. Fishie only records a reaction after the person adding it enables reaction tracking with `fish tracking reactions`; the person receiving it does not need to opt in. An opt-out prevents new collection for that category; it does not erase existing rows.
 

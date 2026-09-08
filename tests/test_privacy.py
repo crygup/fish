@@ -1,4 +1,11 @@
 from core.privacy import erase_guild, erase_user
+import pytest
+from cryptography.fernet import Fernet
+
+
+@pytest.fixture(autouse=True)
+def reward_key(monkeypatch):
+    monkeypatch.setenv("FISHIE_CREDENTIAL_KEY", Fernet.generate_key().decode())
 
 
 class RecordingConnection:
@@ -73,7 +80,12 @@ async def test_full_user_erasure_covers_linked_and_legacy_data() -> None:
         "locked_by",
     ):
         assert table in sql
-    assert all(call[1] == (42,) or call[1] == ("42",) for call in connection.calls)
+    deletions = [
+        args for query, args in connection.calls if query.lstrip().startswith("DELETE")
+    ]
+    assert all(args in ((42,), ("42",)) for args in deletions)
+    assert "INSERT INTO reward_cooldowns" in sql
+    assert "DELETE FROM reward_cooldowns" not in sql
 
 
 async def test_full_guild_erasure_covers_logs_configuration_and_deliveries() -> None:
@@ -85,8 +97,7 @@ async def test_full_guild_erasure_covers_logs_configuration_and_deliveries() -> 
         "guild_log_channels",
         "command_logs",
         "nickname_logs",
-        "twitch_follows",
-        "twitch_announcement_deliveries",
+        "notify_twitch_follows",  # Delivery records cascade from the follow.
         "youtube_follows",
         "youtube_announcement_deliveries",
         "honeypot_channels",

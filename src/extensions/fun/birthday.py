@@ -131,13 +131,17 @@ class BirthdayCommands:
 
     @tasks.loop(minutes=5)
     async def birthday_reward_loop(self) -> None:
+        await self.bot.pool.execute(
+            "DELETE FROM reward_cooldowns WHERE eligible_at <= now()"
+        )
         rows = await self.bot.pool.fetch("""
             SELECT b.user_id FROM user_birthdays b
             LEFT JOIN birthday_rewards r USING (user_id)
-            WHERE b.month = EXTRACT(MONTH FROM now() AT TIME ZONE 'UTC')
-              AND b.day = EXTRACT(DAY FROM now() AT TIME ZONE 'UTC')
+            LEFT JOIN user_settings s USING (user_id)
+            WHERE COALESCE(s.tracking_enabled, true)
+              AND COALESCE(s.currency_tracking_enabled, true)
               AND (r.last_awarded_on IS NULL OR
-                   r.last_awarded_on + INTERVAL '1 year' <= (now() AT TIME ZONE 'UTC')::date)
+                   r.last_awarded_on + INTERVAL '1 year' <= (now() AT TIME ZONE 'UTC')::date + 1)
             """)
         for row in rows:
             try:

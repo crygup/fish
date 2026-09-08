@@ -1202,7 +1202,9 @@ class Logging(Cog):
             "data, or choose a category such as `avatar`, `username`, `joins`, "
             "`downloads`, `reactions`, `games`, or `currency`.\n\n"
             "Individual records can be removed with `settings delete avatar <id>` "
-            "or the matching category command. Every deletion requires confirmation."
+            "or the matching category command. Every deletion requires confirmation.\n\n"
+            "An expiring, pseudonymous birthday reward cooldown is retained after "
+            "account deletion to prevent repeat claims. It expires one year after the reward."
         )
         view = discord.ui.LayoutView(timeout=300)
         view.add_item(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from utils.credentials import birthday_reward_subject
 
 USER_ID_TABLES = (
     "accounts",
@@ -137,6 +138,18 @@ def _count(result: str) -> int:
 
 async def erase_user(connection: Any, user_id: int) -> int:
     """Remove all rows that identify a Discord user in one transaction."""
+    # Serialize with birthday awards before deleting the user's wallet/history.
+    subject = birthday_reward_subject(user_id)
+    await connection.execute("SELECT pg_advisory_xact_lock(hashtext($1))", subject)
+    await connection.execute(
+        """INSERT INTO reward_cooldowns(subject_hash, eligible_at)
+        SELECT $2, (last_awarded_on + INTERVAL '1 year') AT TIME ZONE 'UTC'
+        FROM birthday_rewards WHERE user_id = $1
+          AND last_awarded_on + INTERVAL '1 year' > now() AT TIME ZONE 'UTC'
+        ON CONFLICT (subject_hash) DO NOTHING""",
+        user_id,
+        subject,
+    )
 
     deleted = 0
     # Deleting a marriage also removes both membership rows through its FK.

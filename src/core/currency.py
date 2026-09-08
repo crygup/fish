@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
+from dateutil import tz
+from dateutil.relativedelta import relativedelta
+from utils.credentials import birthday_reward_subject
 
 MAX_COIN_BALANCE = 9_000_000_000_000_000_000
 # Wagers are reserved from the wallet immediately and can be paid out only
@@ -1153,25 +1156,43 @@ class CurrencyService:
         await self._flush_click_rewards(int(user_id))
         async with self.pool.acquire() as connection:
             async with connection.transaction():
-                wallet = await self._locked_wallet(connection, int(user_id))
-                # The wallet lock serializes awards across both bot instances.
-                eligible = await connection.fetchval(
-                    """
-                    SELECT EXISTS (
-                        SELECT 1 FROM user_birthdays b
-                        LEFT JOIN birthday_rewards r USING (user_id)
-                        WHERE b.user_id = $1
-                          AND b.month = EXTRACT(MONTH FROM now() AT TIME ZONE 'UTC')
-                          AND b.day = EXTRACT(DAY FROM now() AT TIME ZONE 'UTC')
-                          AND (r.last_awarded_on IS NULL OR
-                               r.last_awarded_on + INTERVAL '1 year' <=
-                               (now() AT TIME ZONE 'UTC')::date)
-                    )
-                    """,
+                subject = birthday_reward_subject(user_id)
+                await connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))", subject
+                )
+                birthday = await connection.fetchrow(
+                    """SELECT b.month, b.day, s.timezone, r.last_awarded_on
+                    FROM user_birthdays b
+                    LEFT JOIN user_settings s USING (user_id)
+                    LEFT JOIN birthday_rewards r USING (user_id)
+                    WHERE b.user_id = $1
+                      AND COALESCE(s.tracking_enabled, true)
+                      AND COALESCE(s.currency_tracking_enabled, true)""",
                     user_id,
                 )
-                if not eligible:
+                if birthday is None:
                     return False
+                zone = tz.gettz(birthday["timezone"]) if birthday["timezone"] else None
+                now = datetime.now(timezone.utc)
+                local_now = now.astimezone(zone or timezone.utc)
+                if (local_now.month, local_now.day) != (
+                    birthday["month"],
+                    birthday["day"],
+                ):
+                    return False
+                eligible_at = await connection.fetchval(
+                    "SELECT eligible_at FROM reward_cooldowns WHERE subject_hash = $1",
+                    subject,
+                )
+                if eligible_at is not None and now < eligible_at:
+                    return False
+                last_awarded = birthday["last_awarded_on"]
+                if (
+                    last_awarded is not None
+                    and last_awarded + relativedelta(years=1) > local_now.date()
+                ):
+                    return False
+                wallet = await self._locked_wallet(connection, int(user_id))
                 if 50_000 > MAX_COIN_BALANCE - wallet.balance:
                     raise BalanceOverflow("This credit would exceed the wallet limit.")
                 await connection.execute(
@@ -1185,10 +1206,18 @@ class CurrencyService:
                 await connection.execute(
                     """
                     INSERT INTO birthday_rewards (user_id, last_awarded_on)
-                    VALUES ($1, (now() AT TIME ZONE 'UTC')::date)
+                    VALUES ($1, $2)
                     ON CONFLICT (user_id) DO UPDATE SET last_awarded_on = EXCLUDED.last_awarded_on
                     """,
                     user_id,
+                    local_now.date(),
+                )
+                await connection.execute(
+                    """INSERT INTO reward_cooldowns(subject_hash, eligible_at)
+                    VALUES ($1, $2) ON CONFLICT (subject_hash)
+                    DO UPDATE SET eligible_at = EXCLUDED.eligible_at""",
+                    subject,
+                    now + relativedelta(years=1),
                 )
                 return True
 
