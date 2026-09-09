@@ -664,32 +664,28 @@ class Tasks(Cog):
         game = discord.utils.escape_mentions(
             discord.utils.escape_markdown(str(stream.get("game_name") or ""))
         )
-        viewers = stream.get("viewer_count")
-        try:
-            viewer_text = (
-                f"{int(viewers):,} viewers" if viewers is not None else "Live now"
-            )
-        except (TypeError, ValueError):
-            viewer_text = "Live now"
         twitch_url = f"https://www.twitch.tv/{login}" if login else "https://twitch.tv"
-        details = f"### [{display_name}]({twitch_url}) is live!"
-        if title:
-            details += f"\n**{title}**"
+        title = title or f"{display_name} is live on Twitch!"
+        details = f"### [{title}]({twitch_url})"
         if game:
-            details += f"\nPlaying: {game}"
-        details += f"\n👀 {viewer_text}"
+            details += f"\n**Playing:** {game}"
 
         channel_info = await self._get_twitch_user(login) or {}
-        image = stream.get("thumbnail_url") or channel_info.get("profile_image_url")
+        image = (
+            channel_info.get("profile_image_url")
+            or stream.get("thumbnail_url")
+            or channel_info.get("offline_image_url")
+        )
         if image:
             image = str(image).replace("{width}", "1280").replace("{height}", "720")
         mention = mention_text(row.get("mention_role_id"), row.get("mention_everyone"))
         view = NotifyView(
-            "## Twitch live",
             details,
+            "",
             image=image,
             links=[("Watch on Twitch", twitch_url)],
             mention=mention,
+            accent_color=self.bot.embedcolor,
         )
         try:
             await destination.send(
