@@ -205,6 +205,7 @@ async def start(
                 host=os.getenv("FISHIE_API_HOST", "127.0.0.1"),
                 port=api_port or 8001,
                 log_level=os.getenv("FISHIE_API_LOG_LEVEL", "warning"),
+                access_log=False,
             )
             api_server = uvicorn.Server(api_cfg)
             api_task = asyncio.create_task(api_server.serve())
