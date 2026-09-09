@@ -17,9 +17,6 @@ from fastapi import (
 from pydantic import BaseModel, ConfigDict, StrictBool
 
 from core.privacy import erase_guild
-from extensions.events.youtube import (
-    normalize_youtube_events,
-)
 
 from . import auth as api_auth
 from . import state as api_state
@@ -751,153 +748,6 @@ async def delete_twitch_follow(
     return {"channel_name": channel_name}
 
 
-@router.get("/guild/{guild_id}/youtube-follows")
-async def get_youtube_follows(
-    guild_id: int,
-    authorization: str = Header(None),
-    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
-):
-    guild = await _managed_guild(guild_id, authorization, session_id)
-    rows = await api_state._check_pool().fetch(
-        "SELECT youtube_channel_id, channel_name, channel_handle, "
-        "announce_channel_id, message_template, event_types "
-        "FROM youtube_follows WHERE guild_id = $1 ORDER BY channel_name",
-        guild_id,
-    )
-    channels = {str(channel.id): channel.name for channel in guild.text_channels}
-    return {
-        "follows": [
-            {
-                "youtube_channel_id": row["youtube_channel_id"],
-                "channel_name": row["channel_name"],
-                "channel_handle": row["channel_handle"],
-                "announce_channel_id": str(row["announce_channel_id"]),
-                "announce_channel_name": channels.get(
-                    str(row["announce_channel_id"]), "Unknown channel"
-                ),
-                "message_template": row["message_template"],
-                "event_types": list(row["event_types"]),
-            }
-            for row in rows
-        ],
-        "channels": [
-            {"id": str(channel.id), "name": channel.name}
-            for channel in guild.text_channels
-        ],
-        "event_types": ["video", "live", "short", "community"],
-    }
-
-
-@router.post("/guild/{guild_id}/youtube-follows")
-async def set_youtube_follow(
-    guild_id: int,
-    payload: dict = Body(...),
-    authorization: str = Header(None),
-    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
-):
-    guild = await _managed_guild(guild_id, authorization, session_id)
-    raw_channel_id = payload.get("announce_channel_id")
-    if not isinstance(raw_channel_id, (str, int)):
-        raise HTTPException(400, "announce_channel_id must be a text channel ID")
-    try:
-        announce_channel_id = int(raw_channel_id)
-    except (TypeError, ValueError):
-        raise HTTPException(400, "announce_channel_id must be a text channel ID")
-    announce_channel = await _resolve_guild_text_channel(guild, announce_channel_id)
-    if announce_channel is None:
-        raise HTTPException(400, "Announcement channel must belong to this server")
-    message_template = str(payload.get("message_template") or "").strip() or None
-    if message_template and len(message_template) > 2000:
-        raise HTTPException(400, "The YouTube message cannot exceed 2000 characters")
-    event_types = normalize_youtube_events(payload.get("event_types"))
-    if not event_types:
-        raise HTTPException(
-            400, "Choose at least one of: video, live, short, community"
-        )
-    events: Any = api_state.bot_ref.get_cog("Events") if api_state.bot_ref else None
-    if events is None or not hasattr(events, "resolve_youtube_channel"):
-        raise HTTPException(503, "YouTube notifications are unavailable")
-    query = str(
-        payload.get("youtube_channel_id") or payload.get("channel") or ""
-    ).strip()
-    youtube_channel = await events.resolve_youtube_channel(query)
-    if youtube_channel is None:
-        raise HTTPException(404, "YouTube channel not found")
-    youtube_channel_id = str(youtube_channel["id"])
-    pool = api_state._check_pool()
-    async with pool.acquire() as connection:
-        async with connection.transaction():
-            await connection.execute(
-                "SELECT pg_advisory_xact_lock(hashtext($1))",
-                f"fishie:youtube:{guild_id}",
-            )
-            existing = await connection.fetchval(
-                "SELECT 1 FROM youtube_follows "
-                "WHERE guild_id = $1 AND youtube_channel_id = $2",
-                guild_id,
-                youtube_channel_id,
-            )
-            if not existing:
-                count = await connection.fetchval(
-                    "SELECT COUNT(*) FROM youtube_follows WHERE guild_id = $1",
-                    guild_id,
-                )
-                if count >= 3:
-                    raise HTTPException(
-                        400, "You can follow up to 3 YouTube channels per server"
-                    )
-            await connection.execute(
-                """
-                INSERT INTO youtube_follows
-                    (guild_id, youtube_channel_id, channel_name, channel_handle,
-                     announce_channel_id, message_template, event_types)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (guild_id, youtube_channel_id) DO UPDATE SET
-                    channel_name = EXCLUDED.channel_name,
-                    channel_handle = EXCLUDED.channel_handle,
-                    announce_channel_id = EXCLUDED.announce_channel_id,
-                    message_template = EXCLUDED.message_template,
-                    event_types = EXCLUDED.event_types,
-                    updated_at = now()
-                """,
-                guild_id,
-                youtube_channel_id,
-                youtube_channel["name"],
-                youtube_channel.get("handle"),
-                announce_channel_id,
-                message_template,
-                list(event_types),
-            )
-    await events.ensure_youtube_subscription(youtube_channel_id)
-    return {
-        "youtube_channel_id": youtube_channel_id,
-        "channel_name": youtube_channel["name"],
-    }
-
-
-@router.delete("/guild/{guild_id}/youtube-follows/{youtube_channel_id}")
-async def delete_youtube_follow(
-    guild_id: int,
-    youtube_channel_id: str,
-    authorization: str = Header(None),
-    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
-):
-    await _managed_guild(guild_id, authorization, session_id)
-    if not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", youtube_channel_id):
-        raise HTTPException(400, "Invalid YouTube channel ID")
-    result = await api_state._check_pool().execute(
-        "DELETE FROM youtube_follows WHERE guild_id = $1 AND youtube_channel_id = $2",
-        guild_id,
-        youtube_channel_id,
-    )
-    if result == "DELETE 0":
-        raise HTTPException(404, "YouTube channel is not followed")
-    events: Any = api_state.bot_ref.get_cog("Events") if api_state.bot_ref else None
-    if events is not None and hasattr(events, "remove_youtube_subscription"):
-        await events.remove_youtube_subscription(youtube_channel_id)
-    return {"youtube_channel_id": youtube_channel_id}
-
-
 @router.get("/guild/{guild_id}/logger")
 async def get_logger_settings(
     guild_id: int,
@@ -1085,10 +935,6 @@ async def delete_guild_data(
         "WHERE guild_id = $1 AND broadcaster_id IS NOT NULL",
         guild_id,
     )
-    youtube_channels = await pool.fetch(
-        "SELECT DISTINCT youtube_channel_id FROM youtube_follows WHERE guild_id = $1",
-        guild_id,
-    )
     auto_download_channel = await pool.fetchval(
         "SELECT auto_download FROM guild_settings WHERE guild_id = $1", guild_id
     )
@@ -1106,8 +952,6 @@ async def delete_guild_data(
     if events is not None:
         for row in broadcasters:
             await events.remove_twitch_eventsub_subscription(str(row["broadcaster_id"]))
-        for row in youtube_channels:
-            await events.remove_youtube_subscription(str(row["youtube_channel_id"]))
 
     cache = api_state.bot_ref.db_cache
     cache.prefixes.pop(guild_id, None)

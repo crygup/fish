@@ -45,7 +45,7 @@ async def protect_cookie_requests(request: Request, call_next):
     """Reject cross-origin state changes authenticated by the session cookie."""
     path = request.url.path
     media_request = path.startswith("/media/effects/")
-    webhook_request = path in {"/twitch/eventsub", "/youtube/websub"}
+    webhook_request = path == "/twitch/eventsub"
     request_limit = (
         api_state.MAX_MEDIA_API_BYTES
         if media_request

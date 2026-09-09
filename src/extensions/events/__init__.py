@@ -28,7 +28,6 @@ from .reactions import ReactionLogs
 from .statuses import StatusCog
 from .tasks import Tasks
 from .xp import XPCog
-from .youtube import YouTubeNotifications
 
 if TYPE_CHECKING:
     from core import Fishie
@@ -38,7 +37,6 @@ class Events(
     CommandErrors,
     CommandLogs,
     Tasks,
-    YouTubeNotifications,
     AutoDownload,
     AutoUpload,
     Pokemon,

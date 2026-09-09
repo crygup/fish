@@ -1311,9 +1311,6 @@ class Tasks(Cog):
         self.twitch_event_inbox_task.cancel()
         self.notify_twitch_task.cancel()
         self.notify_anime_task.cancel()
-        self.youtube_websub_sync_task.cancel()
-        self.youtube_event_inbox_task.cancel()
-        self.youtube_community_task.cancel()
         self.hourly_posts_task.cancel()
 
     async def cog_load(self) -> None:
@@ -1336,9 +1333,6 @@ class Tasks(Cog):
         self.twitch_event_inbox_task.start()
         self.notify_twitch_task.start()
         self.notify_anime_task.start()
-        self.youtube_websub_sync_task.start()
-        self.youtube_event_inbox_task.start()
-        self.youtube_community_task.start()
         self.hourly_posts_task.start()
 
     @tasks.loop(minutes=10.0)
@@ -1390,38 +1384,6 @@ class Tasks(Cog):
 
     @notify_anime_task.before_loop
     async def before_notify_anime_task(self):
-        await self.bot.wait_until_ready()
-
-    @tasks.loop(hours=6.0)
-    async def youtube_websub_sync_task(self):
-        try:
-            await cast(Any, self).sync_youtube_subscriptions()
-        except Exception:
-            self.bot.logger.exception("YouTube WebSub sync failed")
-
-    @youtube_websub_sync_task.before_loop
-    async def before_youtube_websub_sync_task(self):
-        await self.bot.wait_until_ready()
-
-    @tasks.loop(seconds=30.0)
-    async def youtube_event_inbox_task(self):
-        for _ in range(25):
-            if not await cast(Any, self).process_youtube_event():
-                break
-
-    @youtube_event_inbox_task.before_loop
-    async def before_youtube_event_inbox_task(self):
-        await self.bot.wait_until_ready()
-
-    @tasks.loop(minutes=2.0)
-    async def youtube_community_task(self):
-        try:
-            await cast(Any, self).check_youtube_community_posts()
-        except Exception:
-            self.bot.logger.exception("YouTube community post check failed")
-
-    @youtube_community_task.before_loop
-    async def before_youtube_community_task(self):
         await self.bot.wait_until_ready()
 
     @tasks.loop(minutes=1.0)

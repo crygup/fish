@@ -227,51 +227,6 @@ async def test_public_history_does_not_require_authentication(monkeypatch) -> No
     await history._history_visible_to(42, None, None)
 
 
-def test_youtube_websub_verification_requires_token_and_caps_lease(
-    monkeypatch,
-) -> None:
-    channel_id = "UC1234567890123456789012"
-    secret = "websub-secret"
-    executions: list[tuple[str, tuple[object, ...]]] = []
-
-    class Pool:
-        async def fetchval(self, sql: str, *_args):
-            assert "youtube_websub_subscriptions" in sql
-            return 1
-
-        async def execute(self, sql: str, *args):
-            executions.append((sql, args))
-            return "INSERT 0 1"
-
-    monkeypatch.setattr(
-        api_state,
-        "bot_ref",
-        SimpleNamespace(
-            config={"keys": {"youtube_websub_secret": secret}},
-            pool=Pool(),
-        ),
-    )
-    query = {
-        "hub.mode": "subscribe",
-        "hub.topic": (
-            f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-        ),
-        "hub.challenge": "challenge",
-        "hub.lease_seconds": "999999999",
-    }
-    denied = request("GET", "/youtube/websub?" + urlencode(query))
-    assert denied.status_code == 403
-
-    query["hub.verify_token"] = webhooks.youtube_websub_verify_token(
-        secret,
-        channel_id,
-    )
-    accepted = request("GET", "/youtube/websub?" + urlencode(query))
-    assert accepted.status_code == 200
-    assert accepted.content == b"challenge"
-    assert executions[-1][1] == (channel_id, 864000)
-
-
 def test_media_route_requires_key_and_returns_processed_file(monkeypatch) -> None:
     async def fake_render(data: bytes, effect: str, **options):
         assert data == b"image"

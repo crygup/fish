@@ -86,7 +86,6 @@ class Keys(TypedDict):
     twitch_id: str
     twitch_secret: str
     twitch_eventsub_secret: str
-    youtube_websub_secret: str
     google: List[str]
     google_id: str
     spotify_id: str
