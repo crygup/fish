@@ -16,6 +16,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 import aiohttp
+from discord import app_commands
 from discord.ext import commands
 from fastapi import (
     APIRouter,
@@ -39,51 +40,144 @@ from . import state as api_state
 router = APIRouter()
 
 
+@router.get("/tracking-categories")
+async def tracking_categories():
+    from extensions.settings.logging import (
+        TRACKING_CATEGORY_LABELS,
+        SERVER_TRACKING_CATEGORY_LABELS,
+    )
+
+    def entries(labels):
+        return [
+            {
+                "key": key,
+                "label": label,
+                "disabled": key == "discrim",
+                "hint": (
+                    "Disabling currency also disables commands that use Coins."
+                    if key == "currency"
+                    else ""
+                ),
+            }
+            for key, label in labels.items()
+        ]
+
+    return {
+        "user": entries(TRACKING_CATEGORY_LABELS),
+        "guild": entries(SERVER_TRACKING_CATEGORY_LABELS),
+    }
+
+
 @router.get("/commands")
 async def list_commands():
     if not api_state.bot_ref:
         raise HTTPException(503, "Bot not ready")
+    from extensions.help import _required_permissions, _permission_label
+
+    # Inspect the registered app tree, not aliases or merely the hybrid class.
+    registered_apps = [
+        app
+        for app in api_state.bot_ref.tree.walk_commands()
+        if isinstance(app, app_commands.Command)
+    ]
     cmds = []
-
-    def is_effect_app_subcommand(command: Any) -> bool:
-        """Keep the split effect groups, but hide their child commands on the site."""
-        qualified_name = str(getattr(command, "qualified_name", "")).casefold()
-        return bool(re.match(r"^effect(?:-\d+)?\s+", qualified_name))
-
-    def add_cmd(c):
-        if (
-            c.hidden
-            or c.cog_name in ("Owner", "Jishaku")
-            or is_effect_app_subcommand(c)
-        ):
-            return
-        aliases = ", ".join(c.aliases) if c.aliases else ""
+    for c in api_state.bot_ref.walk_commands():
+        if c.hidden or c.cog_name in ("Owner", "Jishaku"):
+            continue
+        if re.match(r"^effect(?:-\d+)?\s+", c.qualified_name.casefold()):
+            continue
+        apps = [app for app in registered_apps if getattr(app, "wrapped", None) is c]
+        usage = c.extras.get("usage") or c.usage or ""
         params = []
         for name, param in c.clean_params.items():
-            req = "required" if param.default is param.empty else "optional"
-            params.append({"name": name, "required": req})
-        extras = getattr(c, "extras", {})
-        category = extras.get("help_category") if isinstance(extras, dict) else None
-        if not category and str(getattr(c, "qualified_name", "")).casefold().startswith(
-            "game "
-        ):
+            required = param.default is param.empty
+            default = None if required else getattr(param, "displayed_default", None)
+            params.append(
+                {
+                    "name": name,
+                    "required": "required" if required else "optional",
+                    "description": getattr(param, "description", None) or "",
+                    "default": (
+                        default
+                        if isinstance(default, (str, int, float, bool))
+                        else None
+                    ),
+                }
+            )
+        # Dynamic parsers expose one internal parameter, not their public inputs.
+        if usage and len(params) == 1 and params[0]["name"] in {
+            "arguments", "args", "pipeline"
+        }:
+            params[0]["syntax"] = usage
+            params[0]["default"] = None
+        permissions = []
+        for command in [c, *c.parents]:
+            for permission in _required_permissions(command):
+                label = _permission_label(permission)
+                if label not in permissions:
+                    permissions.append(label)
+        category = c.extras.get("help_category") or c.cog_name or "Other"
+        if c.qualified_name.casefold().startswith("game "):
             category = "Games"
         cmds.append(
             {
                 "name": c.qualified_name,
                 "description": c.description or c.short_doc or "",
-                "category": category or c.cog_name or "Uncategorized",
-                "usage": c.usage or "",
-                "aliases": aliases,
+                "category": category,
+                "usage": usage,
+                "aliases": ", ".join(c.aliases),
                 "params": params,
+                "text_command": c.qualified_name,
+                "slash_commands": [app.qualified_name for app in apps],
+                "slash_params": [
+                    {
+                        "name": p.display_name,
+                        "description": p.description,
+                        "required": "required" if p.required else "optional",
+                        "default": (
+                            p.default
+                            if isinstance(p.default, (str, int, float, bool))
+                            else None
+                        ),
+                    }
+                    for app in apps
+                    for p in app.parameters
+                ],
+                "permissions": permissions,
             }
         )
-
-    for cmd in api_state.bot_ref.commands:
-        add_cmd(cmd)
-        if hasattr(cmd, "walk_commands"):
-            for sub in cast(Any, cmd).walk_commands():
-                add_cmd(sub)
+    known = {path for c in cmds for path in c["slash_commands"]}
+    for app in registered_apps:
+        if app.qualified_name in known or getattr(app, "wrapped", None) is not None:
+            continue
+        cmds.append(
+            {
+                "name": app.qualified_name,
+                "description": app.description,
+                "category": app.extras.get("help_category")
+                or getattr(app.binding, "qualified_name", None)
+                or "Other",
+                "usage": "",
+                "aliases": "",
+                "params": [],
+                "text_command": None,
+                "slash_commands": [app.qualified_name],
+                "slash_params": [
+                    {
+                        "name": p.display_name,
+                        "description": p.description,
+                        "required": "required" if p.required else "optional",
+                        "default": None,
+                    }
+                    for p in app.parameters
+                ],
+                "permissions": [
+                    _permission_label(name)
+                    for name, enabled in (app.default_permissions or [])
+                    if enabled
+                ],
+            }
+        )
     return {"commands": sorted(cmds, key=lambda c: (c["category"], c["name"]))}
 
 

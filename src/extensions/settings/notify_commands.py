@@ -950,69 +950,19 @@ class Notify(Cog):
             raise commands.BadArgument(
                 "That anime has finished and has no upcoming release or episode."
             )
+        from .notify import save_anime_follow
+
         guild_id, user_id = _scope(ctx)
-        predicate, scope_id = _scope_predicate(guild_id, user_id)
-        destination = int(ctx.channel.id) if guild_id is not None else None
-        async with self.bot.pool.acquire() as connection:
-            async with connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1))",
-                    f"notify:anime:{scope_id}",
-                )
-                existing = await connection.fetchval(
-                    f"SELECT id FROM notify_anime_follows WHERE {predicate} "
-                    "AND anilist_id = $2",
-                    scope_id,
-                    media_id,
-                )
-                if existing is not None:
-                    raise commands.BadArgument("That anime is already followed here.")
-                count = await connection.fetchval(
-                    f"SELECT COUNT(DISTINCT anilist_id) FROM notify_anime_follows WHERE {predicate}",
-                    scope_id,
-                )
-                if int(count or 0) >= 20:
-                    raise commands.BadArgument(
-                        "You can follow up to 20 anime per server or DM."
-                    )
-                # Mention columns are intentionally omitted so new follows
-                # start with notifications disabled by default.
-                inserted = await connection.fetchrow(
-                    "INSERT INTO notify_anime_follows "
-                    "(guild_id, user_id, anilist_id, title, site_url, banner_url, official_site_url, "
-                    "crunchyroll_url, announce_channel_id, release_at, next_airing_at, next_episode, last_checked_at) "
-                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now()) "
-                    "ON CONFLICT DO NOTHING RETURNING id",
-                    guild_id,
-                    user_id,
-                    media_id,
-                    title,
-                    media.get("siteUrl"),
-                    media.get("bannerImage")
-                    or (media.get("coverImage") or {}).get("extraLarge"),
-                    media_external_link(media, "Official Site"),
-                    next(
-                        (
-                            str(link.get("url"))
-                            for link in (media.get("externalLinks") or [])
-                            if isinstance(link, dict)
-                            and str(link.get("site") or "")
-                            .casefold()
-                            .startswith("crunchyroll")
-                            and str(link.get("url") or "").startswith(
-                                ("http://", "https://")
-                            )
-                        ),
-                        None,
-                    ),
-                    destination,
-                    release,
-                    next_airing,
-                    episode,
-                )
-                if inserted is None:
-                    raise commands.BadArgument("That anime is already followed here.")
-                follow_id = int(inserted["id"])
+        try:
+            follow_id = await save_anime_follow(
+                self.bot.pool,
+                guild_id=guild_id,
+                user_id=user_id,
+                channel_id=int(ctx.channel.id) if guild_id is not None else None,
+                media=media,
+            )
+        except ValueError as error:
+            raise commands.BadArgument(str(error)) from error
         await self._send(
             ctx,
             view=NotifyView(

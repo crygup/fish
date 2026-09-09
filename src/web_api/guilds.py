@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import datetime
 import re
 from types import SimpleNamespace
 from typing import Any, cast
 
 import discord
+from discord.ext import commands
 from fastapi import (
     APIRouter,
     Body,
@@ -233,30 +236,65 @@ async def set_guild_opted_out(
     if not member or not member.guild_permissions.manage_guild:
         raise HTTPException(403, "You need Manage Server permission in this guild")
 
-    items = [i for i in payload.get("items", []) if i in api_state.VALID_GUILD_OPTOUTS]
-    tracking_enabled = payload.get("tracking_enabled", True)
-    history_public = payload.get("history_public", True)
-    if not isinstance(tracking_enabled, bool) or not isinstance(history_public, bool):
-        raise HTTPException(400, "tracking_enabled and history_public must be booleans")
+    changes = payload.get("changes", {})
+    if not isinstance(changes, dict) or any(
+        key not in api_state.VALID_GUILD_OPTOUTS or not isinstance(value, bool)
+        for key, value in changes.items()
+    ):
+        raise HTTPException(400, "Invalid tracking changes")
+    for key in ("tracking_enabled", "history_public"):
+        if key in payload and not isinstance(payload[key], bool):
+            raise HTTPException(400, "Privacy settings must be booleans")
+    if "items" in payload and (
+        not isinstance(payload["items"], list)
+        or any(not isinstance(item, str) for item in payload["items"])
+    ):
+        raise HTTPException(400, "items must be a list of categories")
     pool = api_state._check_pool()
-    await pool.execute(
-        "INSERT INTO guild_opted_out (guild_id, items) VALUES ($1, $2) ON CONFLICT (guild_id) DO UPDATE SET items = $2",
-        guild_id,
-        items,
-    )
-    await pool.execute(
-        "INSERT INTO guild_settings (guild_id, tracking_enabled, history_public) "
-        "VALUES ($1, $2, $3) ON CONFLICT (guild_id) DO UPDATE SET "
-        "tracking_enabled = EXCLUDED.tracking_enabled, "
-        "history_public = EXCLUDED.history_public",
-        guild_id,
-        tracking_enabled,
-        history_public,
-    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO guild_settings(guild_id) VALUES ($1) ON CONFLICT DO NOTHING",
+                guild_id,
+            )
+            settings = await conn.fetchrow(
+                "SELECT tracking_enabled, history_public FROM guild_settings WHERE guild_id=$1 FOR UPDATE",
+                guild_id,
+            )
+            stored = await conn.fetchval(
+                "SELECT items FROM guild_opted_out WHERE guild_id=$1", guild_id
+            )
+            assert settings is not None
+            items: set[str] = set(stored or ())
+            if "items" in payload:
+                items = (items - api_state.VALID_GUILD_OPTOUTS) | set(
+                    payload["items"]
+                ) & api_state.VALID_GUILD_OPTOUTS
+            for key, enabled in changes.items():
+                if enabled:
+                    items.discard(key)
+                else:
+                    items.add(key)
+            saved_items = sorted(items)
+            tracking_enabled = payload.get(
+                "tracking_enabled", settings["tracking_enabled"]
+            )
+            history_public = payload.get("history_public", settings["history_public"])
+            await conn.execute(
+                "INSERT INTO guild_opted_out(guild_id,items) VALUES($1,$2) ON CONFLICT(guild_id) DO UPDATE SET items=$2",
+                guild_id,
+                saved_items,
+            )
+            await conn.execute(
+                "UPDATE guild_settings SET tracking_enabled=$2, history_public=$3 WHERE guild_id=$1",
+                guild_id,
+                tracking_enabled,
+                history_public,
+            )
 
     if api_state.bot_ref:
         if items:
-            api_state.bot_ref.db_cache.opted_out[guild_id] = items
+            api_state.bot_ref.db_cache.opted_out[guild_id] = saved_items
         else:
             api_state.bot_ref.db_cache.opted_out.pop(guild_id, None)
         api_state.bot_ref.db_cache.set_guild_tracking_enabled(
@@ -265,7 +303,7 @@ async def set_guild_opted_out(
         api_state.bot_ref.db_cache.set_guild_history_public(guild_id, history_public)
 
     return {
-        "items": items,
+        "items": saved_items,
         "tracking_enabled": tracking_enabled,
         "history_public": history_public,
     }
@@ -614,7 +652,11 @@ async def get_twitch_follows(
         "follows": [
             {
                 "channel_name": row["channel_name"],
-                "announce_channel_id": int(row["announce_channel_id"]),
+                "announce_channel_id": (
+                    str(row["announce_channel_id"])
+                    if row["announce_channel_id"] is not None
+                    else None
+                ),
                 "announce_channel_name": channels.get(
                     str(row["announce_channel_id"]), "Unknown channel"
                 ),
@@ -640,6 +682,11 @@ async def get_twitch_follows(
             {"id": str(channel.id), "name": channel.name}
             for channel in guild.text_channels
         ],
+        "roles": [
+            {"id": str(role.id), "name": role.name}
+            for role in guild.roles
+            if not role.is_default()
+        ],
     }
 
 
@@ -651,9 +698,12 @@ async def set_twitch_follow(
     session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
 ):
     guild = await _managed_guild(guild_id, authorization, session_id)
-    channel_name = str(payload.get("channel_name", "")).strip().lstrip("@").lower()
-    if not re.fullmatch(r"[A-Za-z0-9_]{1,25}", channel_name):
-        raise HTTPException(400, "Invalid Twitch channel name")
+    from extensions.settings.notify import normalize_twitch_channel
+
+    try:
+        channel_name = normalize_twitch_channel(str(payload.get("channel_name", "")))
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
     raw_channel_id = payload.get("announce_channel_id")
     if not isinstance(raw_channel_id, (str, int)):
         raise HTTPException(400, "announce_channel_id must be a text channel ID")
@@ -968,6 +1018,176 @@ async def delete_guild_data(
     }
     api_state.bot_ref.cached_honeypots.pop(guild_id, None)
     return {"deleted": True, "deleted_rows": deleted}
+
+
+@router.get("/guild/{guild_id}/anime-follows")
+async def get_anime_follows(
+    guild_id: int,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    rows = await api_state._check_pool().fetch(
+        "SELECT id, title, anilist_id, announce_channel_id, mention_role_id, mention_everyone, "
+        "next_airing_at, release_at, next_episode FROM notify_anime_follows "
+        "WHERE guild_id=$1 ORDER BY title",
+        guild_id,
+    )
+    return {
+        "follows": [
+            {
+                key: (
+                    str(value)
+                    if key
+                    in {"id", "anilist_id", "announce_channel_id", "mention_role_id"}
+                    and value is not None
+                    else value
+                )
+                for key, value in dict(row).items()
+            }
+            for row in rows
+        ],
+        "channels": [
+            {"id": str(channel.id), "name": channel.name}
+            for channel in guild.text_channels
+        ],
+        "roles": [
+            {"id": str(role.id), "name": role.name}
+            for role in guild.roles
+            if not role.is_default()
+        ],
+    }
+
+
+async def _dashboard_anime(query: str, *, suggest: bool = False):
+    from extensions.settings.notify import anilist_notification_schedule, media_title
+
+    settings: Any = api_state.bot_ref.get_cog("Settings") if api_state.bot_ref else None
+    if settings is None:
+        raise HTTPException(503, "Anime monitoring is unavailable")
+    try:
+        async with asyncio.timeout(30):
+            media = await settings._anilist_lookup(query)
+            if not media or str(media.get("type", "ANIME")).upper() != "ANIME":
+                raise HTTPException(404, "Anime not found")
+            airing, _, release = anilist_notification_schedule(
+                media, datetime.datetime.now(datetime.timezone.utc)
+            )
+            if not airing and not release and suggest:
+                media = await settings._find_upcoming_successor(
+                    media, datetime.datetime.now(datetime.timezone.utc)
+                )
+            if not media or not media_title(media):
+                raise HTTPException(
+                    400, "That anime has no upcoming release or episode."
+                )
+            return media
+    except (commands.BadArgument, TimeoutError) as error:
+        raise HTTPException(
+            503, "AniList is unavailable. Please try again in 10 minutes."
+        ) from error
+
+
+@router.get("/guild/{guild_id}/anime-search")
+async def search_anime_follow(
+    guild_id: int,
+    q: str = Query(..., min_length=1, max_length=200),
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
+):
+    await _managed_guild(guild_id, authorization, session_id)
+    from extensions.settings.notify import anilist_notification_schedule, media_title
+
+    media = await _dashboard_anime(q, suggest=True)
+    airing, episode, release = anilist_notification_schedule(
+        media, datetime.datetime.now(datetime.timezone.utc)
+    )
+    if not airing and not release:
+        raise HTTPException(400, "That anime has no upcoming release or episode.")
+    return {
+        "id": str(media["id"]),
+        "title": media_title(media),
+        "airing_at": airing or release,
+        "episode": episode,
+    }
+
+
+@router.post("/guild/{guild_id}/anime-follows")
+async def set_anime_follow(
+    guild_id: int,
+    payload: dict = Body(...),
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
+):
+    guild = await _managed_guild(guild_id, authorization, session_id)
+    try:
+        channel_id = int(payload.get("announce_channel_id") or 0)
+        role_id = (
+            int(payload["mention_role_id"]) if payload.get("mention_role_id") else None
+        )
+        follow_id = int(payload["id"]) if payload.get("id") else None
+        media_id = int(payload["anilist_id"]) if payload.get("anilist_id") else None
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Invalid channel, role or anime ID")
+    if any(
+        value is not None and not 0 < value < 2**63
+        for value in (channel_id, role_id, follow_id)
+    ):
+        raise HTTPException(400, "Invalid channel, role or follow ID")
+    everyone = payload.get("mention_everyone", False)
+    if not isinstance(everyone, bool) or (
+        role_id and (everyone or role_id == guild_id or guild.get_role(role_id) is None)
+    ):
+        raise HTTPException(400, "Choose one role from this server or @everyone")
+    if await _resolve_guild_text_channel(guild, channel_id) is None:
+        raise HTTPException(400, "Announcement channel must belong to this server")
+    pool = api_state._check_pool()
+    if follow_id is None:
+        if not media_id or not 0 < media_id <= 2147483647:
+            raise HTTPException(400, "Choose an anime first")
+        from extensions.settings.notify import save_anime_follow
+
+        media = await _dashboard_anime(str(media_id))
+        try:
+            follow_id = await save_anime_follow(
+                pool,
+                guild_id=guild_id,
+                user_id=None,
+                channel_id=channel_id,
+                media=media,
+            )
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+    result = await pool.execute(
+        "UPDATE notify_anime_follows SET announce_channel_id=$3, mention_role_id=$4, "
+        "mention_everyone=$5, updated_at=now() WHERE id=$1 AND guild_id=$2",
+        follow_id,
+        guild_id,
+        channel_id,
+        role_id,
+        everyone,
+    )
+    if result == "UPDATE 0":
+        raise HTTPException(404, "Follow not found in this server")
+    return {"id": str(follow_id)}
+
+
+@router.delete("/guild/{guild_id}/anime-follows/{follow_id}")
+async def delete_anime_follow(
+    guild_id: int,
+    follow_id: int,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
+):
+    await _managed_guild(guild_id, authorization, session_id)
+    result = await api_state._check_pool().execute(
+        "DELETE FROM notify_anime_follows WHERE guild_id=$1 AND id=$2",
+        guild_id,
+        follow_id,
+    )
+    if result == "DELETE 0":
+        raise HTTPException(404, "Follow not found in this server")
+    return {"deleted": True}
 
 
 @router.get("/guild/{guild_id}/pending-deletions")

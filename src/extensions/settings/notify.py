@@ -487,3 +487,89 @@ __all__ = [
     "select_anilist_media",
     "twitch_list_details",
 ]
+
+
+async def save_anime_follow(
+    pool: Any,
+    *,
+    guild_id: int | None,
+    user_id: int | None,
+    channel_id: int | None,
+    media: dict[str, Any],
+) -> int:
+    """Share follow validation, limits and locking with the bot and dashboard."""
+    if (guild_id is None) == (user_id is None):
+        raise ValueError("Choose a server or DM notification scope.")
+    column, scope_id = (
+        ("guild_id", guild_id) if guild_id is not None else ("user_id", user_id)
+    )
+    predicate = f"{column} = $1"
+    media_id = int(media.get("id") or 0)
+    title = media_title(media)
+    next_airing, episode, release = anilist_notification_schedule(
+        media, datetime.datetime.now(datetime.timezone.utc)
+    )
+    if not media_id or not title or str(media.get("type", "ANIME")).upper() != "ANIME":
+        raise ValueError("AniList did not return a usable anime.")
+    if next_airing is None and release is None:
+        raise ValueError("That anime has no upcoming release or episode.")
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))",
+                f"notify:anime:{scope_id}",
+            )
+            existing = await connection.fetchval(
+                f"SELECT id FROM notify_anime_follows WHERE {predicate} "
+                "AND anilist_id = $2",
+                scope_id,
+                media_id,
+            )
+            if existing is not None:
+                raise ValueError("That anime is already followed here.")
+            count = await connection.fetchval(
+                f"SELECT COUNT(DISTINCT anilist_id) FROM notify_anime_follows WHERE {predicate}",
+                scope_id,
+            )
+            if int(count or 0) >= 20:
+                raise ValueError("You can follow up to 20 anime per server or DM.")
+            # Mention columns are intentionally omitted so new follows
+            # start with mentions disabled by default.
+            inserted = await connection.fetchrow(
+                "INSERT INTO notify_anime_follows "
+                "(guild_id, user_id, anilist_id, title, site_url, banner_url, official_site_url, "
+                "crunchyroll_url, announce_channel_id, release_at, next_airing_at, next_episode, last_checked_at) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now()) "
+                "ON CONFLICT DO NOTHING RETURNING id",
+                guild_id,
+                user_id,
+                media_id,
+                title,
+                media.get("siteUrl"),
+                media.get("bannerImage")
+                or (media.get("coverImage") or {}).get("extraLarge"),
+                media_external_link(media, "Official Site"),
+                next(
+                    (
+                        str(link.get("url"))
+                        for link in (media.get("externalLinks") or [])
+                        if isinstance(link, dict)
+                        and str(link.get("site") or "")
+                        .casefold()
+                        .startswith("crunchyroll")
+                        and str(link.get("url") or "").startswith(
+                            ("http://", "https://")
+                        )
+                    ),
+                    None,
+                ),
+                channel_id,
+                release,
+                next_airing,
+                episode,
+            )
+            if inserted is None:
+                raise ValueError("That anime is already followed here.")
+            follow_id = int(inserted["id"])
+
+    return follow_id
