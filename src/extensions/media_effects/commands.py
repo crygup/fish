@@ -5828,13 +5828,12 @@ class Images(Cog):
     @commands.command(
         name="removebars",
         aliases=("remove-bars",),
-        extras={"usage": "<media> [-start 0 -stop 0]"},
+        extras={"usage": "<media>"},
     )
     async def remove_bars(self, ctx: Context, *, argument: str = "") -> None:
         """Remove black bars from a User/Emoji/Media URL.
 
-        -# -start   Start the effect at this time in seconds.
-        -# -stop    Stop the effect at this time in seconds.
+        Crops the whole media. Trim it first to process a specific section.
         """
         media, options = _parse_effect_flags(argument)
         await self._apply_image_effect(ctx, "removebars", source=media, **options)
@@ -5842,13 +5841,12 @@ class Images(Cog):
     @commands.command(
         name="removecaption",
         aliases=("remove-caption",),
-        extras={"usage": "<media> [-start 0 -stop 0]"},
+        extras={"usage": "<media>"},
     )
     async def remove_caption(self, ctx: Context, *, argument: str = "") -> None:
         """Remove caption bars from a User/Emoji/Media URL.
 
-        -# -start   Start the effect at this time in seconds.
-        -# -stop    Stop the effect at this time in seconds.
+        Crops the whole media. Trim it first to process a specific section.
         """
         media, options = _parse_effect_flags(argument)
         await self._apply_image_effect(ctx, "removecaption", source=media, **options)
@@ -5858,24 +5856,22 @@ class Images(Cog):
         """Remove bars or captions from a User/Emoji/Media URL."""
         await ctx.send_help(ctx.command)
 
-    @remove_group.command(name="bars", extras={"usage": "<media> [-start 0 -stop 0]"})
+    @remove_group.command(name="bars", extras={"usage": "<media>"})
     async def remove_group_bars(self, ctx: Context, *, argument: str = "") -> None:
         """Remove black bars from a User/Emoji/Media URL.
 
-        -# -start   Start the effect at this time in seconds.
-        -# -stop    Stop the effect at this time in seconds.
+        Crops the whole media. Trim it first to process a specific section.
         """
         media, options = _parse_effect_flags(argument)
         await self._apply_image_effect(ctx, "removebars", source=media, **options)
 
     @remove_group.command(
-        name="caption", extras={"usage": "<media> [-start 0 -stop 0]"}
+        name="caption", extras={"usage": "<media>"}
     )
     async def remove_group_caption(self, ctx: Context, *, argument: str = "") -> None:
         """Remove caption bars from a User/Emoji/Media URL.
 
-        -# -start   Start the effect at this time in seconds.
-        -# -stop    Stop the effect at this time in seconds.
+        Crops the whole media. Trim it first to process a specific section.
         """
         media, options = _parse_effect_flags(argument)
         await self._apply_image_effect(ctx, "removecaption", source=media, **options)

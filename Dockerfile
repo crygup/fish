@@ -30,6 +30,10 @@ RUN python /tmp/fetch_media_fonts.py \
     && chmod -R a=rX /opt/fishie/fonts \
     && rm /tmp/fetch_media_fonts.py
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --chown=fishie:fishie . .
 RUN mkdir -p src/files/downloads \
     && chown fishie:fishie src/files/downloads \
