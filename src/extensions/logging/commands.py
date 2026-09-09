@@ -18,6 +18,7 @@ from discord.ext import commands, menus
 from discord.http import Route
 
 from core import Cog
+from core.deletions import deletion, RESTORE_NOTICE
 from utils import (
     AvatarsPageSource,
     FieldPageSource,
@@ -274,32 +275,34 @@ class Commands(Cog):
                 if not 0 <= page_number < len(entries):
                     return False
                 record_id = entries[page_number][2]
-                if guild_id is not None:
-                    result = await self.bot.pool.execute(
-                        "DELETE FROM guild_avatars "
-                        "WHERE id = $1 AND member_id = $2 AND guild_id = $3",
-                        record_id,
-                        ctx.author.id,
-                        guild_id,
-                    )
-                else:
-                    result = await self.bot.pool.execute(
-                        "DELETE FROM avatars WHERE id = $1 AND user_id = $2",
-                        record_id,
-                        ctx.author.id,
-                    )
+                async with deletion(self.bot.pool, ctx.author.id) as conn:
+                    if guild_id is not None:
+                        result = await conn.execute(
+                            "DELETE FROM guild_avatars "
+                            "WHERE id = $1 AND member_id = $2 AND guild_id = $3",
+                            record_id,
+                            ctx.author.id,
+                            guild_id,
+                        )
+                    else:
+                        result = await conn.execute(
+                            "DELETE FROM avatars WHERE id = $1 AND user_id = $2",
+                            record_id,
+                            ctx.author.id,
+                        )
                 return not result.endswith(" 0")
 
             def delete_prompt(page_number: int) -> str:
                 record_id = entries[page_number][2]
                 return (
                     f"Delete saved avatar ID `{record_id}` from Fishie's database? "
-                    "This cannot be undone."
+                    + RESTORE_NOTICE
                 )
 
             pager = Pager(
                 source,
                 ctx=ctx,
+                privacy_subjects=(("user", user.id),) + ((("guild", guild_id),) if guild_id is not None else ()),
                 delete_page=delete_avatar if edit else None,
                 delete_prompt=delete_prompt if edit else None,
             )
@@ -793,7 +796,7 @@ class Commands(Cog):
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Usernames for {user}"
         source.embed.description = f"-# View all usernames [here](https://crygup.com/discord?tab=user&subtab=usernames&q={user.id})"
-        pager = Pager(source, ctx=ctx)
+        pager = Pager(source, ctx=ctx, privacy_subjects=(("user", user.id),))
         await pager.start(ctx)
 
     @commands.command(name="usernames")
@@ -831,7 +834,7 @@ class Commands(Cog):
         source = FieldPageSource(entries=entries)
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Server tags for {user}"
-        pager = Pager(source, ctx=ctx)
+        pager = Pager(source, ctx=ctx, privacy_subjects=(("user", user.id),))
         await pager.start(ctx)
 
     async def _display_names(self, ctx: Context, user: discord.User) -> None:
@@ -856,7 +859,7 @@ class Commands(Cog):
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Display names for {user}"
         source.embed.description = f"-# View all display names [here](https://crygup.com/discord?tab=user&subtab=display-names&q={user.id})"
-        pager = Pager(source, ctx=ctx)
+        pager = Pager(source, ctx=ctx, privacy_subjects=(("user", user.id),))
 
         await pager.start(ctx)
 
@@ -898,7 +901,7 @@ class Commands(Cog):
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Nicknames names for {member}"
         # source.embed.description = f"-# View all nicknames [here](https://crygup.com/discord?tab=user&q={member.id})"
-        pager = Pager(source, ctx=ctx)
+        pager = Pager(source, ctx=ctx, privacy_subjects=(("user", member.id), ("guild", member.guild.id)))
         await pager.start(ctx)
 
     @commands.command(name="discrims", aliases=("discriminators",))
@@ -935,7 +938,7 @@ class Commands(Cog):
         source.embed.color = self.bot.embedcolor
         source.embed.title = f"Discriminators names for {member}"
         source.embed.description = f"-# View all discriminators [here](https://crygup.com/discord?tab=user&subtab=discrims&q={member.id})"
-        pager = Pager(source, ctx=ctx)
+        pager = Pager(source, ctx=ctx, privacy_subjects=(("user", member.id),))
         await pager.start(ctx)
 
     @commands.command(name="servernames", aliases=("server_names", "snames"))
@@ -965,7 +968,7 @@ class Commands(Cog):
         source.embed.color = self.bot.embedcolor
         source.embed.description = f"-# View all server names [here](https://crygup.com/discord?tab=guild&subtab=names&q={guild.id})"
         source.embed.title = f"Names for {guild}"
-        pager = Pager(source, ctx=ctx)
+        pager = Pager(source, ctx=ctx, privacy_subjects=(("guild", guild.id),))
         await pager.start(ctx)
 
     @commands.command(name="icons", extras={"usage": "[server] [edit]"})
@@ -1034,23 +1037,25 @@ class Commands(Cog):
                 if not 0 <= page_number < len(entries):
                     return False
                 record_id = entries[page_number][2]
-                result = await self.bot.pool.execute(
-                    "DELETE FROM guild_icons WHERE id = $1 AND guild_id = $2",
-                    record_id,
-                    guild.id,
-                )
+                async with deletion(self.bot.pool, guild.id, scope="guild") as conn:
+                    result = await conn.execute(
+                        "DELETE FROM guild_icons WHERE id = $1 AND guild_id = $2",
+                        record_id,
+                        guild.id,
+                    )
                 return not result.endswith(" 0")
 
             def delete_prompt(page_number: int) -> str:
                 record_id = entries[page_number][2]
                 return (
                     f"Delete saved server icon ID `{record_id}` from Fishie's "
-                    "database? This cannot be undone."
+                    "database? You can restore it within 31 days using settings restore server:true."
                 )
 
             pager = Pager(
                 source,
                 ctx=ctx,
+                privacy_subjects=(("guild", guild.id),),
                 delete_page=delete_icon if edit else None,
                 delete_prompt=delete_prompt if edit else None,
             )

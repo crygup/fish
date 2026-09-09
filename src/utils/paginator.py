@@ -47,6 +47,7 @@ class Pager(discord.ui.View):
         compact: bool = False,
         delete_page: Callable[[int], Awaitable[bool]] | None = None,
         delete_prompt: Callable[[int], str] | None = None,
+        privacy_subjects: tuple[tuple[str, int], ...] = (),
     ):
         super().__init__()
         self.source: menus.PageSource = source
@@ -58,6 +59,7 @@ class Pager(discord.ui.View):
         self.input_lock = asyncio.Lock()
         self.delete_page = delete_page
         self.delete_prompt = delete_prompt
+        self.privacy_subjects = privacy_subjects
         if self.delete_page is not None:
             self.stop_pages.style = discord.ButtonStyle.danger
 
@@ -167,6 +169,25 @@ class Pager(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user and interaction.user == self.ctx.author:
+            # A history page source may hold rows fetched before a deletion.
+            # Invalidate that snapshot instead of serving removed data again.
+            if self.privacy_subjects:
+                changed = await self.ctx.bot.pool.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM privacy_deletions d "
+                    "JOIN unnest($2::text[], $3::bigint[]) s(scope, subject_id) "
+                    "ON d.scope=s.scope AND d.subject_id=s.subject_id "
+                    "WHERE d.created_at >= $1 OR d.restored_at >= $1)",
+                    self.ctx.message.created_at,
+                    [scope for scope, _ in self.privacy_subjects],
+                    [subject for _, subject in self.privacy_subjects],
+                )
+                if changed:
+                    self.stop()
+                    await interaction.response.edit_message(
+                        content="Saved data has changed. Run the command again to view the current history.",
+                        embed=None, attachments=[], view=None,
+                    )
+                    return False
             return True
         await interaction.response.send_message(
             f"You can't use this, sorry. \nIf you'd like to use this then run the command `{self.ctx.command}{self.ctx.invoked_subcommand or ''}`",

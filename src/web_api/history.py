@@ -15,7 +15,7 @@ from fastapi import (
     Query,
 )
 
-from core.privacy import erase_user
+from core.deletions import deletion, delete_account, restore, pending_status, invalidate, archive_badge_document
 from utils.vars import remove_user_badge
 
 from . import auth as api_auth
@@ -180,32 +180,78 @@ async def set_opted_out(
     if int(me["id"]) != user_id:
         raise HTTPException(403, "You can only manage your own settings")
 
-    items = [i for i in payload.get("items", []) if i in api_state.VALID_OPTOUTS]
-    ordinary = [i for i in items if i not in {"games", "currency", "reactions"}]
-    games_enabled = "games" not in items
-    currency_enabled = "currency" not in items
-    reactions_enabled = "reactions" not in items
+    changes = payload.get("changes")
+    if changes is not None and (
+        not isinstance(changes, dict)
+        or any(
+            k not in api_state.VALID_OPTOUTS or not isinstance(v, bool)
+            for k, v in changes.items()
+        )
+    ):
+        raise HTTPException(
+            400, "changes must map tracking categories to true or false"
+        )
+    if changes is None and (
+        not isinstance(payload.get("items"), list)
+        or any(not isinstance(i, str) for i in payload["items"])
+    ):
+        raise HTTPException(400, "Provide items or changes")
     pool = api_state._check_pool()
-    await pool.execute(
-        "INSERT INTO opted_out (user_id, items) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET items = $2",
-        user_id,
-        ordinary,
-    )
-    await pool.execute(
-        "INSERT INTO user_settings (user_id, game_tracking_enabled, currency_tracking_enabled) "
-        "VALUES ($1, $2, $3) ON CONFLICT (user_id) DO UPDATE SET "
-        "game_tracking_enabled = EXCLUDED.game_tracking_enabled, "
-        "currency_tracking_enabled = EXCLUDED.currency_tracking_enabled",
-        user_id,
-        games_enabled,
-        currency_enabled,
-    )
-    await pool.execute(
-        "INSERT INTO reaction_tracking (user_id, enabled) VALUES ($1, $2) "
-        "ON CONFLICT (user_id) DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = now()",
-        user_id,
-        reactions_enabled,
-    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO user_settings(user_id) VALUES ($1) ON CONFLICT DO NOTHING",
+                user_id,
+            )
+            settings = await conn.fetchrow(
+                "SELECT game_tracking_enabled, currency_tracking_enabled FROM user_settings WHERE user_id=$1 FOR UPDATE",
+                user_id,
+            )
+            stored = await conn.fetchval(
+                "SELECT items FROM opted_out WHERE user_id=$1", user_id
+            )
+            reactions = await conn.fetchval(
+                "SELECT enabled FROM reaction_tracking WHERE user_id=$1", user_id
+            )
+            assert settings is not None
+            items: set[str] = set(stored or ())
+            if not settings["game_tracking_enabled"]:
+                items.add("games")
+            if not settings["currency_tracking_enabled"]:
+                items.add("currency")
+            if reactions is not True:
+                items.add("reactions")
+            if changes is not None:
+                for key, enabled in changes.items():
+                    if enabled:
+                        items.discard(key)
+                    else:
+                        items.add(key)
+            else:
+                # Legacy dashboards did not expose snipe; only explicit patches may enable it.
+                items = (items - (api_state.VALID_OPTOUTS - {"snipe"})) | set(
+                    payload["items"]
+                ) & api_state.VALID_OPTOUTS
+            ordinary = sorted(items - {"games", "currency", "reactions"})
+            games_enabled = "games" not in items
+            currency_enabled = "currency" not in items
+            reactions_enabled = "reactions" not in items
+            await conn.execute(
+                "INSERT INTO opted_out(user_id, items) VALUES ($1,$2) ON CONFLICT(user_id) DO UPDATE SET items=$2",
+                user_id,
+                ordinary,
+            )
+            await conn.execute(
+                "UPDATE user_settings SET game_tracking_enabled=$2, currency_tracking_enabled=$3 WHERE user_id=$1",
+                user_id,
+                games_enabled,
+                currency_enabled,
+            )
+            await conn.execute(
+                "INSERT INTO reaction_tracking(user_id, enabled) VALUES ($1,$2) ON CONFLICT(user_id) DO UPDATE SET enabled=$2, updated_at=now()",
+                user_id,
+                reactions_enabled,
+            )
 
     if api_state.bot_ref:
         if ordinary:
@@ -221,7 +267,7 @@ async def set_opted_out(
         else:
             api_state.bot_ref.db_cache.disable_reaction_tracking(user_id)
 
-    return {"items": items}
+    return {"items": sorted(items)}
 
 
 @router.get("/user/{user_id}/privacy-settings")
@@ -259,52 +305,34 @@ async def set_user_privacy_settings(
 ):
     """Update global tracking and saved-history visibility without deleting data."""
     await api_auth._require_self(user_id, authorization, session_id)
-    existing = await api_state._check_pool().fetchrow(
-        "SELECT tracking_enabled, history_public, game_history_public FROM user_settings WHERE user_id = $1",
-        user_id,
-    )
-    tracking_enabled = payload.get(
-        "tracking_enabled", existing["tracking_enabled"] if existing else True
-    )
-    history_public = payload.get(
-        "history_public", existing["history_public"] if existing else False
-    )
-    if not isinstance(tracking_enabled, bool) or not isinstance(history_public, bool):
-        raise HTTPException(
-            400,
-            "tracking_enabled and history_public must both be booleans",
-        )
-    await api_state._check_pool().execute(
+    fields = ("tracking_enabled", "history_public", "game_history_public")
+    if any(key in payload and not isinstance(payload[key], bool) for key in fields):
+        raise HTTPException(400, "Privacy settings must be booleans")
+    row = await api_state._check_pool().fetchrow(
         """
-        INSERT INTO user_settings (
-            user_id, tracking_enabled, history_public, game_history_public, tracking_consent
-        )
-        VALUES ($1, $2, $3, $3, $3)
-        ON CONFLICT (user_id) DO UPDATE
-        SET tracking_enabled = EXCLUDED.tracking_enabled,
-            history_public = EXCLUDED.history_public,
-            game_history_public = EXCLUDED.game_history_public,
-            tracking_consent = CASE
-                WHEN EXCLUDED.history_public THEN TRUE
-                ELSE user_settings.tracking_consent
-            END
+        INSERT INTO user_settings(user_id, tracking_enabled, history_public, game_history_public, tracking_consent)
+        VALUES ($1, COALESCE($2, true), COALESCE($3, false), COALESCE($4, true), COALESCE($3, false) OR COALESCE($4, false))
+        ON CONFLICT(user_id) DO UPDATE SET
+            tracking_enabled = COALESCE($2, user_settings.tracking_enabled),
+            history_public = COALESCE($3, user_settings.history_public),
+            game_history_public = COALESCE($4, user_settings.game_history_public),
+            tracking_consent = user_settings.tracking_consent OR COALESCE($3, false) OR COALESCE($4, false)
+        RETURNING tracking_enabled, history_public, game_history_public, tracking_consent
         """,
         user_id,
-        tracking_enabled,
-        history_public,
+        *(payload.get(key) for key in fields),
     )
+    assert row is not None
     if api_state.bot_ref:
-        if tracking_enabled:
-            api_state.bot_ref.db_cache.tracking_disabled_users.discard(user_id)
+        cache = api_state.bot_ref.db_cache
+        if row["tracking_enabled"]:
+            cache.tracking_disabled_users.discard(user_id)
         else:
-            api_state.bot_ref.db_cache.tracking_disabled_users.add(user_id)
-        api_state.bot_ref.db_cache.set_history_public(user_id, history_public)
-        if history_public:
-            api_state.bot_ref.db_cache.set_tracking_consent(user_id)
-    return {
-        "tracking_enabled": tracking_enabled,
-        "history_public": history_public,
-    }
+            cache.tracking_disabled_users.add(user_id)
+        cache.set_history_public(user_id, row["history_public"])
+        cache.set_game_history_public(user_id, row["game_history_public"])
+        cache.set_tracking_consent(user_id, row["tracking_consent"])
+    return {key: row[key] for key in fields}
 
 
 async def _refresh_urls(urls: list[str]) -> list[str]:
@@ -668,40 +696,54 @@ async def delete_user_data(
 
     if int(me["id"]) != user_id:
         raise HTTPException(403, "You can only delete your own data")
-    deleted = 0
     pool = api_state._check_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            if table is None:
-                deleted = await erase_user(conn, user_id)
-            else:
-                tables = [table]
-                for t in tables:
-                    db_table = api_state.TABLE_MAP.get(t)
-                    if not db_table or t in api_state.GUILD_TABLES:
-                        raise HTTPException(400, f"Invalid user table: {t}")
-                    r = await conn.execute(
-                        f"DELETE FROM {db_table} WHERE user_id = $1", user_id
-                    )
-                    deleted += int(r.split()[-1])
-    if api_state.bot_ref:
-        await api_state.bot_ref.refresh_account_cache(user_id)
-        if table is None or table == "user_badges":
-            remove_user_badge(user_id)
-            api_state.bot_ref.db_cache.user_badges.pop(user_id, None)
-        api_state.bot_ref.db_cache.opted_out.pop(user_id, None)
-        api_state.bot_ref.cached_mudae_consent.discard(user_id)
-        tools = api_state.bot_ref.get_cog("Tools")
-        if tools is not None and hasattr(tools, "_highlight_cache"):
-            cast(Any, tools)._highlight_cache.clear()
-        fun = api_state.bot_ref.get_cog("Fun")
-        if fun is not None and hasattr(fun, "_phone_consent_cache"):
-            cast(Any, fun)._phone_consent_cache.pop(user_id, None)
-    elif table is None or table == "user_badges":
-        # Keep the editable JSON mirror private-data deletion-safe even when
-        # the API is running without a bot instance attached.
-        remove_user_badge(user_id)
-    return {"user_id": user_id, "deleted_rows": deleted}
+    if table is None:
+        if api_state.bot_ref is None:
+            raise HTTPException(503, "Bot not ready")
+        try:
+            deleted = await delete_account(api_state.bot_ref, user_id)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+    else:
+        db_table = api_state.TABLE_MAP.get(table)
+        if not db_table or table in api_state.GUILD_TABLES:
+            raise HTTPException(400, "Invalid user history table")
+        async with deletion(pool, user_id) as conn:
+            if db_table == "user_badges":
+                await archive_badge_document(conn, user_id)
+            result = await conn.execute(f"DELETE FROM {db_table} WHERE user_id=$1", user_id)
+            deleted = int(result.rsplit(" ", 1)[-1])
+        if db_table == "user_badges" and api_state.bot_ref is not None:
+            await invalidate(api_state.bot_ref, {"scope": "user", "id": user_id})
+    return {"user_id": str(user_id), "deleted_rows": deleted, "restore_days": 31}
+
+
+@router.get("/user/{user_id}/pending-deletions")
+async def user_pending_deletions(
+    user_id: int,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
+):
+    me = await api_auth._verify_token(authorization, session_id)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "You can only view your own pending deletions")
+    return await pending_status(api_state._check_pool(), user_id)
+
+
+@router.post("/user/{user_id}/restore")
+async def restore_user_data(
+    user_id: int,
+    authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
+):
+    me = await api_auth._verify_token(authorization, session_id)
+    if int(me["id"]) != user_id:
+        raise HTTPException(403, "You can only restore your own data")
+    if api_state.bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
+    result = await restore(api_state._check_pool(), user_id)
+    await invalidate(api_state.bot_ref, {"scope": "user", "id": user_id, "full": True, "restored": True})
+    return result
 
 
 @router.get("/resolve")
@@ -748,7 +790,7 @@ async def delete_item(
     me = await api_auth._verify_token(authorization, session_id)
 
     pool = api_state._check_pool()
-    async with pool.acquire() as conn:
+    async with deletion(pool, user_id, scope="guild" if table in api_state.GUILD_TABLES else "user") as conn:
         db_table = api_state.TABLE_MAP.get(table)
         if not db_table:
             raise HTTPException(400, f"Invalid table: {table}")

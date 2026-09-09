@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncpg
+
 import asyncio
 import re
 import secrets
@@ -1237,6 +1239,15 @@ class CurrencyService:
         async with self.pool.acquire() as connection:
             async with connection.transaction():
                 wallet = await self._locked_wallet(connection, int(user_id))
+                if reference_key is not None and await connection.fetchval(
+                    """SELECT EXISTS(SELECT 1 FROM privacy_deleted_rows r
+                       JOIN privacy_deletions d ON d.id=r.deletion_id
+                       WHERE r.table_name='currency_transactions' AND d.expires_at>now()
+                         AND r.before_data @> jsonb_build_object('user_id',$1::bigint,'reference_key',$2::text))""",
+                    user_id, reference_key,
+                ):
+                    # Pending erasure must not make a monthly reward replayable.
+                    raise asyncpg.UniqueViolationError("Currency reward already granted")
                 if amount > MAX_COIN_BALANCE - wallet.balance:
                     raise BalanceOverflow("This credit would exceed the wallet limit.")
                 row = await connection.fetchrow(
@@ -2542,6 +2553,25 @@ class CurrencyService:
         async with self.pool.acquire() as connection:
             async with connection.transaction():
                 wallet = await self._locked_wallet(connection, int(user_id))
+                archived = await connection.fetchval(
+                    """SELECT r.before_data FROM privacy_deleted_rows r
+                       JOIN privacy_deletions d ON d.id=r.deletion_id
+                       WHERE r.table_name='currency_claims' AND r.after_data IS NULL
+                         AND d.expires_at>now()
+                         AND r.before_data @> jsonb_build_object(
+                             'user_id', $1::bigint, 'claim_type', $2::text, 'period_start', $3::text)
+                       LIMIT 1""", user_id, claim_type, period_start.isoformat(),
+                )
+                if archived:
+                    import json
+                    previous_claim = json.loads(archived) if isinstance(archived, str) else archived
+                    return ClaimResult(
+                        wallet=wallet, claim_type=claim_type, period_start=period_start, claimed=False,
+                        base_amount=int(previous_claim["base_amount"]),
+                        bonus_amount=int(previous_claim["bonus_amount"]),
+                        streak=int(previous_claim["streak"]),
+                        streak_bonus_amount=int(previous_claim["streak_bonus_amount"]),
+                    )
                 previous = await connection.fetchrow(
                     """
                     SELECT streak
@@ -2658,6 +2688,16 @@ class CurrencyService:
                     period_start,
                 )
                 already_awarded = int(row["amount"]) if row is not None else 0
+                archived_amount = await connection.fetchval(
+                    """SELECT COALESCE(SUM((r.before_data->>'amount')::bigint),0)
+                       FROM privacy_deleted_rows r JOIN privacy_deletions d ON d.id=r.deletion_id
+                       WHERE r.table_name='currency_daily_rewards' AND r.after_data IS NULL
+                         AND d.expires_at>now()
+                         AND r.before_data @> jsonb_build_object(
+                             'user_id', $1::bigint, 'source', $2::text, 'period_start', $3::text)""",
+                    user_id, source, period_start.isoformat(),
+                )
+                already_awarded += int(archived_amount)
                 awarded = min(amount, max(daily_cap - already_awarded, 0))
                 if awarded == 0:
                     return 0

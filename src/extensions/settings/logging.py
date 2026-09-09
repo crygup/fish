@@ -8,7 +8,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from core import Cog
+from core.deletions import deletion, delete_account, restore, invalidate, RESTORE_NOTICE
 from utils import AuthorLayoutView, interaction_only, to_image
+from utils.formats import plural
 
 if TYPE_CHECKING:
     from extensions.context import Context, GuildContext
@@ -1191,16 +1193,34 @@ class Logging(Cog):
             ephemeral=ctx.interaction is not None,
         )
 
+    @settings.command(name="restore")
+    @app_commands.describe(server="Restore this server's data instead of your own (Manage Server required).")
+    async def settings_restore(self, ctx: Context, server: bool = False) -> None:
+        """Restore pending deletions from the last 31 days."""
+        if server:
+            if ctx.guild is None or not isinstance(ctx.author, discord.Member) or not ctx.author.guild_permissions.manage_guild:
+                raise commands.BadArgument("You need Manage Server in this server to restore its data.")
+            subject, scope = ctx.guild.id, "guild"
+        else:
+            subject, scope = ctx.author.id, "user"
+        result = await restore(self.bot.pool, subject, scope=scope)
+        await invalidate(self.bot, {"scope": scope, "id": subject, "full": True, "restored": True})
+        text = f"Restored {result['restored']:,} {plural(result['restored'], return_count=False):record}."
+        if result["pending"]:
+            text += f" Still pending: {result['pending']:,} {plural(result['pending'], return_count=False):record}, due to expired tasks, current data conflicts or another deletion request."
+        await ctx.send(text, ephemeral=ctx.interaction is not None, allowed_mentions=discord.AllowedMentions.none())
+
     @settings.group(name="delete", fallback="info", invoke_without_command=True)
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def settings_delete(self, ctx: Context) -> None:
-        """Explain how to permanently delete saved tracking data."""
+        """Explain the 31-day deletion and restore window."""
         text = (
             "## Delete saved data\n\n"
-            "Use `settings delete all` to review and delete all saved tracking "
-            "data, or choose a category such as `avatar`, `username`, `joins`, "
+            "Use `settings delete all` to delete your entire Fishie account "
+            "(including wallet, inventory, linked accounts and settings), or choose a category such as `avatar`, `username`, `joins`, "
             "`downloads`, `reactions`, `games`, or `currency`.\n\n"
+            "Deleted data is hidden immediately and can be restored for 31 days with `settings restore`.\n\n"
             "Individual records can be removed with `settings delete avatar <id>` "
             "or the matching category command. Every deletion requires confirmation.\n\n"
             "An expiring, pseudonymous birthday reward cooldown is retained after "
@@ -1303,27 +1323,28 @@ class Logging(Cog):
         return counts
 
     async def _delete_user_category(self, user_id: int, category: str) -> int:
-        deleted = 0
-        seen: set[tuple[str, str]] = set()
-        for table, column in _DELETE_SPECS[category]:
-            # Some game/reaction tables identify a user through two columns;
-            # deleting each predicate is intentional, but avoid duplicate SQL
-            # when an alias appears more than once in a category.
-            key = (table, column)
-            if key in seen:
-                continue
-            seen.add(key)
-            result = await self.bot.pool.execute(
-                f"DELETE FROM {table} WHERE {column} = $1", user_id
-            )
-            try:
-                deleted += int(str(result).rsplit(" ", 1)[-1])
-            except (TypeError, ValueError):
-                continue
-        if category == "reactions":
-            await self.bot.pool.execute(
-                "DELETE FROM reaction_tracking WHERE user_id = $1", user_id
-            )
+        async with deletion(self.bot.pool, user_id) as conn:
+            deleted = 0
+            seen: set[tuple[str, str]] = set()
+            for table, column in _DELETE_SPECS[category]:
+                # Some game/reaction tables identify a user through two columns;
+                # deleting each predicate is intentional, but avoid duplicate SQL
+                # when an alias appears more than once in a category.
+                key = (table, column)
+                if key in seen:
+                    continue
+                seen.add(key)
+                result = await conn.execute(
+                    f"DELETE FROM {table} WHERE {column} = $1", user_id
+                )
+                try:
+                    deleted += int(str(result).rsplit(" ", 1)[-1])
+                except (TypeError, ValueError):
+                    continue
+            if category == "reactions":
+                await conn.execute(
+                    "DELETE FROM reaction_tracking WHERE user_id = $1", user_id
+                )
         return deleted
 
     async def _confirm_delete_categories(
@@ -1342,8 +1363,8 @@ class Logging(Cog):
             for key, count in nonzero.items()
         ]
         prompt = await ctx.prompt(
-            "This permanently deletes the following saved data for "
-            f"{scope}. **This cannot be undone.**\n\n" + "\n".join(lines),
+            "This hides the following saved data for "
+            f"{scope}. You have 31 days to restore it.\n\n" + "\n".join(lines),
             ephemeral=ctx.interaction is not None,
             delete_after=False,
         )
@@ -1354,7 +1375,7 @@ class Logging(Cog):
         removed = 0
         for category in nonzero:
             removed += await self._delete_user_category(ctx.author.id, category)
-        await prompt.edit(content=f"Deleted {removed:,} saved record(s).")
+        await prompt.edit(content=f"Deleted {removed:,} saved record(s). {RESTORE_NOTICE}")
 
     @settings_delete.command(name="all")
     @app_commands.describe(
@@ -1363,7 +1384,7 @@ class Logging(Cog):
     async def settings_delete_all(
         self, ctx: Context, category: str | None = None
     ) -> None:
-        """Review and delete all saved tracking records, optionally by category."""
+        """Delete your entire Fishie account, or one category, with a 31-day restore window."""
         selected = self._delete_category(category)
         if category and selected is None:
             raise commands.BadArgument(
@@ -1371,6 +1392,21 @@ class Logging(Cog):
                 "servertag, discrim, joins, status, commands, xp, pokemon, corn, "
                 "emoji, downloads, reactions, games, or currency."
             )
+        if selected is None:
+            prompt = await ctx.prompt(
+                "Delete your entire Fishie account, including your wallet, inventory, linked accounts, "
+                "settings and history? Data is hidden immediately and permanently deleted after 31 days. "
+                "You can restore it during that time. You will need to log into the website again.",
+                ephemeral=ctx.interaction is not None, delete_after=False,
+            )
+            if not prompt:
+                return
+            try:
+                removed = await delete_account(self.bot, ctx.author.id)
+            except ValueError as error:
+                raise commands.BadArgument(str(error)) from error
+            await prompt.edit(content=f"Deleted {removed:,} records. {RESTORE_NOTICE}", view=None)
+            return
         counts = await self._delete_counts(ctx.author.id, selected)
         await self._confirm_delete_categories(ctx, counts)
 
@@ -1430,7 +1466,7 @@ class Logging(Cog):
         when = discord.utils.format_dt(created, "R") if created else "an unknown time"
         prompt = await ctx.prompt(
             f"Delete this saved {TRACKING_CATEGORY_LABELS.get(category, category)} record?\n"
-            f"**Value:** `{value}`\n**Saved:** {when}\n**ID:** `{record_id}`",
+            f"**Value:** `{value}`\n**Saved:** {when}\n**ID:** `{record_id}`\n{RESTORE_NOTICE}",
             ephemeral=ctx.interaction is not None,
             delete_after=False,
         )
@@ -1439,17 +1475,14 @@ class Logging(Cog):
             return
         await prompt.edit(content="Deleting the selected record…", view=None)
         removed = 0
-        for table, column in specs:
-            try:
-                result = await self.bot.pool.execute(
+        async with deletion(self.bot.pool, ctx.author.id) as conn:
+            for table, column in specs:
+                result = await conn.execute(
                     f"DELETE FROM {table} WHERE {column} = $1 AND id = $2",
-                    ctx.author.id,
-                    record_id,
+                    ctx.author.id, record_id,
                 )
-                removed += int(str(result).rsplit(" ", 1)[-1])
-            except Exception:
-                continue
-        await prompt.edit(content=f"Deleted {removed:,} record(s).")
+                removed += int(result.rsplit(" ", 1)[-1])
+        await prompt.edit(content=f"Deleted {removed:,} record(s). {RESTORE_NOTICE}")
 
     async def _delete_item_command(
         self, ctx: Context, category: str, record_id: int
@@ -2021,35 +2054,36 @@ class Logging(Cog):
         return counts
 
     async def _delete_server_category(self, guild_id: int, category: str) -> int:
-        deleted = 0
-        for table, column in _SERVER_DELETE_SPECS[category]:
-            result = await self.bot.pool.execute(
-                f"DELETE FROM {table} WHERE {column} = $1", guild_id
-            )
-            try:
-                deleted += int(str(result).rsplit(" ", 1)[-1])
-            except (TypeError, ValueError):
-                continue
-        if category == "all":
-            # Settings are configuration rather than history, but removing
-            # them here leaves the server in a clean state and matches the
-            # existing website's guild-data deletion endpoint.
-            for table in (
-                "guild_settings",
-                "guild_opted_out",
-                "guild_auto_reaction_channels",
-                "guild_hourly_posts",
-                "honeypot_channels",
-                "guild_log_channels",
-            ):
+        async with deletion(self.bot.pool, guild_id, scope="guild", full=category == "all") as conn:
+            deleted = 0
+            for table, column in _SERVER_DELETE_SPECS[category]:
+                result = await conn.execute(
+                    f"DELETE FROM {table} WHERE {column} = $1", guild_id
+                )
                 try:
-                    await self.bot.pool.execute(
-                        f"DELETE FROM {table} WHERE guild_id = $1", guild_id
-                    )
-                except Exception:
+                    deleted += int(str(result).rsplit(" ", 1)[-1])
+                except (TypeError, ValueError):
                     continue
-            self.bot.db_cache.set_guild_history_public(guild_id, True)
-            self.bot.db_cache.guild_tracking_disabled.discard(guild_id)
+            if category == "all":
+                # Settings are configuration rather than history, but removing
+                # them here leaves the server in a clean state and matches the
+                # existing website's guild-data deletion endpoint.
+                for table in (
+                    "guild_settings",
+                    "guild_opted_out",
+                    "guild_auto_reaction_channels",
+                    "guild_hourly_posts",
+                    "honeypot_channels",
+                    "guild_log_channels",
+                ):
+                    try:
+                        await conn.execute(
+                            f"DELETE FROM {table} WHERE guild_id = $1", guild_id
+                        )
+                    except Exception:
+                        continue
+                self.bot.db_cache.set_guild_history_public(guild_id, True)
+                self.bot.db_cache.guild_tracking_disabled.discard(guild_id)
         return deleted
 
     async def settings_server_delete_all(
@@ -2076,8 +2110,8 @@ class Logging(Cog):
             return
         lines = [f"**{key.title()}:** {count:,}" for key, count in nonzero.items()]
         prompt = await ctx.prompt(
-            f"This permanently deletes saved data for **{ctx.guild.name}**. "
-            "**This cannot be undone.**\n\n" + "\n".join(lines),
+            f"This hides saved data for **{ctx.guild.name}**. "
+            "You have 31 days to restore it with `settings restore true`.\n\n" + "\n".join(lines),
             ephemeral=ctx.interaction is not None,
             delete_after=False,
         )
@@ -2360,7 +2394,7 @@ class Logging(Cog):
 
         label = emoji_name or str(emoji_id)
         msg = await ctx.prompt(
-            f"Delete all of your saved reaction logs for {label}? **THIS CANNOT BE UNDONE**",
+            f"Delete all of your saved reaction logs for {label}? {RESTORE_NOTICE}",
             ephemeral=True,
             delete_after=False,
         )
@@ -2369,21 +2403,22 @@ class Logging(Cog):
             return
 
         await msg.edit(content="Okay, deleting those reaction logs.", view=None)
-        if emoji_id is None:
-            deleted = await self.bot.pool.execute(
-                "DELETE FROM reaction_logs WHERE (giver_id = $1 OR receiver_id = $1) "
-                "AND emoji_name = $2 AND unicode = $3",
-                ctx.author.id,
-                emoji_name,
-                is_unicode,
-            )
-        else:
-            deleted = await self.bot.pool.execute(
-                "DELETE FROM reaction_logs WHERE (giver_id = $1 OR receiver_id = $1) "
-                "AND emoji_id = $2 AND unicode = FALSE",
-                ctx.author.id,
-                emoji_id,
-            )
+        async with deletion(self.bot.pool, ctx.author.id) as conn:
+            if emoji_id is None:
+                deleted = await conn.execute(
+                    "DELETE FROM reaction_logs WHERE (giver_id = $1 OR receiver_id = $1) "
+                    "AND emoji_name = $2 AND unicode = $3",
+                    ctx.author.id,
+                    emoji_name,
+                    is_unicode,
+                )
+            else:
+                deleted = await conn.execute(
+                    "DELETE FROM reaction_logs WHERE (giver_id = $1 OR receiver_id = $1) "
+                    "AND emoji_id = $2 AND unicode = FALSE",
+                    ctx.author.id,
+                    emoji_id,
+                )
         count = deleted.rsplit(" ", 1)[-1]
         await msg.edit(content=f"Deleted {count} reaction log(s) for {label}.")
 
@@ -2408,14 +2443,15 @@ class Logging(Cog):
         await message.edit(content=f"Deleting ID `{id}`", attachments=[], view=None)
 
         sql = f"""DELETE FROM {prompt} WHERE id = $1 AND {format_table[prompt]} = $2 RETURNING *"""
-        results = await self.bot.pool.fetch(sql, id, author_id)
+        async with deletion(self.bot.pool, author_id) as conn:
+            results = await conn.fetch(sql, id, author_id)
 
         if not bool(results):
             return await message.edit(
                 content="Nothing was deleted. Maybe try a different ID."
             )
 
-        await message.edit(content=f"Deleted ID `{id}`")
+        await message.edit(content=f"Deleted ID `{id}`. {RESTORE_NOTICE}")
 
     @logging_delete.command(name="avatar", hidden=True)
     @interaction_only()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import datetime
 import json
 import os
@@ -1399,6 +1400,8 @@ class Fishie(commands.Bot):
                 # bot from starting. The next stats refresh retries reconciliation.
                 self.logger.exception("Could not reconcile stat badges at startup")
         await self.populate_cache()
+        from core.deletions import privacy_listener
+        self._privacy_listener_task = asyncio.create_task(privacy_listener(self), name="privacy-listener")
         await update_pokemon(self)
         self.logger.info(f"Added {len(self.pokemon):,} pokemon")
         self._status_rotation_task = asyncio.create_task(
@@ -1603,6 +1606,10 @@ class Fishie(commands.Bot):
             await super().close()
             return
         self._resources_closed = True
+        privacy_task = getattr(self, "_privacy_listener_task", None)
+        if privacy_task is not None:
+            privacy_task.cancel()
+            await asyncio.gather(privacy_task, return_exceptions=True)
         self.logger.info("Logging out")
         # Flush the Fun cog's write-behind click counters/rewards before the
         # database pool is closed.  Cog unload is synchronous, so relying on a
@@ -1669,51 +1676,57 @@ class Fishie(commands.Bot):
         return self.get_user_color(int(user_id))
 
     async def populate_cache(self):
-        self.db_cache.prefixes.clear()
-        self.db_cache.opted_out.clear()
-        self.db_cache.auto_downloads.clear()
-        self.db_cache.auto_uploads.clear()
-        self.db_cache.auto_upload_media.clear()
-        self.db_cache.hourly_posts.clear()
-        self.db_cache.hourly_post_media.clear()
-        self.db_cache.hourly_post_intervals.clear()
-        self.db_cache.hourly_post_next_at.clear()
-        self.db_cache.hourly_post_blocks.clear()
-        self.db_cache.poketwo_guilds.clear()
-        self.db_cache.poketwo_channels.clear()
-        self.db_cache.auto_reaction_guilds.clear()
-        self.db_cache.auto_reaction_targets.clear()
-        self.db_cache.auto_reaction_channels.clear()
-        self.db_cache.nsfw_covers.clear()
-        self.db_cache.user_colors.clear()
-        self.db_cache.pinboard.clear()
-        self.db_cache.lastfm.clear()
-        self.db_cache.anilist.clear()
-        self.db_cache.user_badges.clear()
-        self.db_cache.boards.clear()
-        self.db_cache.board_blocks.clear()
-        self.db_cache.disabled_commands.clear()
-        self.db_cache.globally_disabled_commands.clear()
-        self.db_cache.globally_disabled_cogs.clear()
-        self.db_cache.globally_blocked_users.clear()
-        self.db_cache.tracking_disabled_users.clear()
-        self.db_cache.private_history_users.clear()
-        self.db_cache.public_history_users.clear()
-        self.db_cache.bot_users.clear()
-        self.db_cache.known_non_bot_users.clear()
-        self.db_cache.game_tracking_disabled_users.clear()
-        self.db_cache.currency_tracking_disabled_users.clear()
-        self.db_cache.private_game_history_users.clear()
-        self.db_cache.public_game_history_users.clear()
-        self.db_cache.guild_tracking_disabled.clear()
-        self.db_cache.private_guild_history.clear()
-        self.db_cache.public_guild_history.clear()
-        self.db_cache.tracking_consent_users.clear()
-        self.db_cache.reaction_tracking_users.clear()
-        self.cached_roblox_templates.clear()
-        self.cached_mudae_consent.clear()
-        self.cached_honeypots.clear()
-        self.cached_banned_ips.clear()
+        # Keep the live policy intact until every query succeeds.
+        cache = copy.deepcopy(self.db_cache)
+        cached_roblox_templates = self.cached_roblox_templates.copy()
+        cached_mudae_consent = self.cached_mudae_consent.copy()
+        cached_honeypots = self.cached_honeypots.copy()
+        cached_banned_ips = self.cached_banned_ips.copy()
+        cache.prefixes.clear()
+        cache.opted_out.clear()
+        cache.auto_downloads.clear()
+        cache.auto_uploads.clear()
+        cache.auto_upload_media.clear()
+        cache.hourly_posts.clear()
+        cache.hourly_post_media.clear()
+        cache.hourly_post_intervals.clear()
+        cache.hourly_post_next_at.clear()
+        cache.hourly_post_blocks.clear()
+        cache.poketwo_guilds.clear()
+        cache.poketwo_channels.clear()
+        cache.auto_reaction_guilds.clear()
+        cache.auto_reaction_targets.clear()
+        cache.auto_reaction_channels.clear()
+        cache.nsfw_covers.clear()
+        cache.user_colors.clear()
+        cache.pinboard.clear()
+        cache.lastfm.clear()
+        cache.anilist.clear()
+        cache.user_badges.clear()
+        cache.boards.clear()
+        cache.board_blocks.clear()
+        cache.disabled_commands.clear()
+        cache.globally_disabled_commands.clear()
+        cache.globally_disabled_cogs.clear()
+        cache.globally_blocked_users.clear()
+        cache.tracking_disabled_users.clear()
+        cache.private_history_users.clear()
+        cache.public_history_users.clear()
+        cache.bot_users.clear()
+        cache.known_non_bot_users.clear()
+        cache.game_tracking_disabled_users.clear()
+        cache.currency_tracking_disabled_users.clear()
+        cache.private_game_history_users.clear()
+        cache.public_game_history_users.clear()
+        cache.guild_tracking_disabled.clear()
+        cache.private_guild_history.clear()
+        cache.public_guild_history.clear()
+        cache.tracking_consent_users.clear()
+        cache.reaction_tracking_users.clear()
+        cached_roblox_templates.clear()
+        cached_mudae_consent.clear()
+        cached_honeypots.clear()
+        cached_banned_ips.clear()
 
         # Reputation XP bonuses are shared by Fishie and imported Tatsu
         # events.  Load only the active UTC day/week once at startup, then
@@ -1721,7 +1734,7 @@ class Fishie(commands.Bot):
         now = datetime.datetime.now(datetime.timezone.utc)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = day_start - datetime.timedelta(days=(day_start.weekday() + 1) % 7)
-        self.db_cache.reset_reputation_bonus_cache(now)
+        cache.reset_reputation_bonus_cache(now)
         reputation_events = await self.pool.fetch(
             """
             SELECT giver_id, kind, source
@@ -1746,17 +1759,17 @@ class Fishie(commands.Bot):
         )
         for row in reputation_events:
             if row["kind"] == "user":
-                self.db_cache.add_reputation_user_bonus(
+                cache.add_reputation_user_bonus(
                     row["giver_id"], row["source"], now
                 )
             else:
-                self.db_cache.add_reputation_guild_bonus(
+                cache.add_reputation_guild_bonus(
                     row["giver_id"], row["source"], now
                 )
         self.logger.info(
             "Cached %d reputation user bonus giver(s) and %d guild bonus giver(s)",
-            len(self.db_cache.reputation_user_bonus_givers),
-            len(self.db_cache.reputation_guild_bonus_givers),
+            len(cache.reputation_user_bonus_givers),
+            len(cache.reputation_guild_bonus_givers),
         )
 
         prefixes = await self.pool.fetch("""SELECT * FROM guild_prefixes""")
@@ -1764,14 +1777,14 @@ class Fishie(commands.Bot):
         for record in prefixes:
             guild_id = record["guild_id"]
             prefix = record["prefix"]
-            self.db_cache.add_prefix(guild_id, prefix)
+            cache.add_prefix(guild_id, prefix)
             self.logger.info(f'Added prefix "{prefix}" to "{guild_id}"')
 
         disabled_commands = await self.pool.fetch(
             "SELECT guild_id, command, channel_id FROM command_disables"
         )
         for row in disabled_commands:
-            self.db_cache.add_disabled_command(
+            cache.add_disabled_command(
                 row["guild_id"], row["command"], row["channel_id"]
             )
 
@@ -1781,14 +1794,14 @@ class Fishie(commands.Bot):
         for row in global_command_disables:
             target = str(row["target"]).casefold()
             if row["target_type"] == "cog":
-                self.db_cache.globally_disabled_cogs.add(target)
+                cache.globally_disabled_cogs.add(target)
             else:
-                self.db_cache.globally_disabled_commands.add(target)
+                cache.globally_disabled_commands.add(target)
 
         global_user_blocks = await self.pool.fetch(
             "SELECT user_id FROM global_user_blocks"
         )
-        self.db_cache.globally_blocked_users.update(
+        cache.globally_blocked_users.update(
             int(row["user_id"]) for row in global_user_blocks
         )
 
@@ -1796,7 +1809,7 @@ class Fishie(commands.Bot):
         for row in opted_out:
             for item in row["items"]:
                 user_id = row["user_id"]
-                self.db_cache.add_opt_out(user_id, item)
+                cache.add_opt_out(user_id, item)
 
                 self.logger.info(f'Added "{item}" to opted out for user "{user_id}"')
 
@@ -1804,7 +1817,7 @@ class Fishie(commands.Bot):
         for row in guild_opted_out:
             for item in row["items"]:
                 guild_id = row["guild_id"]
-                self.db_cache.add_opt_out(guild_id, item)
+                cache.add_opt_out(guild_id, item)
                 self.logger.info(f'Added "{item}" to opted out for guild "{guild_id}"')
 
         user_privacy_settings = await self.pool.fetch("""
@@ -1821,23 +1834,23 @@ class Fishie(commands.Bot):
         for row in user_privacy_settings:
             user_id = row["user_id"]
             if not row["tracking_enabled"]:
-                self.db_cache.tracking_disabled_users.add(user_id)
-            self.db_cache.set_history_public(user_id, bool(row["history_public"]))
+                cache.tracking_disabled_users.add(user_id)
+            cache.set_history_public(user_id, bool(row["history_public"]))
             if not row["game_tracking_enabled"]:
-                self.db_cache.game_tracking_disabled_users.add(user_id)
+                cache.game_tracking_disabled_users.add(user_id)
             if not row.get("currency_tracking_enabled", True):
-                self.db_cache.currency_tracking_disabled_users.add(user_id)
-            self.db_cache.set_game_history_public(
+                cache.currency_tracking_disabled_users.add(user_id)
+            cache.set_game_history_public(
                 user_id, bool(row["game_history_public"])
             )
             if row["tracking_consent"]:
-                self.db_cache.set_tracking_consent(user_id)
+                cache.set_tracking_consent(user_id)
 
         reaction_tracking = await self.pool.fetch(
             "SELECT user_id FROM reaction_tracking WHERE enabled = TRUE"
         )
         for row in reaction_tracking:
-            self.db_cache.enable_reaction_tracking(row["user_id"])
+            cache.enable_reaction_tracking(row["user_id"])
 
         guild_settings = await self.pool.fetch("SELECT * FROM guild_settings")
         for row in guild_settings:
@@ -1859,40 +1872,40 @@ class Fishie(commands.Bot):
             auto_reactions_channel = row.get("auto_reactions_channel")
             pinboard = row["pinboard"]
             if not row["tracking_enabled"]:
-                self.db_cache.guild_tracking_disabled.add(guild_id)
-            self.db_cache.set_guild_history_public(
+                cache.guild_tracking_disabled.add(guild_id)
+            cache.set_guild_history_public(
                 guild_id, bool(row["history_public"])
             )
 
             if adl:
-                self.db_cache.add_adl(adl)
+                cache.add_adl(adl)
                 self.logger.info(
                     f'Added auto download channel "{adl}" to guild "{guild_id}"'
                 )
 
             if auto_upload:
-                self.db_cache.add_auto_upload(auto_upload, auto_upload_types)
+                cache.add_auto_upload(auto_upload, auto_upload_types)
                 self.logger.info(
                     f'Added auto upload channel "{auto_upload}" to guild "{guild_id}"'
                 )
 
             if pinboard:
-                self.db_cache.add_pinboard(guild_id, pinboard)
+                cache.add_pinboard(guild_id, pinboard)
                 self.logger.info(
                     f'Added Pinboard channel "{pinboard}" to guild "{guild_id}"'
                 )
 
             if poketwo:
-                self.db_cache.add_poketwo(guild_id)
-                self.db_cache.set_poketwo_channel(guild_id, poketwo_channel)
+                cache.add_poketwo(guild_id)
+                cache.set_poketwo_channel(guild_id, poketwo_channel)
                 self.logger.info(f'Added auto poketwo solving to guild "{guild_id}"')
 
             if auto_reactions:
-                self.db_cache.add_reaction_guilds(guild_id)
+                cache.add_reaction_guilds(guild_id)
                 # A missing target row means the rule applies server-wide.
                 # The legacy column is still loaded for databases that have
                 # not yet run the multi-channel migration.
-                self.db_cache.set_auto_reaction_channel(
+                cache.set_auto_reaction_channel(
                     guild_id, auto_reactions_channel
                 )
                 self.logger.info(f'Added auto media reactions to guild "{guild_id}"')
@@ -1909,7 +1922,7 @@ class Fishie(commands.Bot):
             # migration.  Keep the legacy cache in that case.
             reaction_targets = []
         for target in reaction_targets:
-            self.db_cache.add_auto_reaction_channel(
+            cache.add_auto_reaction_channel(
                 target["guild_id"], target["channel_id"]
             )
 
@@ -1932,7 +1945,7 @@ class Fishie(commands.Bot):
                 )
                 if enabled
             }
-            self.db_cache.set_hourly_posts(
+            cache.set_hourly_posts(
                 guild_id,
                 hourly["channel_id"],
                 hourly_types,
@@ -1944,7 +1957,7 @@ class Fishie(commands.Bot):
             "SELECT guild_id, user_id FROM guild_hourly_post_blocks"
         )
         for blocked in hourly_blocks:
-            self.db_cache.add_hourly_post_block(blocked["guild_id"], blocked["user_id"])
+            cache.add_hourly_post_block(blocked["guild_id"], blocked["user_id"])
 
         board_rows = await self.pool.fetch(
             "SELECT guild_id, board_type, channel_id, enabled, threshold, "
@@ -1952,7 +1965,7 @@ class Fishie(commands.Bot):
             "FROM guild_boards"
         )
         for board in board_rows:
-            self.db_cache.set_board(
+            cache.set_board(
                 board["guild_id"],
                 board["board_type"],
                 board["channel_id"],
@@ -1970,7 +1983,7 @@ class Fishie(commands.Bot):
             "FROM guild_board_blocks"
         )
         for blocked in board_blocks:
-            self.db_cache.add_board_block(
+            cache.add_board_block(
                 blocked["guild_id"],
                 blocked["board_type"],
                 blocked["target_type"],
@@ -1984,7 +1997,7 @@ class Fishie(commands.Bot):
             user_id: int = row["user_id"]
             last_fm: Optional[str] = row["lastfm"]
             anilist: Optional[str] = row["anilist"]
-            self.db_cache.update_accounts(user_id, last_fm=last_fm, anilist=anilist)
+            cache.update_accounts(user_id, last_fm=last_fm, anilist=anilist)
             if last_fm:
                 self.logger.info(
                     f'Added last.fm account "{last_fm}" to user "{user_id}"'
@@ -2003,7 +2016,7 @@ class Fishie(commands.Bot):
             """)
         for row in user_badges:
             user_id = int(row["user_id"])
-            self.db_cache.user_badges.setdefault(user_id, []).append(
+            cache.user_badges.setdefault(user_id, []).append(
                 {
                     "emoji_name": row["emoji_name"],
                     "emoji_id": row["emoji_id"],
@@ -2022,7 +2035,7 @@ class Fishie(commands.Bot):
             """)
         for row in user_colors:
             try:
-                self.db_cache.set_user_color(
+                cache.set_user_color(
                     int(row["user_id"]),
                     str(row["color_key"]),
                     str(row["hex_value"]),
@@ -2042,7 +2055,7 @@ class Fishie(commands.Bot):
                 if isinstance(row["extra"], str)
                 else (row["extra"] or {})
             )
-            self.cached_roblox_templates[row["asset_id"]] = (
+            cached_roblox_templates[row["asset_id"]] = (
                 row["image_url"],
                 extra,
                 datetime.datetime.now(datetime.timezone.utc),
@@ -2053,20 +2066,26 @@ class Fishie(commands.Bot):
             "SELECT user_id FROM mudae_dm_consent WHERE consented = TRUE"
         )
         for row in consent_rows:
-            self.cached_mudae_consent.add(row["user_id"])
-        self.logger.info(f"Cached {len(self.cached_mudae_consent)} Mudae DM consent(s)")
+            cached_mudae_consent.add(row["user_id"])
+        self.logger.info(f"Cached {len(cached_mudae_consent)} Mudae DM consent(s)")
 
         honeypot_rows = await self.pool.fetch(
             "SELECT guild_id, channel_id FROM honeypot_channels"
         )
         for row in honeypot_rows:
-            self.cached_honeypots[row["guild_id"]] = row["channel_id"]
-        self.logger.info(f"Cached {len(self.cached_honeypots)} honeypot channel(s)")
+            cached_honeypots[row["guild_id"]] = row["channel_id"]
+        self.logger.info(f"Cached {len(cached_honeypots)} honeypot channel(s)")
 
         banned_rows = await self.pool.fetch("SELECT ip FROM banned_ips")
         for row in banned_rows:
-            self.cached_banned_ips.add(row["ip"])
-        self.logger.info(f"Cached {len(self.cached_banned_ips)} banned IP(s)")
+            cached_banned_ips.add(row["ip"])
+        self.logger.info(f"Cached {len(cached_banned_ips)} banned IP(s)")
+        # No await while publishing: readers see either complete snapshot.
+        self.db_cache.__dict__.update(cache.__dict__)
+        self.cached_roblox_templates = cached_roblox_templates
+        self.cached_mudae_consent = cached_mudae_consent
+        self.cached_honeypots = cached_honeypots
+        self.cached_banned_ips = cached_banned_ips
 
     async def add_reactions(
         self,

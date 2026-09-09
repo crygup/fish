@@ -13,10 +13,12 @@ from fastapi import (
     Cookie,
     Header,
     HTTPException,
+    Query,
 )
 from pydantic import BaseModel, ConfigDict, StrictBool
 
 from core.privacy import erase_guild
+from core.deletions import deletion, restore, pending_status, invalidate
 
 from . import auth as api_auth
 from . import state as api_state
@@ -49,6 +51,16 @@ async def get_user_guilds(
         [guild.id for guild in manageable],
     )
     opted_out_by_guild = {row["guild_id"]: row["items"] for row in opt_out_rows}
+    pending_rows = await pool.fetch(
+        """SELECT DISTINCT d.subject_id FROM privacy_deletions d
+           JOIN privacy_deleted_rows r ON r.deletion_id=d.id
+             OR EXISTS(SELECT 1 FROM privacy_deletion_holds h
+                       WHERE h.row_id=r.id AND h.deletion_id=d.id)
+           WHERE d.scope='guild' AND d.subject_id=ANY($1::bigint[])
+             AND d.expires_at>now()""",
+        [guild.id for guild in manageable],
+    )
+    pending_guilds = {row["subject_id"] for row in pending_rows}
     guilds = []
     for guild in manageable:
         guilds.append(
@@ -60,6 +72,7 @@ async def get_user_guilds(
                 # browser while the image is being updated.
                 "icon": str(guild.icon.with_format("png")) if guild.icon else None,
                 "opted_out": opted_out_by_guild.get(guild.id, []),
+                "pending_deletion": guild.id in pending_guilds,
             }
         )
 
@@ -918,6 +931,7 @@ async def remove_guild_prefix(
 @router.delete("/guild/{guild_id}/data")
 async def delete_guild_data(
     guild_id: int,
+    table: str | None = Query(None),
     authorization: str = Header(None),
     session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
 ):
@@ -926,33 +940,21 @@ async def delete_guild_data(
     if api_state.bot_ref is None:
         raise HTTPException(503, "Bot not ready")
     pool = api_state._check_pool()
-    logger_rows = await pool.fetch(
-        "SELECT event, webhook_url FROM guild_log_channels WHERE guild_id = $1",
-        guild_id,
-    )
-    broadcasters = await pool.fetch(
-        "SELECT DISTINCT broadcaster_id FROM notify_twitch_follows "
-        "WHERE guild_id = $1 AND broadcaster_id IS NOT NULL",
-        guild_id,
-    )
+    if table is not None:
+        if table not in {"guild_icons", "guild_name_logs"}:
+            raise HTTPException(400, "Invalid guild history table")
+        async with deletion(pool, guild_id, scope="guild") as connection:
+            result = await connection.execute(
+                f"DELETE FROM {table} WHERE guild_id = $1", guild_id
+            )
+        return {"deleted": True, "deleted_rows": int(result.split()[-1])}
     auto_download_channel = await pool.fetchval(
         "SELECT auto_download FROM guild_settings WHERE guild_id = $1", guild_id
     )
-    async with pool.acquire() as connection:
-        async with connection.transaction():
-            deleted = await erase_guild(connection, guild_id)
+    async with deletion(pool, guild_id, scope="guild", full=True) as connection:
+        deleted = await erase_guild(connection, guild_id)
 
-    moderation: Any = api_state.bot_ref.get_cog("Moderation")
-    if moderation is not None:
-        for row in logger_rows:
-            await moderation._delete_logger_webhook(
-                row["webhook_url"], guild_id, row["event"]
-            )
-    events: Any = api_state.bot_ref.get_cog("Events")
-    if events is not None:
-        for row in broadcasters:
-            await events.remove_twitch_eventsub_subscription(str(row["broadcaster_id"]))
-
+    # Keep remote webhook resources during the restore window; deleted follow rows stop deliveries.
     cache = api_state.bot_ref.db_cache
     cache.prefixes.pop(guild_id, None)
     cache.opted_out.pop(guild_id, None)
@@ -966,3 +968,25 @@ async def delete_guild_data(
     }
     api_state.bot_ref.cached_honeypots.pop(guild_id, None)
     return {"deleted": True, "deleted_rows": deleted}
+
+
+@router.get("/guild/{guild_id}/pending-deletions")
+async def guild_pending_deletions(
+    guild_id: int, authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
+):
+    await api_auth._require_guild_manager(guild_id, authorization, session_id)
+    return await pending_status(api_state._check_pool(), guild_id, "guild")
+
+
+@router.post("/guild/{guild_id}/restore")
+async def restore_guild_data(
+    guild_id: int, authorization: str = Header(None),
+    session_id: str | None = Cookie(None, alias=api_state.SESSION_COOKIE),
+):
+    await api_auth._require_guild_manager(guild_id, authorization, session_id)
+    if api_state.bot_ref is None:
+        raise HTTPException(503, "Bot not ready")
+    result = await restore(api_state._check_pool(), guild_id, scope="guild")
+    await invalidate(api_state.bot_ref, {"scope": "guild", "id": guild_id, "full": True, "restored": True})
+    return result

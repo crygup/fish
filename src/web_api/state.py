@@ -218,6 +218,7 @@ def _check_pool():
 
 
 VALID_OPTOUTS = {
+    "snipe",
     "avatar",
     "username",
     "display",
