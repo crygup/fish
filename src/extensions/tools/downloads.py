@@ -49,7 +49,7 @@ _TENOR_DISCORD_PROXY_RE = re.compile(
 
 
 class DownloadFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
-    format: Literal["mp4", "mp3", "webm", "gif"] = commands.flag(
+    format: Literal["mp4", "mp3", "webm", "gif", "mkv"] = commands.flag(
         description="What format to download as (Klipy and Tenor videos are sent as GIFs).",
         default="mp4",
     )
@@ -164,7 +164,7 @@ class Downloads(Cog):
     ):
         """Download media from a supported website.
 
-        -# -format    Choose MP4, MP3, WEBM, or GIF. Defaults to MP4.
+        -# -format    Choose MP4, MP3, WEBM, GIF, or MKV. Defaults to MP4.
         -# -title     Change the downloaded file name.
         -# -ignore_checks  Owner only. Allow temporary hosting above Discord's limit.
         -# -hidden    Hide the response when using the app command.
@@ -189,6 +189,8 @@ class Downloads(Cog):
         async with ctx.typing(ephemeral=flags.hidden):
             try:
                 url = await TenorUrlConverter().convert(ctx, source_url)
+                if flags.format == "mkv":
+                    raise commands.BadArgument("Use the video downloader for MKV output.")
                 img = cast(BytesIO, await to_image(ctx.session, url))
                 downloader = Downloader(
                     ctx,

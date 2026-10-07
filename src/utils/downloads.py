@@ -872,6 +872,11 @@ class Downloader:
         ]
 
         tiktok_extractor_arg_index: int | None = None
+        if not is_audio:
+            args += [
+                "--merge-output-format",
+                self.format if self.format in {"mkv", "webm"} else "mp4",
+            ]
         cookie_arg_index: int | None = None
 
         if cookies := _get_cookies(video):
@@ -1717,6 +1722,45 @@ class Downloader:
             raise DownloadError("Video compatibility conversion failed.") from exc
         return final_path
 
+    async def _convert_video_container(self, input_path: str) -> str:
+        output_path = os.path.splitext(input_path)[0] + f".{self.format}"
+        codecs = (
+            ["-c", "copy"]
+            if self.format == "mkv"
+            else ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-c:a", "libopus"]
+        )
+        if self.format == "mkv" and input_path.lower().endswith(".gif"):
+            codecs = [
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-vf",
+                "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            ]
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-y",
+            "-i",
+            input_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            *codecs,
+            output_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        await self._communicate_with_timeout(proc)
+        if proc.returncode != 0:
+            raise DownloadError(
+                f"Could not convert this video to {self.format.upper()}."
+            )
+        os.remove(input_path)
+        return output_path
+
     async def _has_audio(self, path: str) -> bool:
         """Return True if *path* contains an audio stream (ffprobe)."""
         proc = await asyncio.create_subprocess_exec(
@@ -1859,10 +1903,22 @@ class Downloader:
         # Preserve an explicitly requested container.  The compatibility
         # transcode is only the default MP4 behavior, so ``-format webm`` (or
         # another caller-selected format) is not silently changed.
-        if self.format == "mp4" and INSTAGRAM_RE.search(self.url):
+        if self.format == "mp4":
             for index, output_path in enumerate(output_paths):
-                if _is_video_file(output_path):
+                if _is_video_file(output_path) and (
+                    INSTAGRAM_RE.search(self.url) or _needs_discord_mp4(output_path)
+                ):
                     output_paths[index] = await self._convert_to_mobile_mp4(output_path)
+
+        if self.format in {"mkv", "webm"}:
+            for index, output_path in enumerate(output_paths):
+                if (
+                    _is_video_file(output_path)
+                    or (self.format == "mkv" and output_path.lower().endswith(".gif"))
+                ) and not output_path.lower().endswith(f".{self.format}"):
+                    output_paths[index] = await self._convert_video_container(
+                        output_path
+                    )
 
         # Twitter GIF conversion:
         #   --format gif          → always convert (rejected if > 30s)
@@ -1891,6 +1947,7 @@ class Downloader:
         # instead of a video attachment.
         if (
             is_klipy_media
+            and self.format != "mkv"
             and not is_audio
             and not output_paths[0].lower().endswith(".gif")
         ):
@@ -1915,6 +1972,13 @@ class Downloader:
             )
 
         total = len(output_paths)
+        for index, output_path in enumerate(output_paths):
+            if output_path.lower().endswith(".mkv") and self.format != "mkv":
+                output_paths[index] = (
+                    await self._convert_to_gif(output_path)
+                    if self.format == "gif"
+                    else await self._convert_to_mobile_mp4(output_path)
+                )
         return [
             discord.File(
                 path,
@@ -2006,7 +2070,15 @@ class Downloader:
 
                 has_video = any(_is_gallery_file(file.filename) for file in batch)
                 has_hosted = bool(hosted)
-                if has_video or has_hosted:
+                if self.format == "mkv":
+                    await self.ctx.send(
+                        content="\n".join(hosted.values()) or None,
+                        files=local_files,
+                        suppress_embeds=True,
+                        reference=reference if batch_index == 0 else None,
+                        ephemeral=self.hidden,
+                    )
+                elif has_video or has_hosted:
                     container_items: list[ui.Item[Any]] = []
                     gallery_items: list[MediaGalleryItem] = []
                     other_items: list[ui.Item[Any]] = []

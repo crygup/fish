@@ -1919,7 +1919,7 @@ class Fun(
 
         await ctx.send(
             file=discord.File(
-                FILES_ROOT / "monark" / f"monark{random.randint(1, 3)}.png",
+                FILES_ROOT / "images" / "monark" / f"monark{random.randint(1, 3)}.png",
                 "monark.png",
             )
         )
@@ -1930,8 +1930,22 @@ class Fun(
         """hattori"""
         name = "hattori2" if random.randint(0, 15) == 6 else "hattori"
         await ctx.send(
-            file=discord.File(FILES_ROOT / "images" / f"{name}.png", "hattori.png")
+            file=discord.File(FILES_ROOT / "images" / "hattori" / f"{name}.png", "hattori.png")
         )
+
+    @commands.command(name="varn", description="varn")
+    @commands.cooldown(1, 3)
+    async def varn(self, ctx: Context):
+        """varn"""
+        root = FILES_ROOT / "images" / "varn"
+        images = [
+            path for path in root.glob("*")
+            if path.is_file() and path.stat().st_size > 0
+            and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+        ]
+        if not images:
+            raise commands.BadArgument("No varn images are available right now.")
+        await ctx.send(file=discord.File(random.choice(images)))
 
     @commands.command(name="merica", aliases=("cm",))
     @commands.cooldown(1, 5)

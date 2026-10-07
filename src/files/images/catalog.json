@@ -5,8 +5,8 @@
       "id": 1,
       "name": "hattori",
       "display_name": "Hattori",
-      "category": "root",
-      "path": "hattori.png",
+      "category": "hattori",
+      "path": "hattori/hattori.png",
       "format": "PNG",
       "animated": false,
       "width": 495,
@@ -16,8 +16,8 @@
       "id": 2,
       "name": "hattori2",
       "display_name": "Hattori2",
-      "category": "root",
-      "path": "hattori2.png",
+      "category": "hattori",
+      "path": "hattori/hattori2.png",
       "format": "PNG",
       "animated": false,
       "width": 1080,
@@ -1661,6 +1661,176 @@
       "animated": false,
       "width": 219,
       "height": 291
+    }
+  ],
+  "burgers": [
+    {
+      "id": 1,
+      "date_added": "2026-09-01T02:13:52Z",
+      "path": "6ac63acaef67b109.png",
+      "source": "https://x.com/4B_Pencil_25/status/1979183520699552042",
+      "extra": {}
+    },
+    {
+      "id": 2,
+      "date_added": "2026-09-01T02:13:52Z",
+      "path": "31b4ee3892e1bd13.png",
+      "source": "https://x.com/YozoMako/status/2091053695584838132",
+      "extra": {}
+    },
+    {
+      "id": 3,
+      "date_added": "2026-09-01T02:13:52Z",
+      "path": "9df04c6552b509bf.png",
+      "source": "https://x.com/mo55ilst/status/1474686060982845441",
+      "extra": {}
+    },
+    {
+      "id": 4,
+      "date_added": "2026-09-01T02:13:52Z",
+      "path": "33b60f910b95c526.png",
+      "source": "https://x.com/RametKup/status/2089118829704327461",
+      "extra": {}
+    },
+    {
+      "id": 5,
+      "date_added": "2026-09-01T02:13:52Z",
+      "path": "3c9bde0f89837171.png",
+      "source": "https://x.com/JpFlasso/status/2085277643419828527",
+      "extra": {}
+    },
+    {
+      "id": 6,
+      "date_added": "2026-09-01T02:13:52Z",
+      "path": "021afd43e77ada8a.png",
+      "source": "https://x.com/yago_rzi/status/2079875043081982113",
+      "extra": {}
+    },
+    {
+      "id": 7,
+      "date_added": "2026-09-01T02:13:52Z",
+      "path": "43d0ca035ed55444.png",
+      "source": "https://x.com/yuyuharu_1027/status/1784735571296002464",
+      "extra": {}
+    },
+    {
+      "id": 8,
+      "date_added": "2026-09-01T02:13:52Z",
+      "path": "3a4038bff6a5c9f5.png",
+      "source": "https://x.com/Pfgwpmpw/status/1974776405167845622",
+      "extra": {}
+    },
+    {
+      "id": 9,
+      "date_added": "2026-09-01T02:13:52Z",
+      "path": "fc4a51b8a6c2aab2.png",
+      "source": "https://www.pixiv.net/en/artworks/72390740",
+      "extra": {}
+    },
+    {
+      "id": 10,
+      "date_added": "2026-09-17T10:59:42.448228Z",
+      "path": "7fabf27ce19836be.png",
+      "source": null,
+      "extra": {}
+    },
+    {
+      "id": 11,
+      "date_added": "2026-09-20T03:04:11.790624Z",
+      "path": "3e631fb1ea0fe17b.png",
+      "source": null,
+      "extra": {}
+    },
+    {
+      "id": 12,
+      "date_added": "2026-09-20T03:06:26.852219Z",
+      "path": "b76507d30b525a6b.png",
+      "source": null,
+      "extra": {}
+    },
+    {
+      "id": 13,
+      "date_added": "2026-09-20T03:08:06.927763Z",
+      "path": "ab634ed6147d3156.png",
+      "source": null,
+      "extra": {}
+    },
+    {
+      "id": 14,
+      "date_added": "2026-09-20T08:25:59.507363Z",
+      "path": "6262168ce214769f.png",
+      "source": null,
+      "extra": {}
+    },
+    {
+      "id": 15,
+      "date_added": "2026-09-20T08:26:19.141541Z",
+      "path": "3c6441e8c4d8ad5d.png",
+      "source": null,
+      "extra": {}
+    },
+    {
+      "id": 16,
+      "date_added": "2026-09-20T08:28:51.676286Z",
+      "path": "ae3dfdc13692b779.png",
+      "source": null,
+      "extra": {}
+    },
+    {
+      "id": 17,
+      "date_added": "2026-09-01T16:34:05.592552Z",
+      "path": "a00b8cf6f944d18e.png",
+      "source": null,
+      "extra": {}
+    },
+    {
+      "id": 18,
+      "date_added": "2026-09-01T16:37:33.202369Z",
+      "path": "969988ef2cb11455.png",
+      "source": "https://www.pixiv.net/en/artworks/145124055",
+      "extra": {}
+    },
+    {
+      "id": 19,
+      "date_added": "2026-09-01T16:39:05.180662Z",
+      "path": "4fe60946b97a49b4.png",
+      "source": "https://x.com/meemofumofu/status/1260681469653069825",
+      "extra": {}
+    },
+    {
+      "id": 20,
+      "date_added": "2026-09-01T16:39:18.770482Z",
+      "path": "a00f8029ba8de1d4.png",
+      "source": null,
+      "extra": {}
+    },
+    {
+      "id": 21,
+      "date_added": "2026-09-01T16:39:32.702599Z",
+      "path": "bdf25250e31e2012.png",
+      "source": "https://x.com/tabakko/status/1769922444536799472",
+      "extra": {}
+    },
+    {
+      "id": 22,
+      "date_added": "2026-09-01T16:39:51.723839Z",
+      "path": "c0b1759c2deb09ee.png",
+      "source": "https://x.com/naagasonomono1/status/1763556723250639000",
+      "extra": {}
+    },
+    {
+      "id": 23,
+      "date_added": "2026-09-01T16:40:06.240692Z",
+      "path": "f8b950e2d17d30c7.png",
+      "source": "https://x.com/maikuro_ace/status/1847418191649395047",
+      "extra": {}
+    },
+    {
+      "id": 24,
+      "date_added": "2026-10-05T16:52:42.449313Z",
+      "path": "55405cef922b570a.png",
+      "source": null,
+      "extra": {}
     }
   ]
 }

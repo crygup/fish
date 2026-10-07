@@ -1815,7 +1815,9 @@ def _animated_visual_frames(
     return output, [frame_duration] * count
 
 
-def _edge_crop_box(frame: Image.Image, *, caption: bool = False) -> tuple[int, int, int, int] | None:
+def _edge_crop_box(
+    frame: Image.Image, *, caption: bool = False
+) -> tuple[int, int, int, int] | None:
     rgba = np.asarray(frame.convert("RGBA"))
     rgb = rgba[:, :, :3].astype(np.float32)
     alpha = rgba[:, :, 3]
@@ -1825,18 +1827,22 @@ def _edge_crop_box(frame: Image.Image, *, caption: bool = False) -> tuple[int, i
     if caption:
         # Require ink in a light panel, not merely white scenery.
         margin = max(1, min(width // 12, 48))
-        background = np.median(np.concatenate((rgb[0, :margin], rgb[0, -margin:])), axis=0)
+        background = np.median(
+            np.concatenate((rgb[0, :margin], rgb[0, -margin:])), axis=0
+        )
         if background.min() < 180 or background.max() - background.min() > 40:
             return None
         close = (np.max(np.abs(rgb - background), axis=2) <= 28) & (alpha > 240)
         row = close.mean(axis=1)
-        sides = np.concatenate((close[:, :margin], close[:, -margin:]), axis=1).mean(axis=1)
-        if row[0] < .85:
+        sides = np.concatenate((close[:, :margin], close[:, -margin:]), axis=1).mean(
+            axis=1
+        )
+        if row[0] < 0.85:
             return None
-        panel = (row >= .60) | ((sides >= .95) & (row >= .35))
+        panel = (row >= 0.60) | ((sides >= 0.95) & (row >= 0.35))
         window = max(3, min(8, height // 80))
         for top in range(max(4, height // 100), height - window):
-            if panel[top:top + window].any():
+            if panel[top : top + window].any():
                 continue
             ink = (rgb[:top].max(axis=2) < background.min() - 60) & (alpha[:top] > 240)
             if ink.sum() < max(3, width // 20) or height - top < max(8, height // 5):
@@ -1845,9 +1851,11 @@ def _edge_crop_box(frame: Image.Image, *, caption: bool = False) -> tuple[int, i
         return None
     # Measure spatial uniformity, not similarity between RGB channels.
     light = rgb.max(axis=2)
+
     def borders(values, opacity):
-        dark = (np.quantile(values, .995, axis=1) <= 24) & (values.std(axis=1) <= 6)
-        return dark | ((opacity <= 8).mean(axis=1) >= .995)
+        dark = (np.quantile(values, 0.995, axis=1) <= 24) & (values.std(axis=1) <= 6)
+        return dark | ((opacity <= 8).mean(axis=1) >= 0.995)
+
     rows, cols = borders(light, alpha), borders(light.T, alpha.T)
     top, bottom, left, right = 0, height, 0, width
     while top < height // 3 and rows[top]:
@@ -1871,17 +1879,25 @@ def _remove_bars(frame: Image.Image, *, caption: bool = False) -> Image.Image:
     return frame.convert("RGBA").crop(box) if box else frame.convert("RGBA")
 
 
-def _stable_edge_crop_box(frames: Sequence[Image.Image], *, caption: bool = False) -> tuple[int, int, int, int] | None:
+def _stable_edge_crop_box(
+    frames: Sequence[Image.Image], *, caption: bool = False
+) -> tuple[int, int, int, int] | None:
     """One conservative crop supported by at least 80% of sampled frames."""
     if not frames:
         return None
-    sampled = [frames[int(i)] for i in np.linspace(0, len(frames) - 1, min(12, len(frames)))]
+    sampled = [
+        frames[int(i)] for i in np.linspace(0, len(frames) - 1, min(12, len(frames)))
+    ]
     boxes = [_edge_crop_box(frame, caption=caption) for frame in sampled]
     found = [box for box in boxes if box is not None]
-    if not found or len(found) < math.ceil(len(sampled) * .8):
+    if not found or len(found) < math.ceil(len(sampled) * 0.8):
         return None
-    box = (min(b[0] for b in found), min(b[1] for b in found),
-           max(b[2] for b in found), max(b[3] for b in found))
+    box = (
+        min(b[0] for b in found),
+        min(b[1] for b in found),
+        max(b[2] for b in found),
+        max(b[3] for b in found),
+    )
     return None if box == (0, 0, *frames[0].size) else box
 
 
@@ -3584,19 +3600,42 @@ def _render_video_visual(
         if not probe.has_video:
             raise ValueError("That effect requires an image, GIF, or video.")
         if effect in {"removebars", "removecaption"}:
-            if float(options.get("start", 0) or 0) or float(options.get("stop", 0) or 0):
-                raise ValueError("Cropping applies to the whole video. Trim it first to crop a specific section.")
+            if float(options.get("start", 0) or 0) or float(
+                options.get("stop", 0) or 0
+            ):
+                raise ValueError(
+                    "Cropping applies to the whole video. Trim it first to crop a specific section."
+                )
             previews = []
-            for index, point in enumerate(np.linspace(0, max(0, probe.duration - .1), 8)):
+            for index, point in enumerate(
+                np.linspace(0, max(0, probe.duration - 0.1), 8)
+            ):
                 preview_path = os.path.join(directory, f"crop-preview-{index}.png")
-                _run(["ffmpeg", "-v", "error", "-y", "-ss", str(point),
-                      "-i", input_path, "-frames:v", "1", preview_path])
+                _run(
+                    [
+                        "ffmpeg",
+                        "-v",
+                        "error",
+                        "-y",
+                        "-ss",
+                        str(point),
+                        "-i",
+                        input_path,
+                        "-frames:v",
+                        "1",
+                        preview_path,
+                    ]
+                )
                 if Path(preview_path).exists():
                     with Image.open(preview_path) as preview:
                         previews.append(preview.copy())
-            crop_box = _stable_edge_crop_box(previews, caption=effect == "removecaption")
+            crop_box = _stable_edge_crop_box(
+                previews, caption=effect == "removecaption"
+            )
             if crop_box is None:
-                raise ValueError("No caption or bars could be confidently detected. Use a manual crop instead.")
+                raise ValueError(
+                    "No caption or bars could be confidently detected. Use a manual crop instead."
+                )
             left, top, right, bottom = crop_box
             filter_value = f"crop={right-left}:{bottom-top}:{left}:{top}:exact=1,pad=ceil(iw/2)*2:ceil(ih/2)*2"
             filename = (
@@ -3737,13 +3776,17 @@ def render_image_effect_sync(
 
     if effect in {"removebars", "removecaption"}:
         if float(options.get("start", 0) or 0) or float(options.get("stop", 0) or 0):
-            raise ValueError("Cropping applies to the whole image or GIF. Trim it first to crop a specific section.")
+            raise ValueError(
+                "Cropping applies to the whole image or GIF. Trim it first to crop a specific section."
+            )
         crop_box = _stable_edge_crop_box(
             frames,
             caption=effect == "removecaption",
         )
         if crop_box is None:
-            raise ValueError("No caption or bars could be confidently detected. Use a manual crop instead.")
+            raise ValueError(
+                "No caption or bars could be confidently detected. Use a manual crop instead."
+            )
         transformed = [
             (
                 frame.convert("RGBA").crop(crop_box)
@@ -3930,11 +3973,14 @@ def render_overlay_effect_sync(
             overlay_data=second_data,
             **options,
         )
-    return _render_video_overlay_sync(
+    return _preserve_gif_output(
         input_data,
-        second_data,
-        allow_image_base=True,
-        **options,
+        _render_video_overlay_sync(
+            input_data,
+            second_data,
+            allow_image_base=True,
+            **options,
+        ),
     )
 
 
@@ -5323,9 +5369,7 @@ def _detect_platform_outro(path: str, duration: float, platform: str) -> float:
         "-i",
         path,
         "-vf",
-        (
-            "fps=10,scale=96:96"
-        ),
+        ("fps=10,scale=96:96"),
         "-f",
         "rawvideo",
         "-pix_fmt",
@@ -5378,16 +5422,38 @@ def _detect_platform_outro(path: str, duration: float, platform: str) -> float:
     # several ending frames; fail closed if OCR is unavailable or inconclusive.
     branded = False
     with tempfile.TemporaryDirectory(prefix="fishie-outro-ocr-") as directory:
-        for index, point in enumerate(np.linspace(sample_start + transition / 10 + .2, duration - .1, 3)):
+        for index, point in enumerate(
+            np.linspace(sample_start + transition / 10 + 0.2, duration - 0.1, 3)
+        ):
             image_path = os.path.join(directory, f"ending-{index}.png")
-            _run(["ffmpeg", "-v", "error", "-y", "-ss", str(point), "-i", path,
-                  "-frames:v", "1", "-vf", "scale=720:-1", image_path])
+            _run(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-y",
+                    "-ss",
+                    str(point),
+                    "-i",
+                    path,
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=720:-1",
+                    image_path,
+                ]
+            )
             try:
-                detected = run_media_command(
-                    ["tesseract", image_path, "stdout", "--psm", "11"],
-                    timeout=10, failure_prefix="Could not verify the outro",
-                    timeout_message="Could not verify the outro",
-                ).stdout.decode(errors="replace").lower()
+                detected = (
+                    run_media_command(
+                        ["tesseract", image_path, "stdout", "--psm", "11"],
+                        timeout=10,
+                        failure_prefix="Could not verify the outro",
+                        timeout_message="Could not verify the outro",
+                    )
+                    .stdout.decode(errors="replace")
+                    .lower()
+                )
             except (ValueError, OSError):
                 break
             pattern = r"tik\s*tok" if platform == "tiktok" else r"instagram|reels"
@@ -5395,8 +5461,10 @@ def _detect_platform_outro(path: str, duration: float, platform: str) -> float:
                 branded = True
                 break
     # A later return to bright content is not a persistent ending card.
-    if not branded or np.any((after.mean(axis=3) < 35).mean(axis=(1, 2)) < .75):
-        raise ValueError("Could not verify platform branding in the ending. Use the trim command to choose an endpoint manually.")
+    if not branded or np.any((after.mean(axis=3) < 35).mean(axis=(1, 2)) < 0.75):
+        raise ValueError(
+            "Could not verify platform branding in the ending. Use the trim command to choose an endpoint manually."
+        )
     return sample_start + transition / 10
 
 
@@ -5664,7 +5732,7 @@ def _reverse_image_window(
     return output_frames, output_durations
 
 
-def render_video_effect_sync(
+def _render_video_effect_sync(
     input_data: bytes,
     effect: str,
     *,
@@ -5968,6 +6036,37 @@ def render_video_effect_sync(
             )
 
     raise ValueError("Unknown video effect.")
+
+
+def _preserve_gif_output(input_data: bytes, result: EffectResult) -> EffectResult:
+    if not input_data.startswith((b"GIF87a", b"GIF89a")):
+        return result
+    if Path(result.filename).suffix.lower() not in {".mp4", ".webm", ".mov"}:
+        return result
+    probe = probe_media_sync(result.data)
+    if probe.has_audio or not probe.has_video:
+        return result
+    return _video_command_output(
+        result.data,
+        filename=Path(result.filename).stem,
+        output_extension="gif",
+        video_filter="split[a][b];[a]palettegen[p];[b][p]paletteuse",
+        media_probe=probe,
+    )
+
+
+def render_video_effect_sync(
+    input_data: bytes,
+    effect: str,
+    *,
+    second_data: bytes | None = None,
+    media_probe: MediaProbe | None = None,
+    **options: Any,
+) -> EffectResult:
+    result = _render_video_effect_sync(
+        input_data, effect, second_data=second_data, media_probe=media_probe, **options
+    )
+    return _preserve_gif_output(input_data, result)
 
 
 render_video_effect = to_thread(render_video_effect_sync)

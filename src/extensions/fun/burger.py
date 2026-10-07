@@ -1,12 +1,4 @@
-"""Anime burger images and the owner-managed burger catalogue.
-
-The burger collection is deliberately kept separate from the general image
-catalogue.  It is a small, file-backed collection so adding an image does not
-require a database migration or a deploy.  The checked-in catalogue acts as a
-seed; production can point the writable catalogue and image directory at a
-persistent volume with ``FISHIE_BURGERS_CATALOG_PATH`` and
-``FISHIE_BURGERS_ROOT``.
-"""
+"""Anime burger images stored in the shared image catalogue."""
 
 from __future__ import annotations
 
@@ -35,35 +27,13 @@ if TYPE_CHECKING:
     from extensions.context import Context
 
 
-BURGER_SEED_ROOT = FILES_ROOT / "images" / "burgers"
-BURGER_SEED_CATALOG = BURGER_SEED_ROOT / "catalog.json"
-
-# ``src`` is mounted read-only in production.  This is the same data parent
-# mounted by the production compose file, and is also a useful local fallback
-# when an older deployment has not yet picked up the burger-specific
-# environment variables.  Keep this runtime location separate from the
-# checked-in seed: the seed is intentionally never a write target.
-BURGER_RUNTIME_ROOT = Path(
-    os.getenv(
-        "FISHIE_BURGERS_RUNTIME_ROOT",
-        str(FILES_ROOT.parents[1] / "data" / "burgers"),
-    )
+BURGER_ROOT = Path(
+    os.getenv("FISHIE_BURGERS_ROOT", str(FILES_ROOT / "images" / "burgers"))
 )
-BURGER_RUNTIME_CATALOG = Path(
-    os.getenv(
-        "FISHIE_BURGERS_RUNTIME_CATALOG_PATH",
-        str(FILES_ROOT.parents[1] / "data" / "burgers_catalog.json"),
-    )
-)
-
-# Source files are read-only in the production container.  These optional
-# paths let owner-managed additions live on the existing persistent data
-# volume while retaining the bundled images as a fallback.  The runtime
-# directory is the default even when the environment variables are absent;
-# otherwise a stale deployment could silently select the read-only seed tree.
-BURGER_ROOT = Path(os.getenv("FISHIE_BURGERS_ROOT", str(BURGER_RUNTIME_ROOT)))
 BURGER_CATALOG = Path(
-    os.getenv("FISHIE_BURGERS_CATALOG_PATH", str(BURGER_ROOT / "catalog.json"))
+    os.getenv(
+        "FISHIE_BURGERS_CATALOG_PATH", str(FILES_ROOT / "images" / "catalog.json")
+    )
 )
 
 BURGER_MAX_BYTES = 50 * 1024 * 1024
@@ -86,8 +56,6 @@ BURGER_TRUSTED_CDN_HOSTS = frozenset(
     }
 )
 
-_ACTIVE_BURGER_CATALOG: Path | None = None
-
 
 @dataclass(frozen=True, slots=True)
 class BurgerAsset:
@@ -100,51 +68,12 @@ class BurgerAsset:
     extra: dict[str, Any]
 
 
-def _catalog_path() -> Path:
-    """Return the writable catalogue path configured for this instance."""
-
-    return BURGER_CATALOG
-
-
-def _catalog_candidates() -> tuple[Path, ...]:
-    """Return catalogue paths in the order in which they should be read.
-
-    When no runtime path was configured, the bundled seed is the historical
-    ``BURGER_CATALOG`` value.  Put the runtime catalogue first in that case so
-    additions made by an older deployment remain visible after a restart.
-    """
-
-    candidates: list[Path] = []
-
-    def add(path: Path) -> None:
-        if path not in candidates:
-            candidates.append(path)
-
-    if _ACTIVE_BURGER_CATALOG is not None:
-        add(_ACTIVE_BURGER_CATALOG)
-    if BURGER_CATALOG == BURGER_SEED_CATALOG:
-        add(BURGER_RUNTIME_CATALOG)
-        add(BURGER_CATALOG)
-    else:
-        add(BURGER_CATALOG)
-        add(BURGER_RUNTIME_CATALOG)
-        add(BURGER_SEED_CATALOG)
-    if BURGER_SEED_CATALOG not in candidates:
-        add(BURGER_SEED_CATALOG)
-    return tuple(candidates)
-
-
 def _catalog_document() -> tuple[Path, dict[str, Any]]:
-    """Load the writable catalogue, falling back to the bundled seed."""
-
-    for candidate in _catalog_candidates():
-        try:
-            payload = json.loads(candidate.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(payload, dict) and isinstance(payload.get("assets"), list):
-            return candidate, payload
-    return _catalog_path(), {"version": 1, "assets": []}
+    """Load the shared catalogue without discarding unrelated image entries."""
+    payload = json.loads(BURGER_CATALOG.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("burgers"), list):
+        raise commands.BadArgument("The burger catalogue is invalid.")
+    return BURGER_CATALOG, payload
 
 
 def _safe_asset_path(relative: object) -> Path | None:
@@ -157,19 +86,12 @@ def _safe_asset_path(relative: object) -> Path | None:
     if candidate.is_absolute():
         return None
 
-    roots: list[Path] = []
-    for root in (BURGER_ROOT, BURGER_RUNTIME_ROOT, BURGER_SEED_ROOT):
-        resolved = root.resolve()
-        if resolved not in roots:
-            roots.append(resolved)
-    for root in roots:
-        path = (root / candidate).resolve()
-        try:
-            path.relative_to(root)
-        except ValueError:
-            continue
-        if path.is_file() and path.suffix.casefold() == ".png":
-            return path
+    root = BURGER_ROOT.resolve()
+    path = (root / candidate).resolve()
+    if not path.is_relative_to(root):
+        return None
+    if path.is_file() and path.suffix.casefold() in {".png", ".gif", ".mp4"}:
+        return path
     return None
 
 
@@ -179,7 +101,7 @@ def burger_catalog() -> tuple[BurgerAsset, ...]:
     _catalog_file, payload = _catalog_document()
     assets: list[BurgerAsset] = []
     seen_ids: set[int] = set()
-    for raw in payload.get("assets", []):
+    for raw in payload.get("burgers", []):
         if not isinstance(raw, dict):
             continue
         raw_id = raw.get("id")
@@ -209,7 +131,7 @@ def burger_catalog() -> tuple[BurgerAsset, ...]:
 
 
 def _raw_assets(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    return [dict(item) for item in payload.get("assets", []) if isinstance(item, dict)]
+    return [dict(item) for item in payload.get("burgers", []) if isinstance(item, dict)]
 
 
 def _write_catalog(path: Path, payload: dict[str, Any]) -> None:
@@ -222,7 +144,7 @@ def _write_catalog(path: Path, payload: dict[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp")
     temporary.write_text(
         json.dumps(
-            {"version": int(payload.get("version") or 1), "assets": payload["assets"]},
+            payload,
             ensure_ascii=False,
             indent=2,
         )
@@ -232,76 +154,27 @@ def _write_catalog(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
-def _write_targets() -> tuple[tuple[Path, Path], ...]:
-    """Return persistent ``(image_root, catalog)`` write locations.
-
-    ``BURGER_SEED_ROOT``/``BURGER_SEED_CATALOG`` are deliberately excluded.
-    They are bundled with the application and production mounts them under a
-    read-only source tree.  If an explicitly configured target is unavailable
-    we fall back to the persistent runtime target, then fail with a clear
-    error; we never mutate the seed as a last resort.
-    """
-
-    candidates: list[tuple[Path, Path]] = []
-    for root, catalog in (
-        (BURGER_ROOT, BURGER_CATALOG),
-        (BURGER_RUNTIME_ROOT, BURGER_RUNTIME_CATALOG),
-    ):
-        pair = (root, catalog)
-        if pair in candidates:
-            continue
-        try:
-            if root.resolve() == BURGER_SEED_ROOT.resolve():
-                continue
-            if catalog.resolve() == BURGER_SEED_CATALOG.resolve():
-                continue
-        except OSError:
-            # A missing path still has a valid lexical path.  ``resolve`` may
-            # fail only for an unusual filesystem race; leave selection to
-            # the write probe below rather than treating it as the seed.
-            pass
-        if pair not in candidates:
-            candidates.append(pair)
-    return tuple(candidates)
-
-
 def _select_write_target() -> tuple[Path, Path]:
-    """Choose the first writable image/catalogue pair.
-
-    The source tree is intentionally read-only in the production container.
-    Probing a tiny file in the target directory catches both read-only mounts
-    and host UID/GID mismatches before an image is downloaded and avoids the
-    old generic failure after a successful fetch.
-    """
-
-    for root, catalog in _write_targets():
-        probes: list[Path] = []
-        try:
-            root.mkdir(parents=True, exist_ok=True)
-            catalog.parent.mkdir(parents=True, exist_ok=True)
-            for directory, label in (
-                (root, "asset"),
-                (catalog.parent, "catalog"),
-            ):
-                probe = directory / (
-                    f".{catalog.name}.{label}.{secrets.token_hex(8)}.tmp"
-                )
-                probes.append(probe)
-                probe.write_bytes(b"")
+    """Check that the configured image and catalogue directories are writable."""
+    probes: list[Path] = []
+    try:
+        for directory in {BURGER_ROOT, BURGER_CATALOG.parent}:
+            directory.mkdir(parents=True, exist_ok=True)
+            probe = directory / f".burger.{secrets.token_hex(8)}.tmp"
+            probes.append(probe)
+            probe.write_bytes(b"")
+            probe.unlink()
+    except OSError as error:
+        raise commands.BadArgument(
+            "The burger catalogue is not writable; configure a writable data directory."
+        ) from error
+    finally:
+        for probe in probes:
+            try:
                 probe.unlink(missing_ok=True)
-            return root, catalog
-        except OSError:
-            for probe in probes:
-                try:
-                    # Cleanup can itself fail on a read-only mount (the
-                    # original failure that caused this target to be skipped)
-                    # so never let it prevent trying the next target.
-                    probe.unlink(missing_ok=True)
-                except OSError:
-                    pass
-    raise commands.BadArgument(
-        "The burger catalogue is not writable; configure a writable data directory."
-    )
+            except OSError:
+                pass
+    return BURGER_ROOT, BURGER_CATALOG
 
 
 def _png_bytes(data: bytes) -> bytes:
@@ -347,6 +220,7 @@ async def add_burger_asset(
             image_url,
             allowed_content_prefixes=(
                 "image/",
+                "video/",
                 "application/octet-stream",
                 "binary/octet-stream",
             ),
@@ -366,7 +240,23 @@ async def add_burger_asset(
             **fetch_options,
         )
     try:
-        png = await asyncio.to_thread(_png_bytes, fetched.data)
+        with Image.open(BytesIO(fetched.data)) as image:
+            is_gif = image.format == "GIF"
+            image.verify()
+        if is_gif:
+            png, extension = fetched.data, ".gif"
+        else:
+            png, extension = await asyncio.to_thread(_png_bytes, fetched.data), ".png"
+    except Image.UnidentifiedImageError:
+        from extensions.media_effects.processing import convert_media
+
+        try:
+            result = await convert_media(fetched.data, "mp4")
+        except ValueError as error:
+            raise commands.BadArgument(
+                "That URL did not return valid image or video media."
+            ) from error
+        png, extension = result.data, ".mp4"
     except (
         OSError,
         ValueError,
@@ -380,7 +270,7 @@ async def add_burger_asset(
         entries = _raw_assets(payload)
         ids = [int(item["id"]) for item in entries if str(item.get("id", "")).isdigit()]
         asset_id = max(ids, default=0) + 1
-        filename = f"{secrets.token_hex(8)}.png"
+        filename = f"{secrets.token_hex(8)}{extension}"
         root, target = _select_write_target()
         path = root / filename
         try:
@@ -395,10 +285,8 @@ async def add_burger_asset(
                 "extra": {},
             }
             entries.append(entry)
-            payload["assets"] = entries
+            payload["burgers"] = entries
             await asyncio.to_thread(_write_catalog, target, payload)
-            global _ACTIVE_BURGER_CATALOG
-            _ACTIVE_BURGER_CATALOG = target
         except Exception:
             path.unlink(missing_ok=True)
             raise
@@ -425,26 +313,16 @@ async def remove_burger_asset(asset_id: int) -> bool:
         if selected is None:
             return False
         entries = [entry for entry in entries if entry is not selected]
-        payload["assets"] = entries
+        payload["burgers"] = entries
         try:
-            target = catalog_file
-            # A seed catalogue can be readable but not writable.  In that
-            # case write the edited document to the same runtime fallback used
-            # by additions instead of failing after the database lookup.
-            _root, fallback = _select_write_target()
-            if target == BURGER_SEED_CATALOG:
-                target = fallback
+            _root, target = _select_write_target()
             await asyncio.to_thread(_write_catalog, target, payload)
-            global _ACTIVE_BURGER_CATALOG
-            _ACTIVE_BURGER_CATALOG = target
         except OSError as error:
             raise commands.BadArgument(
                 "The burger catalogue is not writable; configure a writable data directory."
             ) from error
-        # Never remove a bundled seed image when production is using a
-        # separate writable directory; it may still be needed by the seed.
         path = _safe_asset_path(selected.get("path"))
-        if path is not None and path.parent != BURGER_SEED_ROOT.resolve():
+        if path is not None:
             path.unlink(missing_ok=True)
     return True
 
@@ -472,11 +350,18 @@ class BurgerPageView(discord.ui.LayoutView):
 
     def _render(self) -> None:
         self.clear_items()
+        number = str(self.asset.id)
+        source = self.asset.source
+        if source and urlsplit(source).scheme in {"http", "https"}:
+            number = f"[{number}](<{source}>)"
         self.add_item(
             discord.ui.Container(
                 discord.ui.MediaGallery(
-                    discord.MediaGalleryItem("attachment://burger.png")
+                    discord.MediaGalleryItem(
+                        f"attachment://burger{self.asset.path.suffix}"
+                    )
                 ),
+                discord.ui.TextDisplay(f"-# #{number}"),
                 accent_color=getattr(self.ctx, "embedcolor", None),
             )
         )
@@ -486,7 +371,7 @@ class BurgerPageView(discord.ui.LayoutView):
             self.add_item(discord.ui.ActionRow(self.previous, self.next))
 
     def _file(self) -> discord.File:
-        return discord.File(self.asset.path, filename="burger.png")
+        return discord.File(self.asset.path, filename=f"burger{self.asset.path.suffix}")
 
     async def start(self) -> None:
         self.message = await self.ctx.send(
@@ -542,13 +427,20 @@ class BurgerCommands:
     bot: Fishie
 
     @cast(Any, commands.command)(name="burger", description="burger")
-    async def burger(self, ctx: Context) -> None:
+    async def burger(self, ctx: Context, number: int | None = None) -> None:
         """burger"""
 
         assets = burger_catalog()
         if not assets:
             raise commands.BadArgument("No burger images are available right now.")
-        view = BurgerPageView(ctx, (random.choice(assets),))
+        selected = (
+            random.choice(assets)
+            if number is None
+            else next((asset for asset in assets if asset.id == number), None)
+        )
+        if selected is None:
+            raise commands.BadArgument(f"No burger entry #{number} exists.")
+        view = BurgerPageView(ctx, (selected,))
         await view.start()
 
     @cast(Any, commands.command)(name="burgers", description="burger")
@@ -564,8 +456,6 @@ class BurgerCommands:
 __all__ = [
     "BURGER_CATALOG",
     "BURGER_ROOT",
-    "BURGER_RUNTIME_CATALOG",
-    "BURGER_RUNTIME_ROOT",
     "BURGER_TRUSTED_CDN_HOSTS",
     "BurgerAsset",
     "BurgerCommands",
