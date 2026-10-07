@@ -191,6 +191,8 @@ ANILIST_NOTIFICATION_STATUSES = frozenset({"RELEASING", "AIRING", "NOT_YET_RELEA
 def anilist_notification_schedule(
     media: dict[str, Any],
     now: datetime.datetime | None = None,
+    *,
+    include_due: bool = False,
 ) -> tuple[
     datetime.datetime | None,
     int | None,
@@ -198,11 +200,10 @@ def anilist_notification_schedule(
 ]:
     """Return the next valid notification time for an AniList anime.
 
-    Finished, cancelled, and paused entries are deliberately excluded.  A
-    not-yet-released entry is actionable only when its (possibly partial)
-    start date is in the future.  Airing/releasing entries require a future
-    ``nextAiringEpisode`` value.  This keeps a completed season from being
-    followed just because AniList still returns its historical start date.
+    Finished, cancelled, and paused entries are deliberately excluded.
+    Exact episode times take precedence, including before a premiere.
+    Date-only start dates are a fallback for not-yet-released entries.
+    Existing follows may retain due times until delivered or advanced.
     """
 
     if now is None:
@@ -212,19 +213,19 @@ def anilist_notification_schedule(
     status = str(media.get("status") or "").upper()
     if status not in ANILIST_NOTIFICATION_STATUSES:
         return None, None, None
+    airing, episode = anilist_airing_datetime(media.get("nextAiringEpisode"))
+    # AniList can publish an exact premiere time before changing the status
+    # from NOT_YET_RELEASED. Date-only fields must not override that time.
+    if airing is not None and (include_due or airing > now):
+        return airing, episode, None
     end_date = anilist_datetime(media.get("endDate"))
     if end_date is not None and end_date <= now:
         return None, None, None
-
-    airing, episode = anilist_airing_datetime(media.get("nextAiringEpisode"))
     start_date = anilist_datetime(media.get("startDate"))
     if status == "NOT_YET_RELEASED":
-        if start_date is not None and start_date > now:
+        if start_date is not None and (include_due or start_date > now):
             return None, None, start_date
         return None, None, None
-    if status in {"AIRING", "RELEASING"}:
-        if airing is not None and airing > now:
-            return airing, episode, None
     return None, None, None
 
 

@@ -284,6 +284,10 @@ class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles, Protection):
     @commands.has_guild_permissions(manage_guild=True)
     @app_commands.allowed_installs(guilds=True)
     @app_commands.allowed_contexts(guilds=True)
+    @app_commands.describe(
+        command_name="Command to disable.",
+        channel="Channel to disable it in; leave blank for the entire server.",
+    )
     async def disable(
         self,
         ctx: GuildContext,
@@ -311,6 +315,25 @@ class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles, Protection):
         )
         scope = f"in {channel.mention}" if channel is not None else "in this server"
         await ctx.send(f"Disabled `{command.qualified_name}` {scope}.")
+
+    @disable.autocomplete("command_name")
+    async def disable_command_autocomplete(
+        self, _interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        needle = current.casefold().strip()
+        choices = {
+            command.qualified_name
+            for command in self.bot.walk_commands()
+            if not command.hidden and not self.bot._command_disable_excluded(command)
+        }
+        matches = sorted(
+            (name for name in choices if not needle or needle in name.casefold()),
+            key=lambda name: (not name.casefold().startswith(needle), name.casefold()),
+        )
+        return [
+            app_commands.Choice(name=name[:100], value=name[:100])
+            for name in matches[:25]
+        ]
 
     @commands.command(name="enable")
     @commands.guild_only()
@@ -585,9 +608,26 @@ class Moderation(Mass, Logger, Honeypot, Snipe, CustomRoles, Protection):
     @commands.hybrid_command(name="unmute")
     @mod_target("moderate_members")
     async def unmute(self, ctx: GuildContext, member: discord.Member):
-        """Remove someone's timeout."""
-        if not member.is_timed_out():
+        """Remove someone's timeout and restore roles saved by protection."""
+        protection_locked = await self.bot.pool.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM guild_protection_locks "
+            "WHERE guild_id = $1 AND user_id = $2)",
+            ctx.guild.id,
+            member.id,
+        )
+        if not member.is_timed_out() and not protection_locked:
             raise commands.BadArgument("That member is not muted.")
+
+        if protection_locked:
+            complete, details = await self._unlock_protection_member(
+                ctx.guild, member, ctx.author
+            )
+            await ctx.send(
+                f"{'Unmuted and unlocked' if complete else 'Partially unlocked'} "
+                f"**{member}**. {details}"
+            )
+            return
+
         await member.timeout(None, reason=f"{str(ctx.author)} (ID: {ctx.author.id})")
         await ctx.send(f"Unmuted **{member}**.")
 

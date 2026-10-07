@@ -911,6 +911,9 @@ class Protection(Cog):
         await self._send_protection(ctx)
 
     @protection.command(name="enable")
+    @app_commands.describe(
+        trigger="Protection trigger to enable; leave blank to enable protection."
+    )
     @protection_manager_only
     async def protection_enable(
         self, ctx: GuildContext, *, trigger: str | None = None
@@ -934,6 +937,9 @@ class Protection(Cog):
         )
 
     @protection.command(name="disable")
+    @app_commands.describe(
+        trigger="Protection trigger to disable; leave blank to disable protection."
+    )
     @protection_manager_only
     async def protection_disable(
         self, ctx: GuildContext, *, trigger: str | None = None
@@ -958,7 +964,23 @@ class Protection(Cog):
             else f"Disabled **{TRIGGER_LABELS[normalized]}** protection."
         )
 
+    @protection_enable.autocomplete("trigger")
+    @protection_disable.autocomplete("trigger")
+    async def protection_trigger_autocomplete(
+        self, _interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        needle = current.casefold().strip()
+        choices = [("all", "All triggers"), *TRIGGER_LABELS.items()]
+        return [
+            app_commands.Choice(name=label, value=value)
+            for value, label in choices
+            if not needle or needle in label.casefold() or needle in value.casefold()
+        ][:25]
+
     @protection.command(name="action", aliases=("mode", "response"))
+    @app_commands.describe(
+        mode="Response when protection triggers: warn, lock, or both."
+    )
     @protection_manager_only
     async def protection_action(
         self, ctx: GuildContext, mode: str | None = None
@@ -972,7 +994,21 @@ class Protection(Cog):
         await self._set_protection_mode(ctx.guild.id, normalized, ctx.author.id)
         await ctx.send(f"Protection response set to **{normalized.title()}**.")
 
+    @protection_action.autocomplete("mode")
+    async def protection_action_autocomplete(
+        self, _interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        needle = current.casefold().strip()
+        return [
+            app_commands.Choice(name=mode.title(), value=mode)
+            for mode in ("warn", "lock", "both")
+            if not needle or needle in mode
+        ]
+
     @protection.command(name="channel")
+    @app_commands.describe(
+        channel="Text channel for protection logs; leave blank to open setup."
+    )
     @protection_manager_only
     async def protection_channel(
         self,
@@ -1014,6 +1050,7 @@ class Protection(Cog):
             )
 
     @protection.command(name="lock")
+    @app_commands.describe(member="Member whose roles protection should lock.")
     @protection_manager_only
     async def protection_lock(self, ctx: GuildContext, member: discord.Member) -> None:
         """Strip a member's roles and lock them until protection unlocks them."""
@@ -1048,6 +1085,7 @@ class Protection(Cog):
         )
 
     @protection.command(name="unlock")
+    @app_commands.describe(member="Member whose protected roles should be restored.")
     @protection_manager_only
     async def protection_unlock(
         self, ctx: GuildContext, member: discord.Member
@@ -1097,6 +1135,7 @@ class Protection(Cog):
             await ctx.send(f"Protection role: <@&{config.protection_role_id}>")
 
     @protection_role.command(name="set")
+    @app_commands.describe(role="Role trusted to manage and bypass protection.")
     @protection_trust_root_only
     async def protection_role_set(self, ctx: GuildContext, role: discord.Role) -> None:
         """Set the role allowed to manage and bypass protection."""

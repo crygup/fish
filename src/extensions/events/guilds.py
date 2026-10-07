@@ -40,55 +40,13 @@ class Guilds(Cog):
         self._legacy_handoff_left: set[int] = set()
 
     def _current_bot_id(self) -> int | None:
-        # Prefer the identity selected by the launcher.  ``active_bot_id``
-        # and ``configured_bot_id`` are properties on the production bot;
-        # checking them first keeps hand-off decisions correct before
-        # Discord has populated ``Client.user``.
-        for attribute in ("active_bot_id", "configured_bot_id"):
-            configured = getattr(self.bot, attribute, None)
-            if configured is None:
-                continue
-            try:
-                configured = configured() if callable(configured) else configured
-                return int(configured)
-            except (TypeError, ValueError):
-                continue
-        user = getattr(self.bot, "user", None)
-        if user is not None:
-            try:
-                return int(user.id)
-            except (TypeError, ValueError):
-                pass
-        try:
-            ids = self.bot.config.get("ids", {})
-            marker = getattr(self.bot, "is_new_bot", None)
-            if marker is not None:
-                try:
-                    if bool(marker() if callable(marker) else marker):
-                        return int(ids.get("new_bot_id") or self.REPLACEMENT_BOT_ID)
-                except Exception:
-                    pass
-            return int(ids.get("bot_id") or self.LEGACY_BOT_ID)
-        except (KeyError, TypeError, ValueError):
-            return None
+        return self.bot.active_bot_id
 
     def _is_replacement_bot(self) -> bool:
-        marker = getattr(self.bot, "is_new_bot", None)
-        if marker is not None:
-            try:
-                return bool(marker() if callable(marker) else marker)
-            except Exception:
-                pass
-        return self._current_bot_id() == self.REPLACEMENT_BOT_ID
+        return self.bot.is_new_bot
 
     def _is_legacy_bot(self) -> bool:
-        explicit = getattr(self.bot, "is_legacy_bot", None)
-        if explicit is not None:
-            try:
-                return bool(explicit() if callable(explicit) else explicit)
-            except Exception:
-                pass
-        return self._current_bot_id() == self.LEGACY_BOT_ID
+        return self.bot.is_legacy_bot
 
     @staticmethod
     def _member_present(guild: discord.Guild, member_id: int) -> bool:

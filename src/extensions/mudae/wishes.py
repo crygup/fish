@@ -355,53 +355,6 @@ def series_wish_from_row(row: Mapping[str, Any] | object) -> MudaeWishRecord | N
     return record if record.is_series else None
 
 
-def series_wish_values(
-    series: str,
-    *,
-    wish_type: str = "series",
-    kakera_threshold: int | None = None,
-    bundle_id: int | None = None,
-    bundle_name: str | None = None,
-    source_guild_id: int | None = None,
-    source_channel_id: int | None = None,
-    source_message_id: int | None = None,
-    source_page: int | None = None,
-    source_entry: int | None = None,
-) -> dict[str, Any]:
-    """Build normalized insert values for a series wish row.
-
-    The returned mapping intentionally omits guild/user ids because those are
-    command-scope values.  It can be passed directly to an INSERT builder or
-    used to validate a batch before opening a transaction.
-    """
-
-    text = " ".join(str(series).strip().split())
-    if not text:
-        raise ValueError("A series name is required")
-    if wish_type not in {"series", "series_kakera"}:
-        raise ValueError("wish_type must be series or series_kakera")
-    if wish_type == "series_kakera" and kakera_threshold is None:
-        raise ValueError("series_kakera wishes require a kakera threshold")
-    if kakera_threshold is not None and kakera_threshold < 0:
-        raise ValueError("kakera threshold cannot be negative")
-    normalized = normalize_wish(text)
-    key = bundle_key(bundle_name) if bundle_name else None
-    return {
-        "wish_type": wish_type,
-        "wish_value": normalized,
-        "normalized_value": normalized,
-        "kakera_threshold": kakera_threshold,
-        "bundle_id": bundle_id,
-        "bundle_key": key,
-        "bundle_name": bundle_name,
-        "source_guild_id": source_guild_id,
-        "source_channel_id": source_channel_id,
-        "source_message_id": source_message_id,
-        "source_page": source_page,
-        "source_entry": source_entry,
-    }
-
-
 def wish_item_key(kind: str, value: str | int) -> str:
     """Build the in-memory key used for a character/series/kakera wish."""
 

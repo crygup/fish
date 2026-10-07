@@ -54,11 +54,7 @@ from .cache import (
     db_cache,
 )
 from .currency import CurrencyService
-from .handoff import (
-    is_handoff_exempt_command,
-    is_legacy_instance,
-    send_handoff_notice,
-)
+from .handoff import is_legacy_instance
 from .migrations import check_migrations
 
 BotInstance = Literal["legacy", "new", "testing"]
@@ -76,24 +72,18 @@ def normalize_bot_instance(
     *,
     testing: bool = False,
 ) -> BotInstance:
-    """Return the configured Fishie application role.
-
-    Production has historically defaulted to the legacy application.  The
-    ``testing`` flag retains its old meaning and takes precedence when no
-    explicit instance is supplied.  ``FISHIE_BOT_INSTANCE`` is accepted here
-    as a convenience for code that constructs :class:`Fishie` directly; the
-    launcher passes its resolved value explicitly.
-    """
+    """Return the configured Fishie application role."""
 
     requested = value if value is not None else os.getenv("FISHIE_BOT_INSTANCE")
     if requested is None or not requested.strip():
-        requested = "testing" if testing else "legacy"
+        requested = "testing" if testing else "new"
     normalized = requested.strip().casefold()
     aliases = {
         "old": "legacy",
-        "primary": "legacy",
-        "prod": "legacy",
-        "production": "legacy",
+        "main": "new",
+        "primary": "new",
+        "prod": "new",
+        "production": "new",
         "replacement": "new",
         "newbot": "new",
         "test": "testing",
@@ -275,6 +265,13 @@ ROTATING_STATUSES: tuple[str, ...] = (
     "{commands_ran:,} commands ran",
     "{commands_ran_today:,} commands ran today",
     "Most used command today: {command_name}",
+    "did you know rawr means i love you in dinosaur",
+    "i love dr pepper",
+    "woof",
+    "22",
+    "fish game balatro",
+    "fish blackjack",
+    "fish show better call saul"
 )
 STATUS_ROTATION_INTERVAL = 60 * 30
 
@@ -599,19 +596,6 @@ class FishieCommandTree(app_commands.CommandTree[Any]):
 
     async def interaction_check(self, interaction: discord.Interaction[Any]) -> bool:
         bot = self.client
-        command = interaction.command
-        # The retiring application remains online only to direct users to the
-        # replacement.  Autocomplete requests cannot receive a normal message
-        # response, so let those complete and block the eventual invocation.
-        if (
-            interaction.type != discord.InteractionType.autocomplete
-            and is_legacy_instance(bot)
-            and command is not None
-            and not getattr(interaction.user, "bot", False)
-            and not is_handoff_exempt_command(command)
-        ):
-            await send_handoff_notice(bot, interaction)
-            return False
         check = getattr(bot, "_check_app_command_disabled", None)
         if check is None:
             return True
@@ -709,9 +693,6 @@ class Fishie(commands.Bot):
         self._status_rotation_index = 0
         self._restart_message_checked = False
         self.error_logs = None
-        self.dagpi_rl = commands.CooldownMapping.from_cooldown(
-            60.0, 60.0, commands.BucketType.default
-        )
         self.messages: TTLCache[str, discord.Message] = TTLCache[str, discord.Message](
             maxsize=1000, ttl=300.0
         )  # {repr(ctx): message(from ctx.send) }
@@ -1039,22 +1020,6 @@ class Fishie(commands.Bot):
                 visit(command)
 
     async def invoke(self, ctx: commands.Context[Fishie]) -> None:
-        # Text commands (including the text side of hybrid commands) do not
-        # pass through the application-command tree, so apply the same
-        # replacement notice here before any command callback or tracking
-        # consent prompt can run.
-        if (
-            is_legacy_instance(self)
-            and ctx.command is not None
-            and not ctx.author.bot
-            and not is_handoff_exempt_command(ctx.command)
-        ):
-            await send_handoff_notice(
-                self,
-                ctx,
-                ephemeral=ctx.interaction is not None,
-            )
-            return
         if (
             ctx.command is not None
             and not ctx.author.bot
@@ -1361,6 +1326,9 @@ class Fishie(commands.Bot):
                 self.logger.exception(f"Failed to reload extension: {ext}")
                 continue
         self._register_tracking_consent_checks()
+        for cog in self.cogs.values():
+            for command in cog.get_app_commands():
+                describe_missing_app_parameters(command)
 
     async def setup_hook(self) -> None:
         async with self.pool.acquire() as connection:
@@ -1410,27 +1378,36 @@ class Fishie(commands.Bot):
 
     async def _rotate_statuses(self) -> None:
         """Rotate the public custom status without changing the mobile identify."""
-        await self.wait_until_ready()
+        delay = 0
         while not self.is_closed():
-            await asyncio.sleep(STATUS_ROTATION_INTERVAL)
+            await asyncio.sleep(delay)
             if self.is_closed():
                 return
-
-            self._status_rotation_index = (self._status_rotation_index + 1) % len(
-                ROTATING_STATUSES
-            )
-            status_name = await self._format_rotating_status(
-                ROTATING_STATUSES[self._status_rotation_index]
-            )
-            if status_name is None:
-                continue
-            activity = discord.CustomActivity(name=status_name)
-            self.activity = activity
             try:
-                await self.change_presence(activity=activity)
-            except discord.DiscordException:
+                await self.wait_until_ready()
+                for _ in range(len(ROTATING_STATUSES)):
+                    self._status_rotation_index = (self._status_rotation_index + 1) % len(
+                        ROTATING_STATUSES
+                    )
+                    status_name = await self._format_rotating_status(
+                        ROTATING_STATUSES[self._status_rotation_index]
+                    )
+                    if status_name is not None:
+                        break
+                else:
+                    delay = 60
+                    continue
+                activity = discord.CustomActivity(name=status_name)
+                async with asyncio.timeout(30):
+                    await self.change_presence(activity=activity)
+                self.activity = activity
+                delay = STATUS_ROTATION_INTERVAL
+                self.logger.info("Rotating custom status updated: %s", status_name)
+            except Exception:
+                delay = 60
                 self.logger.warning(
-                    "Could not update the rotating custom status", exc_info=True
+                    "Could not update the rotating custom status; retrying in 60 seconds",
+                    exc_info=True,
                 )
 
     async def _format_rotating_status(self, template: str) -> str | None:
@@ -1472,7 +1449,8 @@ class Fishie(commands.Bot):
                         today,
                     )
                 )
-            results = await asyncio.gather(*queries)
+            async with asyncio.timeout(10):
+                results = await asyncio.gather(*queries)
             result_index = 0
             total = today_count = 0
             most_used_command: str | None = None
@@ -1496,9 +1474,18 @@ class Fishie(commands.Bot):
             return template.format(**values)
         except Exception:
             self.logger.exception("Could not render dynamic rotating status")
-            return template
+            return None
 
     async def on_ready(self):
+        if self._status_rotation_task is None or self._status_rotation_task.done():
+            previous_task = self._status_rotation_task
+            if previous_task is not None and not previous_task.cancelled():
+                error = previous_task.exception()
+                if error is not None:
+                    self.logger.error("Status rotation stopped unexpectedly: %r", error)
+            self._status_rotation_task = asyncio.create_task(
+                self._rotate_statuses(), name="fishie-status-rotation"
+            )
         # Cache bot accounts from the ready member cache so synchronous
         # history checks can treat them as public without extra API calls.
         if self.user is not None:

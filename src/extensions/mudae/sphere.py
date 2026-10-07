@@ -665,10 +665,15 @@ def _ot_recommendations(
     # Never offer a cell that is provably blue as a recommendation.  When all
     # remaining cells are forced blue there simply is no useful click to show.
     candidates = safe if safe else unknown - danger
+    if not candidates:
+        return safe, danger, [], probabilities, complete
+    lowest_blue_count = min(blue_counts[position] for position in candidates)
     ranked = sorted(
-        candidates, key=lambda position: (probabilities[position], position)
+        position
+        for position in candidates
+        if blue_counts[position] == lowest_blue_count
     )
-    return safe, danger, ranked[:4], probabilities, complete
+    return safe, danger, ranked, probabilities, complete
 
 
 def _ot_color_count(content: str) -> int | None:
@@ -751,11 +756,13 @@ def _ot_initial_recommendations(
         position: blue_counts[position] / OT_INITIAL_SAMPLE_COUNT
         for position in range(GRID_SIZE * GRID_SIZE)
     }
-    ranked = sorted(
-        range(GRID_SIZE * GRID_SIZE),
-        key=lambda position: (probabilities[position], position),
-    )
-    return set(), set(), ranked[:4], probabilities, False
+    lowest_blue_count = min(blue_counts)
+    ranked = [
+        position
+        for position, blue_count in enumerate(blue_counts)
+        if blue_count == lowest_blue_count
+    ]
+    return set(), set(), ranked, probabilities, False
 
 
 def _possible_red_positions(revealed: dict[int, str]) -> Set[int]:

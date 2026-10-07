@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Optional, Sequence, cast
 import asyncpg
 from cachetools import TTLCache
 
-# TODO: replace with ZoneInfo when upgrading to 3.9
 import dateutil.tz
 import discord
 from dateutil.zoneinfo import get_zonefile_instance
@@ -29,27 +28,6 @@ if TYPE_CHECKING:
 
     from core.bot import Fishie
     from extensions.context import Context
-
-
-class MaybeAcquire:
-    def __init__(
-        self, connection: Optional[asyncpg.Connection], *, pool: asyncpg.Pool
-    ) -> None:
-        self._connection: Optional[asyncpg.Connection] = connection
-        self.pool: asyncpg.Pool = pool
-        self._cleanup: bool = False
-
-    async def __aenter__(self) -> asyncpg.Connection:
-        if self._connection is None:
-            self._cleanup = True
-            self._connection = c = await self.pool.acquire()  # type: ignore
-            return c  # type: ignore
-
-        return self._connection
-
-    async def __aexit__(self, *args) -> None:
-        if self._cleanup:
-            await self.pool.release(self._connection)  # type: ignore
 
 
 class TimeZone(NamedTuple):
@@ -491,19 +469,19 @@ class Reminder(Cog):
     async def wait_for_active_timers(
         self, *, connection: Optional[asyncpg.Connection] = None, days: int = 7
     ) -> Timer:
-        async with MaybeAcquire(connection=connection, pool=self.bot.pool) as con:
-            while True:
-                # Clear before querying so an insert racing with the query always
-                # leaves the event set and cannot strand the dispatcher.
-                self._have_data.clear()
-                timer = await self.get_active_timer(connection=con, days=days)
-                if timer is not None:
-                    return timer
-                self._current_timer = None
-                try:
-                    await asyncio.wait_for(self._have_data.wait(), timeout=3600)
-                except asyncio.TimeoutError:
-                    pass
+        while True:
+            # Clear before querying so an insert racing with the query always
+            # leaves the event set and cannot strand the dispatcher. A pooled
+            # connection is held only by the query, never by the idle wait.
+            self._have_data.clear()
+            timer = await self.get_active_timer(connection=connection, days=days)
+            if timer is not None:
+                return timer
+            self._current_timer = None
+            try:
+                await asyncio.wait_for(self._have_data.wait(), timeout=3600)
+            except asyncio.TimeoutError:
+                pass
 
     async def call_timer(self, timer: Timer) -> None:
         # delete the timer

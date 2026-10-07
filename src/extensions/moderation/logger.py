@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence, cast
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from core import Cog, is_operational_guild
@@ -53,6 +54,13 @@ def _display(value: object | None) -> str:
         return "None"
     value = discord.utils.escape_mentions(discord.utils.escape_markdown(str(value)))
     return value if len(value) <= 1000 else value[:997] + "..."
+
+
+def _code_value(value: object | None) -> str:
+    if value is None or value == "":
+        return "None"
+    text = discord.utils.escape_mentions(str(value)).replace("`", "ˋ")
+    return text if len(text) <= 1000 else text[:997] + "..."
 
 
 def _attachment_signature(attachment: discord.Attachment) -> tuple[object, ...]:
@@ -235,7 +243,21 @@ class _RolePositionChange:
     after_position: object | None
 
 
+@dataclass(slots=True)
+class _ProfileNameChange:
+    """One user's name changes during the short merge window."""
+
+    user: discord.User
+    before_username: str
+    after_username: str
+    before_display_name: str
+    after_display_name: str
+    username_changed: bool
+    display_name_changed: bool
+
+
 CHANNEL_MOVE_BATCH_DELAY = 0.75
+PROFILE_UPDATE_BATCH_DELAY = 1.0
 
 
 async def _authorize_logger_interaction(
@@ -338,55 +360,6 @@ class LoggerChannelModal(discord.ui.Modal, title="Logger channel"):
             return
         await interaction.response.send_message(
             f"{LOGGER_EVENTS[self.event]} will now be logged in {channel.mention}.",
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-
-class LoggerChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self, view: LoggerChannelPickerView) -> None:
-        self.logger_view = view
-        super().__init__(
-            placeholder="Choose a text channel",
-            min_values=1,
-            max_values=1,
-            channel_types=[discord.ChannelType.text],
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0]
-        # Channel selects return AppCommandChannel objects rather than the
-        # cached TextChannel instance used by the logger setup code.
-        channel = selected.resolve()
-        if channel is None:
-            channel = self.logger_view.ctx.guild.get_channel(selected.id)
-        if channel is None:
-            try:
-                channel = await selected.fetch()
-            except discord.HTTPException:
-                channel = None
-        if not isinstance(channel, discord.TextChannel):
-            await interaction.response.send_message(
-                "Please choose a text channel.", ephemeral=True
-            )
-            return
-        try:
-            await self.logger_view.cog._set_logger_channel(
-                self.logger_view.ctx,
-                self.logger_view.event,
-                channel,
-                announce=False,
-                actor_id=interaction.user.id,
-            )
-        except (
-            commands.BadArgument,
-            commands.BotMissingPermissions,
-            discord.HTTPException,
-        ) as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
-            return
-        await interaction.response.send_message(
-            f"{LOGGER_EVENTS[self.logger_view.event]} will now be logged in {channel.mention}.",
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -757,6 +730,8 @@ class Logger(Cog):
     _channel_move_tasks: dict[int, asyncio.Task[None]]
     _role_move_batches: dict[int, list[_RolePositionChange]]
     _role_move_tasks: dict[int, asyncio.Task[None]]
+    _profile_name_changes: dict[int, _ProfileNameChange]
+    _profile_name_tasks: dict[int, asyncio.Task[None]]
     _logger_rebind_task: asyncio.Task[None] | None
 
     def _is_replacement_instance(self) -> bool:
@@ -775,28 +750,7 @@ class Logger(Cog):
             return False
 
     def _is_legacy_instance(self) -> bool:
-        """Return whether this logger is running on the retiring bot."""
-
-        marker = getattr(self.bot, "is_legacy_bot", None)
-        if marker is not None:
-            try:
-                return bool(marker() if callable(marker) else marker)
-            except Exception:
-                pass
-        for attribute in ("instance", "bot_instance"):
-            marker = getattr(self.bot, attribute, None)
-            if marker is None:
-                continue
-            try:
-                marker = marker() if callable(marker) else marker
-                return str(marker).casefold() in {"legacy", "old", "primary"}
-            except Exception:
-                pass
-        user = getattr(self.bot, "user", None)
-        try:
-            return int(getattr(user, "id", 0)) == self.LEGACY_BOT_ID
-        except (TypeError, ValueError):
-            return False
+        return self.bot.is_legacy_bot
 
     def _replacement_member_present(self, guild: discord.Guild) -> bool:
         """Return whether the replacement application is in *guild*.
@@ -1764,6 +1718,10 @@ class Logger(Cog):
         await self._logger_list(ctx)
 
     @logger.command(name="set")
+    @app_commands.describe(
+        event="Event type to log.",
+        channel="Text channel where this event should be logged.",
+    )
     async def logger_set(
         self,
         ctx: GuildContext,
@@ -1837,9 +1795,42 @@ class Logger(Cog):
         await self._set_logger_channel(ctx, "message", channel)
 
     @logger.command(name="clear", aliases=("disable", "remove"))
+    @app_commands.describe(
+        event="Event logger to disable; leave blank to disable every logger."
+    )
     async def logger_clear(self, ctx: GuildContext, event: str | None = None) -> None:
         """Disable logging for an event."""
         await self._clear_logger_channel(ctx, event)
+
+    @logger_set.autocomplete("event")
+    async def logger_set_event_autocomplete(
+        self, _interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        needle = current.casefold().strip()
+        return [
+            app_commands.Choice(name=label, value=event)
+            for event, label in LOGGER_EVENTS.items()
+            if not needle or needle in event.casefold() or needle in label.casefold()
+        ][:25]
+
+    @logger_clear.autocomplete("event")
+    async def logger_clear_event_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        if interaction.guild_id is None:
+            return []
+        configured = await self._configured_logger_channels(interaction.guild_id)
+        needle = current.casefold().strip()
+        return [
+            app_commands.Choice(name=LOGGER_EVENTS[event], value=event)
+            for event in LOGGER_EVENTS
+            if event in configured
+            and (
+                not needle
+                or needle in event.casefold()
+                or needle in LOGGER_EVENTS[event].casefold()
+            )
+        ][:25]
 
     async def _emit_logger(
         self,
@@ -2108,14 +2099,120 @@ class Logger(Cog):
     ) -> None:
         embed.set_footer(text=f"ID: {item.id}")
 
+    @staticmethod
+    def _add_user_footer(
+        embed: discord.Embed, user: discord.User | discord.Member
+    ) -> None:
+        embed.set_footer(text=f"ID: {user.id} | {user.mention}")
+
+    @staticmethod
+    def _profile_name_embed(change: _ProfileNameChange) -> discord.Embed | None:
+        username_changed = (
+            change.username_changed and change.before_username != change.after_username
+        )
+        display_name_changed = (
+            change.display_name_changed
+            and change.before_display_name != change.after_display_name
+        )
+        if not username_changed and not display_name_changed:
+            return None
+
+        user_name = _display(change.user.name)
+        if username_changed and display_name_changed:
+            embed = Logger._embed(
+                f"{user_name} updated their profile",
+                (
+                    f"**Username**: `{_code_value(change.before_username)}` -> "
+                    f"`{_code_value(change.after_username)}`\n\n"
+                    f"**Display name**: `{_code_value(change.before_display_name)}` -> "
+                    f"`{_code_value(change.after_display_name)}`"
+                ),
+                color=discord.Colour.orange(),
+            )
+        elif username_changed:
+            embed = Logger._embed(
+                f"{user_name} changed their username",
+                f"**{_display(change.before_username)}** -> "
+                f"**{_display(change.after_username)}**",
+                color=discord.Colour.orange(),
+            )
+        else:
+            embed = Logger._embed(
+                f"{user_name} changed their display name",
+                f"**{_display(change.before_display_name)}** -> "
+                f"**{_display(change.after_display_name)}**",
+                color=discord.Colour.orange(),
+            )
+        Logger._add_user_footer(embed, change.user)
+        return embed
+
+    def _queue_profile_name_update(
+        self, before: discord.User, after: discord.User
+    ) -> None:
+        pending: dict[int, _ProfileNameChange] = getattr(
+            self, "_profile_name_changes", {}
+        )
+        tasks: dict[int, asyncio.Task[None]] = getattr(self, "_profile_name_tasks", {})
+        self._profile_name_changes = pending
+        self._profile_name_tasks = tasks
+
+        username_changed = before.name != after.name
+        display_name_changed = getattr(before, "global_name", None) != getattr(
+            after, "global_name", None
+        )
+        change = pending.get(after.id)
+        if change is None:
+            pending[after.id] = _ProfileNameChange(
+                user=after,
+                before_username=before.name,
+                after_username=after.name,
+                before_display_name=before.display_name,
+                after_display_name=after.display_name,
+                username_changed=username_changed,
+                display_name_changed=display_name_changed,
+            )
+        else:
+            change.user = after
+            change.after_username = after.name
+            change.after_display_name = after.display_name
+            change.username_changed |= username_changed
+            change.display_name_changed |= display_name_changed
+
+        task = tasks.get(after.id)
+        if task is not None:
+            task.cancel()
+        tasks[after.id] = asyncio.create_task(self._flush_profile_name_update(after.id))
+
+    async def _flush_profile_name_update(self, user_id: int) -> None:
+        try:
+            await asyncio.sleep(PROFILE_UPDATE_BATCH_DELAY)
+            pending: dict[int, _ProfileNameChange] = getattr(
+                self, "_profile_name_changes", {}
+            )
+            change = pending.pop(user_id, None)
+            if change is None:
+                return
+            embed = self._profile_name_embed(change)
+            if embed is None:
+                return
+            for guild in self.bot.guilds:
+                if guild.get_member(user_id) is not None:
+                    await self._emit_logger(guild, "member", embed)
+        finally:
+            tasks: dict[int, asyncio.Task[None]] = getattr(
+                self, "_profile_name_tasks", {}
+            )
+            if tasks.get(user_id) is asyncio.current_task():
+                tasks.pop(user_id, None)
+
     @commands.Cog.listener("on_user_update")
     async def logger_user_update(
         self, before: discord.User, after: discord.User
     ) -> None:
         avatar_changed = _asset_key(before.avatar) != _asset_key(after.avatar)
-        profile_changed = (
-            before.name != after.name or before.display_name != after.display_name
-        )
+        profile_changed = before.name != after.name or getattr(
+            before, "global_name", None
+        ) != getattr(after, "global_name", None)
         before_primary_guild = getattr(before, "primary_guild", None)
         after_primary_guild = getattr(after, "primary_guild", None)
         before_tag = getattr(before_primary_guild, "tag", None)
@@ -2124,44 +2221,28 @@ class Logger(Cog):
         if not avatar_changed and not profile_changed and not tag_changed:
             return
 
+        if profile_changed:
+            self._queue_profile_name_update(before, after)
+
         for guild in self.bot.guilds:
             if guild.get_member(after.id) is None:
                 continue
             if avatar_changed:
                 embed = self._embed(
-                    "Avatar changed",
-                    f"{after.mention} changed their avatar.",
+                    f"{_display(after.name)} changed their avatar",
+                    None,
                     color=discord.Colour.blurple(),
                 )
-                embed.set_author(name=str(after), icon_url=after.display_avatar.url)
                 embed.set_image(url=after.display_avatar.url)
-                self._add_item_id(embed, after)
+                self._add_user_footer(embed, after)
                 await self._emit_logger(guild, "avatar", embed)
-            if profile_changed:
-                embed = self._embed(
-                    "Member name changed",
-                    f"{after.mention} updated their Discord profile.",
-                    color=discord.Colour.orange(),
-                )
-                embed.add_field(
-                    name="Before",
-                    value=f"{_display(before.name)} / {_display(before.display_name)}",
-                )
-                embed.add_field(
-                    name="After",
-                    value=f"{_display(after.name)} / {_display(after.display_name)}",
-                )
-                self._add_item_id(embed, after)
-                await self._emit_logger(guild, "member", embed)
             if tag_changed:
                 embed = self._embed(
-                    "Member tag changed",
-                    f"{after.mention} changed their server tag.",
+                    f"{_display(after.name)} changed their server tag",
+                    f"**{_display(before_tag)}** -> **{_display(after_tag)}**",
                     color=discord.Colour.orange(),
                 )
-                embed.add_field(name="Before", value=_display(before_tag))
-                embed.add_field(name="After", value=_display(after_tag))
-                self._add_item_id(embed, after)
+                self._add_user_footer(embed, after)
                 await self._emit_logger(guild, "member", embed)
 
     @commands.Cog.listener("on_member_update")
@@ -2170,24 +2251,21 @@ class Logger(Cog):
     ) -> None:
         if _asset_key(before.guild_avatar) != _asset_key(after.guild_avatar):
             embed = self._embed(
-                "Server avatar changed",
-                f"{after.mention} changed their server avatar.",
+                f"{_display(after.name)} changed their server avatar",
+                None,
                 color=discord.Colour.blurple(),
             )
-            embed.set_author(name=str(after), icon_url=after.display_avatar.url)
             embed.set_image(url=after.display_avatar.url)
-            self._add_item_id(embed, after)
+            self._add_user_footer(embed, after)
             await self._emit_logger(after.guild, "avatar", embed)
 
         if before.nick != after.nick:
             embed = self._embed(
-                "Nickname changed",
-                f"{after.mention} changed their nickname.",
+                f"{_display(after.name)} changed their nickname",
+                f"**{_display(before.nick)}** -> **{_display(after.nick)}**",
                 color=discord.Colour.orange(),
             )
-            embed.add_field(name="Before", value=_display(before.nick))
-            embed.add_field(name="After", value=_display(after.nick))
-            self._add_item_id(embed, after)
+            self._add_user_footer(embed, after)
             await self._emit_logger(
                 after.guild,
                 "member",
@@ -3276,33 +3354,34 @@ class Logger(Cog):
         channel = guild.get_channel(payload.channel_id)
         channel_name = getattr(channel, "mention", f"channel `{payload.channel_id}`")
         cached = payload.cached_message
+        # Raw deletes for uncached messages carry no author or content. Logging
+        # them produces misleading ID-only noise when old messages disappear
+        # in large batches.
         if cached is None:
-            description = f"A message in {channel_name} was deleted."
-        else:
-            description = f"A message in {channel_name} was deleted."
+            return
+        description = f"A message in {channel_name} was deleted."
         embed = self._embed("Message deleted", description, color=discord.Colour.red())
-        if cached is not None:
+        embed.add_field(
+            name="Author",
+            value=f"{cached.author.mention} (`ID: {cached.author.id}`)",
+        )
+        if cached.content:
             embed.add_field(
-                name="Author",
-                value=f"{cached.author.mention} (`ID: {cached.author.id}`)",
+                name="Content", value=_display(cached.content), inline=False
             )
-            if cached.content:
-                embed.add_field(
-                    name="Content", value=_display(cached.content), inline=False
-                )
-            if cached.attachments:
-                embed.add_field(
-                    name="Attachments",
-                    value=_attachment_lines(cached.attachments),
-                    inline=False,
-                )
+        if cached.attachments:
+            embed.add_field(
+                name="Attachments",
+                value=_attachment_lines(cached.attachments),
+                inline=False,
+            )
         self._add_item_id(embed, discord.Object(payload.message_id))
         await self._emit_logger(
             guild,
             "message",
             embed,
             audit_action=discord.AuditLogAction.message_delete,
-            audit_target_id=cached.author.id if cached is not None else None,
+            audit_target_id=cached.author.id,
             audit_channel_id=payload.channel_id,
         )
 
@@ -3699,9 +3778,12 @@ class Logger(Cog):
         for task in (
             *getattr(self, "_channel_move_tasks", {}).values(),
             *getattr(self, "_role_move_tasks", {}).values(),
+            *getattr(self, "_profile_name_tasks", {}).values(),
         ):
             task.cancel()
         getattr(self, "_channel_move_tasks", {}).clear()
         getattr(self, "_channel_move_batches", {}).clear()
         getattr(self, "_role_move_tasks", {}).clear()
         getattr(self, "_role_move_batches", {}).clear()
+        getattr(self, "_profile_name_tasks", {}).clear()
+        getattr(self, "_profile_name_changes", {}).clear()

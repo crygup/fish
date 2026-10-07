@@ -230,7 +230,7 @@ async def bot_stats():
         result = {
             "guilds": len(api_state.bot_ref.guilds),
             "users": sum(g.member_count or 0 for g in api_state.bot_ref.guilds),
-            "commands": len(api_state.bot_ref.commands),
+            "commands": len((await list_commands())["commands"]),
             "uptime_seconds": (
                 (
                     datetime.datetime.now().astimezone() - api_state.bot_ref.start_time

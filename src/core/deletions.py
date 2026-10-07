@@ -12,6 +12,7 @@ from typing import Any
 import asyncpg
 
 from .privacy import erase_user
+from utils.credentials import birthday_reward_subject
 
 RESTORE_NOTICE = "Hidden now. You have 31 days to restore this data with `settings restore` or the website."
 PRIVACY_LOCK = 0x4649534844454C
@@ -68,6 +69,12 @@ async def delete_account(bot: Any, user_id: int) -> int:
 
     await bot.currency._flush_click_rewards(user_id)
     async with deletion(bot.pool, user_id, full=True) as conn:
+        # Match the birthday-award lock order, then serialize with wager starts.
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext($1))",
+            birthday_reward_subject(user_id),
+        )
+        await bot.currency._locked_wallet(conn, user_id)
         # Do not remove the backing record of an in-progress financial action.
         if await conn.fetchval(
             "SELECT EXISTS(SELECT 1 FROM currency_wagers WHERE user_id=$1 AND status='open')",
@@ -89,7 +96,7 @@ async def archive_badge_document(conn: Any, user_id: int) -> None:
     document = refresh_user_badges().get("users", {}).get(str(user_id))
     if document:
         await conn.execute(
-            """INSERT INTO user_badge_documents VALUES($1,$2::jsonb)
+            """INSERT INTO user_badge_documents VALUES($1,$2::text::jsonb)
                ON CONFLICT(user_id) DO UPDATE SET document=EXCLUDED.document""",
             user_id,
             json.dumps({"badges": document}),
@@ -111,24 +118,30 @@ async def pending_status(
     return {"records": row["records"], "next_expiry": row["next_expiry"]}
 
 
-async def _restore_row(conn: Any, row: Any) -> bool:
+async def _restore_row(conn: Any, row: Any, column_cache: dict[str, list[str]]) -> bool:
     table = row["table_name"]
     if not re.fullmatch(r"[a-z_][a-z0-9_]*", table):
         raise ValueError("Invalid archived table")
     # Only tables carrying the privacy trigger can be restored, never sessions
     # or SQL identifiers supplied by a website request.
-    columns = await conn.fetch(
-        """SELECT a.attname FROM pg_attribute a
+    if table not in column_cache:
+        columns = await conn.fetch(
+            """SELECT a.attname FROM pg_attribute a
            WHERE a.attrelid=to_regclass($1) AND a.attnum>0 AND NOT a.attisdropped
              AND a.attgenerated=''
              AND EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=a.attrelid AND t.tgname='privacy_archive')
            ORDER BY a.attnum""",
-        "public." + table,
-    )
-    if not columns:
+            "public." + table,
+        )
+        column_cache[table] = [c["attname"] for c in columns]
+    names = column_cache[table]
+    if not names:
         return False
-    names = [c["attname"] for c in columns]
     data = _json(row["before_data"])
+    # Newly added columns must use their defaults for older archived rows.
+    names = [name for name in names if name in data]
+    if not names:
+        return False
     key = _json(row["identity_data"])
     if row["after_data"] is not None:
         after = _json(row["after_data"])
@@ -143,9 +156,9 @@ async def _restore_row(conn: Any, row: Any) -> bool:
         )
         result = await conn.execute(
             f"""UPDATE public."{table}" target SET {sets}
-                FROM jsonb_populate_record(NULL::public."{table}", $1::jsonb) old,
-                     jsonb_populate_record(NULL::public."{table}", $2::jsonb) expected
-                WHERE to_jsonb(target) @> $3::jsonb AND {guards}""",
+                FROM jsonb_populate_record(NULL::public."{table}", $1::text::jsonb) old,
+                     jsonb_populate_record(NULL::public."{table}", $2::text::jsonb) expected
+                WHERE to_jsonb(target) @> $3::text::jsonb AND {guards}""",
             json.dumps(data),
             json.dumps(after),
             json.dumps(key),
@@ -212,7 +225,7 @@ async def _restore_row(conn: Any, row: Any) -> bool:
     quoted = ", ".join(f'"{name}"' for name in names)
     result = await conn.execute(
         f"""INSERT INTO public."{table}" ({quoted}) OVERRIDING SYSTEM VALUE
-            SELECT {quoted} FROM jsonb_populate_record(NULL::public."{table}", $1::jsonb)
+            SELECT {quoted} FROM jsonb_populate_record(NULL::public."{table}", $1::text::jsonb)
             ON CONFLICT {conflict}""",
         json.dumps(data),
     )
@@ -222,6 +235,7 @@ async def _restore_row(conn: Any, row: Any) -> bool:
 
 async def restore(pool: Any, subject_id: int, *, scope: str = "user") -> dict[str, int]:
     restored = 0
+    column_cache: dict[str, list[str]] = {}
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock($1)", PRIVACY_LOCK)
@@ -253,7 +267,7 @@ async def restore(pool: Any, subject_id: int, *, scope: str = "user") -> dict[st
                 for row in rows:
                     try:
                         async with conn.transaction():
-                            if not await _restore_row(conn, row):
+                            if not await _restore_row(conn, row, column_cache):
                                 deferred.append(row)
                                 continue
                             await conn.execute(
@@ -355,7 +369,14 @@ async def privacy_listener(bot: Any) -> None:
                            WHERE d.scope='user' AND r.table_name='user_badge_documents'"""
                     )
                     for subject in subjects:
-                        await invalidate(bot, {"scope": "user", "id": subject["subject_id"], "full": True})
+                        await invalidate(
+                            bot,
+                            {
+                                "scope": "user",
+                                "id": subject["subject_id"],
+                                "full": True,
+                            },
+                        )
                     await conn.execute("SELECT privacy_expire_deletions()")
                     next_cleanup = asyncio.get_running_loop().time() + 3600
                     while True:

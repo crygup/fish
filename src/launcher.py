@@ -4,8 +4,8 @@ import logging.handlers
 import os
 import sys
 import tomllib
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -23,9 +23,9 @@ from utils import (
     identify_mobile,
     validate_credential_key,
 )
-from utils.paths import REPOSITORY_ROOT
-from utils.network import PublicTCPConnector
 from utils.credentials import configured_secrets
+from utils.network import PublicTCPConnector
+from utils.paths import REPOSITORY_ROOT
 
 gateway.DiscordWebSocket.identify = identify_mobile
 
@@ -84,11 +84,12 @@ def _api_port(instance: BotInstance) -> int:
     """Return an instance-specific API port.
 
     ``FISHIE_API_PORT`` remains the highest-priority override for existing
-    deployments.  Otherwise a role-specific variable is used, with the old
-    8001 port retained for legacy/testing and 8002 reserved for the new bot.
+    deployments. Otherwise a role-specific variable is used, with the active
+    and testing applications on 8001 and the inactive legacy application on
+    8002.
     """
 
-    default_ports = {"legacy": 8001, "new": 8002, "testing": 8001}
+    default_ports = {"legacy": 8002, "new": 8001, "testing": 8001}
     value = os.getenv("FISHIE_API_PORT") or os.getenv(
         f"FISHIE_API_PORT_{instance.upper()}"
     )

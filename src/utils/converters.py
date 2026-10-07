@@ -5,7 +5,7 @@ import html as html_lib
 import re
 from collections.abc import Mapping
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
+from typing import TYPE_CHECKING
 from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import aiohttp
@@ -81,63 +81,6 @@ class URLConverter(commands.Converter[str]):
             argument = f"http://{argument}"
 
         return argument
-
-
-class SpotifyConverter:
-    format_mode = {
-        "track": "tracks",
-        "album": "albums",
-        "artist": "artists",
-        "track,album,artist": "albums",
-    }
-
-    def __init__(
-        self,
-        ctx: Context,
-        mode: Union[
-            Literal["track"], Literal["album"], Literal["artist"], Literal["all"]
-        ],
-    ):
-        super().__init__()
-        self.mode = mode if mode != "all" else "track,album,artist"
-        self.ctx = ctx
-
-    async def search_raw(self, query: str) -> Dict[Any, Any]:
-        ctx = self.ctx
-        url = "https://api.spotify.com/v1/search"
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {ctx.bot.spotify_key}",
-        }
-
-        api_data = {"q": query, "type": self.mode, "limit": "10", "market": "US"}
-
-        async with ctx.session.get(url, headers=headers, params=api_data) as resp:
-            response_checker(resp)
-            data: Optional[Dict[Any, Any]] = (
-                (await resp.json()).get(self.format_mode[self.mode]).get("items")
-            )
-
-        if data == [] or data is None:
-            raise commands.BadArgument("No info found for this query")
-
-        return data
-
-    async def search_album(self, query: str) -> str:
-        data = await self.search_raw(query)
-
-        return data[0]["external_urls"]["spotify"]
-
-    async def search_artist(self, query: str) -> str:
-        data = await self.search_raw(query)
-
-        return data[0]["external_urls"]["spotify"]
-
-    async def search_track(self, query: str) -> str:
-        data = await self.search_raw(query)
-
-        return data[0]["external_urls"]["spotify"]
 
 
 async def render_with_rsvg(blob):

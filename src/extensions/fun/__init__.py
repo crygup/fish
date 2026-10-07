@@ -52,7 +52,6 @@ from .crash import (
     CrashView,
 )
 from .game_2048 import Game2048, Game2048View, highest_tile
-from .helpers import RPS_ALWAYS_WIN_USER_ID, WTPView, dagpi
 from .lastletter import LastLetterCommands, LastLetterGame
 from .library_uploads import (
     LibraryUploadsPageSource,
@@ -127,6 +126,8 @@ from .wordle import (
 if TYPE_CHECKING:
     from core import Fishie
     from extensions.context import Context
+
+RPS_ALWAYS_WIN_USER_ID = 766953372309127168
 
 
 class PhoneFlags(commands.FlagConverter, delimiter=" ", prefix="-"):
@@ -1072,6 +1073,28 @@ class Fun(
     ) -> None:
         """Memorize a flashing sequence of colors."""
         await self._start_color_memorize(ctx, difficulty)
+
+    @game_unscramble.autocomplete("difficulty")
+    async def game_unscramble_difficulty_autocomplete(
+        self, _interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        needle = current.casefold().strip()
+        return [
+            app_commands.Choice(name=value.title(), value=value)
+            for value in ("easy", "normal", "hard", "random")
+            if not needle or needle in value
+        ]
+
+    @game_color_memorize.autocomplete("difficulty")
+    async def game_color_memorize_difficulty_autocomplete(
+        self, _interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        needle = current.casefold().strip()
+        return [
+            app_commands.Choice(name=value.title(), value=value)
+            for value in COLOR_MEMORIZE_DIFFICULTIES
+            if not needle or needle in value
+        ]
 
     @game.command(name="click", aliases=("clicks",))
     @app_commands.allowed_installs(guilds=True, users=True)
@@ -4030,7 +4053,7 @@ class Fun(
 
     @commands.Cog.listener("on_message")
     async def unscramble_listener(self, message: discord.Message) -> None:
-        if is_legacy_instance(getattr(self, "bot", None)):
+        if is_legacy_instance(self.bot):
             return
         if message.author.bot:
             return
@@ -4064,7 +4087,7 @@ class Fun(
     @commands.Cog.listener("on_message")
     async def wordle_listener(self, message: discord.Message) -> None:
         """Accept only five-letter guesses from the active game's owner."""
-        if is_legacy_instance(getattr(self, "bot", None)):
+        if is_legacy_instance(self.bot):
             return
         if message.author.bot:
             return
@@ -4421,7 +4444,7 @@ class Fun(
 
     @commands.Cog.listener("on_message")
     async def phone_relay(self, message: discord.Message) -> None:
-        if is_legacy_instance(getattr(self, "bot", None)):
+        if is_legacy_instance(self.bot):
             return
         if message.guild is None or message.author.bot:
             return
@@ -4563,23 +4586,6 @@ class Fun(
 
         await ctx.send(msg)
 
-    # @commands.command(name="wtp", hidden=True, enabled=False)
-    # async def wtp(self, ctx: Context):
-    #     """Start a Who's That Pokémon guessing game."""
-    #     await ctx.typing()
-
-    #     data = await dagpi(self.bot, ctx.message, "https://api.dagpi.xyz/data/wtp")
-
-    #     embed = discord.Embed(color=self.bot.embedcolor)
-    #     embed.set_author(name="Who's that pokemon?")
-
-    #     image = await to_image(ctx.session, data["question"])
-    #     file = discord.File(fp=image, filename="pokemon.png")
-
-    #     embed.set_image(url="attachment://pokemon.png")
-
-    #     await ctx.send(embed=embed, file=file, view=WTPView(ctx, data))
-
     @commands.command(
         name="badapple",
         aliases=(
@@ -4619,10 +4625,10 @@ class Fun(
     @commands.command(name="echo")
     async def echo(self, ctx: Context, *, text: str):
         """Repeat the provided text without allowing mentions."""
-        await ctx.send(text, allowed_mentions=None)
+        await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
 
     async def cog_load(self) -> None:
-        if is_legacy_instance(getattr(self, "bot", None)):
+        if is_legacy_instance(self.bot):
             self.bot.logger.info(
                 "Skipping shared click-reward flusher on legacy bot instance"
             )

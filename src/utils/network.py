@@ -73,11 +73,6 @@ def is_public_address(address: str) -> bool:
     return ip.is_global
 
 
-# Keep the private name available for callers that imported it while this
-# helper was internal.
-_is_public_address = is_public_address
-
-
 def public_socket(address_info: tuple) -> socket.socket:
     """Check the actual destination before opening a media connection."""
     family, kind, protocol, _, address = address_info

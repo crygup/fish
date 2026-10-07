@@ -94,10 +94,10 @@ async def _create_web_session(
     return session_id, lifetime
 
 
-async def _session_access_token(session_id: str) -> str:
+async def _web_session(session_id: str) -> dict[str, Any]:
     pool = api_state._check_pool()
     row = await pool.fetchrow(
-        "SELECT discord_access_token, expires_at FROM web_sessions "
+        "SELECT user_id, discord_access_token, expires_at, last_seen_at FROM web_sessions "
         "WHERE session_id_hash = $1",
         _session_hash(session_id),
     )
@@ -110,21 +110,31 @@ async def _session_access_token(session_id: str) -> str:
             _session_hash(session_id),
         )
         raise HTTPException(401, "Session expired")
-    await pool.execute(
-        "UPDATE web_sessions SET last_seen_at = now() WHERE session_id_hash = $1",
-        _session_hash(session_id),
-    )
-    token = decrypt_credential(row["discord_access_token"])
-    if token is None:
-        raise HTTPException(401, "Session credential is unavailable")
-    return token
+    if row["last_seen_at"] is None or row["last_seen_at"] < datetime.now(
+        timezone.utc
+    ) - timedelta(minutes=5):
+        await pool.execute(
+            "UPDATE web_sessions SET last_seen_at = now() WHERE session_id_hash = $1",
+            _session_hash(session_id),
+        )
+    return dict(row)
 
 
 async def _verify_token(
-    authorization: str | None = None, session_id: str | None = None
+    authorization: str | None = None,
+    session_id: str | None = None,
+    *,
+    include_profile: bool = False,
 ) -> dict:
     if session_id:
-        token = await _session_access_token(session_id)
+        session = await _web_session(session_id)
+        # The opaque, unexpired session already proves identity. Only the
+        # profile endpoint needs Discord's current username/avatar.
+        if not include_profile:
+            return {"id": str(session["user_id"])}
+        token = decrypt_credential(session["discord_access_token"])
+        if token is None:
+            raise HTTPException(401, "Session credential is unavailable")
     elif authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
     else:
@@ -138,8 +148,17 @@ async def _verify_token(
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
-            if resp.status != 200:
+            if resp.status in {401, 403}:
+                if session_id:
+                    await api_state._check_pool().execute(
+                        "DELETE FROM web_sessions WHERE session_id_hash = $1",
+                        _session_hash(session_id),
+                    )
                 raise HTTPException(401, "Invalid access token")
+            if resp.status != 200:
+                raise HTTPException(
+                    503, "Discord authentication is temporarily unavailable"
+                )
             return await resp.json()
     except HTTPException:
         raise
@@ -329,7 +348,7 @@ async def oauth_me(
         return {"authenticated": False, "user": None}
 
     try:
-        user = await _verify_token(authorization, session_id)
+        user = await _verify_token(authorization, session_id, include_profile=True)
     except HTTPException as error:
         if error.status_code == 401:
             if session_id:

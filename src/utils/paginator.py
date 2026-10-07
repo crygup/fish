@@ -22,11 +22,10 @@ from typing import (
 import discord
 from dateutil.parser import parse
 from discord.ext import commands, menus
-from discord.ext.commands import Paginator as CommandPaginator
 
 from .emojis import fish_check
 from .functions import human_join
-from .vars import GoogleImageData, Review
+from .vars import Review
 
 if TYPE_CHECKING:
     from extensions.context import Context
@@ -185,7 +184,9 @@ class Pager(discord.ui.View):
                     self.stop()
                     await interaction.response.edit_message(
                         content="Saved data has changed. Run the command again to view the current history.",
-                        embed=None, attachments=[], view=None,
+                        embed=None,
+                        attachments=[],
+                        view=None,
                     )
                     return False
             return True
@@ -835,72 +836,6 @@ class AvatarsPageSource(menus.ListPageSource):
         return self.embed
 
 
-class GoogleImagePageSource(menus.ListPageSource):
-    def __init__(self, entries: List[GoogleImageData], *, per_page=1):
-        super().__init__(entries, per_page=per_page)
-        self.embed = discord.Embed(colour=0x2F3136)
-
-    async def format_page(self, menu: Pager, entry: GoogleImageData):
-        self.embed.clear_fields()
-
-        self.embed.set_image(url=entry.image_url)
-        self.embed.set_author(
-            name=str(entry.author), icon_url=entry.author.display_avatar.url
-        )
-        self.embed.title = entry.snippet
-        self.embed.url = entry.url
-
-        self.embed.set_footer(
-            text=f"Page {menu.current_page + 1}/{self.get_max_pages()} of Google Image search - {entry.query}",
-            icon_url="https://cdn.discordapp.com/attachments/1055712784458989598/1061514627093110795/google-go.png",
-        )
-
-        return self.embed
-
-
-class FrontHelpPageSource(menus.ListPageSource):
-    def __init__(
-        self,
-        entries: List[commands.Cog],
-        *,
-        per_page=12,
-        help_command: commands.HelpCommand,
-    ):
-        super().__init__(entries, per_page=per_page)
-        self.help_command = help_command
-        self.embed = discord.Embed(colour=0x2F3136)
-
-    async def format_page(self, menu: Pager, entries: List[commands.Cog]):
-        self.embed.clear_fields()
-
-        for cog in entries:
-            cmds = await self.help_command.filter_commands(cog.get_commands())
-            if len(cmds) == 0:
-                continue
-
-            if cog is None:
-                continue
-
-            self.embed.add_field(
-                name=cog.qualified_name.capitalize(),
-                value=human_join(
-                    [f"**`{command.qualified_name}`**" for command in cmds],
-                    final="and",
-                )
-                or "No commands found here.",
-                inline=False,
-            )
-
-        maximum = self.get_max_pages()
-        if maximum > 1:
-            text = (
-                f"Page {menu.current_page + 1}/{maximum} ({len(self.entries)} entries)"
-            )
-            self.embed.set_footer(text=text)
-
-        return self.embed
-
-
 class ImagePageSource(menus.ListPageSource):
     def __init__(self, entries, *, per_page=1):
         super().__init__(entries, per_page=per_page)
@@ -919,21 +854,6 @@ class ImagePageSource(menus.ListPageSource):
             self.embed.set_footer(text=text)
 
         return self.embed
-
-
-class TextPageSource(menus.ListPageSource):
-    def __init__(self, text, *, prefix="```", suffix="```", max_size=2000):
-        pages = CommandPaginator(prefix=prefix, suffix=suffix, max_size=max_size - 200)
-        for line in text.split("\n"):
-            pages.add_line(line)
-
-        super().__init__(entries=pages.pages, per_page=1)
-
-    async def format_page(self, menu: Pager, content):
-        maximum = self.get_max_pages()
-        if maximum > 1:
-            return f"{content}\nPage {menu.current_page + 1}/{maximum}"
-        return content
 
 
 class SimplePageSource(menus.ListPageSource):
@@ -962,32 +882,3 @@ class SimplePages(Pager):
     def __init__(self, entries, *, ctx: Context, per_page: int = 12):
         super().__init__(SimplePageSource(entries, per_page=per_page), ctx=ctx)
         self.embed = discord.Embed(colour=discord.Colour.blurple())
-
-
-class ReviewsPageSource(menus.ListPageSource):
-    """A page source that requires (Review) List items."""
-
-    def __init__(self, entries: List[Review], *, per_page=1):
-        super().__init__(entries, per_page=per_page)
-        self.embed = discord.Embed(colour=0x2F3136)
-
-    async def format_page(self, menu: Pager, entries: Review):
-        maximum = self.get_max_pages()
-        review = entries
-        author = review.sender
-
-        self.embed.set_footer(
-            text=(
-                f"Page {menu.current_page + 1}/{maximum} (ID: {review.id})\n"
-                f"Reviewed <t:{review.timestamp}:D> · Data from ReviewDB"
-            )
-        )
-        self.embed.description = review.comment
-        self.embed.timestamp = datetime.datetime.fromtimestamp(review.timestamp)
-        self.embed.set_author(
-            name=f"{author.username} ({author.user_id})",
-            icon_url=author.profilePhoto,
-            url=f"https://reviewdb.mantikafasi.dev/dashboard?query={review.target_id}",
-        )
-
-        return self.embed

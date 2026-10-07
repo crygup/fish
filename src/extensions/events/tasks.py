@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime
+import json
 import os
 import shutil
 import time
@@ -930,19 +931,32 @@ class Tasks(Cog):
         if not rows:
             return
         now = datetime.datetime.now(datetime.timezone.utc)
-        await self._deliver_due_anime(rows, now)
+        # Save cached episode times before refreshing: AniList may already
+        # have advanced to the following episode. Date-only estimates must
+        # be refreshed first so they cannot beat a newly published exact time.
+        await self._queue_due_anime(
+            [row for row in rows if row.get("next_airing_at") is not None], now
+        )
         stale_ids = {
             int(row["anilist_id"])
             for row in rows
             if row.get("last_checked_at") is None
             or row["last_checked_at"] < now - datetime.timedelta(days=1)
+            or (row.get("next_airing_at") is not None and row["next_airing_at"] <= now)
+            or (
+                (due := row.get("next_airing_at") or row.get("release_at")) is not None
+                and due <= now + datetime.timedelta(days=1)
+                and row["last_checked_at"] < now - datetime.timedelta(hours=1)
+            )
         }
         media_map = await self._anilist_media_batch(sorted(stale_ids))
         for media_id, media in media_map.items():
             # Keep the same status-aware schedule rules used while adding a
             # follow: finished/cancelled entries are cleared instead of
             # generating stale release notifications.
-            airing, episode, release = anilist_notification_schedule(media, now)
+            airing, episode, release = anilist_notification_schedule(
+                media, now, include_due=True
+            )
             links = media.get("externalLinks") or []
             crunchyroll = next(
                 (
@@ -976,9 +990,18 @@ class Tasks(Cog):
             )
 
         rows = await self.bot.pool.fetch("SELECT * FROM notify_anime_follows")
-        await self._deliver_due_anime(rows, now)
+        await self._queue_due_anime(
+            [
+                row
+                for row in rows
+                if row.get("next_airing_at") is not None
+                or int(row["anilist_id"]) in media_map
+            ],
+            now,
+        )
+        await self._deliver_pending_anime()
 
-    async def _deliver_due_anime(self, rows: Any, now: datetime.datetime) -> None:
+    async def _queue_due_anime(self, rows: Any, now: datetime.datetime) -> None:
         for row in rows:
             if is_operational_guild(row.get("guild_id")):
                 continue
@@ -997,10 +1020,52 @@ class Tasks(Cog):
             last_notified = row.get("last_notified_at")
             if last_notified is not None and last_notified >= due_at:
                 continue
-            if await self._announce_notify_anime(row):
+            snapshot = {
+                "next_airing_at": due_airing.isoformat() if due_airing else None,
+                "release_at": due_release.isoformat() if due_release else None,
+                "next_episode": row.get("next_episode"),
+            }
+            await self.bot.pool.execute(
+                """
+                UPDATE notify_anime_follows
+                SET pending_notifications = $2::text::jsonb || pending_notifications
+                WHERE id = $1 AND (last_notified_at IS NULL OR last_notified_at < $3)
+                """,
+                row["id"],
+                json.dumps({due_at.isoformat(): snapshot}),
+                due_at,
+            )
+
+    async def _deliver_pending_anime(self) -> None:
+        rows = await self.bot.pool.fetch(
+            "SELECT * FROM notify_anime_follows WHERE pending_notifications <> '{}'::jsonb"
+        )
+        for row in rows:
+            if is_operational_guild(row.get("guild_id")):
+                continue
+            pending = row["pending_notifications"]
+            if isinstance(pending, str):
+                pending = json.loads(pending)
+            for key in sorted(pending, key=datetime.datetime.fromisoformat):
+                snapshot = dict(pending[key])
+                for field in ("next_airing_at", "release_at"):
+                    if snapshot.get(field):
+                        snapshot[field] = datetime.datetime.fromisoformat(
+                            snapshot[field]
+                        )
+                if not await self._announce_notify_anime({**dict(row), **snapshot}):
+                    # Keep the failed delivery, even if AniList has moved on.
+                    break
                 await self.bot.pool.execute(
-                    "UPDATE notify_anime_follows SET last_notified_at = now(), updated_at = now() WHERE id = $1",
+                    """
+                    UPDATE notify_anime_follows
+                    SET pending_notifications = pending_notifications - $2::text,
+                        last_notified_at = GREATEST(last_notified_at, $3), updated_at = now()
+                    WHERE id = $1
+                    """,
                     row["id"],
+                    key,
+                    datetime.datetime.fromisoformat(key),
                 )
 
     async def set_spotify_key(self):

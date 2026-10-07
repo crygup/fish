@@ -93,7 +93,6 @@ class Keys(TypedDict):
     anilist_id: str
     anilist_secret: str
     anilist_background_user_id: NotRequired[int]
-    dagpi: str
     roblox: str
     steam: str
 
